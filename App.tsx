@@ -11,7 +11,7 @@ import { SettingsModal } from './components/SettingsModal';
 import { CalculatorTool } from './components/CalculatorTool';
 import { AIChatView } from './components/AIChatView';
 import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage } from './types';
-import { INITIAL_DATA, DEFAULT_PIN } from './constants';
+import { INITIAL_DATA } from './constants';
 import { encryptData, decryptData, isEncrypted } from './services/security';
 
 // CONSTANTS FOR STORAGE
@@ -90,13 +90,12 @@ const App: React.FC = () => {
     const enteredPin = enteredPinRaw.trim();
     
     try {
+      if (enteredPin.length < 4) {
+        throw new Error("Your PIN must be at least 4 digits long.");
+      }
       const stored = localStorage.getItem(STORAGE_KEY);
       
       if (authMode === 'setup') {
-        // Enforce Default PIN for Setup
-        if (enteredPin !== DEFAULT_PIN) {
-           throw new Error(`Incorrect PIN. Try ${DEFAULT_PIN}.`);
-        }
         setPin(enteredPin);
         setData(INITIAL_DATA); 
         setNotes([]);
@@ -107,11 +106,6 @@ const App: React.FC = () => {
         setIsLocked(false);
       } 
       else if (authMode === 'migrate') {
-        // Enforce Default PIN for Migration
-        if (enteredPin !== DEFAULT_PIN) {
-           throw new Error(`Incorrect PIN. Try ${DEFAULT_PIN}.`);
-        }
-
         let migrationData: InventoryItem[] = [];
         
         // Try main key first (plain text)

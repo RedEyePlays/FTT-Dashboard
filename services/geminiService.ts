@@ -11,7 +11,10 @@ export const getFinancialInsights = async (data: InventoryItem[]): Promise<strin
   try {
     if (!apiKey) return "API Key is missing. Please check your .env file.";
 
-    const dataString = JSON.stringify(data);
+    // Vulnerability Fix: Strip out user-provided 'notes' field to prevent prompt injection.
+    const sanitizedData = data.map(({ notes, ...retainedFields }) => retainedFields);
+
+    const dataString = JSON.stringify(sanitizedData);
     const prompt = `
       Act as a senior business analyst. Analyze the following inventory log for a flipping/reselling business.
       

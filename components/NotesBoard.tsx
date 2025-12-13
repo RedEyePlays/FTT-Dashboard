@@ -27,12 +27,11 @@ export const NotesBoard: React.FC<NotesBoardProps> = ({ notes, tasks, onUpdateNo
   const [newTaskText, setNewTaskText] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Select first note on load if available and none selected
   useEffect(() => {
     if (!selectedNoteId && notes.length > 0) {
       setSelectedNoteId(notes[0].id);
     }
-  }, []);
+  }, [notes, selectedNoteId]);
 
   const activeNote = notes.find(n => n.id === selectedNoteId);
   
@@ -41,13 +40,12 @@ export const NotesBoard: React.FC<NotesBoardProps> = ({ notes, tasks, onUpdateNo
     n.content.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  // --- NOTES HANDLERS ---
   const handleAddNote = () => {
     const newNote: Note = {
       id: Date.now().toString(),
       title: '',
       content: '',
-      color: 'slate', // Default icon color
+      color: 'slate',
       date: new Date().toISOString()
     };
     onUpdateNotes([newNote, ...notes]);
@@ -74,7 +72,6 @@ export const NotesBoard: React.FC<NotesBoardProps> = ({ notes, tasks, onUpdateNo
     handleUpdateNote(id, 'color', nextColor);
   };
 
-  // --- TASKS HANDLERS ---
   const handleAddTask = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newTaskText.trim()) return;
@@ -96,12 +93,11 @@ export const NotesBoard: React.FC<NotesBoardProps> = ({ notes, tasks, onUpdateNo
   };
 
   return (
-    <div className="flex flex-col lg:flex-row h-[calc(100vh-140px)] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-sm overflow-hidden">
+    <div className="grid grid-cols-1 md:grid-cols-12 h-[calc(100vh-140px)] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-sm overflow-hidden">
       
-      {/* 1. LEFT SIDEBAR: Note List */}
-      <div className="w-full lg:w-64 border-r border-slate-200 dark:border-slate-800 flex flex-col bg-slate-50/50 dark:bg-slate-950/50">
+      {/* 1. LEFT SIDEBAR: Note List (Spans 3 cols on md, full width on sm) */}
+      <div className="md:col-span-3 border-r border-slate-200 dark:border-slate-800 flex flex-col bg-slate-50/50 dark:bg-slate-950/50">
         
-        {/* Sidebar Header */}
         <div className="p-4 border-b border-slate-100 dark:border-slate-800">
            <div className="flex items-center justify-between mb-4">
              <div className="flex items-center gap-2 font-bold text-slate-700 dark:text-slate-200">
@@ -129,7 +125,6 @@ export const NotesBoard: React.FC<NotesBoardProps> = ({ notes, tasks, onUpdateNo
            </div>
         </div>
 
-        {/* Page List */}
         <div className="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-0.5">
           <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-3 py-2">Private</div>
           
@@ -139,12 +134,8 @@ export const NotesBoard: React.FC<NotesBoardProps> = ({ notes, tasks, onUpdateNo
               onClick={() => setSelectedNoteId(note.id)}
               className={`group flex items-center gap-2 px-3 py-1.5 rounded-md text-sm cursor-pointer transition-colors ${selectedNoteId === note.id ? 'bg-slate-200/60 dark:bg-slate-800 text-slate-900 dark:text-white font-medium' : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
             >
-              <div className="text-slate-400">
-                <FileText className="w-4 h-4" />
-              </div>
-              <span className="truncate flex-1">
-                {note.title || "Untitled"}
-              </span>
+              <div className="text-slate-400"><FileText className="w-4 h-4" /></div>
+              <span className="truncate flex-1">{note.title || "Untitled"}</span>
               <button
                  onClick={(e) => handleDeleteNote(e, note.id)}
                  className="opacity-0 group-hover:opacity-100 p-1 hover:bg-slate-300 dark:hover:bg-slate-700 rounded text-slate-400 hover:text-rose-500 transition-all"
@@ -162,14 +153,11 @@ export const NotesBoard: React.FC<NotesBoardProps> = ({ notes, tasks, onUpdateNo
         </div>
       </div>
 
-      {/* 2. CENTER PANEL: Editor */}
-      <div className="flex-1 flex flex-col bg-white dark:bg-slate-900 relative">
+      {/* 2. CENTER PANEL: Editor (Spans 6 cols on md) */}
+      <div className="md:col-span-6 flex flex-col bg-white dark:bg-slate-900 relative">
          {activeNote ? (
            <div className="flex-1 flex flex-col h-full overflow-hidden animate-fadeIn">
-              
-              {/* Document Header (Cover/Icon/Title) */}
               <div className="pt-12 px-8 md:px-12 max-w-4xl mx-auto w-full flex-shrink-0">
-                 {/* Icon Selector */}
                  <div className="group relative mb-6">
                     <button 
                       onClick={() => cycleColor(activeNote.id, activeNote.color)}
@@ -182,7 +170,6 @@ export const NotesBoard: React.FC<NotesBoardProps> = ({ notes, tasks, onUpdateNo
                     </div>
                  </div>
 
-                 {/* Title Input */}
                  <input
                     type="text"
                     value={activeNote.title}
@@ -191,7 +178,6 @@ export const NotesBoard: React.FC<NotesBoardProps> = ({ notes, tasks, onUpdateNo
                     className="w-full text-4xl font-bold text-slate-900 dark:text-slate-100 placeholder:text-slate-300 dark:placeholder:text-slate-600 border-none outline-none bg-transparent p-0 mb-4"
                  />
                  
-                 {/* Metadata Row */}
                  <div className="flex items-center gap-6 text-xs text-slate-400 border-b border-slate-100 dark:border-slate-800 pb-4 mb-4">
                     <div className="flex items-center gap-2">
                        <Calendar className="w-3.5 h-3.5" />
@@ -206,7 +192,6 @@ export const NotesBoard: React.FC<NotesBoardProps> = ({ notes, tasks, onUpdateNo
                  </div>
               </div>
 
-              {/* Document Body */}
               <div className="flex-1 overflow-y-auto px-8 md:px-12 pb-12 max-w-4xl mx-auto w-full custom-scrollbar">
                  <textarea
                     value={activeNote.content}
@@ -225,8 +210,8 @@ export const NotesBoard: React.FC<NotesBoardProps> = ({ notes, tasks, onUpdateNo
          )}
       </div>
 
-      {/* 3. RIGHT SIDEBAR: Tasks */}
-      <div className="hidden xl:flex w-72 border-l border-slate-200 dark:border-slate-800 flex-col bg-slate-50/30 dark:bg-slate-950/30">
+      {/* 3. RIGHT SIDEBAR: Tasks (Spans 3 cols on md, full width on sm) */}
+      <div className="md:col-span-3 border-l border-slate-200 dark:border-slate-800 flex flex-col bg-slate-50/30 dark:bg-slate-950/30">
         <div className="p-4 border-b border-slate-100 dark:border-slate-800">
            <h3 className="font-bold text-sm text-slate-700 dark:text-slate-200 flex items-center gap-2">
              <CheckSquare className="w-4 h-4 text-slate-400" />

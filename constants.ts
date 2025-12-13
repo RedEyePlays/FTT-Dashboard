@@ -1,7 +1,5 @@
 import { InventoryItem } from './types';
 
-export const DEFAULT_PIN = '2522';
-
 export const INITIAL_DATA: InventoryItem[] = [
   // September 2025
   {

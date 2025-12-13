@@ -12,7 +12,9 @@ export interface InventoryItem {
   soldDate: string; // YYYY-MM-DD, empty if not sold
   soldTo: string;
   salePrice: number;
-  
+  shippingCost: number; // Cost to ship the item to the buyer
+  platformFees: number; // Fees from platforms like eBay, etc.
+
   notes: string;
 }
 
