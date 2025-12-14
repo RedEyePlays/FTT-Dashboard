@@ -14,7 +14,8 @@ import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage } from './ty
 import { INITIAL_DATA } from './constants';
 import { encryptData, decryptData } from './services/security';
 import { auth, db } from './services/firebase';
-import { onAuthStateChanged, User, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from 'firebase/auth';
+import { onAuthChange } from './services/auth';
+import { User, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { doc, setDoc, getDoc } from 'firebase/firestore';
 
 const App: React.FC = () => {
@@ -55,7 +56,7 @@ const App: React.FC = () => {
 
   // Firebase Auth Listener
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+    const unsubscribe = onAuthChange(async (user) => {
       setUser(user);
       if (user) {
         await loadData(user.uid, user.email!); // Pass email as the pin
