@@ -65,3 +65,51 @@ Instead of a batch file, run these standard commands in your Command Prompt (mak
 ## 6. First Login
 *   **PIN**: Enter **2522** to unlock the app.
 *   Go to **Settings (Gear Icon) > Change PIN** to set your own secure PIN.
+
+---
+
+# Firebase Hosting Deployment (Alternative to DreamHost)
+
+This is a **static React/Vite application** that should be deployed to **Firebase Hosting** (NOT Cloud Run).
+
+## Build Instructions for Firebase
+
+```bash
+npm install
+npm run build
+cp test.html dist/
+```
+
+## Output Directory
+`dist/`
+
+## Deployment via Firebase Console
+
+**IMPORTANT:** Use **Firebase Hosting** (not Cloud Run) for this static site.
+
+1. Go to: https://console.firebase.google.com
+2. Select project: **ftt-dashboardgit-0945496-a85e0**
+3. Click **Hosting** in left sidebar
+4. Click **"Get started"** or **"Add another site"**
+5. Choose **"Connect to GitHub"**
+6. Select repository: **RedEyePlays/FTT-Dashboard**
+7. Select branch: **claude/create-test-site-PzVS9**
+8. Configure build settings:
+   - **Framework preset:** Vite
+   - **Build command:** `npm run build && cp test.html dist/`
+   - **Output directory:** `dist`
+9. Click **Save and Deploy**
+
+## Deployment via Firebase CLI
+
+```bash
+npm run build
+cp test.html dist/
+firebase deploy --only hosting
+```
+
+## Live URLs
+
+After deployment, your site will be available at:
+- Main app: https://ftt-dashboardgit-0945496-a85e0.web.app/
+- Test site: https://ftt-dashboardgit-0945496-a85e0.web.app/test.html
