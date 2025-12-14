@@ -1,23 +1,16 @@
 import React, { useRef, useState } from 'react';
-import { Download, Upload, X, ShieldCheck, AlertTriangle, FileJson, Lock } from 'lucide-react';
-import { AppData, InventoryItem, Note, Task } from '../types';
+import { Download, Upload, X, ShieldCheck, AlertTriangle, FileJson } from 'lucide-react';
+import { AppData } from '../types';
 
 interface SettingsModalProps {
   onClose: () => void;
   currentData: AppData;
   onRestore: (data: AppData) => void;
-  onChangePin?: (newPin: string) => void;
 }
 
-export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, currentData, onRestore, onChangePin }) => {
+export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, currentData, onRestore }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [restoreError, setRestoreError] = useState<string | null>(null);
-  
-  // PIN Change State
-  const [newPin, setNewPin] = useState('');
-  const [confirmPin, setConfirmPin] = useState('');
-  const [pinMessage, setPinMessage] = useState<string | null>(null);
-  const [pinSuccess, setPinSuccess] = useState(false);
 
   const handleBackup = () => {
     const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(currentData, null, 2));
@@ -27,27 +20,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, currentDa
     document.body.appendChild(downloadAnchorNode);
     downloadAnchorNode.click();
     downloadAnchorNode.remove();
-  };
-
-  const handleChangePinSubmit = () => {
-    if (newPin.length < 4) {
-      setPinMessage("PIN must be at least 4 digits.");
-      setPinSuccess(false);
-      return;
-    }
-    if (newPin !== confirmPin) {
-      setPinMessage("PINs do not match.");
-      setPinSuccess(false);
-      return;
-    }
-    if (onChangePin) {
-      onChangePin(newPin);
-      setPinMessage("PIN updated successfully! Your data is now re-encrypted.");
-      setPinSuccess(true);
-      setNewPin('');
-      setConfirmPin('');
-      setTimeout(() => setPinMessage(null), 3000);
-    }
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -98,49 +70,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, currentDa
         </div>
 
         <div className="p-6 space-y-6">
-          {/* Change PIN Section */}
-          {onChangePin && (
-            <div className="space-y-3">
-              <div className="flex items-center gap-3">
-                 <div className="p-2 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-lg">
-                   <Lock className="w-5 h-5" />
-                 </div>
-                 <div>
-                   <h3 className="font-medium text-slate-900 dark:text-white">Change Security PIN</h3>
-                   <p className="text-xs text-slate-500 dark:text-slate-400">Update the key used to encrypt your data.</p>
-                 </div>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <input 
-                  type="password" 
-                  value={newPin}
-                  onChange={(e) => setNewPin(e.target.value)}
-                  placeholder="New PIN"
-                  className="px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-lg text-sm bg-white dark:bg-slate-800 focus:ring-1 focus:ring-indigo-500 outline-none dark:text-white"
-                />
-                <input 
-                  type="password" 
-                  value={confirmPin}
-                  onChange={(e) => setConfirmPin(e.target.value)}
-                  placeholder="Confirm PIN"
-                  className="px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-lg text-sm bg-white dark:bg-slate-800 focus:ring-1 focus:ring-indigo-500 outline-none dark:text-white"
-                />
-              </div>
-              <button 
-                onClick={handleChangePinSubmit}
-                disabled={!newPin || !confirmPin}
-                className="w-full py-2 bg-slate-800 hover:bg-slate-900 dark:bg-slate-700 dark:hover:bg-slate-600 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
-              >
-                Update PIN
-              </button>
-              {pinMessage && (
-                <p className={`text-xs text-center ${pinSuccess ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
-                  {pinMessage}
-                </p>
-              )}
-            </div>
-          )}
-
           <div className="h-px bg-slate-100 dark:bg-slate-800 w-full" />
 
           {/* Backup Section */}

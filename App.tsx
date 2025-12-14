@@ -12,27 +12,25 @@ import { CalculatorTool } from './components/CalculatorTool';
 import { AIChatView } from './components/AIChatView';
 import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage } from './types';
 import { INITIAL_DATA } from './constants';
-import { encryptData, decryptData, isEncrypted } from './services/security';
-
-// CONSTANTS FOR STORAGE
-const STORAGE_KEY = 'biztrack_production_v1';
-const LEGACY_KEYS = ['bizTrackData_2025_demo_v1', 'bizTrackData'];
+import { encryptData, decryptData } from './services/security';
+import { auth, db } from './services/firebase';
+import { onAuthStateChanged, User, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from 'firebase/auth';
+import { doc, setDoc, getDoc } from 'firebase/firestore';
 
 const App: React.FC = () => {
   // --- AUTH STATE ---
-  const [isLocked, setIsLocked] = useState(true);
-  const [authMode, setAuthMode] = useState<'setup' | 'unlock' | 'migrate'>('setup');
-  const [pin, setPin] = useState<string | null>(null);
+  const [user, setUser] = useState<User | null>(null);
+  const [isLoadingAuth, setIsLoadingAuth] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
 
   // --- APP STATE ---
   const [view, setView] = useState<ViewState>('dashboard');
-  
+
   // Data State
   const [data, setData] = useState<InventoryItem[]>([]);
   const [notes, setNotes] = useState<Note[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
-  
+
   // AI Chat State (Shared between Sidebar and Tab)
   const [aiMessages, setAiMessages] = useState<ChatMessage[]>([{
       id: 'welcome',
@@ -41,12 +39,12 @@ const App: React.FC = () => {
       timestamp: new Date()
   }]);
   const [isAiSidebarOpen, setIsAiSidebarOpen] = useState(false);
-  
+
   const [editingItem, setEditingItem] = useState<InventoryItem | undefined>(undefined);
   const [showBulkModal, setShowBulkModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showCalculator, setShowCalculator] = useState(false);
-  
+
   // Theme State
   const [darkMode, setDarkMode] = useState(() => {
     if (typeof window !== 'undefined') {
@@ -55,149 +53,94 @@ const App: React.FC = () => {
     return false;
   });
 
-  // INITIAL LOAD CHECK
+  // Firebase Auth Listener
   useEffect(() => {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    
-    if (!stored) {
-      // Check legacy keys for migration
-      let legacyFound = false;
-      for (const k of LEGACY_KEYS) {
-        if (localStorage.getItem(k)) {
-          legacyFound = true;
-          break;
-        }
-      }
-      
-      if (legacyFound) {
-        setAuthMode('migrate');
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      setUser(user);
+      if (user) {
+        await loadData(user.uid, user.email!); // Pass email as the pin
       } else {
-        setAuthMode('setup'); // New User
+        // Reset app state on logout
+        setData([]);
+        setNotes([]);
+        setTasks([]);
       }
-    } else {
-      // Check if data is already encrypted
-      if (isEncrypted(stored)) {
-        setAuthMode('unlock');
-      } else {
-        setAuthMode('migrate'); // Existing plain data, needs lock
-      }
-    }
+      setIsLoadingAuth(false);
+    });
+    return () => unsubscribe();
   }, []);
 
   // --- AUTH HANDLERS ---
-  const handleAuthenticate = (enteredPinRaw: string) => {
+  const handleAuthenticate = async (email: string, password: string, isRegister: boolean) => {
     setAuthError(null);
-    const enteredPin = enteredPinRaw.trim();
-    
     try {
-      if (enteredPin.length < 4) {
-        throw new Error("Your PIN must be at least 4 digits long.");
+      if (isRegister) {
+        const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+        const newUser = userCredential.user;
+        // Create a new document in Firestore for the new user
+        const appData: AppData = { inventory: INITIAL_DATA, notes: [], tasks: [] };
+        const encryptedData = encryptData(appData, email); // Use email as the pin
+        await setDoc(doc(db, "user_data", newUser.uid), { data: encryptedData });
+      } else {
+        await signInWithEmailAndPassword(auth, email, password);
       }
-      const stored = localStorage.getItem(STORAGE_KEY);
-      
-      if (authMode === 'setup') {
-        setPin(enteredPin);
-        setData(INITIAL_DATA); 
-        setNotes([]);
-        setTasks([
-          {id: '1', text: 'Set up my business profile', completed: false},
-          {id: '2', text: 'List first item on eBay', completed: false}
-        ]);
-        setIsLocked(false);
-      } 
-      else if (authMode === 'migrate') {
-        let migrationData: InventoryItem[] = [];
-        
-        // Try main key first (plain text)
-        if (stored && !isEncrypted(stored)) {
-           migrationData = JSON.parse(stored);
-        } else {
-           // Try legacy keys
-           for (const k of LEGACY_KEYS) {
-             const val = localStorage.getItem(k);
-             if (val) {
-               migrationData = JSON.parse(val);
-               break;
-             }
-           }
-        }
-        
-        if (migrationData.length === 0) migrationData = INITIAL_DATA; // Fallback
-
-        setPin(enteredPin);
-        setData(migrationData);
-        setNotes([]);
-        setTasks([]);
-        setIsLocked(false);
-      } 
-      else if (authMode === 'unlock') {
-        // Unlock: Decrypt existing data
-        if (!stored) throw new Error("No data found");
-        
-        try {
-          const decrypted = decryptData(stored, enteredPin);
-          
-          setPin(enteredPin);
-          
-          // Handle Data Migration (Array vs Object)
-          if (Array.isArray(decrypted)) {
-            // Old format (Just inventory array)
-            setData(decrypted);
-            setNotes([]);
-            setTasks([]);
-          } else {
-            // New format (Object with inventory, notes, tasks)
-            setData(decrypted.inventory || []);
-            setNotes(decrypted.notes || []);
-            setTasks(decrypted.tasks || []);
-          }
-          
-          setIsLocked(false);
-        } catch (decryptErr) {
-           throw new Error("Wrong PIN. Please try again.");
-        }
-      }
-
     } catch (e: any) {
       console.error(e);
       setAuthError(e.message || "Authentication failed");
     }
   };
 
-  const handleResetApp = () => {
-    localStorage.removeItem(STORAGE_KEY);
-    LEGACY_KEYS.forEach(k => localStorage.removeItem(k));
-    window.location.reload();
-  };
-
-  const handleLock = () => {
-    setPin(null);
-    setData([]); 
-    setNotes([]);
-    setTasks([]);
-    setIsLocked(true);
-    setAuthMode('unlock');
-  };
-
-  const handleChangePin = (newPin: string) => {
-    // This will trigger the persistence useEffect because `pin` changes
-    setPin(newPin);
-  };
-
-  // PERSISTENCE (ENCRYPTED)
-  // Save all data types into one encrypted blob whenever data or pin changes
-  useEffect(() => {
-    if (!isLocked && pin) {
-       // Create the unified data object
-       const appData = {
-         inventory: data,
-         notes: notes,
-         tasks: tasks
-       };
-       const encrypted = encryptData(appData, pin);
-       localStorage.setItem(STORAGE_KEY, encrypted);
+  const handleLock = async () => {
+    try {
+      await signOut(auth);
+    } catch (e) {
+      console.error("Error signing out: ", e);
     }
-  }, [data, notes, tasks, isLocked, pin]);
+  };
+  
+  // DATA HANDLING
+  const loadData = async (uid: string, pin: string) => {
+    const docRef = doc(db, "user_data", uid);
+    const docSnap = await getDoc(docRef);
+
+    if (docSnap.exists()) {
+      const encryptedData = docSnap.data().data;
+      try {
+        const decrypted = decryptData(encryptedData, pin);
+        setData(decrypted.inventory || []);
+        setNotes(decrypted.notes || []);
+        setTasks(decrypted.tasks || []);
+      } catch (error) {
+        console.error("Error decrypting data: ", error);
+        setAuthError("Failed to decrypt data. Please check your credentials.");
+        await signOut(auth); // Log out if decryption fails
+      }
+    } else {
+      // This case should ideally not happen for a logged-in user
+      // unless the document was deleted manually.
+      console.log("No data document found for user, creating a new one.");
+      const appData: AppData = { inventory: INITIAL_DATA, notes: [], tasks: [] };
+      const encryptedData = encryptData(appData, pin);
+      await setDoc(doc(db, "user_data", uid), { data: encryptedData });
+      setData(INITIAL_DATA);
+      setNotes([]);
+      setTasks([]);
+    }
+  };
+
+  // PERSISTENCE (ENCRYPTED TO FIRESTORE)
+  useEffect(() => {
+    if (user) {
+      const appData = {
+        inventory: data,
+        notes: notes,
+        tasks: tasks
+      };
+      const encrypted = encryptData(appData, user.email!); // Use email as the pin
+      setDoc(doc(db, "user_data", user.uid), { data: encrypted });
+    }
+  }, [data, notes, tasks, user]);
+
 
   // THEME HANDLING
   useEffect(() => {
@@ -291,13 +234,15 @@ const App: React.FC = () => {
     </button>
   );
 
+  if (isLoadingAuth) {
+      return <div>Loading...</div>; // Or a nice spinner component
+  }
+
   // --- RENDER LOCK SCREEN IF LOCKED ---
-  if (isLocked) {
+  if (!user) {
     return (
       <AuthScreen 
-        mode={authMode} 
         onAuthenticate={handleAuthenticate} 
-        onReset={handleResetApp}
         error={authError}
       />
     );
@@ -517,7 +462,6 @@ const App: React.FC = () => {
            onClose={() => setShowSettingsModal(false)}
            currentData={{ inventory: data, notes, tasks }}
            onRestore={handleRestoreData}
-           onChangePin={handleChangePin}
          />
       )}
     </div>
