@@ -45,4 +45,4 @@ export interface AppData {
   tasks: Task[];
 }
 
-export type ViewState = 'dashboard' | 'entry' | 'edit' | 'grid' | 'notes' | 'ai';
+export type ViewState = 'dashboard' | 'entry' | 'edit' | 'grid' | 'notes' | 'ai' | 'pos';
