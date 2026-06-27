@@ -19,4 +19,3 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 
 export { app, auth, db };
-When you enter the cost, it does not let u remove the 0 to enter the price same with repair row, and price
