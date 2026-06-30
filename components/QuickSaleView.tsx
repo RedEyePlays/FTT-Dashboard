@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { InventoryItem } from '../types';
 import { QRScanner } from './QRScanner';
+import { getPOSSettings } from './SettingsModal';
 
 interface Props {
   inventory: InventoryItem[];
@@ -59,6 +60,7 @@ export const QuickSaleView: React.FC<Props> = ({ inventory, onSell }) => {
   const [form, setForm] = useState<SaleForm>(emptyForm());
   const [confirmed, setConfirmed] = useState(false);
   const [showQR, setShowQR] = useState(false);
+  const taxRate = getPOSSettings().taxRate;
 
   const unsold = inventory.filter(i => !i.soldDate);
   const filtered = unsold.filter(i =>
@@ -76,7 +78,15 @@ export const QuickSaleView: React.FC<Props> = ({ inventory, onSell }) => {
   const netProfit = salePrice - totalCost - shipping - feeAmount;
 
   const set = (key: keyof SaleForm, value: string) =>
-    setForm(f => ({ ...f, [key]: value }));
+    setForm(f => {
+      const next = { ...f, [key]: value };
+      // Auto-compute tax when price changes and method isn't cash
+      if (key === 'salePrice' && f.paymentMethod !== 'cash') {
+        const price = parseFloat(value) || 0;
+        next.taxCollected = (price * taxRate / 100).toFixed(2);
+      }
+      return next;
+    });
 
   const handleSelect = (item: InventoryItem) => {
     setSelected(item);
@@ -160,10 +170,19 @@ export const QuickSaleView: React.FC<Props> = ({ inventory, onSell }) => {
     <p className="text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">{children}</p>
   );
 
+  const setPaymentMethod = (method: 'cash' | 'card' | 'mixed') => {
+    setForm(f => ({
+      ...f,
+      paymentMethod: method,
+      taxCollected: method === 'cash' ? '0'
+        : (( parseFloat(f.salePrice) || 0) * taxRate / 100).toFixed(2),
+    }));
+  };
+
   const payBtn = (method: 'cash' | 'card' | 'mixed', icon: React.ReactNode, label: string) => (
     <button
       type="button"
-      onClick={() => set('paymentMethod', method)}
+      onClick={() => setPaymentMethod(method)}
       className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium transition-all border ${
         form.paymentMethod === method
           ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
