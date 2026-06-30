@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { LayoutDashboard, PlusCircle, Table, Activity, Sparkles, Moon, Sun, Lock, StickyNote, Settings, Calculator, Bot, MessageCircle } from 'lucide-react';
+import { LayoutDashboard, PlusCircle, Table, Activity, Sparkles, Moon, Sun, Lock, StickyNote, Settings, Calculator, Bot, MessageCircle, ShoppingCart } from 'lucide-react';
 import { Dashboard } from './components/Dashboard';
 import { DataEntryForm } from './components/DataEntryForm';
 import { DataGrid } from './components/DataGrid';
@@ -10,6 +10,7 @@ import { NotesBoard } from './components/NotesBoard';
 import { SettingsModal } from './components/SettingsModal';
 import { CalculatorTool } from './components/CalculatorTool';
 import { AIChatView } from './components/AIChatView';
+import { QuickSaleView } from './components/QuickSaleView';
 import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage } from './types';
 import { INITIAL_DATA } from './constants';
 import { encryptData, decryptData } from './services/security';
@@ -284,11 +285,17 @@ const App: React.FC = () => {
               label="Notes" 
               onClick={() => setView('notes')} 
             />
-            <NavButton 
-              active={view === 'ai'} 
-              icon={<Bot className="w-4 h-4" />} 
-              label="AI Assistant" 
-              onClick={() => setView('ai')} 
+            <NavButton
+              active={view === 'pos'}
+              icon={<ShoppingCart className="w-4 h-4" />}
+              label="Quick Sale"
+              onClick={() => setView('pos')}
+            />
+            <NavButton
+              active={view === 'ai'}
+              icon={<Bot className="w-4 h-4" />}
+              label="AI Assistant"
+              onClick={() => setView('ai')}
             />
             
             <div className="w-px h-6 bg-slate-200 dark:bg-slate-700 mx-2"></div>
@@ -367,7 +374,14 @@ const App: React.FC = () => {
            <Table className="w-6 h-6" />
            <span className="text-[10px] mt-1">Sheet</span>
          </button>
-         <button 
+         <button
+           onClick={() => setView('pos')}
+           className={`flex flex-col items-center p-2 rounded-lg ${view === 'pos' ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-500 dark:text-slate-400'}`}
+         >
+           <ShoppingCart className="w-6 h-6" />
+           <span className="text-[10px] mt-1">Sell</span>
+         </button>
+         <button
            onClick={handleStartAdd}
            className={`flex flex-col items-center p-2 rounded-lg ${view === 'entry' ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-500 dark:text-slate-400'}`}
          >
@@ -408,6 +422,12 @@ const App: React.FC = () => {
               onUpdate={handleUpdateItem}
               onUpdateRow={handleUpdateRow}
               onAddEmpty={handleCreateEmptyItem}
+            />
+          )}
+          {view === 'pos' && (
+            <QuickSaleView
+              inventory={data}
+              onSell={handleUpdateRow}
             />
           )}
           {view === 'notes' && (
