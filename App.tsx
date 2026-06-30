@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { LayoutDashboard, PlusCircle, Table, Activity, Sparkles, Moon, Sun, Lock, StickyNote, Settings, Calculator, Bot, MessageCircle, ShoppingCart } from 'lucide-react';
+import { LayoutDashboard, PlusCircle, Table, Activity, Sparkles, Moon, Sun, Lock, StickyNote, Settings, Calculator, Bot, MessageCircle, ShoppingCart, Search } from 'lucide-react';
 import { Dashboard } from './components/Dashboard';
 import { DataEntryForm } from './components/DataEntryForm';
 import { DataGrid } from './components/DataGrid';
@@ -11,6 +11,7 @@ import { SettingsModal } from './components/SettingsModal';
 import { CalculatorTool } from './components/CalculatorTool';
 import { AIChatView } from './components/AIChatView';
 import { QuickSaleView } from './components/QuickSaleView';
+import { FinderModal } from './components/FinderModal';
 import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage } from './types';
 import { INITIAL_DATA } from './constants';
 import { encryptData, decryptData } from './services/security';
@@ -46,6 +47,7 @@ const App: React.FC = () => {
   const [showBulkModal, setShowBulkModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showCalculator, setShowCalculator] = useState(false);
+  const [showFinder, setShowFinder] = useState(false);
 
   // Theme State
   const [darkMode, setDarkMode] = useState(() => {
@@ -299,7 +301,15 @@ const App: React.FC = () => {
             />
             
             <div className="w-px h-6 bg-slate-200 dark:bg-slate-700 mx-2"></div>
-            
+
+            <button
+              onClick={() => setShowFinder(true)}
+              className="p-2 text-slate-500 hover:text-indigo-600 dark:text-slate-400 dark:hover:text-indigo-400 rounded-lg hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-colors"
+              title="Find item (Finder)"
+            >
+              <Search className="w-4 h-4" />
+            </button>
+
             <button
               onClick={() => setDarkMode(!darkMode)}
               className="p-2 text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
@@ -479,11 +489,19 @@ const App: React.FC = () => {
       )}
       
       {showSettingsModal && (
-         <SettingsModal 
+         <SettingsModal
            onClose={() => setShowSettingsModal(false)}
            currentData={{ inventory: data, notes, tasks }}
            onRestore={handleRestoreData}
          />
+      )}
+
+      {showFinder && (
+        <FinderModal
+          inventory={data}
+          onClose={() => setShowFinder(false)}
+          onEdit={item => { setEditingItem(item); setView('edit'); }}
+        />
       )}
     </div>
   );

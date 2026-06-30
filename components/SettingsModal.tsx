@@ -1,6 +1,17 @@
 import React, { useRef, useState } from 'react';
-import { Download, Upload, X, ShieldCheck, AlertTriangle, FileJson } from 'lucide-react';
+import { Download, Upload, X, ShieldCheck, AlertTriangle, FileJson, Percent } from 'lucide-react';
 import { AppData } from '../types';
+
+export const getPOSSettings = () => {
+  try {
+    const raw = localStorage.getItem('posSettings');
+    if (raw) return JSON.parse(raw) as { taxRate: number };
+  } catch {}
+  return { taxRate: 13 };
+};
+
+const savePOSSettings = (s: { taxRate: number }) =>
+  localStorage.setItem('posSettings', JSON.stringify(s));
 
 interface SettingsModalProps {
   onClose: () => void;
@@ -11,6 +22,16 @@ interface SettingsModalProps {
 export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, currentData, onRestore }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [restoreError, setRestoreError] = useState<string | null>(null);
+  const [taxRate, setTaxRate] = useState(() => String(getPOSSettings().taxRate));
+  const [taxSaved, setTaxSaved] = useState(false);
+
+  const handleSaveTax = () => {
+    const rate = parseFloat(taxRate);
+    if (isNaN(rate) || rate < 0 || rate > 100) return;
+    savePOSSettings({ taxRate: rate });
+    setTaxSaved(true);
+    setTimeout(() => setTaxSaved(false), 2000);
+  };
 
   const handleBackup = () => {
     const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(currentData, null, 2));
@@ -70,6 +91,39 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, currentDa
         </div>
 
         <div className="p-6 space-y-6">
+          {/* POS Settings */}
+          <div className="space-y-3">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 rounded-lg">
+                <Percent className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-medium text-slate-900 dark:text-white">POS Tax Rate</h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400">Applied automatically on Card / Mixed payments.</p>
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <div className="relative flex-1">
+                <input
+                  type="number"
+                  value={taxRate}
+                  onChange={e => { setTaxRate(e.target.value); setTaxSaved(false); }}
+                  min="0"
+                  max="100"
+                  step="0.1"
+                  className="w-full pl-3 pr-8 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+                <span className="absolute inset-y-0 right-3 flex items-center text-slate-400 text-sm">%</span>
+              </div>
+              <button
+                onClick={handleSaveTax}
+                className={`px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${taxSaved ? 'bg-emerald-500 text-white' : 'bg-indigo-600 hover:bg-indigo-700 text-white'}`}
+              >
+                {taxSaved ? 'Saved ✓' : 'Save'}
+              </button>
+            </div>
+          </div>
+
           <div className="h-px bg-slate-100 dark:bg-slate-800 w-full" />
 
           {/* Backup Section */}
