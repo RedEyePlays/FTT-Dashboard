@@ -7,13 +7,25 @@ export interface InventoryItem {
   boughtFrom: string;
   purchaseCost: number;
   repairCost: number;
-  
+
   // Sales Data
   soldDate: string; // YYYY-MM-DD, empty if not sold
   soldTo: string;
   salePrice: number;
-  shippingCost: number; // Cost to ship the item to the buyer
-  platformFees: number; // Fees from platforms like eBay, etc.
+  shippingCost?: number; // Cost to ship the item to the buyer
+  platformFees?: number; // Computed dollar amount of platform fees
+  platformName?: string;
+  platformFeePercent?: number;
+
+  // Customer Details (POS)
+  customerName?: string;
+  customerPhone?: string;
+  customerNotes?: string;
+
+  // Payment (POS)
+  paymentMethod?: 'cash' | 'card' | 'mixed';
+  taxCollected?: number;
+  cashAmount?: number;
 
   notes: string;
 }
