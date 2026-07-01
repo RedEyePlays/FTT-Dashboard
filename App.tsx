@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { LayoutDashboard, PlusCircle, Table, Activity, Sparkles, Moon, Sun, Lock, StickyNote, Settings, Calculator, Bot, MessageCircle, ShoppingCart, Search } from 'lucide-react';
+import { LayoutDashboard, PlusCircle, Table, Activity, Sparkles, Moon, Sun, Lock, StickyNote, Settings, Calculator, Bot, MessageCircle, ShoppingCart, Search, Truck } from 'lucide-react';
 import { Dashboard } from './components/Dashboard';
 import { DataEntryForm } from './components/DataEntryForm';
 import { DataGrid } from './components/DataGrid';
@@ -12,7 +12,8 @@ import { CalculatorTool } from './components/CalculatorTool';
 import { AIChatView } from './components/AIChatView';
 import { QuickSaleView } from './components/QuickSaleView';
 import { FinderModal } from './components/FinderModal';
-import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage } from './types';
+import { DropOffView } from './components/DropOffView';
+import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, Runner, DropOff, Settlement } from './types';
 import { INITIAL_DATA } from './constants';
 import { encryptData, decryptData } from './services/security';
 import { auth, db } from './services/firebase';
@@ -33,6 +34,9 @@ const App: React.FC = () => {
   const [data, setData] = useState<InventoryItem[]>([]);
   const [notes, setNotes] = useState<Note[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [runners, setRunners] = useState<Runner[]>([]);
+  const [dropOffs, setDropOffs] = useState<DropOff[]>([]);
+  const [settlements, setSettlements] = useState<Settlement[]>([]);
 
   // AI Chat State (Shared between Sidebar and Tab)
   const [aiMessages, setAiMessages] = useState<ChatMessage[]>([{
@@ -114,6 +118,9 @@ const App: React.FC = () => {
         setData(decrypted.inventory || []);
         setNotes(decrypted.notes || []);
         setTasks(decrypted.tasks || []);
+        setRunners(decrypted.runners || []);
+        setDropOffs(decrypted.dropOffs || []);
+        setSettlements(decrypted.settlements || []);
       } catch (error) {
         console.error("Error decrypting data: ", error);
         setAuthError("Failed to decrypt data. Please check your credentials.");
@@ -135,15 +142,18 @@ const App: React.FC = () => {
   // PERSISTENCE (ENCRYPTED TO FIRESTORE)
   useEffect(() => {
     if (user) {
-      const appData = {
+      const appData: AppData = {
         inventory: data,
         notes: notes,
-        tasks: tasks
+        tasks: tasks,
+        runners: runners,
+        dropOffs: dropOffs,
+        settlements: settlements,
       };
       const encrypted = encryptData(appData, user.email!); // Use email as the pin
       setDoc(doc(db, "user_data", user.uid), { data: encrypted });
     }
-  }, [data, notes, tasks, user]);
+  }, [data, notes, tasks, runners, dropOffs, settlements, user]);
 
 
   // THEME HANDLING
@@ -221,6 +231,32 @@ const App: React.FC = () => {
     setData(restoredData.inventory);
     setNotes(restoredData.notes);
     setTasks(restoredData.tasks);
+    setRunners(restoredData.runners || []);
+    setDropOffs(restoredData.dropOffs || []);
+    setSettlements(restoredData.settlements || []);
+  };
+
+  // Add an accepted drop-off into inventory, carrying runner + cost across
+  const handleAddDropOffToInventory = (d: DropOff) => {
+    const runner = runners.find(r => r.id === d.runnerId);
+    const newItem: InventoryItem = {
+      id: Date.now().toString() + Math.random().toString(36).substr(2, 5),
+      date: d.dateDropped || new Date().toISOString().split('T')[0],
+      item: d.item,
+      imei: d.imei,
+      boughtFrom: d.sellerName || 'Marketplace (drop-off)',
+      purchaseCost: d.purchasePrice,
+      repairCost: 0,
+      soldDate: '',
+      soldTo: '',
+      salePrice: 0,
+      runnerId: d.runnerId,
+      runnerName: runner?.name,
+      dropOffId: d.id,
+      notes: d.notes ? `Drop-off: ${d.notes}` : 'Added from drop-off',
+    };
+    setData(prev => [...prev, newItem]);
+    setDropOffs(prev => prev.map(x => x.id === d.id ? { ...x, inventoryId: newItem.id } : x));
   };
 
   const handleStartAdd = () => {
@@ -301,6 +337,12 @@ const App: React.FC = () => {
               icon={<ShoppingCart className="w-4 h-4" />}
               label="Quick Sale"
               onClick={() => setView('pos')}
+            />
+            <NavButton
+              active={view === 'dropoff'}
+              icon={<Truck className="w-4 h-4" />}
+              label="Drop-Offs"
+              onClick={() => setView('dropoff')}
             />
             <NavButton
               active={view === 'ai'}
@@ -448,6 +490,17 @@ const App: React.FC = () => {
               inventory={data}
               onSell={handleUpdateRow}
               onCheckout={handleCheckout}
+            />
+          )}
+          {view === 'dropoff' && (
+            <DropOffView
+              runners={runners}
+              dropOffs={dropOffs}
+              settlements={settlements}
+              onRunnersChange={setRunners}
+              onDropOffsChange={setDropOffs}
+              onSettlementsChange={setSettlements}
+              onAddToInventory={handleAddDropOffToInventory}
             />
           )}
           {view === 'notes' && (
