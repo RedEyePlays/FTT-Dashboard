@@ -7,12 +7,12 @@ import {
 import { InventoryItem } from '../types';
 import { QRScanner } from './QRScanner';
 import { getPOSSettings } from './SettingsModal';
-import { CartSaleView } from './CartSaleView';
+import { CartSaleView, CartCheckout } from './CartSaleView';
 
 interface Props {
   inventory: InventoryItem[];
   onSell: (item: InventoryItem) => void;
-  onCheckout: (items: InventoryItem[]) => void;
+  onSellCart: (payload: CartCheckout) => void;
 }
 
 const PLATFORMS: { name: string; fee: number }[] = [
@@ -60,7 +60,7 @@ const emptyForm = (): SaleForm => ({
   paymentNotes: '',
 });
 
-export const QuickSaleView: React.FC<Props> = ({ inventory, onSell, onCheckout }) => {
+export const QuickSaleView: React.FC<Props> = ({ inventory, onSell, onSellCart }) => {
   const [mode, setMode] = useState<'single' | 'cart'>('single');
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<InventoryItem | null>(null);
@@ -90,7 +90,7 @@ export const QuickSaleView: React.FC<Props> = ({ inventory, onSell, onCheckout }
     return (
       <div className="flex flex-col">
         {modeToggle}
-        <CartSaleView inventory={inventory} onCheckout={onCheckout} />
+        <CartSaleView inventory={inventory} onComplete={onSellCart} />
       </div>
     );
   }
