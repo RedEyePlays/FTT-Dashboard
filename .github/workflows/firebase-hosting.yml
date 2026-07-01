@@ -25,6 +25,6 @@ jobs:
         run: npm run build
 
       - name: Deploy to Firebase Hosting
-        run: npx firebase-tools deploy --only hosting --project ftt-dashboardgit-0945496-a85e0
+        run: npx firebase-tools deploy --only hosting:ftt-dashboardgit-0945496-a85e0 --project ftt-dashboardgit-0945496-a85e0
         env:
           FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
