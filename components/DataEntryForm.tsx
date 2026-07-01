@@ -1,6 +1,9 @@
 
 import React, { useState, useEffect } from 'react';
+import { QrCode, Printer } from 'lucide-react';
 import { InventoryItem } from '../types';
+import { QRScanner } from './QRScanner';
+import { QRLabel } from './QRLabel';
 
 interface DataEntryFormProps {
   initialData?: InventoryItem;
@@ -25,6 +28,9 @@ export const DataEntryForm: React.FC<DataEntryFormProps> = ({ initialData, onSav
     notes: ''
   });
 
+  const [showScanner, setShowScanner] = useState(false);
+  const [showLabel, setShowLabel] = useState(false);
+
   useEffect(() => {
     // If initialData is provided (for editing), populate the form
     if (initialData) {
@@ -34,6 +40,31 @@ export const DataEntryForm: React.FC<DataEntryFormProps> = ({ initialData, onSav
       });
     }
   }, [initialData]);
+
+  // Use a scanned QR / barcode to pull item data where possible.
+  // Supports either a raw IMEI/serial string, or a JSON payload with item fields.
+  const handleScan = (value: string) => {
+    setShowScanner(false);
+    let parsed: Partial<InventoryItem> | null = null;
+    try {
+      const obj = JSON.parse(value);
+      if (obj && typeof obj === 'object') parsed = obj;
+    } catch {
+      /* not JSON — treat as a plain IMEI/serial */
+    }
+    if (parsed) {
+      setFormData(prev => ({
+        ...prev,
+        item: parsed!.item ?? prev.item,
+        imei: parsed!.imei ?? prev.imei,
+        boughtFrom: parsed!.boughtFrom ?? prev.boughtFrom,
+        purchaseCost: parsed!.purchaseCost ?? prev.purchaseCost,
+        notes: parsed!.notes ?? prev.notes,
+      }));
+    } else {
+      setFormData(prev => ({ ...prev, imei: value }));
+    }
+  };
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value, type } = e.target;
@@ -74,7 +105,17 @@ export const DataEntryForm: React.FC<DataEntryFormProps> = ({ initialData, onSav
               </div>
               <div>
                 <label htmlFor="imei" className="block text-sm font-medium text-slate-600 dark:text-slate-300 mb-1">IMEI / Serial</label>
-                <input type="text" name="imei" id="imei" value={formData.imei} onChange={handleChange} className="w-full p-2 bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-600 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500"/>
+                <div className="flex gap-2">
+                  <input type="text" name="imei" id="imei" value={formData.imei} onChange={handleChange} className="flex-1 min-w-0 p-2 bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-600 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500"/>
+                  <button type="button" onClick={() => setShowScanner(true)} title="Scan QR / barcode"
+                    className="shrink-0 px-3 rounded-md bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 text-slate-500 hover:text-indigo-600 hover:border-indigo-400 transition-colors">
+                    <QrCode className="w-4 h-4" />
+                  </button>
+                  <button type="button" onClick={() => setShowLabel(true)} disabled={!formData.imei} title="Print IMEI QR label"
+                    className="shrink-0 px-3 rounded-md bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 text-slate-500 hover:text-indigo-600 hover:border-indigo-400 transition-colors disabled:opacity-40 disabled:hover:text-slate-500 disabled:hover:border-slate-300">
+                    <Printer className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
                <div>
                 <label htmlFor="boughtFrom" className="block text-sm font-medium text-slate-600 dark:text-slate-300 mb-1">Bought From</label>
@@ -139,6 +180,9 @@ export const DataEntryForm: React.FC<DataEntryFormProps> = ({ initialData, onSav
           </button>
         </div>
       </form>
+
+      {showScanner && <QRScanner onScan={handleScan} onClose={() => setShowScanner(false)} />}
+      {showLabel && <QRLabel imei={formData.imei} itemName={formData.item} onClose={() => setShowLabel(false)} />}
     </div>
   );
 };

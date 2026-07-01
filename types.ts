@@ -26,6 +26,8 @@ export interface InventoryItem {
   paymentMethod?: 'cash' | 'card' | 'mixed';
   taxCollected?: number;
   cashAmount?: number;
+  cashTaxStatus?: 'none' | 'separate' | 'included';
+  paymentNotes?: string;
 
   notes: string;
 }
