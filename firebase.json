@@ -1,5 +1,6 @@
 {
   "hosting": {
+    "site": "ftt-dashboardgit-0945496-a85e0",
     "public": "dist",
     "ignore": [
       "firebase.json",
