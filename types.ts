@@ -33,6 +33,50 @@ export interface InventoryItem {
   cashTaxStatus?: 'none' | 'separate' | 'included';
   paymentNotes?: string;
 
+  // Drop-off / runner sourcing
+  runnerId?: string;
+  runnerName?: string;
+  dropOffId?: string;
+
+  notes: string;
+}
+
+export type PaidBy = 'runner' | 'store';
+
+export type DropOffStatus = 'pending' | 'accepted' | 'rejected' | 'paidout' | 'settled';
+
+export interface Runner {
+  id: string;
+  name: string;
+  phone: string;
+  notes: string;
+}
+
+export interface DropOff {
+  id: string;
+  runnerId: string;
+  item: string;              // device / item name
+  imei: string;              // IMEI / serial, optional
+  sellerName: string;        // marketplace seller name, optional
+  sellerContact: string;     // marketplace seller contact, optional
+  purchasePrice: number;     // what was paid to the seller
+  paidBy: PaidBy;            // 'runner' paid the seller, or 'store' paid
+  dropOffFee: number;        // commission owed to the runner for this device
+  dateDropped: string;       // YYYY-MM-DD
+  status: DropOffStatus;
+  notes: string;
+  inventoryId?: string;      // set once accepted & added to inventory
+  settlementId?: string;     // set once included in a weekly settlement
+}
+
+export interface Settlement {
+  id: string;
+  runnerId: string;
+  date: string;              // YYYY-MM-DD settled
+  dropOffIds: string[];
+  totalPurchaseFronted: number; // cash the runner fronted to sellers
+  totalFees: number;            // drop-off fees paid to runner
+  amountPaid: number;           // net amount paid to runner (or negative = owed to store)
   notes: string;
 }
 
@@ -61,6 +105,9 @@ export interface AppData {
   inventory: InventoryItem[];
   notes: Note[];
   tasks: Task[];
+  runners?: Runner[];
+  dropOffs?: DropOff[];
+  settlements?: Settlement[];
 }
 
-export type ViewState = 'dashboard' | 'entry' | 'edit' | 'grid' | 'notes' | 'ai' | 'pos';
+export type ViewState = 'dashboard' | 'entry' | 'edit' | 'grid' | 'notes' | 'ai' | 'pos' | 'dropoff';
