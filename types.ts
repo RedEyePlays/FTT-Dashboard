@@ -1,12 +1,46 @@
 
+export type ItemKind = 'device' | 'accessory';
+
+export type DeviceType = 'Phone' | 'Tablet' | 'Laptop' | 'Console' | 'Watch' | 'Other';
+
+export type DeviceStatus =
+  | 'pending_purchase'
+  | 'pending_repair'
+  | 'ready'
+  | 'sold'
+  | 'returned';
+
 export interface InventoryItem {
   id: string;
-  date: string; // Purchase Date (YYYY-MM-DD)
+  kind?: ItemKind; // 'device' (serialized) or 'accessory' (stock). Legacy rows = device.
+  sku?: string; // internal SKU e.g. PHN-000001
+  manufacturerBarcode?: string; // optional UPC/EAN from the manufacturer
+
+  date: string; // Purchase Date / Date In (YYYY-MM-DD)
   item: string; // Product Name/Model
-  imei: string;
+  imei: string; // IMEI or Serial Number (devices)
   boughtFrom: string;
   purchaseCost: number;
   repairCost: number;
+
+  // --- Device attributes ---
+  deviceType?: DeviceType;
+  brand?: string;
+  model?: string;
+  storage?: string;
+  color?: string;
+  carrier?: string;
+  batteryHealth?: string;
+  condition?: string;
+  purchaseSource?: string; // channel: Marketplace, Runner, Trade-in, etc.
+  targetSalePrice?: number;
+  deviceStatus?: DeviceStatus;
+
+  // --- Accessory attributes (stock) ---
+  quantity?: number;
+  costPerUnit?: number;
+  sellingPrice?: number;
+  lowStockThreshold?: number;
 
   // Sales Data
   soldDate: string; // YYYY-MM-DD, empty if not sold
@@ -101,6 +135,14 @@ export interface ChatMessage {
   timestamp: Date;
 }
 
+export interface Customer {
+  id: string;
+  name: string;
+  phone: string;
+  email?: string;
+  notes?: string;
+}
+
 export interface AppData {
   inventory: InventoryItem[];
   notes: Note[];
@@ -108,6 +150,8 @@ export interface AppData {
   runners?: Runner[];
   dropOffs?: DropOff[];
   settlements?: Settlement[];
+  customers?: Customer[];
+  skuCounters?: Record<string, number>; // monotonic per-prefix SKU counters
 }
 
 export type ViewState = 'dashboard' | 'entry' | 'edit' | 'grid' | 'notes' | 'ai' | 'pos' | 'dropoff';

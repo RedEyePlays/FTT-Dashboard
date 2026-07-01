@@ -13,7 +13,9 @@ import { AIChatView } from './components/AIChatView';
 import { QuickSaleView } from './components/QuickSaleView';
 import { FinderModal } from './components/FinderModal';
 import { DropOffView } from './components/DropOffView';
-import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, Runner, DropOff, Settlement } from './types';
+import { InventoryView } from './components/InventoryView';
+import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, Runner, DropOff, Settlement, ItemKind, DeviceType } from './types';
+import { skuPrefix, nextSku } from './services/sku';
 import { INITIAL_DATA } from './constants';
 import { encryptData, decryptData } from './services/security';
 import { auth, db } from './services/firebase';
@@ -37,6 +39,7 @@ const App: React.FC = () => {
   const [runners, setRunners] = useState<Runner[]>([]);
   const [dropOffs, setDropOffs] = useState<DropOff[]>([]);
   const [settlements, setSettlements] = useState<Settlement[]>([]);
+  const [skuCounters, setSkuCounters] = useState<Record<string, number>>({});
 
   // AI Chat State (Shared between Sidebar and Tab)
   const [aiMessages, setAiMessages] = useState<ChatMessage[]>([{
@@ -121,6 +124,7 @@ const App: React.FC = () => {
         setRunners(decrypted.runners || []);
         setDropOffs(decrypted.dropOffs || []);
         setSettlements(decrypted.settlements || []);
+        setSkuCounters(decrypted.skuCounters || {});
       } catch (error) {
         console.error("Error decrypting data: ", error);
         setAuthError("Failed to decrypt data. Please check your credentials.");
@@ -149,11 +153,12 @@ const App: React.FC = () => {
         runners: runners,
         dropOffs: dropOffs,
         settlements: settlements,
+        skuCounters: skuCounters,
       };
       const encrypted = encryptData(appData, user.email!); // Use email as the pin
       setDoc(doc(db, "user_data", user.uid), { data: encrypted });
     }
-  }, [data, notes, tasks, runners, dropOffs, settlements, user]);
+  }, [data, notes, tasks, runners, dropOffs, settlements, skuCounters, user]);
 
 
   // THEME HANDLING
@@ -202,6 +207,34 @@ const App: React.FC = () => {
       const map = new Map(prev.map(i => [i.id, i]));
       items.forEach(it => map.set(it.id, it));
       return Array.from(map.values());
+    });
+  };
+
+  // Generate the next unique internal SKU for a kind/device type (never reused)
+  const handleGenerateSku = (kind: ItemKind, deviceType?: DeviceType): string => {
+    const prefix = skuPrefix(kind, deviceType);
+    const { sku, counters } = nextSku(prefix, skuCounters, data);
+    setSkuCounters(counters);
+    return sku;
+  };
+
+  // Add or update a single inventory item (device or accessory) from InventoryView
+  const handleSaveInventoryItem = (item: InventoryItem) => {
+    setData(prev => prev.some(i => i.id === item.id)
+      ? prev.map(i => i.id === item.id ? item : i)
+      : [...prev, item]);
+  };
+
+  // Sell a cart: mark devices sold, decrement accessory quantities, shared txn id
+  const handleSellCart = (payload: { soldRows: InventoryItem[]; accessoryQtys: Record<string, number> }) => {
+    setData(prev => {
+      const byId = new Map(prev.map(i => [i.id, i]));
+      payload.soldRows.forEach(d => byId.set(d.id, d));
+      Object.entries(payload.accessoryQtys).forEach(([id, soldQty]) => {
+        const acc = byId.get(id);
+        if (acc) byId.set(id, { ...acc, quantity: Math.max(0, (acc.quantity ?? 0) - soldQty) });
+      });
+      return Array.from(byId.values());
     });
   };
 
@@ -323,7 +356,7 @@ const App: React.FC = () => {
             <NavButton 
               active={view === 'grid'} 
               icon={<Table className="w-4 h-4" />} 
-              label="Inventory Sheet" 
+              label="Inventory"
               onClick={() => setView('grid')} 
             />
             <NavButton 
@@ -477,19 +510,19 @@ const App: React.FC = () => {
             />
           )}
           {view === 'grid' && (
-            <DataGrid 
-              data={data} 
-              onDelete={handleDeleteItem} 
-              onUpdate={handleUpdateItem}
-              onUpdateRow={handleUpdateRow}
-              onAddEmpty={handleCreateEmptyItem}
+            <InventoryView
+              inventory={data}
+              runners={runners}
+              onSave={handleSaveInventoryItem}
+              onDelete={handleDeleteItem}
+              onGenerateSku={handleGenerateSku}
             />
           )}
           {view === 'pos' && (
             <QuickSaleView
               inventory={data}
               onSell={handleUpdateRow}
-              onCheckout={handleCheckout}
+              onSellCart={handleSellCart}
             />
           )}
           {view === 'dropoff' && (
