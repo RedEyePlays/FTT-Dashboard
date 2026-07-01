@@ -7,10 +7,12 @@ import {
 import { InventoryItem } from '../types';
 import { QRScanner } from './QRScanner';
 import { getPOSSettings } from './SettingsModal';
+import { CartSaleView } from './CartSaleView';
 
 interface Props {
   inventory: InventoryItem[];
   onSell: (item: InventoryItem) => void;
+  onCheckout: (items: InventoryItem[]) => void;
 }
 
 const PLATFORMS: { name: string; fee: number }[] = [
@@ -58,13 +60,40 @@ const emptyForm = (): SaleForm => ({
   paymentNotes: '',
 });
 
-export const QuickSaleView: React.FC<Props> = ({ inventory, onSell }) => {
+export const QuickSaleView: React.FC<Props> = ({ inventory, onSell, onCheckout }) => {
+  const [mode, setMode] = useState<'single' | 'cart'>('single');
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<InventoryItem | null>(null);
   const [form, setForm] = useState<SaleForm>(emptyForm());
   const [confirmed, setConfirmed] = useState(false);
   const [showQR, setShowQR] = useState(false);
   const taxRate = getPOSSettings().taxRate;
+
+  const modeToggle = (
+    <div className="inline-flex p-1 bg-slate-100 dark:bg-slate-800 rounded-lg mb-4 self-start">
+      <button
+        onClick={() => setMode('single')}
+        className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${mode === 'single' ? 'bg-white dark:bg-slate-700 text-indigo-600 dark:text-indigo-300 shadow-sm' : 'text-slate-500 dark:text-slate-400'}`}
+      >
+        Single Sale
+      </button>
+      <button
+        onClick={() => setMode('cart')}
+        className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${mode === 'cart' ? 'bg-white dark:bg-slate-700 text-indigo-600 dark:text-indigo-300 shadow-sm' : 'text-slate-500 dark:text-slate-400'}`}
+      >
+        Cart / Multi-Item
+      </button>
+    </div>
+  );
+
+  if (mode === 'cart') {
+    return (
+      <div className="flex flex-col">
+        {modeToggle}
+        <CartSaleView inventory={inventory} onCheckout={onCheckout} />
+      </div>
+    );
+  }
 
   const unsold = inventory.filter(i => !i.soldDate);
   const filtered = unsold.filter(i =>
@@ -204,7 +233,9 @@ export const QuickSaleView: React.FC<Props> = ({ inventory, onSell }) => {
   );
 
   return (
-    <div className="flex gap-6 h-full min-h-[calc(100vh-12rem)]">
+    <div className="flex flex-col">
+      {modeToggle}
+      <div className="flex gap-6 h-full min-h-[calc(100vh-12rem)]">
       {showQR && <QRScanner onScan={handleQRScan} onClose={() => setShowQR(false)} />}
 
       {/* Left — item picker */}
@@ -468,6 +499,7 @@ export const QuickSaleView: React.FC<Props> = ({ inventory, onSell }) => {
             </button>
           </div>
         )}
+      </div>
       </div>
     </div>
   );
