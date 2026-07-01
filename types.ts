@@ -17,6 +17,10 @@ export interface InventoryItem {
   platformName?: string;
   platformFeePercent?: number;
 
+  // Item classification (POS cart)
+  category?: string; // e.g. 'device', 'accessory', 'other'
+  transactionId?: string; // groups line items sold in one cart transaction
+
   // Customer Details (POS)
   customerName?: string;
   customerPhone?: string;

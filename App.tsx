@@ -186,6 +186,15 @@ const App: React.FC = () => {
     setData(prev => prev.map(item => item.id === updatedItem.id ? updatedItem : item));
   };
 
+  // Cart checkout: replace existing rows by id, append new (accessory) rows
+  const handleCheckout = (items: InventoryItem[]) => {
+    setData(prev => {
+      const map = new Map(prev.map(i => [i.id, i]));
+      items.forEach(it => map.set(it.id, it));
+      return Array.from(map.values());
+    });
+  };
+
   const handleCreateEmptyItem = () => {
     const newItem: InventoryItem = {
       id: Date.now().toString() + Math.random().toString(36).substr(2, 5),
@@ -438,6 +447,7 @@ const App: React.FC = () => {
             <QuickSaleView
               inventory={data}
               onSell={handleUpdateRow}
+              onCheckout={handleCheckout}
             />
           )}
           {view === 'notes' && (
