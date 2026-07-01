@@ -38,6 +38,8 @@ interface SaleForm {
   paymentMethod: 'cash' | 'card' | 'mixed';
   taxCollected: string;
   cashAmount: string;
+  cashTaxStatus: 'none' | 'separate' | 'included';
+  paymentNotes: string;
 }
 
 const emptyForm = (): SaleForm => ({
@@ -52,6 +54,8 @@ const emptyForm = (): SaleForm => ({
   paymentMethod: 'cash',
   taxCollected: '0',
   cashAmount: '',
+  cashTaxStatus: 'none',
+  paymentNotes: '',
 });
 
 export const QuickSaleView: React.FC<Props> = ({ inventory, onSell }) => {
@@ -73,7 +77,11 @@ export const QuickSaleView: React.FC<Props> = ({ inventory, onSell }) => {
   const shipping = parseFloat(form.shippingCost) || 0;
   const feePercent = parseFloat(form.platformFeePercent) || 0;
   const feeAmount = salePrice * feePercent / 100;
-  const tax = form.paymentMethod === 'cash' ? 0 : parseFloat(form.taxCollected) || 0;
+  // For cash sales, tax is only counted when the user marks it paid separately /
+  // included; "No tax charged" (the default) keeps it at 0.
+  const tax = form.paymentMethod === 'cash'
+    ? (form.cashTaxStatus === 'none' ? 0 : parseFloat(form.taxCollected) || 0)
+    : parseFloat(form.taxCollected) || 0;
   const totalCost = selected ? selected.purchaseCost + selected.repairCost : 0;
   const netProfit = salePrice - totalCost - shipping - feeAmount;
 
@@ -129,6 +137,8 @@ export const QuickSaleView: React.FC<Props> = ({ inventory, onSell }) => {
       paymentMethod: form.paymentMethod,
       taxCollected: tax,
       cashAmount: form.paymentMethod === 'mixed' ? parseFloat(form.cashAmount) || 0 : undefined,
+      cashTaxStatus: form.paymentMethod === 'cash' ? form.cashTaxStatus : undefined,
+      paymentNotes: form.paymentNotes || undefined,
     };
     onSell(sold);
     setConfirmed(true);
@@ -340,15 +350,38 @@ export const QuickSaleView: React.FC<Props> = ({ inventory, onSell }) => {
             <div className="flex flex-col gap-3">
               <SectionTitle>Payment Method</SectionTitle>
               <div className="flex gap-2">
-                {payBtn('cash', <Banknote className="w-4 h-4" />, 'Cash')}
+                {payBtn('cash', <Banknote className="w-4 h-4" />, 'Store / Cash')}
                 {payBtn('card', <CreditCard className="w-4 h-4" />, 'Card')}
                 {payBtn('mixed', <Blend className="w-4 h-4" />, 'Mixed')}
               </div>
 
               {form.paymentMethod === 'cash' && (
-                <div className="flex items-center gap-2 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 text-xs font-medium px-3 py-2 rounded-lg">
-                  <Banknote className="w-4 h-4 shrink-0" />
-                  Cash sale — no tax charged to customer
+                <div className="flex flex-col gap-3">
+                  <div>
+                    <label className={labelCls}>Cash Sale Tax Status</label>
+                    <select
+                      value={form.cashTaxStatus}
+                      onChange={e => set('cashTaxStatus', e.target.value)}
+                      className="w-full px-3 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    >
+                      <option value="none">No tax charged</option>
+                      <option value="separate">Tax paid separately</option>
+                      <option value="included">Tax included in cash amount</option>
+                    </select>
+                  </div>
+
+                  {form.cashTaxStatus === 'none' && (
+                    <div className="flex items-center gap-2 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 text-xs font-medium px-3 py-2 rounded-lg">
+                      <Banknote className="w-4 h-4 shrink-0" />
+                      In-store cash sale — no tax charged to customer
+                    </div>
+                  )}
+
+                  {form.cashTaxStatus !== 'none' && (
+                    <Field label="Tax Amount ($)" icon={<Receipt className="w-4 h-4" />} value={form.taxCollected} onChange={v => set('taxCollected', v)} type="number" placeholder="0.00" />
+                  )}
+
+                  <Field label="Payment Notes" icon={<FileText className="w-4 h-4" />} value={form.paymentNotes} onChange={v => set('paymentNotes', v)} placeholder="e.g. Customer paid $200 cash + $15 tax" />
                 </div>
               )}
 
@@ -357,9 +390,12 @@ export const QuickSaleView: React.FC<Props> = ({ inventory, onSell }) => {
               )}
 
               {form.paymentMethod === 'mixed' && (
-                <div className="grid grid-cols-2 gap-4">
-                  <Field label="Cash Amount ($)" icon={<Banknote className="w-4 h-4" />} value={form.cashAmount} onChange={v => set('cashAmount', v)} type="number" placeholder="0.00" />
-                  <Field label="Tax Collected ($)" icon={<Receipt className="w-4 h-4" />} value={form.taxCollected} onChange={v => set('taxCollected', v)} type="number" placeholder="0.00" />
+                <div className="flex flex-col gap-3">
+                  <div className="grid grid-cols-2 gap-4">
+                    <Field label="Cash Amount ($)" icon={<Banknote className="w-4 h-4" />} value={form.cashAmount} onChange={v => set('cashAmount', v)} type="number" placeholder="0.00" />
+                    <Field label="Tax Collected ($)" icon={<Receipt className="w-4 h-4" />} value={form.taxCollected} onChange={v => set('taxCollected', v)} type="number" placeholder="0.00" />
+                  </div>
+                  <Field label="Payment Notes" icon={<FileText className="w-4 h-4" />} value={form.paymentNotes} onChange={v => set('paymentNotes', v)} placeholder="e.g. Customer paid $200 cash + $15 tax" />
                 </div>
               )}
             </div>
