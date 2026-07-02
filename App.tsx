@@ -514,6 +514,7 @@ const App: React.FC = () => {
               inventory={data}
               runners={runners}
               onSave={handleSaveInventoryItem}
+              onUpdate={handleUpdateItem}
               onDelete={handleDeleteItem}
               onGenerateSku={handleGenerateSku}
             />
