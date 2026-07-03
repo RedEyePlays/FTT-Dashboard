@@ -2,7 +2,7 @@ import React, { useState, useMemo, useRef } from 'react';
 import {
   ShoppingCart, Trash2, X, Search, User, Phone, FileText, Mail,
   Banknote, CreditCard, Blend, CheckCircle, Package, Smartphone, ScanLine, History,
-  Printer, Eye, RotateCcw, QrCode,
+  Printer, Eye, RotateCcw, QrCode, Sparkles,
 } from 'lucide-react';
 import { InventoryItem, ItemKind, SalesTransaction, Customer } from '../types';
 import { getPOSSettings } from './SettingsModal';
@@ -13,6 +13,7 @@ export interface CartCheckout {
   accessoryQtys: Record<string, number>; // accessoryId -> qty to decrement
   transaction: SalesTransaction;         // sales record to persist
   customer?: Customer;                   // customer to upsert
+  newInventoryItems?: InventoryItem[];   // custom items to add to inventory (SKU filled by caller)
 }
 
 interface Props {
@@ -33,19 +34,27 @@ const PLATFORMS: { name: string; fee: number }[] = [
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 const kindOf = (i: InventoryItem): ItemKind => i.kind ?? 'device';
 
+type CustomCategory = 'device' | 'accessory' | 'service' | 'other';
+
 interface CartLine {
   key: string;
-  inventoryId: string;
+  inventoryId: string;   // '' for custom items not tied to inventory
   kind: ItemKind;
   name: string;
   code: string;
   quantity: number;
-  maxQty: number;        // accessories: available stock; devices: 1
+  maxQty: number;        // accessories: available stock; devices: 1; custom: 9999
   unitPrice: number;
-  purchaseCost: number;  // per-unit purchase cost
+  purchaseCost: number;  // per-unit purchase / cost estimate
   repairCost: number;    // per-unit repair (devices)
   taxable: boolean;
   discount: number;
+  // Custom (not-in-inventory) items
+  isCustom?: boolean;
+  category?: CustomCategory;
+  imei?: string;
+  notes?: string;
+  addToInventory?: boolean;
 }
 
 export const CartSaleView: React.FC<Props> = ({ inventory, onComplete }) => {
@@ -81,6 +90,11 @@ export const CartSaleView: React.FC<Props> = ({ inventory, onComplete }) => {
   const [showTx, setShowTx] = useState(false);
   const [labelItem, setLabelItem] = useState<InventoryItem | null>(null);
 
+  // Custom (not-in-inventory) item modal
+  const emptyCustom = () => ({ name: '', category: 'accessory' as CustomCategory, quantity: '1', unitPrice: '', costEstimate: '', taxable: true, notes: '', imei: '', addToInventory: false });
+  const [showCustom, setShowCustom] = useState(false);
+  const [custom, setCustom] = useState(emptyCustom());
+
   const taxRate = getPOSSettings().taxRate;
   const feePercent = parseFloat(platformFeePercent) || 0;
 
@@ -113,7 +127,11 @@ export const CartSaleView: React.FC<Props> = ({ inventory, onComplete }) => {
   );
 
   // ---- math ----
-  const lineSubtotal = (l: CartLine) => Math.max(0, l.quantity * l.unitPrice - l.discount);
+  // Custom items may be negative (manual discount/adjustment); real items clamp at 0.
+  const lineSubtotal = (l: CartLine) => {
+    const v = l.quantity * l.unitPrice - l.discount;
+    return l.isCustom ? v : Math.max(0, v);
+  };
   const linePurchase = (l: CartLine) => l.quantity * l.purchaseCost;
   const lineRepair = (l: CartLine) => l.quantity * l.repairCost;
 
@@ -155,6 +173,22 @@ export const CartSaleView: React.FC<Props> = ({ inventory, onComplete }) => {
   const removeLine = (key: string) => setCart(c => c.filter(l => l.key !== key));
   const num = (v: string) => parseFloat(v) || 0;
 
+  // Add a custom (not-in-inventory) item to the cart
+  const addCustomItem = () => {
+    if (!custom.name.trim()) return;
+    setCart(c => [...c, {
+      key: uid(), inventoryId: '', kind: custom.category === 'device' ? 'device' : 'accessory',
+      name: custom.name.trim(), code: custom.imei.trim(),
+      quantity: Math.max(1, Math.round(num(custom.quantity)) || 1), maxQty: 9999,
+      unitPrice: num(custom.unitPrice), purchaseCost: num(custom.costEstimate), repairCost: 0,
+      taxable: custom.taxable, discount: 0,
+      isCustom: true, category: custom.category, imei: custom.imei.trim() || undefined,
+      notes: custom.notes.trim() || undefined, addToInventory: custom.addToInventory,
+    }]);
+    setCustom(emptyCustom());
+    setShowCustom(false);
+  };
+
   // Resolve a scanned/typed code to an inventory item and add it to the cart.
   // Works with USB/Bluetooth scanners that type into the focused input + Enter.
   const handleScan = (raw: string) => {
@@ -183,6 +217,7 @@ export const CartSaleView: React.FC<Props> = ({ inventory, onComplete }) => {
     const transactionId = uid();
     const soldRows: InventoryItem[] = [];
     const accessoryQtys: Record<string, number> = {};
+    const newInventoryItems: InventoryItem[] = [];
 
     cart.forEach(l => {
       const saleShare = lineSubtotal(l);
@@ -196,6 +231,29 @@ export const CartSaleView: React.FC<Props> = ({ inventory, onComplete }) => {
         paymentNotes: paymentNotes || undefined,
         platformName, platformFeePercent: feePercent, platformFees: feeShare,
       };
+
+      // Custom items: never touch existing inventory. Optionally add a new record.
+      if (l.isCustom) {
+        if (l.addToInventory && (l.category === 'device' || l.category === 'accessory')) {
+          if (l.category === 'device') {
+            newInventoryItems.push({
+              id: uid(), kind: 'device', sku: '', date: soldDate, item: l.name, imei: l.imei || '',
+              boughtFrom: 'Custom sale', purchaseCost: l.purchaseCost, repairCost: 0,
+              deviceType: 'Other', condition: 'Good', deviceStatus: 'sold',
+              salePrice: saleShare, notes: l.notes || 'Added from custom sale', ...common,
+            } as InventoryItem);
+          } else {
+            newInventoryItems.push({
+              id: uid(), kind: 'accessory', sku: '', date: soldDate, item: l.name, imei: '',
+              boughtFrom: 'Custom sale', purchaseCost: 0, repairCost: 0, soldDate: '', soldTo: '', salePrice: 0,
+              category: 'Custom', quantity: 0, costPerUnit: l.purchaseCost, sellingPrice: l.unitPrice,
+              lowStockThreshold: 3, notes: l.notes || 'Added from custom sale',
+            } as InventoryItem);
+          }
+        }
+        return;
+      }
+
       if (l.kind === 'accessory') {
         accessoryQtys[l.inventoryId] = (accessoryQtys[l.inventoryId] || 0) + l.quantity;
       } else {
@@ -222,7 +280,7 @@ export const CartSaleView: React.FC<Props> = ({ inventory, onComplete }) => {
       notes: paymentNotes || undefined,
     };
 
-    onComplete({ soldRows, accessoryQtys, transaction, customer });
+    onComplete({ soldRows, accessoryQtys, transaction, customer, newInventoryItems });
     setLastTx(transaction);
     setConfirmed(true);
   };
@@ -233,6 +291,7 @@ export const CartSaleView: React.FC<Props> = ({ inventory, onComplete }) => {
     setCashAmount(''); setCardAmount(''); setEtransferAmount(''); setTaxCollected('');
     setPlatformName('None / In-Store'); setPlatformFeePercent('0');
     setLastTx(null); setShowTx(false); setConfirmed(false);
+    setCustom(emptyCustom()); setShowCustom(false);
     setTimeout(() => scanRef.current?.focus(), 0);
   };
 
@@ -352,6 +411,7 @@ export const CartSaleView: React.FC<Props> = ({ inventory, onComplete }) => {
         <div className="flex flex-wrap gap-2">
           <button onClick={() => { setPicker('device'); setSearch(''); }} className="flex items-center gap-2 px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium"><Smartphone className="w-4 h-4" /> Add Device</button>
           <button onClick={() => { setPicker('accessory'); setSearch(''); }} className="flex items-center gap-2 px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-lg text-sm font-medium hover:border-indigo-400"><Package className="w-4 h-4" /> Add Accessory</button>
+          <button onClick={() => { setCustom(emptyCustom()); setShowCustom(true); }} className="flex items-center gap-2 px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-lg text-sm font-medium hover:border-indigo-400"><Sparkles className="w-4 h-4" /> Add Custom Item</button>
         </div>
 
         {cart.length === 0 && (
@@ -366,13 +426,15 @@ export const CartSaleView: React.FC<Props> = ({ inventory, onComplete }) => {
           {cart.map(l => (
             <div key={l.key} className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-4">
               <div className="flex items-start gap-3">
-                <div className={`mt-1 ${l.kind === 'device' ? 'text-indigo-500' : 'text-violet-500'}`}>{l.kind === 'device' ? <Smartphone className="w-4 h-4" /> : <Package className="w-4 h-4" />}</div>
+                <div className={`mt-1 ${l.isCustom ? 'text-amber-500' : l.kind === 'device' ? 'text-indigo-500' : 'text-violet-500'}`}>{l.isCustom ? <Sparkles className="w-4 h-4" /> : l.kind === 'device' ? <Smartphone className="w-4 h-4" /> : <Package className="w-4 h-4" />}</div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-slate-800 dark:text-slate-100 truncate">{l.name}</p>
-                  <p className="text-xs text-slate-400 font-mono">{l.code}</p>
+                  <p className="text-sm font-semibold text-slate-800 dark:text-slate-100 truncate flex items-center gap-2">{l.name}
+                    {l.isCustom && <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold uppercase bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">Custom · {l.category}</span>}
+                  </p>
+                  {(l.code || l.notes) && <p className="text-xs text-slate-400 font-mono truncate">{l.code}{l.notes ? `  ${l.notes}` : ''}</p>}
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-2">
-                    {l.kind === 'accessory' && (
-                      <div><label className={labelCls}>Qty (max {l.maxQty})</label>
+                    {(l.kind === 'accessory' || l.isCustom) && (
+                      <div><label className={labelCls}>Qty{!l.isCustom ? ` (max ${l.maxQty})` : ''}</label>
                         <input type="number" min="1" max={l.maxQty} className={inputCls} value={l.quantity}
                           onChange={e => updateLine(l.key, { quantity: Math.min(l.maxQty, Math.max(1, Math.round(num(e.target.value)))) })} /></div>
                     )}
@@ -505,6 +567,53 @@ export const CartSaleView: React.FC<Props> = ({ inventory, onComplete }) => {
                   </span>
                 </button>
               ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Custom item modal */}
+      {showCustom && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={() => setShowCustom(false)}>
+          <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-lg border border-slate-200 dark:border-slate-700 max-h-[92vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            <div className="px-5 py-3 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
+              <h2 className="font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2"><Sparkles className="w-5 h-5 text-amber-500" /> Add Custom Item</h2>
+              <button onClick={() => setShowCustom(false)}><X className="w-5 h-5 text-slate-400" /></button>
+            </div>
+            <div className="p-5 grid grid-cols-2 gap-3">
+              <div className="col-span-2"><label className={labelCls}>Item Name *</label>
+                <input autoFocus className={inputCls} value={custom.name} onChange={e => setCustom(c => ({ ...c, name: e.target.value }))} placeholder="e.g. Service fee, Random charger" /></div>
+              <div><label className={labelCls}>Category</label>
+                <select className={inputCls} value={custom.category} onChange={e => setCustom(c => ({ ...c, category: e.target.value as CustomCategory }))}>
+                  <option value="device">Device</option>
+                  <option value="accessory">Accessory</option>
+                  <option value="service">Service</option>
+                  <option value="other">Other</option>
+                </select></div>
+              <div><label className={labelCls}>Quantity</label>
+                <input type="number" min="1" className={inputCls} value={custom.quantity} onChange={e => setCustom(c => ({ ...c, quantity: e.target.value }))} /></div>
+              <div><label className={labelCls}>Unit Price</label>
+                <input type="number" step="0.01" className={inputCls} value={custom.unitPrice} onChange={e => setCustom(c => ({ ...c, unitPrice: e.target.value }))} placeholder="0.00 (negative = discount)" /></div>
+              <div><label className={labelCls}>Cost Estimate (optional)</label>
+                <input type="number" step="0.01" className={inputCls} value={custom.costEstimate} onChange={e => setCustom(c => ({ ...c, costEstimate: e.target.value }))} placeholder="0.00" /></div>
+              {custom.category === 'device' && (
+                <div className="col-span-2"><label className={labelCls}>IMEI / Serial (optional)</label>
+                  <input className={inputCls} value={custom.imei} onChange={e => setCustom(c => ({ ...c, imei: e.target.value }))} /></div>
+              )}
+              <div className="col-span-2"><label className={labelCls}>Notes</label>
+                <input className={inputCls} value={custom.notes} onChange={e => setCustom(c => ({ ...c, notes: e.target.value }))} /></div>
+              <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300 cursor-pointer">
+                <input type="checkbox" checked={custom.taxable} onChange={e => setCustom(c => ({ ...c, taxable: e.target.checked }))} className="rounded" /> Taxable
+              </label>
+              {(custom.category === 'device' || custom.category === 'accessory') && (
+                <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300 cursor-pointer">
+                  <input type="checkbox" checked={custom.addToInventory} onChange={e => setCustom(c => ({ ...c, addToInventory: e.target.checked }))} className="rounded" /> Add this item to inventory after sale
+                </label>
+              )}
+            </div>
+            <div className="px-5 py-3 border-t border-slate-100 dark:border-slate-800 flex justify-end gap-2">
+              <button onClick={() => setShowCustom(false)} className="px-4 py-2 text-sm rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">Cancel</button>
+              <button onClick={addCustomItem} disabled={!custom.name.trim()} className="px-5 py-2 text-sm rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white font-medium">Add to Cart</button>
             </div>
           </div>
         </div>
