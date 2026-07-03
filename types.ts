@@ -166,6 +166,9 @@ export interface SalesTransaction {
   customerPhone?: string;
   customerEmail?: string;
   paymentMethod?: 'cash' | 'card' | 'mixed';
+  cashAmount?: number;
+  cardAmount?: number;
+  etransferAmount?: number;
   platformName?: string;
   subtotal: number;
   tax: number;
