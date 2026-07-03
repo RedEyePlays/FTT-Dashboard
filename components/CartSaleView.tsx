@@ -3,12 +3,14 @@ import {
   ShoppingCart, Trash2, X, Search, QrCode, User, Phone, FileText, Mail,
   Banknote, CreditCard, Blend, CheckCircle, Package, Smartphone, ScanLine, History,
 } from 'lucide-react';
-import { InventoryItem, ItemKind } from '../types';
+import { InventoryItem, ItemKind, SalesTransaction, Customer } from '../types';
 import { getPOSSettings } from './SettingsModal';
 
 export interface CartCheckout {
   soldRows: InventoryItem[];              // device rows to mark sold (replace by id)
   accessoryQtys: Record<string, number>; // accessoryId -> qty to decrement
+  transaction: SalesTransaction;         // sales record to persist
+  customer?: Customer;                   // customer to upsert
 }
 
 interface Props {
@@ -161,7 +163,21 @@ export const CartSaleView: React.FC<Props> = ({ inventory, onComplete }) => {
       }
     });
 
-    onComplete({ soldRows, accessoryQtys });
+    const customer: Customer | undefined = customerName.trim()
+      ? { id: (customerPhone.trim() || customerName.trim().toLowerCase().replace(/\s+/g, '-')), name: customerName.trim(), phone: customerPhone.trim(), email: customerEmail.trim() || undefined, notes: customerNotes.trim() || undefined }
+      : undefined;
+
+    const transaction: SalesTransaction = {
+      id: transactionId, date: soldDate,
+      customerId: customer?.id, customerName, customerPhone: customerPhone || undefined, customerEmail: customerEmail || undefined,
+      paymentMethod, platformName,
+      subtotal, tax, platformFee, purchaseCost: purchaseCostTotal, repairCost: repairCostTotal,
+      totalCost, totalPaid, netProfit,
+      lines: cart.map(l => ({ inventoryId: l.inventoryId, kind: l.kind, name: l.name, sku: l.code, quantity: l.quantity, unitPrice: l.unitPrice })),
+      notes: paymentNotes || undefined,
+    };
+
+    onComplete({ soldRows, accessoryQtys, transaction, customer });
     setConfirmed(true);
   };
 

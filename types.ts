@@ -149,6 +149,36 @@ export interface ActivityEntry {
   text: string; // e.g. "PHN-000021 sold to John"
 }
 
+export interface SalesLine {
+  inventoryId?: string;
+  kind: ItemKind;
+  name: string;
+  sku?: string;
+  quantity: number;
+  unitPrice: number;
+}
+
+export interface SalesTransaction {
+  id: string;
+  date: string;            // YYYY-MM-DD
+  customerId?: string;
+  customerName: string;
+  customerPhone?: string;
+  customerEmail?: string;
+  paymentMethod?: 'cash' | 'card' | 'mixed';
+  platformName?: string;
+  subtotal: number;
+  tax: number;
+  platformFee: number;
+  purchaseCost: number;
+  repairCost: number;
+  totalCost: number;
+  totalPaid: number;
+  netProfit: number;
+  lines: SalesLine[];
+  notes?: string;
+}
+
 export interface AppData {
   inventory: InventoryItem[];
   notes: Note[];

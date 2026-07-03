@@ -17,6 +17,7 @@ interface Props {
   onUpdate: (id: string, field: keyof InventoryItem, value: any) => void;
   onDelete: (id: string) => void;
   onGenerateSku: (kind: ItemKind, deviceType?: DeviceType) => string;
+  onSeed?: () => void;
 }
 
 type Tab = 'all' | 'devices' | 'accessories' | 'sold' | 'lowstock';
@@ -116,7 +117,7 @@ const parseCSV = (text: string): Record<string, string>[] => {
   return rows.filter(r => r.some(x => x !== '')).map(r => Object.fromEntries(header.map((h, i) => [h.trim(), r[i] ?? ''])));
 };
 
-export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, onSave, onUpdate, onDelete, onGenerateSku }) => {
+export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, onSave, onUpdate, onDelete, onGenerateSku, onSeed }) => {
   const [tab, setTab] = useState<Tab>('all');
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<Sort | null>(null);
@@ -270,6 +271,23 @@ export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, o
       <div className="min-w-0"><p className="text-[11px] text-slate-400 uppercase tracking-wide truncate">{label}</p><p className="text-lg font-bold text-slate-800 dark:text-slate-100 leading-tight">{value}</p></div>
     </div>
   );
+
+  if (inventory.length === 0) {
+    return (
+      <div className="h-full min-h-[60vh] flex flex-col items-center justify-center text-center gap-4">
+        <div className="w-16 h-16 rounded-2xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center"><Boxes className="w-8 h-8 text-slate-300" /></div>
+        <div>
+          <p className="text-lg font-bold text-slate-800 dark:text-slate-100">No inventory yet</p>
+          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Add your first device or accessory, or load sample data to explore.</p>
+        </div>
+        <div className="flex gap-2 flex-wrap justify-center">
+          <button onClick={addDeviceRow} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium"><Smartphone className="w-4 h-4" /> Add Device</button>
+          <button onClick={addAccessoryRow} className="flex items-center gap-2 px-4 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-lg text-sm font-medium"><Package className="w-4 h-4" /> Add Accessory</button>
+          {onSeed && <button onClick={onSeed} className="flex items-center gap-2 px-4 py-2 bg-white dark:bg-slate-800 border border-indigo-300 dark:border-indigo-700 text-indigo-600 dark:text-indigo-300 rounded-lg text-sm font-medium"><Boxes className="w-4 h-4" /> Load Sample Data</button>}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-4 h-full" onClick={() => menu && setMenu(null)}>
