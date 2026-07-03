@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { LayoutDashboard, PlusCircle, Table, Activity, Sparkles, Moon, Sun, Lock, StickyNote, Settings, Calculator, Bot, MessageCircle, ShoppingCart, Search, Truck } from 'lucide-react';
 import { Dashboard } from './components/Dashboard';
 import { DataEntryForm } from './components/DataEntryForm';
@@ -11,17 +11,26 @@ import { SettingsModal } from './components/SettingsModal';
 import { CalculatorTool } from './components/CalculatorTool';
 import { AIChatView } from './components/AIChatView';
 import { QuickSaleView } from './components/QuickSaleView';
+import type { CartCheckout } from './components/CartSaleView';
 import { FinderModal } from './components/FinderModal';
 import { DropOffView } from './components/DropOffView';
 import { InventoryView } from './components/InventoryView';
-import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, Runner, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry } from './types';
+import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, Runner, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, SalesTransaction } from './types';
 import { skuPrefix, nextSku } from './services/sku';
 import { INITIAL_DATA } from './constants';
-import { encryptData, decryptData } from './services/security';
+import { decryptData } from './services/security';
 import { auth, db } from './services/firebase';
 import { onAuthChange } from './services/auth';
 import { User, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from 'firebase/auth';
-import { doc, setDoc, getDoc } from 'firebase/firestore';
+import { doc, getDoc } from 'firebase/firestore';
+import {
+  subscribeCollection, subscribeMeta, saveMeta, saveItem, deleteItem, syncArray,
+  logActivityDoc, commitSale, seedSampleData, migrateLegacyIfNeeded, CollName,
+} from './services/firestoreDb';
+
+const collFor = (i: InventoryItem): CollName => (i.kind ?? 'device') === 'accessory' ? 'accessories' : 'inventory';
+const newId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+const mkActivity = (text: string): ActivityEntry => ({ id: newId(), ts: Date.now(), text });
 
 const App: React.FC = () => {
   // --- AUTH STATE ---
@@ -32,15 +41,36 @@ const App: React.FC = () => {
   // --- APP STATE ---
   const [view, setView] = useState<ViewState>('dashboard');
 
-  // Data State
-  const [data, setData] = useState<InventoryItem[]>([]);
+  // Data State — populated live from Firestore collections
+  const [devices, setDevices] = useState<InventoryItem[]>([]);
+  const [accessories, setAccessories] = useState<InventoryItem[]>([]);
+  const data = useMemo(() => [...devices, ...accessories], [devices, accessories]);
   const [notes, setNotes] = useState<Note[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [runners, setRunners] = useState<Runner[]>([]);
   const [dropOffs, setDropOffs] = useState<DropOff[]>([]);
   const [settlements, setSettlements] = useState<Settlement[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [salesTransactions, setSalesTransactions] = useState<SalesTransaction[]>([]);
   const [skuCounters, setSkuCounters] = useState<Record<string, number>>({});
   const [activityLog, setActivityLog] = useState<ActivityEntry[]>([]);
+
+  // Firestore connection state
+  const [dbLoading, setDbLoading] = useState(true);
+  const [dbError, setDbError] = useState<string | null>(null);
+  const [reconnectKey, setReconnectKey] = useState(0);
+
+  // Refs for latest snapshots (used to diff array-based updates + SKU gen)
+  const runnersRef = useRef<Runner[]>([]);
+  const dropOffsRef = useRef<DropOff[]>([]);
+  const settlementsRef = useRef<Settlement[]>([]);
+  const skuRef = useRef<Record<string, number>>({});
+  const dataRef = useRef<InventoryItem[]>([]);
+  useEffect(() => { runnersRef.current = runners; }, [runners]);
+  useEffect(() => { dropOffsRef.current = dropOffs; }, [dropOffs]);
+  useEffect(() => { settlementsRef.current = settlements; }, [settlements]);
+  useEffect(() => { skuRef.current = skuCounters; }, [skuCounters]);
+  useEffect(() => { dataRef.current = data; }, [data]);
 
   // AI Chat State (Shared between Sidebar and Tab)
   const [aiMessages, setAiMessages] = useState<ChatMessage[]>([{
@@ -67,32 +97,63 @@ const App: React.FC = () => {
 
   // Firebase Auth Listener
   useEffect(() => {
-    const unsubscribe = onAuthChange(async (user) => {
-      setUser(user);
-      if (user) {
-        await loadData(user.uid, user.email!); // Pass email as the pin
-      } else {
-        // Reset app state on logout
-        setData([]);
-        setNotes([]);
-        setTasks([]);
+    const unsubscribe = onAuthChange((u) => {
+      setUser(u);
+      if (!u) {
+        setDevices([]); setAccessories([]); setNotes([]); setTasks([]);
+        setRunners([]); setDropOffs([]); setSettlements([]); setCustomers([]);
+        setSalesTransactions([]); setActivityLog([]); setSkuCounters({});
+        setDbLoading(false);
       }
       setIsLoadingAuth(false);
     });
     return () => unsubscribe();
   }, []);
 
+  // Firestore real-time subscriptions (per collection) once signed in
+  useEffect(() => {
+    if (!user) return;
+    const uid = user.uid;
+    setDbLoading(true); setDbError(null);
+    const onErr = (e: Error) => { console.error('Firestore error:', e); setDbError(e.message || 'Failed to load data'); setDbLoading(false); };
+
+    let migrated = false;
+    // One-time migration from the legacy encrypted blob, then rely on live subs.
+    (async () => {
+      try {
+        const legacySnap = await getDoc(doc(db, 'user_data', uid));
+        const enc = legacySnap.exists() ? (legacySnap.data() as any).data : null;
+        if (enc && user.email) {
+          try {
+            const decrypted = decryptData(enc, user.email);
+            migrated = await migrateLegacyIfNeeded(uid, decrypted);
+          } catch { /* legacy pin mismatch — skip migration */ }
+        }
+      } catch (e) { /* non-fatal */ }
+      finally { if (!migrated) setDbLoading(false); else setDbLoading(false); }
+    })();
+
+    const subs = [
+      subscribeCollection<InventoryItem>(uid, 'inventory', rows => { setDevices(rows); setDbLoading(false); }, onErr),
+      subscribeCollection<InventoryItem>(uid, 'accessories', setAccessories, onErr),
+      subscribeCollection<Runner>(uid, 'runners', setRunners, onErr),
+      subscribeCollection<DropOff>(uid, 'dropOffs', setDropOffs, onErr),
+      subscribeCollection<Settlement>(uid, 'settlements', setSettlements, onErr),
+      subscribeCollection<Customer>(uid, 'customers', setCustomers, onErr),
+      subscribeCollection<SalesTransaction>(uid, 'salesTransactions', setSalesTransactions, onErr),
+      subscribeCollection<ActivityEntry>(uid, 'activityLog', rows => setActivityLog(rows.sort((a, b) => b.ts - a.ts).slice(0, 60)), onErr),
+      subscribeMeta(uid, m => { setNotes(m.notes || []); setTasks(m.tasks || []); setSkuCounters(m.skuCounters || {}); }, onErr),
+    ];
+    return () => subs.forEach(u => u());
+  }, [user, reconnectKey]);
+
   // --- AUTH HANDLERS ---
   const handleAuthenticate = async (email: string, password: string, isRegister: boolean) => {
     setAuthError(null);
     try {
       if (isRegister) {
-        const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-        const newUser = userCredential.user;
-        // Create a new document in Firestore for the new user
-        const appData: AppData = { inventory: INITIAL_DATA, notes: [], tasks: [] };
-        const encryptedData = encryptData(appData, email); // Use email as the pin
-        await setDoc(doc(db, "user_data", newUser.uid), { data: encryptedData });
+        await createUserWithEmailAndPassword(auth, email, password);
+        // New accounts start empty; sample data can be seeded on demand.
       } else {
         await signInWithEmailAndPassword(auth, email, password);
       }
@@ -103,69 +164,20 @@ const App: React.FC = () => {
   };
 
   const handleLock = async () => {
-    try {
-      await signOut(auth);
-    } catch (e) {
-      console.error("Error signing out: ", e);
-    }
-  };
-  
-  // DATA HANDLING
-  const loadData = async (uid: string, pin: string) => {
-    const docRef = doc(db, "user_data", uid);
-    const docSnap = await getDoc(docRef);
-
-    if (docSnap.exists()) {
-      const encryptedData = docSnap.data().data;
-      try {
-        const decrypted = decryptData(encryptedData, pin);
-        setData(decrypted.inventory || []);
-        setNotes(decrypted.notes || []);
-        setTasks(decrypted.tasks || []);
-        setRunners(decrypted.runners || []);
-        setDropOffs(decrypted.dropOffs || []);
-        setSettlements(decrypted.settlements || []);
-        setSkuCounters(decrypted.skuCounters || {});
-        setActivityLog(decrypted.activityLog || []);
-      } catch (error) {
-        console.error("Error decrypting data: ", error);
-        setAuthError("Failed to decrypt data. Please check your credentials.");
-        await signOut(auth); // Log out if decryption fails
-      }
-    } else {
-      // This case should ideally not happen for a logged-in user
-      // unless the document was deleted manually.
-      console.log("No data document found for user, creating a new one.");
-      const appData: AppData = { inventory: INITIAL_DATA, notes: [], tasks: [] };
-      const encryptedData = encryptData(appData, pin);
-      await setDoc(doc(db, "user_data", uid), { data: encryptedData });
-      setData(INITIAL_DATA);
-      setNotes([]);
-      setTasks([]);
-    }
+    try { await signOut(auth); } catch (e) { console.error("Error signing out: ", e); }
   };
 
-  // PERSISTENCE (ENCRYPTED TO FIRESTORE)
-  useEffect(() => {
-    if (user) {
-      const appData: AppData = {
-        inventory: data,
-        notes: notes,
-        tasks: tasks,
-        runners: runners,
-        dropOffs: dropOffs,
-        settlements: settlements,
-        skuCounters: skuCounters,
-        activityLog: activityLog,
-      };
-      const encrypted = encryptData(appData, user.email!); // Use email as the pin
-      setDoc(doc(db, "user_data", user.uid), { data: encrypted });
-    }
-  }, [data, notes, tasks, runners, dropOffs, settlements, skuCounters, activityLog, user]);
+  const uid = user?.uid;
 
-  // Append a capped activity-log entry
-  const logActivity = (text: string) =>
-    setActivityLog(prev => [{ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), ts: Date.now(), text }, ...prev].slice(0, 60));
+  // Write an activity entry to Firestore (Recent Activity is generated from DB changes)
+  const logActivity = (text: string) => { if (uid) logActivityDoc(uid, mkActivity(text)).catch(() => {}); };
+
+  // Seed sample data into Firestore (demo option only)
+  const handleSeedSampleData = async () => {
+    if (!uid) return;
+    await seedSampleData(uid, INITIAL_DATA);
+    logActivity('Sample data loaded');
+  };
 
 
   // THEME HANDLING
@@ -179,135 +191,105 @@ const App: React.FC = () => {
     }
   }, [darkMode]);
 
+  // --- Inventory writes go straight to Firestore; live subs update the UI ---
   const handleSaveItem = (item: InventoryItem) => {
-    if (editingItem) {
-      setData(prev => prev.map(i => i.id === item.id ? item : i));
-    } else {
-      setData(prev => [...prev, item]);
-    }
+    if (uid) { if (!dataRef.current.some(i => i.id === item.id)) logActivity(`${item.sku || item.item || 'Item'} added`); saveItem(uid, collFor(item), item); }
     setView('grid');
     setEditingItem(undefined);
   };
 
   const handleDeleteItem = (id: string) => {
-    setData((prev) => prev.filter(r => r.id !== id));
+    if (!uid) return;
+    const target = dataRef.current.find(i => i.id === id);
+    deleteItem(uid, target ? collFor(target) : 'inventory', id);
   };
 
-  // Update single field
+  // Update single field (inline edit)
   const handleUpdateItem = (id: string, field: keyof InventoryItem, value: any) => {
-    const target = data.find(i => i.id === id);
-    if (target) {
-      const label = target.sku || target.item || id;
-      if (field === 'deviceStatus') {
-        const nice = String(value).replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-        logActivity(`${label} marked ${nice}`);
-      } else if (field === 'quantity') {
-        logActivity(`${label} quantity updated`);
-      }
-    }
-    setData(prev => prev.map(item => item.id === id ? { ...item, [field]: value } : item));
+    if (!uid) return;
+    const target = dataRef.current.find(i => i.id === id);
+    if (!target) return;
+    const label = target.sku || target.item || id;
+    if (field === 'deviceStatus') logActivity(`${label} marked ${String(value).replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}`);
+    else if (field === 'quantity') logActivity(`${label} quantity updated`);
+    saveItem(uid, collFor(target), { ...target, [field]: value });
   };
 
-  // Update entire row (for Quick Sell or Bulk Edit)
-  const handleUpdateRow = (updatedItem: InventoryItem) => {
-    setData(prev => prev.map(item => item.id === updatedItem.id ? updatedItem : item));
-  };
-
-  // Cart checkout: replace existing rows by id, append new (accessory) rows
-  const handleCheckout = (items: InventoryItem[]) => {
-    setData(prev => {
-      const map = new Map(prev.map(i => [i.id, i]));
-      items.forEach(it => map.set(it.id, it));
-      return Array.from(map.values());
-    });
-  };
+  // Update an entire row
+  const handleUpdateRow = (updatedItem: InventoryItem) => { if (uid) saveItem(uid, collFor(updatedItem), updatedItem); };
 
   // Generate the next unique internal SKU for a kind/device type (never reused)
   const handleGenerateSku = (kind: ItemKind, deviceType?: DeviceType): string => {
     const prefix = skuPrefix(kind, deviceType);
-    const { sku, counters } = nextSku(prefix, skuCounters, data);
+    const { sku, counters } = nextSku(prefix, skuRef.current, dataRef.current);
+    skuRef.current = counters;
     setSkuCounters(counters);
+    if (uid) saveMeta(uid, { skuCounters: counters });
     return sku;
   };
 
   // Add or update a single inventory item (device or accessory) from InventoryView
   const handleSaveInventoryItem = (item: InventoryItem) => {
-    setData(prev => {
-      const exists = prev.some(i => i.id === item.id);
-      if (!exists) logActivity(`${item.sku || item.item || 'Item'} added`);
-      return exists ? prev.map(i => i.id === item.id ? item : i) : [...prev, item];
-    });
+    if (!uid) return;
+    if (!dataRef.current.some(i => i.id === item.id)) logActivity(`${item.sku || item.item || 'Item'} added`);
+    saveItem(uid, collFor(item), item);
   };
 
-  // Sell a cart: mark devices sold, decrement accessory quantities, shared txn id
-  const handleSellCart = (payload: { soldRows: InventoryItem[]; accessoryQtys: Record<string, number> }) => {
-    payload.soldRows.forEach(d => logActivity(`${d.sku || d.item} sold to ${d.customerName || d.soldTo || 'customer'}`));
-    setData(prev => {
-      const byId = new Map(prev.map(i => [i.id, i]));
-      payload.soldRows.forEach(d => byId.set(d.id, d));
-      Object.entries(payload.accessoryQtys).forEach(([id, soldQty]) => {
-        const acc = byId.get(id);
-        if (acc) byId.set(id, { ...acc, quantity: Math.max(0, (acc.quantity ?? 0) - soldQty) });
-      });
-      return Array.from(byId.values());
+  // Sell a cart: mark devices sold in Firestore, decrement accessory quantities,
+  // create a sales transaction + customer, log activity — one atomic commit.
+  const handleSellCart = (payload: CartCheckout) => {
+    if (!uid) return;
+    const accessoryUpdates = Object.entries(payload.accessoryQtys).map(([id, soldQty]) => {
+      const acc = dataRef.current.find(i => i.id === id);
+      return { id, quantity: Math.max(0, (acc?.quantity ?? 0) - soldQty) };
     });
-  };
-
-  const handleCreateEmptyItem = () => {
-    const newItem: InventoryItem = {
-      id: Date.now().toString() + Math.random().toString(36).substr(2, 5),
-      date: new Date().toISOString().split('T')[0],
-      item: '',
-      imei: '',
-      boughtFrom: '',
-      purchaseCost: 0,
-      repairCost: 0,
-      soldDate: '',
-      soldTo: '',
-      salePrice: 0,
-      notes: ''
-    };
-    setData(prev => [...prev, newItem]);
+    const activity: ActivityEntry[] = [
+      ...payload.soldRows.map(d => mkActivity(`${d.sku || d.item} sold to ${d.customerName || d.soldTo || 'customer'}`)),
+      ...Object.keys(payload.accessoryQtys).map(id => {
+        const a = dataRef.current.find(i => i.id === id); return mkActivity(`${a?.sku || 'Accessory'} quantity updated`);
+      }),
+    ];
+    commitSale(uid, { soldRows: payload.soldRows, accessoryUpdates, transaction: payload.transaction, customer: payload.customer, activity }).catch(e => console.error('Sale commit failed', e));
   };
 
   const handleBulkImport = (items: InventoryItem[]) => {
-    setData(prev => [...prev, ...items]);
+    if (uid) items.forEach(it => saveItem(uid, collFor(it), it));
     setView('grid');
   };
-  
-  const handleRestoreData = (restoredData: AppData) => {
-    setData(restoredData.inventory);
-    setNotes(restoredData.notes);
-    setTasks(restoredData.tasks);
-    setRunners(restoredData.runners || []);
-    setDropOffs(restoredData.dropOffs || []);
-    setSettlements(restoredData.settlements || []);
-    setSkuCounters(restoredData.skuCounters || {});
-    setActivityLog(restoredData.activityLog || []);
+
+  const handleRestoreData = async (restoredData: AppData) => {
+    if (!uid) return;
+    const inv = restoredData.inventory || [];
+    await syncArray(uid, 'inventory', inv.filter(i => (i.kind ?? 'device') === 'device'), dataRef.current.filter(i => (i.kind ?? 'device') === 'device'));
+    await syncArray(uid, 'accessories', inv.filter(i => i.kind === 'accessory'), dataRef.current.filter(i => i.kind === 'accessory'));
+    await syncArray(uid, 'runners', restoredData.runners || [], runnersRef.current);
+    await syncArray(uid, 'dropOffs', restoredData.dropOffs || [], dropOffsRef.current);
+    await syncArray(uid, 'settlements', restoredData.settlements || [], settlementsRef.current);
+    await saveMeta(uid, { notes: restoredData.notes || [], tasks: restoredData.tasks || [], skuCounters: restoredData.skuCounters || {} });
   };
 
   // Add an accepted drop-off into inventory, carrying runner + cost across
   const handleAddDropOffToInventory = (d: DropOff) => {
-    const runner = runners.find(r => r.id === d.runnerId);
+    if (!uid) return;
+    const runner = runnersRef.current.find(r => r.id === d.runnerId);
     const newItem: InventoryItem = {
-      id: Date.now().toString() + Math.random().toString(36).substr(2, 5),
-      date: d.dateDropped || new Date().toISOString().split('T')[0],
-      item: d.item,
-      imei: d.imei,
-      boughtFrom: d.sellerName || 'Marketplace (drop-off)',
-      purchaseCost: d.purchasePrice,
-      repairCost: 0,
-      soldDate: '',
-      soldTo: '',
-      salePrice: 0,
-      runnerId: d.runnerId,
-      runnerName: runner?.name,
-      dropOffId: d.id,
+      id: newId(), kind: 'device', date: d.dateDropped || new Date().toISOString().split('T')[0],
+      item: d.item, imei: d.imei, boughtFrom: d.sellerName || 'Marketplace (drop-off)',
+      purchaseCost: d.purchasePrice, repairCost: 0, soldDate: '', soldTo: '', salePrice: 0,
+      deviceStatus: 'ready', runnerId: d.runnerId, runnerName: runner?.name, dropOffId: d.id,
       notes: d.notes ? `Drop-off: ${d.notes}` : 'Added from drop-off',
     };
-    setData(prev => [...prev, newItem]);
-    setDropOffs(prev => prev.map(x => x.id === d.id ? { ...x, inventoryId: newItem.id } : x));
+    saveItem(uid, 'inventory', newItem);
+    saveItem(uid, 'dropOffs', { ...d, inventoryId: newItem.id });
+    logActivity(`${newItem.item} added from drop-off`);
   };
+
+  // Persisted notes/tasks (meta) + array-synced runner data
+  const saveNotes = (n: Note[]) => { setNotes(n); if (uid) saveMeta(uid, { notes: n }); };
+  const saveTasks = (t: Task[]) => { setTasks(t); if (uid) saveMeta(uid, { tasks: t }); };
+  const saveRunners = (r: Runner[]) => { if (uid) syncArray(uid, 'runners', r, runnersRef.current); };
+  const saveDropOffs = (d: DropOff[]) => { if (uid) syncArray(uid, 'dropOffs', d, dropOffsRef.current); };
+  const saveSettlements = (s: Settlement[]) => { if (uid) syncArray(uid, 'settlements', s, settlementsRef.current); };
 
   const handleStartAdd = () => {
     setEditingItem(undefined);
@@ -334,16 +316,46 @@ const App: React.FC = () => {
   );
 
   if (isLoadingAuth) {
-      return <div>Loading...</div>; // Or a nice spinner component
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center gap-3 bg-slate-50 dark:bg-slate-950 text-slate-500">
+        <div className="w-10 h-10 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+        <p className="text-sm">Loading…</p>
+      </div>
+    );
   }
 
   // --- RENDER LOCK SCREEN IF LOCKED ---
   if (!user) {
     return (
-      <AuthScreen 
-        onAuthenticate={handleAuthenticate} 
+      <AuthScreen
+        onAuthenticate={handleAuthenticate}
         error={authError}
       />
+    );
+  }
+
+  // --- FIRESTORE CONNECTION STATES ---
+  if (dbError) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center gap-4 bg-slate-50 dark:bg-slate-950 text-center px-6">
+        <div className="w-14 h-14 rounded-full bg-rose-100 dark:bg-rose-900/30 flex items-center justify-center text-rose-500 text-2xl">!</div>
+        <div>
+          <p className="text-lg font-bold text-slate-800 dark:text-slate-100">Couldn't reach the database</p>
+          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1 max-w-md">{dbError}</p>
+        </div>
+        <div className="flex gap-2">
+          <button onClick={() => { setDbError(null); setDbLoading(true); setReconnectKey(k => k + 1); }} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium">Retry</button>
+          <button onClick={handleLock} className="px-4 py-2 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-lg text-sm font-medium">Sign out</button>
+        </div>
+      </div>
+    );
+  }
+  if (dbLoading) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center gap-3 bg-slate-50 dark:bg-slate-950 text-slate-500">
+        <div className="w-10 h-10 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+        <p className="text-sm">Loading your inventory…</p>
+      </div>
     );
   }
 
@@ -535,6 +547,7 @@ const App: React.FC = () => {
               onUpdate={handleUpdateItem}
               onDelete={handleDeleteItem}
               onGenerateSku={handleGenerateSku}
+              onSeed={handleSeedSampleData}
             />
           )}
           {view === 'pos' && (
@@ -549,18 +562,18 @@ const App: React.FC = () => {
               runners={runners}
               dropOffs={dropOffs}
               settlements={settlements}
-              onRunnersChange={setRunners}
-              onDropOffsChange={setDropOffs}
-              onSettlementsChange={setSettlements}
+              onRunnersChange={saveRunners}
+              onDropOffsChange={saveDropOffs}
+              onSettlementsChange={saveSettlements}
               onAddToInventory={handleAddDropOffToInventory}
             />
           )}
           {view === 'notes' && (
-            <NotesBoard 
+            <NotesBoard
               notes={notes}
               tasks={tasks}
-              onUpdateNotes={setNotes}
-              onUpdateTasks={setTasks}
+              onUpdateNotes={saveNotes}
+              onUpdateTasks={saveTasks}
             />
           )}
           {view === 'ai' && (
