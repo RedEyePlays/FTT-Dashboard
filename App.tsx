@@ -14,7 +14,7 @@ import { QuickSaleView } from './components/QuickSaleView';
 import { FinderModal } from './components/FinderModal';
 import { DropOffView } from './components/DropOffView';
 import { InventoryView } from './components/InventoryView';
-import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, Runner, DropOff, Settlement, ItemKind, DeviceType } from './types';
+import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, Runner, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry } from './types';
 import { skuPrefix, nextSku } from './services/sku';
 import { INITIAL_DATA } from './constants';
 import { encryptData, decryptData } from './services/security';
@@ -40,6 +40,7 @@ const App: React.FC = () => {
   const [dropOffs, setDropOffs] = useState<DropOff[]>([]);
   const [settlements, setSettlements] = useState<Settlement[]>([]);
   const [skuCounters, setSkuCounters] = useState<Record<string, number>>({});
+  const [activityLog, setActivityLog] = useState<ActivityEntry[]>([]);
 
   // AI Chat State (Shared between Sidebar and Tab)
   const [aiMessages, setAiMessages] = useState<ChatMessage[]>([{
@@ -125,6 +126,7 @@ const App: React.FC = () => {
         setDropOffs(decrypted.dropOffs || []);
         setSettlements(decrypted.settlements || []);
         setSkuCounters(decrypted.skuCounters || {});
+        setActivityLog(decrypted.activityLog || []);
       } catch (error) {
         console.error("Error decrypting data: ", error);
         setAuthError("Failed to decrypt data. Please check your credentials.");
@@ -154,11 +156,16 @@ const App: React.FC = () => {
         dropOffs: dropOffs,
         settlements: settlements,
         skuCounters: skuCounters,
+        activityLog: activityLog,
       };
       const encrypted = encryptData(appData, user.email!); // Use email as the pin
       setDoc(doc(db, "user_data", user.uid), { data: encrypted });
     }
-  }, [data, notes, tasks, runners, dropOffs, settlements, skuCounters, user]);
+  }, [data, notes, tasks, runners, dropOffs, settlements, skuCounters, activityLog, user]);
+
+  // Append a capped activity-log entry
+  const logActivity = (text: string) =>
+    setActivityLog(prev => [{ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), ts: Date.now(), text }, ...prev].slice(0, 60));
 
 
   // THEME HANDLING
@@ -188,12 +195,17 @@ const App: React.FC = () => {
 
   // Update single field
   const handleUpdateItem = (id: string, field: keyof InventoryItem, value: any) => {
-    setData(prev => prev.map(item => {
-      if (item.id === id) {
-        return { ...item, [field]: value };
+    const target = data.find(i => i.id === id);
+    if (target) {
+      const label = target.sku || target.item || id;
+      if (field === 'deviceStatus') {
+        const nice = String(value).replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+        logActivity(`${label} marked ${nice}`);
+      } else if (field === 'quantity') {
+        logActivity(`${label} quantity updated`);
       }
-      return item;
-    }));
+    }
+    setData(prev => prev.map(item => item.id === id ? { ...item, [field]: value } : item));
   };
 
   // Update entire row (for Quick Sell or Bulk Edit)
@@ -220,13 +232,16 @@ const App: React.FC = () => {
 
   // Add or update a single inventory item (device or accessory) from InventoryView
   const handleSaveInventoryItem = (item: InventoryItem) => {
-    setData(prev => prev.some(i => i.id === item.id)
-      ? prev.map(i => i.id === item.id ? item : i)
-      : [...prev, item]);
+    setData(prev => {
+      const exists = prev.some(i => i.id === item.id);
+      if (!exists) logActivity(`${item.sku || item.item || 'Item'} added`);
+      return exists ? prev.map(i => i.id === item.id ? item : i) : [...prev, item];
+    });
   };
 
   // Sell a cart: mark devices sold, decrement accessory quantities, shared txn id
   const handleSellCart = (payload: { soldRows: InventoryItem[]; accessoryQtys: Record<string, number> }) => {
+    payload.soldRows.forEach(d => logActivity(`${d.sku || d.item} sold to ${d.customerName || d.soldTo || 'customer'}`));
     setData(prev => {
       const byId = new Map(prev.map(i => [i.id, i]));
       payload.soldRows.forEach(d => byId.set(d.id, d));
@@ -267,6 +282,8 @@ const App: React.FC = () => {
     setRunners(restoredData.runners || []);
     setDropOffs(restoredData.dropOffs || []);
     setSettlements(restoredData.settlements || []);
+    setSkuCounters(restoredData.skuCounters || {});
+    setActivityLog(restoredData.activityLog || []);
   };
 
   // Add an accepted drop-off into inventory, carrying runner + cost across
@@ -513,6 +530,7 @@ const App: React.FC = () => {
             <InventoryView
               inventory={data}
               runners={runners}
+              activity={activityLog}
               onSave={handleSaveInventoryItem}
               onUpdate={handleUpdateItem}
               onDelete={handleDeleteItem}

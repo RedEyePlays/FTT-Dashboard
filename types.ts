@@ -143,6 +143,12 @@ export interface Customer {
   notes?: string;
 }
 
+export interface ActivityEntry {
+  id: string;
+  ts: number;   // epoch ms
+  text: string; // e.g. "PHN-000021 sold to John"
+}
+
 export interface AppData {
   inventory: InventoryItem[];
   notes: Note[];
@@ -152,6 +158,7 @@ export interface AppData {
   settlements?: Settlement[];
   customers?: Customer[];
   skuCounters?: Record<string, number>; // monotonic per-prefix SKU counters
+  activityLog?: ActivityEntry[];
 }
 
 export type ViewState = 'dashboard' | 'entry' | 'edit' | 'grid' | 'notes' | 'ai' | 'pos' | 'dropoff';
