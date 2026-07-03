@@ -250,6 +250,14 @@ const App: React.FC = () => {
       }),
     ];
     commitSale(uid, { soldRows: payload.soldRows, accessoryUpdates, transaction: payload.transaction, customer: payload.customer, activity }).catch(e => console.error('Sale commit failed', e));
+
+    // Custom items opted into inventory: fill a real SKU and persist to the right collection
+    (payload.newInventoryItems || []).forEach(item => {
+      const kind: ItemKind = (item.kind ?? 'device');
+      const withSku = item.sku ? item : { ...item, sku: handleGenerateSku(kind, item.deviceType) };
+      saveItem(uid, collFor(withSku), withSku);
+      logActivity(`${withSku.sku || withSku.item} added from custom sale`);
+    });
   };
 
   const handleBulkImport = (items: InventoryItem[]) => {
