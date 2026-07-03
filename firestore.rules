@@ -1,0 +1,19 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Each signed-in user owns their own data under user_data/{uid}.
+    // No cross-user reads or writes are permitted.
+    match /user_data/{uid} {
+      // The parent doc itself: read once on login for legacy-blob migration
+      // (see App.tsx's one-time migrateLegacyIfNeeded check).
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+
+      // Everything nested below it: inventory, accessories, salesTransactions,
+      // customers, dropOffs, runners, settlements, activityLog, meta/app.
+      match /{document=**} {
+        allow read, write: if request.auth != null && request.auth.uid == uid;
+      }
+    }
+  }
+}
