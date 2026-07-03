@@ -553,7 +553,6 @@ const App: React.FC = () => {
           {view === 'pos' && (
             <QuickSaleView
               inventory={data}
-              onSell={handleUpdateRow}
               onSellCart={handleSellCart}
             />
           )}

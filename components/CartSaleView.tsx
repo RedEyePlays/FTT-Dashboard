@@ -1,10 +1,12 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import {
-  ShoppingCart, Trash2, X, Search, QrCode, User, Phone, FileText, Mail,
+  ShoppingCart, Trash2, X, Search, User, Phone, FileText, Mail,
   Banknote, CreditCard, Blend, CheckCircle, Package, Smartphone, ScanLine, History,
+  Printer, Eye, RotateCcw, QrCode,
 } from 'lucide-react';
 import { InventoryItem, ItemKind, SalesTransaction, Customer } from '../types';
 import { getPOSSettings } from './SettingsModal';
+import { LabelModal } from './LabelModal';
 
 export interface CartCheckout {
   soldRows: InventoryItem[];              // device rows to mark sold (replace by id)
@@ -65,6 +67,20 @@ export const CartSaleView: React.FC<Props> = ({ inventory, onComplete }) => {
   const [cashTaxStatus, setCashTaxStatus] = useState<'none' | 'separate' | 'included'>('none');
   const [paymentNotes, setPaymentNotes] = useState('');
 
+  // Mixed-payment breakdown
+  const [cashAmount, setCashAmount] = useState('');
+  const [cardAmount, setCardAmount] = useState('');
+  const [etransferAmount, setEtransferAmount] = useState('');
+  const [taxCollected, setTaxCollected] = useState('');
+
+  // Scan input + result of a completed sale
+  const [scan, setScan] = useState('');
+  const [scanMsg, setScanMsg] = useState<string | null>(null);
+  const scanRef = useRef<HTMLInputElement>(null);
+  const [lastTx, setLastTx] = useState<SalesTransaction | null>(null);
+  const [showTx, setShowTx] = useState(false);
+  const [labelItem, setLabelItem] = useState<InventoryItem | null>(null);
+
   const taxRate = getPOSSettings().taxRate;
   const feePercent = parseFloat(platformFeePercent) || 0;
 
@@ -107,7 +123,10 @@ export const CartSaleView: React.FC<Props> = ({ inventory, onComplete }) => {
   const totalCost = purchaseCostTotal + repairCostTotal;
   const taxableBase = cart.filter(l => l.taxable).reduce((s, l) => s + lineSubtotal(l), 0);
   const taxApplies = !(paymentMethod === 'cash' && cashTaxStatus === 'none');
-  const tax = taxApplies ? taxableBase * taxRate / 100 : 0;
+  // Mixed payments use a manually-entered tax figure; otherwise compute from the rate.
+  const tax = paymentMethod === 'mixed'
+    ? (parseFloat(taxCollected) || 0)
+    : (taxApplies ? taxableBase * taxRate / 100 : 0);
   const platformFee = subtotal * feePercent / 100;
   const totalPaid = subtotal + tax;
   const netProfit = subtotal - totalCost - platformFee;
@@ -135,6 +154,28 @@ export const CartSaleView: React.FC<Props> = ({ inventory, onComplete }) => {
     setCart(c => c.map(l => l.key === key ? { ...l, ...patch } : l));
   const removeLine = (key: string) => setCart(c => c.filter(l => l.key !== key));
   const num = (v: string) => parseFloat(v) || 0;
+
+  // Resolve a scanned/typed code to an inventory item and add it to the cart.
+  // Works with USB/Bluetooth scanners that type into the focused input + Enter.
+  const handleScan = (raw: string) => {
+    const v = raw.trim();
+    if (!v) return;
+    const q = v.toLowerCase();
+    const eq = (a?: string) => (a || '').toLowerCase() === q;
+
+    const device = inventory.find(i => kindOf(i) === 'device' && !soldIds.has(i.id) && !inCart.has(i.id) && (eq(i.sku) || eq(i.imei)));
+    if (device) { addDevice(device); setScan(''); setScanMsg(null); return; }
+
+    const acc = inventory.find(i => kindOf(i) === 'accessory' && (i.quantity ?? 0) > 0 && (eq(i.sku) || eq(i.manufacturerBarcode)));
+    if (acc) {
+      const line = cart.find(l => l.inventoryId === acc.id);
+      if (line) updateLine(line.key, { quantity: Math.min(line.maxQty, line.quantity + 1) });
+      else addAccessory(acc);
+      setScan(''); setScanMsg(null); return;
+    }
+    setScanMsg(`No item found for "${v}"`);
+    setScan('');
+  };
 
   // ---- checkout ----
   const handleCheckout = () => {
@@ -170,7 +211,11 @@ export const CartSaleView: React.FC<Props> = ({ inventory, onComplete }) => {
     const transaction: SalesTransaction = {
       id: transactionId, date: soldDate,
       customerId: customer?.id, customerName, customerPhone: customerPhone || undefined, customerEmail: customerEmail || undefined,
-      paymentMethod, platformName,
+      paymentMethod,
+      cashAmount: paymentMethod === 'mixed' ? (parseFloat(cashAmount) || 0) : undefined,
+      cardAmount: paymentMethod === 'mixed' ? (parseFloat(cardAmount) || 0) : undefined,
+      etransferAmount: paymentMethod === 'mixed' ? (parseFloat(etransferAmount) || 0) : undefined,
+      platformName,
       subtotal, tax, platformFee, purchaseCost: purchaseCostTotal, repairCost: repairCostTotal,
       totalCost, totalPaid, netProfit,
       lines: cart.map(l => ({ inventoryId: l.inventoryId, kind: l.kind, name: l.name, sku: l.code, quantity: l.quantity, unitPrice: l.unitPrice })),
@@ -178,34 +223,107 @@ export const CartSaleView: React.FC<Props> = ({ inventory, onComplete }) => {
     };
 
     onComplete({ soldRows, accessoryQtys, transaction, customer });
+    setLastTx(transaction);
     setConfirmed(true);
   };
 
   const reset = () => {
     setCart([]); setCustomerName(''); setCustomerPhone(''); setCustomerEmail(''); setCustomerNotes('');
     setPaymentNotes(''); setPaymentMethod('cash'); setCashTaxStatus('none');
-    setPlatformName('None / In-Store'); setPlatformFeePercent('0'); setConfirmed(false);
+    setCashAmount(''); setCardAmount(''); setEtransferAmount(''); setTaxCollected('');
+    setPlatformName('None / In-Store'); setPlatformFeePercent('0');
+    setLastTx(null); setShowTx(false); setConfirmed(false);
+    setTimeout(() => scanRef.current?.focus(), 0);
   };
+
+  // Build and print a simple counter receipt for the completed transaction.
+  const printReceipt = () => {
+    if (!lastTx) return;
+    const rows = lastTx.lines.map(l => `<tr><td>${l.name}</td><td style="text-align:center">${l.quantity}</td><td style="text-align:right">$${(l.quantity * l.unitPrice).toFixed(2)}</td></tr>`).join('');
+    const payParts = lastTx.paymentMethod === 'mixed'
+      ? [['Cash', lastTx.cashAmount], ['Card', lastTx.cardAmount], ['E-transfer', lastTx.etransferAmount]].filter(([, v]) => v).map(([k, v]) => `${k}: $${Number(v).toFixed(2)}`).join(' · ')
+      : (lastTx.paymentMethod || '');
+    const win = window.open('', '_blank', 'width=380,height=640');
+    if (!win) return;
+    win.document.write(`<html><head><title>Receipt ${lastTx.id}</title>
+      <style>body{font-family:'Inter',system-ui,Arial,sans-serif;width:280px;margin:0 auto;padding:12px;color:#000;}
+      h2{text-align:center;margin:0 0 2px;} .muted{color:#555;font-size:11px;text-align:center;margin-bottom:8px;}
+      table{width:100%;border-collapse:collapse;font-size:12px;} td{padding:2px 0;} .tot td{border-top:1px dashed #999;padding-top:4px;}
+      .row{display:flex;justify-content:space-between;font-size:12px;} .b{font-weight:800;}</style></head>
+      <body><h2>FlipThatTech</h2><div class="muted">Receipt ${lastTx.id}<br/>${lastTx.date}</div>
+      <table>${rows}</table>
+      <div style="margin-top:8px">
+        <div class="row"><span>Subtotal</span><span>$${lastTx.subtotal.toFixed(2)}</span></div>
+        <div class="row"><span>Tax</span><span>$${lastTx.tax.toFixed(2)}</span></div>
+        <div class="row b" style="margin-top:4px"><span>Total</span><span>$${lastTx.totalPaid.toFixed(2)}</span></div>
+        <div class="row" style="margin-top:6px;color:#555"><span>Payment</span><span>${payParts}</span></div>
+        ${lastTx.customerName ? `<div class="row" style="color:#555"><span>Customer</span><span>${lastTx.customerName}</span></div>` : ''}
+      </div>
+      <p style="text-align:center;font-size:11px;color:#555;margin-top:12px">Thank you!</p>
+      <script>window.onload=function(){window.print();setTimeout(function(){window.close();},300);};</script>
+      </body></html>`);
+    win.document.close();
+  };
+
+  const soldDeviceRows = cart.filter(l => l.kind === 'device').map(l => inventory.find(i => i.id === l.inventoryId)).filter(Boolean) as InventoryItem[];
 
   const inputCls = 'w-full px-2 py-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500';
   const labelCls = 'block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1';
 
-  if (confirmed) {
+  if (confirmed && lastTx) {
     return (
       <div className="h-full min-h-[calc(100vh-14rem)] flex flex-col items-center justify-center text-center gap-4">
         <div className="w-20 h-20 rounded-full bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center">
           <CheckCircle className="w-10 h-10 text-emerald-500" />
         </div>
         <div>
-          <p className="text-xl font-bold text-slate-800 dark:text-slate-100">Transaction Complete!</p>
-          <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">{cart.length} line item{cart.length !== 1 ? 's' : ''} sold to {customerName}</p>
+          <p className="text-xl font-bold text-slate-800 dark:text-slate-100">Sale Complete!</p>
+          <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">{lastTx.lines.length} item{lastTx.lines.length !== 1 ? 's' : ''} sold to {lastTx.customerName || 'customer'}</p>
         </div>
         <div className="flex gap-6 text-sm">
-          <div className="text-center"><p className="text-slate-400 text-xs">Total Paid</p><p className="font-bold text-slate-800 dark:text-slate-100">${totalPaid.toFixed(2)}</p></div>
-          <div className="text-center"><p className="text-slate-400 text-xs">Total Cost</p><p className="font-bold text-slate-700 dark:text-slate-200">${totalCost.toFixed(2)}</p></div>
-          <div className="text-center"><p className="text-slate-400 text-xs">Net Profit</p><p className={`font-bold ${netProfit >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>${netProfit.toFixed(2)}</p></div>
+          <div className="text-center"><p className="text-slate-400 text-xs">Total Paid</p><p className="font-bold text-slate-800 dark:text-slate-100">${lastTx.totalPaid.toFixed(2)}</p></div>
+          <div className="text-center"><p className="text-slate-400 text-xs">Net Profit</p><p className={`font-bold ${lastTx.netProfit >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>${lastTx.netProfit.toFixed(2)}</p></div>
         </div>
-        <button onClick={reset} className="mt-2 px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg">New Transaction</button>
+
+        <div className="grid grid-cols-2 gap-2 w-full max-w-sm mt-2">
+          <button onClick={printReceipt} className="flex items-center justify-center gap-2 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium"><Printer className="w-4 h-4" /> Print Receipt</button>
+          <button onClick={() => soldDeviceRows[0] && setLabelItem(soldDeviceRows[0])} disabled={soldDeviceRows.length === 0}
+            className="flex items-center justify-center gap-2 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-lg text-sm font-medium hover:border-indigo-400 disabled:opacity-40"><QrCode className="w-4 h-4" /> Print Label</button>
+          <button onClick={() => setShowTx(true)} className="flex items-center justify-center gap-2 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-lg text-sm font-medium hover:border-indigo-400"><Eye className="w-4 h-4" /> View Transaction</button>
+          <button onClick={reset} className="flex items-center justify-center gap-2 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium"><RotateCcw className="w-4 h-4" /> Sell Another</button>
+        </div>
+
+        {labelItem && <LabelModal item={labelItem} onClose={() => setLabelItem(null)} />}
+        {showTx && (
+          <div className="fixed inset-0 z-[65] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={() => setShowTx(false)}>
+            <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-md border border-slate-200 dark:border-slate-700 max-h-[90vh] overflow-y-auto text-left" onClick={e => e.stopPropagation()}>
+              <div className="px-5 py-3 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
+                <h2 className="font-bold text-slate-800 dark:text-slate-100">Transaction {lastTx.id}</h2>
+                <button onClick={() => setShowTx(false)}><X className="w-5 h-5 text-slate-400" /></button>
+              </div>
+              <div className="p-5 space-y-3 text-sm">
+                <p className="text-slate-500 dark:text-slate-400">{lastTx.date} · {lastTx.customerName}{lastTx.customerPhone ? ` · ${lastTx.customerPhone}` : ''}</p>
+                <div className="divide-y divide-slate-100 dark:divide-slate-800 border border-slate-100 dark:border-slate-800 rounded-lg">
+                  {lastTx.lines.map((l, idx) => (
+                    <div key={idx} className="flex items-center justify-between px-3 py-2">
+                      <span className="text-slate-700 dark:text-slate-200 truncate">{l.name} <span className="text-slate-400 text-xs">×{l.quantity}</span></span>
+                      <span className="text-slate-600 dark:text-slate-300">${(l.quantity * l.unitPrice).toFixed(2)}</span>
+                    </div>
+                  ))}
+                </div>
+                <div className="space-y-1">
+                  <Row label="Subtotal" value={lastTx.subtotal} />
+                  <Row label="Tax" value={lastTx.tax} muted />
+                  <Row label="Platform fee" value={-lastTx.platformFee} muted />
+                  <Row label="Total Paid" value={lastTx.totalPaid} bold />
+                  <Row label="Net Profit" value={lastTx.netProfit} />
+                </div>
+                <p className="text-xs text-slate-500 dark:text-slate-400">Payment: {lastTx.paymentMethod}{lastTx.paymentMethod === 'mixed' ? ` — cash $${(lastTx.cashAmount || 0).toFixed(2)}, card $${(lastTx.cardAmount || 0).toFixed(2)}, e-transfer $${(lastTx.etransferAmount || 0).toFixed(2)}` : ''}</p>
+                {lastTx.notes && <p className="text-xs text-slate-500 dark:text-slate-400 italic">{lastTx.notes}</p>}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -216,6 +334,21 @@ export const CartSaleView: React.FC<Props> = ({ inventory, onComplete }) => {
     <div className="flex flex-col lg:flex-row gap-6 h-full min-h-[calc(100vh-14rem)]">
       {/* Left: cart */}
       <div className="flex-1 flex flex-col gap-3">
+        {/* Scan / search to add — works with USB/Bluetooth wedge scanners */}
+        <div className="relative">
+          <ScanLine className="w-4 h-4 text-indigo-500 absolute left-3 top-1/2 -translate-y-1/2" />
+          <input
+            ref={scanRef}
+            autoFocus
+            value={scan}
+            onChange={e => { setScan(e.target.value); setScanMsg(null); }}
+            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleScan(scan); } }}
+            placeholder="Scan SKU, IMEI, serial, or barcode to add item"
+            className="w-full pl-9 pr-3 py-3 bg-white dark:bg-slate-900 border-2 border-indigo-200 dark:border-indigo-800 rounded-xl text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          />
+        </div>
+        {scanMsg && <p className="text-xs text-rose-500 -mt-1">{scanMsg}</p>}
+
         <div className="flex flex-wrap gap-2">
           <button onClick={() => { setPicker('device'); setSearch(''); }} className="flex items-center gap-2 px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium"><Smartphone className="w-4 h-4" /> Add Device</button>
           <button onClick={() => { setPicker('accessory'); setSearch(''); }} className="flex items-center gap-2 px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-lg text-sm font-medium hover:border-indigo-400"><Package className="w-4 h-4" /> Add Accessory</button>
@@ -316,9 +449,15 @@ export const CartSaleView: React.FC<Props> = ({ inventory, onComplete }) => {
               </select>
             </div>
           )}
-          {(paymentMethod === 'mixed' || paymentMethod === 'cash') && (
-            <IconInput icon={<FileText className="w-4 h-4" />} placeholder="Payment notes, e.g. $200 cash + $15 tax" value={paymentNotes} onChange={setPaymentNotes} />
+          {paymentMethod === 'mixed' && (
+            <div className="grid grid-cols-2 gap-2">
+              <div><label className={labelCls}>Cash Amount</label><input type="number" step="0.01" className={inputCls} value={cashAmount} onChange={e => setCashAmount(e.target.value)} placeholder="0.00" /></div>
+              <div><label className={labelCls}>Card Amount</label><input type="number" step="0.01" className={inputCls} value={cardAmount} onChange={e => setCardAmount(e.target.value)} placeholder="0.00" /></div>
+              <div><label className={labelCls}>E-transfer</label><input type="number" step="0.01" className={inputCls} value={etransferAmount} onChange={e => setEtransferAmount(e.target.value)} placeholder="0.00" /></div>
+              <div><label className={labelCls}>Tax Collected</label><input type="number" step="0.01" className={inputCls} value={taxCollected} onChange={e => setTaxCollected(e.target.value)} placeholder="0.00" /></div>
+            </div>
           )}
+          <IconInput icon={<FileText className="w-4 h-4" />} placeholder="Payment notes, e.g. $200 cash + $15 tax" value={paymentNotes} onChange={setPaymentNotes} />
         </div>
 
         {/* Platform */}
