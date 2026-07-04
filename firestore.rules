@@ -1,19 +1,104 @@
 rules_version = '2';
 
+// IMPORTANT: These rules encode the app's role model. Test them in the Firebase
+// console Rules Playground before relying on them in production — they cannot be
+// exercised in CI.
+//
+// Data model:
+//   users/{uid}                      -> { email, role, workspaceId, disabled, ... }
+//   workspaceInvites/{email}         -> { email, workspaceId, role }
+//   user_data/{workspaceId}/...      -> all shared shop collections
+// workspaceId == the owning account's uid; staff share the owner's workspace.
+
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Each signed-in user owns their own data under user_data/{uid}.
-    // No cross-user reads or writes are permitted.
-    match /user_data/{uid} {
-      // The parent doc itself: read once on login for legacy-blob migration
-      // (see App.tsx's one-time migrateLegacyIfNeeded check).
-      allow read, write: if request.auth != null && request.auth.uid == uid;
 
-      // Everything nested below it: inventory, accessories, salesTransactions,
-      // customers, dropOffs, runners, settlements, activityLog, meta/app.
-      match /{document=**} {
-        allow read, write: if request.auth != null && request.auth.uid == uid;
+    function signedIn() { return request.auth != null; }
+    function myUserPath() { return /databases/$(database)/documents/users/$(request.auth.uid); }
+    function hasProfile() { return signedIn() && exists(myUserPath()); }
+    function me() { return get(myUserPath()).data; }
+    function myWorkspace() { return me().workspaceId; }
+    function myRole() { return me().role; }
+    function activeMemberOf(ws) { return hasProfile() && me().disabled != true && myWorkspace() == ws; }
+    function isOwnerOf(ws) { return activeMemberOf(ws) && myRole() == 'owner'; }
+    function canWrite(ws) { return activeMemberOf(ws); } // members write shop data; deletes gated below
+
+    // ---- Shared shop data ----
+    match /user_data/{ws} {
+      // The parent doc holds the legacy encrypted blob (read once for migration).
+      allow read: if activeMemberOf(ws) || request.auth.uid == ws;
+      allow write: if activeMemberOf(ws) || request.auth.uid == ws;
+
+      // Inventory & accessories: any active member may create/update; only the
+      // owner may delete (mirrors inventory.delete = owner-only in the app).
+      match /inventory/{id} {
+        allow read, create, update: if activeMemberOf(ws);
+        allow delete: if isOwnerOf(ws);
       }
+      match /accessories/{id} {
+        allow read, create, update: if activeMemberOf(ws);
+        allow delete: if isOwnerOf(ws);
+      }
+
+      // Audit logs are append-only: create allowed, no update/delete from clients.
+      match /auditLogs/{id} {
+        allow read: if activeMemberOf(ws);
+        allow create: if activeMemberOf(ws);
+        allow update, delete: if false;
+      }
+
+      // Everything else in the workspace: active members read/write.
+      match /{document=**} {
+        allow read, write: if activeMemberOf(ws);
+      }
+    }
+
+    // ---- Users registry ----
+    match /users/{uid} {
+      // A user reads their own profile; owners read profiles in their workspace.
+      allow read: if signedIn() && (request.auth.uid == uid
+        || (hasProfile() && myRole() == 'owner' && resource.data.workspaceId == myWorkspace()));
+
+      // First-login self-provisioning: create only your own doc, and either become
+      // the owner of your own workspace, or claim a matching invite.
+      allow create: if signedIn() && request.auth.uid == uid
+        && request.resource.data.id == uid
+        && (
+          (request.resource.data.role == 'owner' && request.resource.data.workspaceId == uid)
+          || (
+            exists(/databases/$(database)/documents/workspaceInvites/$(request.auth.token.email.lower()))
+            && request.resource.data.workspaceId == get(/databases/$(database)/documents/workspaceInvites/$(request.auth.token.email.lower())).data.workspaceId
+            && request.resource.data.role == get(/databases/$(database)/documents/workspaceInvites/$(request.auth.token.email.lower())).data.role
+          )
+        );
+
+      // Self may only update lastLogin; an owner may change role/disabled/allowProfit
+      // for members of their workspace.
+      allow update: if signedIn() && (
+        (request.auth.uid == uid
+          && request.resource.data.role == resource.data.role
+          && request.resource.data.workspaceId == resource.data.workspaceId
+          && request.resource.data.disabled == resource.data.disabled)
+        || (hasProfile() && myRole() == 'owner' && resource.data.workspaceId == myWorkspace())
+      );
+
+      allow delete: if hasProfile() && myRole() == 'owner' && resource.data.workspaceId == myWorkspace();
+    }
+
+    // ---- Invites ----
+    match /workspaceInvites/{email} {
+      // The invited user may read their own invite (to claim it); owners manage them.
+      allow read: if signedIn() && (
+        request.auth.token.email.lower() == email
+        || (hasProfile() && myRole() == 'owner')
+      );
+      allow create, update: if hasProfile() && myRole() == 'owner'
+        && request.resource.data.workspaceId == myWorkspace();
+      // Deletable by the invitee (on claim) or the owner.
+      allow delete: if signedIn() && (
+        request.auth.token.email.lower() == email
+        || (hasProfile() && myRole() == 'owner')
+      );
     }
   }
 }

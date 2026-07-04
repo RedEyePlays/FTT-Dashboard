@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { LayoutDashboard, PlusCircle, Table, Activity, Sparkles, Moon, Sun, Lock, StickyNote, Settings, Calculator, Bot, MessageCircle, ShoppingCart, Search, Truck } from 'lucide-react';
+import { LayoutDashboard, PlusCircle, Table, Activity, Sparkles, Moon, Sun, Lock, StickyNote, Settings, Calculator, Bot, MessageCircle, ShoppingCart, Search, Truck, ScrollText, Users as UsersIcon } from 'lucide-react';
 import { Dashboard } from './components/Dashboard';
 import { DataEntryForm } from './components/DataEntryForm';
 import { DataGrid } from './components/DataGrid';
@@ -15,8 +15,12 @@ import type { CartCheckout } from './components/CartSaleView';
 import { FinderModal } from './components/FinderModal';
 import { DropOffView } from './components/DropOffView';
 import { InventoryView } from './components/InventoryView';
-import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, Runner, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, SalesTransaction } from './types';
+import { UsersView } from './components/UsersView';
+import { AuditLogView } from './components/AuditLogView';
+import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, Runner, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, SalesTransaction, AppUser, WorkspaceInvite, AuditEntry, Role, Permission } from './types';
 import { skuPrefix, nextSku } from './services/sku';
+import { can } from './services/rbac';
+import { downloadJson, toCSV, triggerDownload } from './services/backup';
 import { INITIAL_DATA } from './constants';
 import { decryptData } from './services/security';
 import { auth, db } from './services/firebase';
@@ -26,6 +30,8 @@ import { doc, getDoc } from 'firebase/firestore';
 import {
   subscribeCollection, subscribeMeta, saveMeta, saveItem, deleteItem, syncArray,
   logActivityDoc, commitSale, seedSampleData, migrateLegacyIfNeeded, CollName,
+  getUserDoc, setUserDoc, updateUserDoc, subscribeWorkspaceUsers, getInvite, setInvite, deleteInvite,
+  subscribeInvites, logAudit, exportWorkspaceData, recordBackup,
 } from './services/firestoreDb';
 
 const collFor = (i: InventoryItem): CollName => (i.kind ?? 'device') === 'accessory' ? 'accessories' : 'inventory';
@@ -54,6 +60,15 @@ const App: React.FC = () => {
   const [salesTransactions, setSalesTransactions] = useState<SalesTransaction[]>([]);
   const [skuCounters, setSkuCounters] = useState<Record<string, number>>({});
   const [activityLog, setActivityLog] = useState<ActivityEntry[]>([]);
+  const [lastBackup, setLastBackup] = useState<number | undefined>(undefined);
+
+  // Users / roles
+  const [appUser, setAppUser] = useState<AppUser | null>(null);
+  const [roleLoading, setRoleLoading] = useState(true);
+  const [workspaceUsers, setWorkspaceUsers] = useState<AppUser[]>([]);
+  const [invites, setInvites] = useState<WorkspaceInvite[]>([]);
+  const [auditLogs, setAuditLogs] = useState<AuditEntry[]>([]);
+  const workspaceId = appUser?.workspaceId;
 
   // Firestore connection state
   const [dbLoading, setDbLoading] = useState(true);
@@ -103,49 +118,91 @@ const App: React.FC = () => {
         setDevices([]); setAccessories([]); setNotes([]); setTasks([]);
         setRunners([]); setDropOffs([]); setSettlements([]); setCustomers([]);
         setSalesTransactions([]); setActivityLog([]); setSkuCounters({});
-        setDbLoading(false);
+        setAppUser(null); setWorkspaceUsers([]); setInvites([]); setAuditLogs([]);
+        setDbLoading(false); setRoleLoading(false);
       }
       setIsLoadingAuth(false);
     });
     return () => unsubscribe();
   }, []);
 
-  // Firestore real-time subscriptions (per collection) once signed in
+  // Resolve the signed-in user's role + workspace (create/claim on first login)
   useEffect(() => {
     if (!user) return;
-    const uid = user.uid;
+    let cancelled = false;
+    setRoleLoading(true);
+    (async () => {
+      try {
+        let record = await getUserDoc(user.uid);
+        if (!record) {
+          // First login: claim a pending invite by email, else become owner of a new workspace.
+          const invite = user.email ? await getInvite(user.email) : null;
+          record = invite
+            ? { id: user.uid, email: user.email || '', role: invite.role, workspaceId: invite.workspaceId, lastLogin: Date.now(), createdAt: Date.now() }
+            : { id: user.uid, email: user.email || '', role: 'owner', workspaceId: user.uid, lastLogin: Date.now(), createdAt: Date.now() };
+          await setUserDoc(record);
+          if (invite) await deleteInvite(invite.email).catch(() => {});
+        } else {
+          updateUserDoc(user.uid, { lastLogin: Date.now() }).catch(() => {});
+        }
+        if (cancelled) return;
+        if (record.disabled) {
+          setAuthError('Your account has been disabled. Contact the shop owner.');
+          await signOut(auth);
+          return;
+        }
+        setAppUser(record);
+      } catch (e: any) {
+        if (!cancelled) setDbError(e?.message || 'Failed to load your account');
+      } finally {
+        if (!cancelled) setRoleLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [user]);
+
+  // Firestore real-time subscriptions, keyed on the workspace (shared shop data)
+  useEffect(() => {
+    if (!user || !appUser || !workspaceId) return;
+    const wsId = workspaceId;
     setDbLoading(true); setDbError(null);
     const onErr = (e: Error) => { console.error('Firestore error:', e); setDbError(e.message || 'Failed to load data'); setDbLoading(false); };
 
-    let migrated = false;
-    // One-time migration from the legacy encrypted blob, then rely on live subs.
-    (async () => {
-      try {
-        const legacySnap = await getDoc(doc(db, 'user_data', uid));
-        const enc = legacySnap.exists() ? (legacySnap.data() as any).data : null;
-        if (enc && user.email) {
-          try {
+    // One-time migration of the legacy encrypted blob (owner's own workspace only).
+    if (wsId === user.uid) {
+      (async () => {
+        try {
+          const legacySnap = await getDoc(doc(db, 'user_data', wsId));
+          const enc = legacySnap.exists() ? (legacySnap.data() as any).data : null;
+          if (enc && user.email) {
             const decrypted = decryptData(enc, user.email);
-            migrated = await migrateLegacyIfNeeded(uid, decrypted);
-          } catch { /* legacy pin mismatch — skip migration */ }
-        }
-      } catch (e) { /* non-fatal */ }
-      finally { if (!migrated) setDbLoading(false); else setDbLoading(false); }
-    })();
+            await migrateLegacyIfNeeded(wsId, decrypted);
+          }
+        } catch { /* non-fatal */ }
+      })();
+    }
 
     const subs = [
-      subscribeCollection<InventoryItem>(uid, 'inventory', rows => { setDevices(rows); setDbLoading(false); }, onErr),
-      subscribeCollection<InventoryItem>(uid, 'accessories', setAccessories, onErr),
-      subscribeCollection<Runner>(uid, 'runners', setRunners, onErr),
-      subscribeCollection<DropOff>(uid, 'dropOffs', setDropOffs, onErr),
-      subscribeCollection<Settlement>(uid, 'settlements', setSettlements, onErr),
-      subscribeCollection<Customer>(uid, 'customers', setCustomers, onErr),
-      subscribeCollection<SalesTransaction>(uid, 'salesTransactions', setSalesTransactions, onErr),
-      subscribeCollection<ActivityEntry>(uid, 'activityLog', rows => setActivityLog(rows.sort((a, b) => b.ts - a.ts).slice(0, 60)), onErr),
-      subscribeMeta(uid, m => { setNotes(m.notes || []); setTasks(m.tasks || []); setSkuCounters(m.skuCounters || {}); }, onErr),
+      subscribeCollection<InventoryItem>(wsId, 'inventory', rows => { setDevices(rows); setDbLoading(false); }, onErr),
+      subscribeCollection<InventoryItem>(wsId, 'accessories', setAccessories, onErr),
+      subscribeCollection<Runner>(wsId, 'runners', setRunners, onErr),
+      subscribeCollection<DropOff>(wsId, 'dropOffs', setDropOffs, onErr),
+      subscribeCollection<Settlement>(wsId, 'settlements', setSettlements, onErr),
+      subscribeCollection<Customer>(wsId, 'customers', setCustomers, onErr),
+      subscribeCollection<SalesTransaction>(wsId, 'salesTransactions', setSalesTransactions, onErr),
+      subscribeCollection<ActivityEntry>(wsId, 'activityLog', rows => setActivityLog(rows.sort((a, b) => b.ts - a.ts).slice(0, 60)), onErr),
+      subscribeCollection<AuditEntry>(wsId, 'auditLogs', rows => setAuditLogs(rows.sort((a, b) => b.ts - a.ts).slice(0, 1000)), onErr),
+      subscribeMeta(wsId, m => { setNotes(m.notes || []); setTasks(m.tasks || []); setSkuCounters(m.skuCounters || {}); setLastBackup(m.lastBackup); }, onErr),
     ];
+    // Owner-only: workspace members + pending invites
+    if (appUser.role === 'owner') {
+      subs.push(subscribeWorkspaceUsers(wsId, setWorkspaceUsers, onErr));
+      subs.push(subscribeInvites(wsId, setInvites, onErr));
+    } else {
+      setWorkspaceUsers([appUser]);
+    }
     return () => subs.forEach(u => u());
-  }, [user, reconnectKey]);
+  }, [user, appUser, workspaceId, reconnectKey]);
 
   // --- AUTH HANDLERS ---
   const handleAuthenticate = async (email: string, password: string, isRegister: boolean) => {
@@ -167,16 +224,27 @@ const App: React.FC = () => {
     try { await signOut(auth); } catch (e) { console.error("Error signing out: ", e); }
   };
 
-  const uid = user?.uid;
+  // All shop writes target the workspace (owner's uid), so staff share one dataset.
+  const uid = workspaceId;
+
+  // Role-based permission check (mirrors the Firestore rules)
+  const allow = (p: Permission) => can(appUser?.role, p, { allowProfit: appUser?.allowProfit });
 
   // Write an activity entry to Firestore (Recent Activity is generated from DB changes)
   const logActivity = (text: string) => { if (uid) logActivityDoc(uid, mkActivity(text)).catch(() => {}); };
 
+  // Append an audit entry (who / what / before / after)
+  const audit = (action: string, entityType: string, entityId?: string, before?: any, after?: any) => {
+    if (!uid || !appUser) return;
+    logAudit(uid, { id: newId(), ts: Date.now(), userId: appUser.id, userEmail: appUser.email, action, entityType, entityId, before, after }).catch(() => {});
+  };
+
   // Seed sample data into Firestore (demo option only)
   const handleSeedSampleData = async () => {
-    if (!uid) return;
+    if (!uid || !allow('inventory.add')) return;
     await seedSampleData(uid, INITIAL_DATA);
     logActivity('Sample data loaded');
+    audit('backup.seed', 'inventory');
   };
 
 
@@ -193,30 +261,37 @@ const App: React.FC = () => {
 
   // --- Inventory writes go straight to Firestore; live subs update the UI ---
   const handleSaveItem = (item: InventoryItem) => {
-    if (uid) { if (!dataRef.current.some(i => i.id === item.id)) logActivity(`${item.sku || item.item || 'Item'} added`); saveItem(uid, collFor(item), item); }
+    const isNew = !dataRef.current.some(i => i.id === item.id);
+    if (uid && (isNew ? allow('inventory.add') : allow('inventory.edit'))) {
+      if (isNew) { logActivity(`${item.sku || item.item || 'Item'} added`); audit('inventory.add', collFor(item), item.id, undefined, item); }
+      else audit('inventory.edit', collFor(item), item.id);
+      saveItem(uid, collFor(item), item);
+    }
     setView('grid');
     setEditingItem(undefined);
   };
 
   const handleDeleteItem = (id: string) => {
-    if (!uid) return;
+    if (!uid || !allow('inventory.delete')) return;
     const target = dataRef.current.find(i => i.id === id);
+    audit('inventory.delete', target ? collFor(target) : 'inventory', id, target);
     deleteItem(uid, target ? collFor(target) : 'inventory', id);
   };
 
   // Update single field (inline edit)
   const handleUpdateItem = (id: string, field: keyof InventoryItem, value: any) => {
-    if (!uid) return;
+    if (!uid || !allow('inventory.edit')) return;
     const target = dataRef.current.find(i => i.id === id);
     if (!target) return;
     const label = target.sku || target.item || id;
     if (field === 'deviceStatus') logActivity(`${label} marked ${String(value).replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}`);
-    else if (field === 'quantity') logActivity(`${label} quantity updated`);
+    else if (field === 'quantity') { logActivity(`${label} quantity updated`); audit('accessory.quantity', collFor(target), id, { quantity: target.quantity }, { quantity: value }); }
+    audit('inventory.edit', collFor(target), id, { [field]: (target as any)[field] }, { [field]: value });
     saveItem(uid, collFor(target), { ...target, [field]: value });
   };
 
   // Update an entire row
-  const handleUpdateRow = (updatedItem: InventoryItem) => { if (uid) saveItem(uid, collFor(updatedItem), updatedItem); };
+  const handleUpdateRow = (updatedItem: InventoryItem) => { if (uid && allow('inventory.edit')) saveItem(uid, collFor(updatedItem), updatedItem); };
 
   // Generate the next unique internal SKU for a kind/device type (never reused)
   const handleGenerateSku = (kind: ItemKind, deviceType?: DeviceType): string => {
@@ -231,14 +306,18 @@ const App: React.FC = () => {
   // Add or update a single inventory item (device or accessory) from InventoryView
   const handleSaveInventoryItem = (item: InventoryItem) => {
     if (!uid) return;
-    if (!dataRef.current.some(i => i.id === item.id)) logActivity(`${item.sku || item.item || 'Item'} added`);
+    const isNew = !dataRef.current.some(i => i.id === item.id);
+    if (isNew ? !allow('inventory.add') : !allow('inventory.edit')) return;
+    if (isNew) { logActivity(`${item.sku || item.item || 'Item'} added`); audit('inventory.add', collFor(item), item.id, undefined, item); }
+    else audit('inventory.edit', collFor(item), item.id);
     saveItem(uid, collFor(item), item);
   };
 
   // Sell a cart: mark devices sold in Firestore, decrement accessory quantities,
   // create a sales transaction + customer, log activity — one atomic commit.
   const handleSellCart = (payload: CartCheckout) => {
-    if (!uid) return;
+    if (!uid || !allow('sales.complete')) return;
+    audit('sale.complete', 'sale', payload.transaction.id, undefined, { totalPaid: payload.transaction.totalPaid, lines: payload.transaction.lines.length });
     const accessoryUpdates = Object.entries(payload.accessoryQtys).map(([id, soldQty]) => {
       const acc = dataRef.current.find(i => i.id === id);
       return { id, quantity: Math.max(0, (acc?.quantity ?? 0) - soldQty) };
@@ -266,7 +345,7 @@ const App: React.FC = () => {
   };
 
   const handleRestoreData = async (restoredData: AppData) => {
-    if (!uid) return;
+    if (!uid || !allow('settings.manage')) return;
     const inv = restoredData.inventory || [];
     await syncArray(uid, 'inventory', inv.filter(i => (i.kind ?? 'device') === 'device'), dataRef.current.filter(i => (i.kind ?? 'device') === 'device'));
     await syncArray(uid, 'accessories', inv.filter(i => i.kind === 'accessory'), dataRef.current.filter(i => i.kind === 'accessory'));
@@ -290,14 +369,56 @@ const App: React.FC = () => {
     saveItem(uid, 'inventory', newItem);
     saveItem(uid, 'dropOffs', { ...d, inventoryId: newItem.id });
     logActivity(`${newItem.item} added from drop-off`);
+    audit('dropoff.accept', 'dropOff', d.id, undefined, { inventoryId: newItem.id });
   };
 
   // Persisted notes/tasks (meta) + array-synced runner data
   const saveNotes = (n: Note[]) => { setNotes(n); if (uid) saveMeta(uid, { notes: n }); };
   const saveTasks = (t: Task[]) => { setTasks(t); if (uid) saveMeta(uid, { tasks: t }); };
-  const saveRunners = (r: Runner[]) => { if (uid) syncArray(uid, 'runners', r, runnersRef.current); };
-  const saveDropOffs = (d: DropOff[]) => { if (uid) syncArray(uid, 'dropOffs', d, dropOffsRef.current); };
-  const saveSettlements = (s: Settlement[]) => { if (uid) syncArray(uid, 'settlements', s, settlementsRef.current); };
+  const saveRunners = (r: Runner[]) => { if (uid && allow('dropoffs.manage')) { syncArray(uid, 'runners', r, runnersRef.current); audit('runner.edit', 'runner'); } };
+  const saveDropOffs = (d: DropOff[]) => { if (uid && allow('dropoffs.manage')) { syncArray(uid, 'dropOffs', d, dropOffsRef.current); audit('dropoff.edit', 'dropOff'); } };
+  const saveSettlements = (s: Settlement[]) => { if (uid && allow('dropoffs.manage')) { syncArray(uid, 'settlements', s, settlementsRef.current); audit('dropoff.settle', 'settlement'); } };
+
+  // --- Users / roles management (Owner only) ---
+  const handleSetRole = (targetUid: string, role: Role) => {
+    if (!allow('users.manage') || targetUid === appUser?.id) return;
+    const before = workspaceUsers.find(u => u.id === targetUid)?.role;
+    updateUserDoc(targetUid, { role }).catch(() => {});
+    audit('user.role_change', 'user', targetUid, { role: before }, { role });
+  };
+  const handleSetDisabled = (targetUid: string, disabled: boolean) => {
+    if (!allow('users.manage') || targetUid === appUser?.id) return;
+    updateUserDoc(targetUid, { disabled }).catch(() => {});
+    audit(disabled ? 'user.disable' : 'user.enable', 'user', targetUid);
+  };
+  const handleSetAllowProfit = (targetUid: string, allowProfit: boolean) => {
+    if (!allow('users.manage')) return;
+    updateUserDoc(targetUid, { allowProfit }).catch(() => {});
+    audit('user.allow_profit', 'user', targetUid, undefined, { allowProfit });
+  };
+  const handleInvite = (email: string, role: Role) => {
+    if (!allow('users.manage') || !workspaceId) return;
+    const inv: WorkspaceInvite = { id: email.toLowerCase(), email: email.toLowerCase(), workspaceId, role, invitedBy: appUser?.email, createdAt: Date.now() };
+    setInvite(inv).catch(() => {});
+    audit('user.invite', 'user', email, undefined, { role });
+  };
+  const handleDeleteInvite = (email: string) => { if (allow('users.manage')) deleteInvite(email).catch(() => {}); };
+
+  // --- Backups (Owner only) ---
+  const handleExportJson = async () => {
+    if (!uid || !allow('backup.export')) return;
+    const dump = await exportWorkspaceData(uid);
+    downloadJson(`ftt-backup-${new Date().toISOString().split('T')[0]}.json`, { exportedAt: new Date().toISOString(), workspaceId: uid, data: dump });
+    await recordBackup(uid, Date.now());
+    audit('backup.export', 'backup', undefined, undefined, { format: 'json' });
+  };
+  const handleExportCsv = async () => {
+    if (!uid || !allow('backup.export')) return;
+    const dump = await exportWorkspaceData(uid);
+    Object.entries(dump).forEach(([name, rows]) => { if (rows.length) triggerDownload(`ftt-${name}-${new Date().toISOString().split('T')[0]}.csv`, toCSV(rows), 'text/csv;charset=utf-8;'); });
+    await recordBackup(uid, Date.now());
+    audit('backup.export', 'backup', undefined, undefined, { format: 'csv' });
+  };
 
   const handleStartAdd = () => {
     setEditingItem(undefined);
@@ -358,11 +479,11 @@ const App: React.FC = () => {
       </div>
     );
   }
-  if (dbLoading) {
+  if (roleLoading || dbLoading || !appUser) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center gap-3 bg-slate-50 dark:bg-slate-950 text-slate-500">
         <div className="w-10 h-10 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" />
-        <p className="text-sm">Loading your inventory…</p>
+        <p className="text-sm">{roleLoading || !appUser ? 'Signing you in…' : 'Loading your inventory…'}</p>
       </div>
     );
   }
@@ -408,20 +529,40 @@ const App: React.FC = () => {
               label="Quick Sale"
               onClick={() => setView('pos')}
             />
-            <NavButton
-              active={view === 'dropoff'}
-              icon={<Truck className="w-4 h-4" />}
-              label="Drop-Offs"
-              onClick={() => setView('dropoff')}
-            />
+            {allow('dropoffs.manage') && (
+              <NavButton
+                active={view === 'dropoff'}
+                icon={<Truck className="w-4 h-4" />}
+                label="Drop-Offs"
+                onClick={() => setView('dropoff')}
+              />
+            )}
+            {allow('audit.view') && (
+              <NavButton
+                active={view === 'audit'}
+                icon={<ScrollText className="w-4 h-4" />}
+                label="Audit"
+                onClick={() => setView('audit')}
+              />
+            )}
+            {allow('users.manage') && (
+              <NavButton
+                active={view === 'users'}
+                icon={<UsersIcon className="w-4 h-4" />}
+                label="Users"
+                onClick={() => setView('users')}
+              />
+            )}
             <NavButton
               active={view === 'ai'}
               icon={<Bot className="w-4 h-4" />}
               label="AI Assistant"
               onClick={() => setView('ai')}
             />
-            
+
             <div className="w-px h-6 bg-slate-200 dark:bg-slate-700 mx-2"></div>
+
+            <span className="hidden lg:inline text-xs text-slate-400 mr-1" title={appUser.email}>{appUser.email.split('@')[0]} · {appUser.role}</span>
 
             <button
               onClick={() => setShowFinder(true)}
@@ -538,7 +679,11 @@ const App: React.FC = () => {
       {/* Main Content */}
       <main className={`mx-auto px-4 sm:px-6 lg:px-8 py-8 flex-1 w-full flex flex-col ${view === 'grid' || view === 'ai' ? 'max-w-[98%]' : 'max-w-7xl'}`}>
         <div className="animate-fadeIn flex-1 flex flex-col">
-          {view === 'dashboard' && <Dashboard data={data} darkMode={darkMode} />}
+          {view === 'dashboard' && (
+            allow('reports.view')
+              ? <Dashboard data={data} darkMode={darkMode} canViewProfit={allow('reports.profit')} />
+              : <div className="text-center text-slate-400 py-20">You don't have access to reports.</div>
+          )}
           {(view === 'entry' || view === 'edit') && (
             <DataEntryForm 
               initialData={editingItem} 
@@ -584,11 +729,26 @@ const App: React.FC = () => {
             />
           )}
           {view === 'ai' && (
-            <AIChatView 
-               inventory={data} 
+            <AIChatView
+               inventory={data}
                messages={aiMessages}
                onUpdateMessages={setAiMessages}
             />
+          )}
+          {view === 'users' && allow('users.manage') && (
+            <UsersView
+              me={appUser}
+              users={workspaceUsers}
+              invites={invites}
+              onSetRole={handleSetRole}
+              onSetDisabled={handleSetDisabled}
+              onSetAllowProfit={handleSetAllowProfit}
+              onInvite={handleInvite}
+              onDeleteInvite={handleDeleteInvite}
+            />
+          )}
+          {view === 'audit' && allow('audit.view') && (
+            <AuditLogView logs={auditLogs} users={workspaceUsers} />
           )}
         </div>
       </main>
@@ -628,6 +788,8 @@ const App: React.FC = () => {
            onClose={() => setShowSettingsModal(false)}
            currentData={{ inventory: data, notes, tasks }}
            onRestore={handleRestoreData}
+           canManageSettings={allow('settings.manage')}
+           backup={allow('backup.export') ? { lastBackup, onExportJson: handleExportJson, onExportCsv: handleExportCsv } : undefined}
          />
       )}
 

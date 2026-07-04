@@ -1,21 +1,23 @@
 import {
-  collection, doc, onSnapshot, setDoc, deleteDoc, getDocs, writeBatch,
+  collection, doc, onSnapshot, setDoc, deleteDoc, getDoc, getDocs, writeBatch, query, where,
 } from 'firebase/firestore';
 import { db } from './firebase';
 import {
   InventoryItem, Runner, DropOff, Settlement, Customer, SalesTransaction, ActivityEntry, Note, Task,
+  AppUser, WorkspaceInvite, AuditEntry,
 } from '../types';
 
-// All per-user data lives under user_data/{uid}/<collection>.
+// Shared shop data lives under user_data/{workspaceId}/<collection>, where
+// workspaceId is the owning account's uid. The `wsId` arg below is that id.
 export const COLLECTIONS = [
   'inventory', 'accessories', 'salesTransactions', 'customers',
-  'dropOffs', 'runners', 'settlements', 'activityLog',
+  'dropOffs', 'runners', 'settlements', 'activityLog', 'auditLogs',
 ] as const;
 export type CollName = typeof COLLECTIONS[number];
 
-const colRef = (uid: string, name: CollName) => collection(db, 'user_data', uid, name);
-const docRef = (uid: string, name: CollName, id: string) => doc(db, 'user_data', uid, name, id);
-const metaRef = (uid: string) => doc(db, 'user_data', uid, 'meta', 'app');
+const colRef = (wsId: string, name: CollName) => collection(db, 'user_data', wsId, name);
+const docRef = (wsId: string, name: CollName, id: string) => doc(db, 'user_data', wsId, name, id);
+const metaRef = (wsId: string) => doc(db, 'user_data', wsId, 'meta', 'app');
 
 // Firestore rejects `undefined` — deep-strip before writing.
 const clean = (v: any): any => {
@@ -36,7 +38,7 @@ export function subscribeCollection<T extends { id: string }>(
     onError);
 }
 
-export interface AppMeta { notes?: Note[]; tasks?: Task[]; skuCounters?: Record<string, number>; }
+export interface AppMeta { notes?: Note[]; tasks?: Task[]; skuCounters?: Record<string, number>; lastBackup?: number; }
 export function subscribeMeta(uid: string, cb: (m: AppMeta) => void, onError: (e: Error) => void) {
   return onSnapshot(metaRef(uid), snap => cb((snap.data() as AppMeta) || {}), onError);
 }
@@ -109,3 +111,54 @@ export async function migrateLegacyIfNeeded(uid: string, legacy: {
   await batch.commit();
   return true;
 }
+
+/* ------------------------- Users / roles (top-level) ------------------------- */
+
+const userRef = (uid: string) => doc(db, 'users', uid);
+const inviteRef = (email: string) => doc(db, 'workspaceInvites', email.toLowerCase());
+
+export const getUserDoc = async (uid: string): Promise<AppUser | null> => {
+  const s = await getDoc(userRef(uid));
+  return s.exists() ? ({ ...(s.data() as any), id: s.id }) : null;
+};
+export const setUserDoc = (u: AppUser) => setDoc(userRef(u.id), clean(u));
+export const updateUserDoc = (uid: string, patch: Partial<AppUser>) => setDoc(userRef(uid), clean(patch), { merge: true });
+
+export function subscribeWorkspaceUsers(wsId: string, cb: (u: AppUser[]) => void, onError: (e: Error) => void) {
+  return onSnapshot(query(collection(db, 'users'), where('workspaceId', '==', wsId)),
+    snap => cb(snap.docs.map(d => ({ ...(d.data() as any), id: d.id })) as AppUser[]), onError);
+}
+
+export const getInvite = async (email: string): Promise<WorkspaceInvite | null> => {
+  const s = await getDoc(inviteRef(email));
+  return s.exists() ? ({ ...(s.data() as any), id: s.id }) : null;
+};
+export const setInvite = (inv: WorkspaceInvite) => setDoc(inviteRef(inv.email), clean(inv));
+export const deleteInvite = (email: string) => deleteDoc(inviteRef(email));
+export function subscribeInvites(wsId: string, cb: (i: WorkspaceInvite[]) => void, onError: (e: Error) => void) {
+  return onSnapshot(query(collection(db, 'workspaceInvites'), where('workspaceId', '==', wsId)),
+    snap => cb(snap.docs.map(d => ({ ...(d.data() as any), id: d.id })) as WorkspaceInvite[]), onError);
+}
+
+/* --------------------------------- Audit ---------------------------------- */
+
+export const logAudit = (wsId: string, entry: AuditEntry) =>
+  setDoc(docRef(wsId, 'auditLogs', entry.id), clean(entry));
+
+/* -------------------------------- Backups --------------------------------- */
+
+// Read every collection for a workspace into one object (for JSON/CSV export).
+export async function exportWorkspaceData(wsId: string): Promise<Record<string, any[]>> {
+  const out: Record<string, any[]> = {};
+  for (const name of COLLECTIONS) {
+    const snap = await getDocs(colRef(wsId, name));
+    out[name] = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
+  }
+  const usersSnap = await getDocs(query(collection(db, 'users'), where('workspaceId', '==', wsId)));
+  out['users'] = usersSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
+  const metaSnap = await getDoc(metaRef(wsId));
+  out['meta'] = metaSnap.exists() ? [{ id: 'app', ...(metaSnap.data() as any) }] : [];
+  return out;
+}
+
+export const recordBackup = (wsId: string, ts: number) => setDoc(metaRef(wsId), clean({ lastBackup: ts }), { merge: true });
