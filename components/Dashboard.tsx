@@ -10,6 +10,7 @@ import ReactMarkdown from 'react-markdown';
 interface DashboardProps {
   data: InventoryItem[];
   darkMode?: boolean;
+  canViewProfit?: boolean;
 }
 
 const COLORS = ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4'];
@@ -24,7 +25,8 @@ const calculateTotalCost = (item: InventoryItem): number => {
     return (item.purchaseCost || 0) + (item.repairCost || 0) + (item.shippingCost || 0) + (item.platformFees || 0);
 };
 
-export const Dashboard: React.FC<DashboardProps> = ({ data, darkMode = false }) => {
+export const Dashboard: React.FC<DashboardProps> = ({ data, darkMode = false, canViewProfit = true }) => {
+  const mask = (v: string) => canViewProfit ? v : '•••';
   const [insight, setInsight] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [timeFilter, setTimeFilter] = useState<string>('All');
@@ -215,10 +217,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, darkMode = false }) 
       )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <SummaryCard title="Net Profit" value={`$${totalProfit.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`} trend={totalProfit > 0 ? "+" : ""} trendUp={totalProfit >= 0} icon="dollar" color="emerald" />
+        <SummaryCard title="Net Profit" value={mask(`$${totalProfit.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`)} trend={canViewProfit && totalProfit > 0 ? "+" : ""} trendUp={totalProfit >= 0} icon="dollar" color="emerald" />
         <SummaryCard title="Total Revenue" value={`$${totalRevenue.toLocaleString()}`} icon="bar-chart" color="blue" />
         <SummaryCard title="Inventory Value" value={`$${totalInvestedUnsold.toLocaleString()}`} subValue={`${unsoldItems.length} items`} icon="package" color="violet" />
-        <SummaryCard title="ROI" value={`${roi.toFixed(1)}%`} subValue={`${margin.toFixed(1)}% Margin`} icon="percent" color="indigo" trendUp={roi > ROI_GOOD_THRESHOLD} />
+        <SummaryCard title="ROI" value={mask(`${roi.toFixed(1)}%`)} subValue={canViewProfit ? `${margin.toFixed(1)}% Margin` : 'Restricted'} icon="percent" color="indigo" trendUp={roi > ROI_GOOD_THRESHOLD} />
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -239,7 +241,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, darkMode = false }) 
           <div className="bg-white dark:bg-slate-900 p-5 rounded-xl border border-slate-100 dark:border-slate-800 shadow-sm flex items-center justify-between">
              <div>
                <p className="text-slate-500 dark:text-slate-400 text-sm font-medium">Avg Profit / Item</p>
-               <h3 className="text-2xl font-bold text-slate-900 dark:text-white mt-1">${soldItems.length ? (totalProfit / soldItems.length).toFixed(2) : '0.00'}</h3>
+               <h3 className="text-2xl font-bold text-slate-900 dark:text-white mt-1">{mask(`$${soldItems.length ? (totalProfit / soldItems.length).toFixed(2) : '0.00'}`)}</h3>
              </div>
              <div className="bg-emerald-100 dark:bg-emerald-900/30 p-3 rounded-lg text-emerald-600 dark:text-emerald-400"><ArrowDownRight className="w-6 h-6" /></div>
           </div>

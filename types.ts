@@ -149,6 +149,47 @@ export interface ActivityEntry {
   text: string; // e.g. "PHN-000021 sold to John"
 }
 
+// --- Users / roles / audit ---
+export type Role = 'owner' | 'manager' | 'employee';
+
+export type Permission =
+  | 'inventory.add' | 'inventory.edit' | 'inventory.delete'
+  | 'sales.complete' | 'dropoffs.manage'
+  | 'reports.view' | 'reports.profit'
+  | 'users.manage' | 'audit.view' | 'backup.export' | 'settings.manage';
+
+export interface AppUser {
+  id: string;            // Firebase Auth uid
+  email: string;
+  role: Role;
+  workspaceId: string;   // the owning account's uid; all shop data lives under user_data/{workspaceId}
+  disabled?: boolean;
+  allowProfit?: boolean; // employee override to view profit-sensitive figures
+  lastLogin?: number;    // epoch ms (best-effort, updated client-side)
+  createdAt?: number;
+}
+
+export interface WorkspaceInvite {
+  id: string;            // lowercased email
+  email: string;
+  workspaceId: string;
+  role: Role;
+  invitedBy?: string;
+  createdAt?: number;
+}
+
+export interface AuditEntry {
+  id: string;
+  ts: number;            // epoch ms
+  userId: string;
+  userEmail: string;
+  action: string;        // e.g. 'inventory.add', 'sale.complete', 'user.role_change'
+  entityType: string;    // 'inventory' | 'accessory' | 'sale' | 'customer' | 'runner' | 'settlement' | 'user' | 'backup'
+  entityId?: string;
+  before?: any;
+  after?: any;
+}
+
 export interface SalesLine {
   inventoryId?: string;
   kind: ItemKind;
@@ -194,4 +235,4 @@ export interface AppData {
   activityLog?: ActivityEntry[];
 }
 
-export type ViewState = 'dashboard' | 'entry' | 'edit' | 'grid' | 'notes' | 'ai' | 'pos' | 'dropoff';
+export type ViewState = 'dashboard' | 'entry' | 'edit' | 'grid' | 'notes' | 'ai' | 'pos' | 'dropoff' | 'users' | 'audit';

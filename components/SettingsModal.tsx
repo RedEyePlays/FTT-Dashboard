@@ -1,6 +1,7 @@
 import React, { useRef, useState } from 'react';
 import { Download, Upload, X, ShieldCheck, AlertTriangle, FileJson, Percent } from 'lucide-react';
 import { AppData } from '../types';
+import { BackupPanel } from './BackupPanel';
 
 export const getPOSSettings = () => {
   try {
@@ -17,9 +18,11 @@ interface SettingsModalProps {
   onClose: () => void;
   currentData: AppData;
   onRestore: (data: AppData) => void;
+  backup?: { lastBackup?: number; onExportJson: () => Promise<void>; onExportCsv: () => Promise<void> };
+  canManageSettings?: boolean;
 }
 
-export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, currentData, onRestore }) => {
+export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, currentData, onRestore, backup, canManageSettings = true }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [restoreError, setRestoreError] = useState<string | null>(null);
   const [taxRate, setTaxRate] = useState(() => String(getPOSSettings().taxRate));
@@ -91,6 +94,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, currentDa
         </div>
 
         <div className="p-6 space-y-6">
+          {backup && (
+            <>
+              <BackupPanel lastBackup={backup.lastBackup} onExportJson={backup.onExportJson} onExportCsv={backup.onExportCsv} />
+              <div className="h-px bg-slate-100 dark:bg-slate-800 w-full" />
+            </>
+          )}
+
           {/* POS Settings */}
           <div className="space-y-3">
             <div className="flex items-center gap-3">
