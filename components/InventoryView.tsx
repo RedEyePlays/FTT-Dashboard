@@ -1,11 +1,11 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import {
-  Search, Smartphone, Package, QrCode, Maximize2, Trash2, X, Plus, ScanLine, AlertTriangle,
+  Search, Smartphone, Package, QrCode, Trash2, X, Plus, ScanLine, AlertTriangle,
   Columns3, SlidersHorizontal, Bookmark, Download, Upload, Copy, ChevronUp, ChevronDown,
   Activity as ActivityIcon, CheckSquare, Square, DollarSign, Boxes, TrendingUp, Wrench,
-  BadgeCheck, ShoppingBag,
+  BadgeCheck, ShoppingBag, Pencil, MoreVertical, Printer, History, ScrollText,
 } from 'lucide-react';
-import { InventoryItem, Runner, ItemKind, DeviceType, DeviceStatus, ActivityEntry } from '../types';
+import { InventoryItem, Runner, ItemKind, DeviceType, DeviceStatus, ActivityEntry, AuditEntry } from '../types';
 import { ItemFormModal } from './ItemFormModal';
 import { LabelModal } from './LabelModal';
 
@@ -13,6 +13,7 @@ interface Props {
   inventory: InventoryItem[];
   runners: Runner[];
   activity: ActivityEntry[];
+  auditLogs?: AuditEntry[]; // display-only, for the per-row Audit Log popover
   onSave: (item: InventoryItem) => void;
   onUpdate: (id: string, field: keyof InventoryItem, value: any) => void;
   onDelete: (id: string) => void;
@@ -49,10 +50,19 @@ const STATUS_CELL: Record<DeviceStatus, string> = {
   sold: 'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200',
   returned: 'bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-300',
 };
+// Short labels for the compact in-table status pill (values are unchanged).
+const STATUS_SHORT: Record<DeviceStatus, string> = {
+  pending_purchase: 'Purchase',
+  pending_repair: 'Repair',
+  ready: 'Ready',
+  sold: 'Sold',
+  returned: 'Returned',
+};
 
 type ColType = 'text' | 'number' | 'date' | 'select' | 'computed';
-// `frozen` pins a column to the left while scrolling; `emphasis` tunes text weight.
-interface Col { key: string; label: string; type: ColType; w: number; align?: 'right'; frozen?: boolean; emphasis?: 'strong' | 'muted'; options?: { value: string; label: string }[]; compute?: (i: InventoryItem) => string; sortVal?: (i: InventoryItem) => number | string; }
+// `frozen` pins a column to the left while scrolling; `emphasis` tunes text
+// weight; `readOnly` shows the value as plain text (edited in the form instead).
+interface Col { key: string; label: string; type: ColType; w: number; align?: 'right'; frozen?: boolean; emphasis?: 'strong' | 'muted'; readOnly?: boolean; options?: { value: string; label: string }[]; compute?: (i: InventoryItem) => string; sortVal?: (i: InventoryItem) => number | string; }
 const opt = (arr: string[]) => arr.map(v => ({ value: v, label: v }));
 
 // Combined Brand + Model display (falls back to the item name). Read-only —
@@ -64,9 +74,9 @@ const DEVICE_COLS: Col[] = [
   { key: 'date', label: 'Date In', type: 'date', w: 120, frozen: true },
   { key: 'sku', label: 'SKU', type: 'text', w: 116, frozen: true, emphasis: 'muted' },
   { key: 'imei', label: 'IMEI/Serial', type: 'text', w: 150, frozen: true, emphasis: 'muted' },
-  { key: '__item', label: 'Item', type: 'computed', w: 200, frozen: true, emphasis: 'strong', compute: itemLabel, sortVal: i => itemLabel(i).toLowerCase() },
-  // Scrolling attributes
-  { key: 'deviceType', label: 'Type', type: 'select', w: 78, options: opt(DEVICE_TYPES) },
+  { key: '__item', label: 'Item', type: 'computed', w: 170, frozen: true, emphasis: 'strong', compute: itemLabel, sortVal: i => itemLabel(i).toLowerCase() },
+  // Scrolling attributes. Type is plain text here (edited in the form).
+  { key: 'deviceType', label: 'Type', type: 'text', w: 76, readOnly: true },
   { key: 'storage', label: 'Storage', type: 'text', w: 90 },
   { key: 'color', label: 'Color', type: 'text', w: 100 },
   { key: 'batteryHealth', label: 'Battery', type: 'text', w: 80 },
@@ -75,14 +85,16 @@ const DEVICE_COLS: Col[] = [
   { key: 'condition', label: 'Condition', type: 'select', w: 120, options: opt(CONDITIONS) },
   { key: 'boughtFrom', label: 'Bought From', type: 'text', w: 130, emphasis: 'muted' },
   { key: 'purchaseSource', label: 'Source', type: 'text', w: 110, emphasis: 'muted' },
+  // Financial group — kept contiguous.
   { key: 'purchaseCost', label: 'Purchase', type: 'number', w: 100, align: 'right' },
   { key: 'repairCost', label: 'Repair', type: 'number', w: 90, align: 'right' },
   { key: '__total', label: 'Total Cost', type: 'computed', w: 100, align: 'right', compute: i => money(totalCost(i)), sortVal: totalCost },
   { key: 'targetSalePrice', label: 'Target', type: 'number', w: 90, align: 'right' },
-  { key: 'deviceStatus', label: 'Status', type: 'select', w: 150, options: STATUS_OPTS },
+  { key: '__profit', label: 'Profit', type: 'computed', w: 100, align: 'right', compute: i => i.salePrice ? money(profitOf(i)) : '—', sortVal: profitOf },
+  // Sale group.
+  { key: 'deviceStatus', label: 'Status', type: 'select', w: 120, options: STATUS_OPTS },
   { key: 'soldDate', label: 'Date Sold', type: 'date', w: 130 },
   { key: 'soldTo', label: 'Customer', type: 'text', w: 130 },
-  { key: '__profit', label: 'Profit', type: 'computed', w: 100, align: 'right', compute: i => i.salePrice ? money(profitOf(i)) : '—', sortVal: profitOf },
   { key: 'notes', label: 'Notes', type: 'text', w: 220, emphasis: 'muted' },
 ];
 const ACCESSORY_COLS: Col[] = [
@@ -128,8 +140,9 @@ const parseCSV = (text: string): Record<string, string>[] => {
   return rows.filter(r => r.some(x => x !== '')).map(r => Object.fromEntries(header.map((h, i) => [h.trim(), r[i] ?? ''])));
 };
 
-export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, onSave, onUpdate, onDelete, onGenerateSku, onSeed }) => {
+export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, auditLogs = [], onSave, onUpdate, onDelete, onGenerateSku, onSeed }) => {
   const [tab, setTab] = useState<Tab>('all');
+  const [historyItem, setHistoryItem] = useState<{ item: InventoryItem; mode: 'history' | 'audit' } | null>(null);
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<Sort | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>('all');
@@ -410,12 +423,14 @@ export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, o
             <Sheet title={tab === 'sold' ? 'Sold Devices' : 'Devices'} cols={visCols('device', DEVICE_COLS)} rows={tab === 'sold' ? soldDevices : devices}
               sort={sort} onSort={onSortToggle} selected={selected} onToggleSel={toggleSel} onToggleAll={toggleSelAll}
               onUpdate={onUpdate} onDelete={onDelete} onDuplicate={duplicate} onExpand={setExpandItem} onLabel={setLabelItem}
+              onHistory={(it, mode) => setHistoryItem({ item: it, mode })}
               onAddRow={tab === 'sold' ? undefined : addDeviceRow} addLabel="Add Device row" />
           )}
           {(tab === 'all' || tab === 'accessories' || tab === 'lowstock') && (
             <Sheet title={tab === 'lowstock' ? 'Low Stock Accessories' : 'Accessories'} cols={visCols('accessory', ACCESSORY_COLS)} rows={tab === 'lowstock' ? lowAccessories : accessories}
               sort={sort} onSort={onSortToggle} selected={selected} onToggleSel={toggleSel} onToggleAll={toggleSelAll}
               onUpdate={onUpdate} onDelete={onDelete} onDuplicate={duplicate} onExpand={setExpandItem} onLabel={setLabelItem}
+              onHistory={(it, mode) => setHistoryItem({ item: it, mode })}
               onAddRow={tab === 'lowstock' ? undefined : addAccessoryRow} addLabel="Add Accessory row" lowFlag />
           )}
         </div>
@@ -446,6 +461,57 @@ export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, o
 
       {expandItem && <ItemFormModal initial={expandItem} runners={runners} onSave={onSave} onGenerateSku={onGenerateSku} onClose={() => setExpandItem(null)} />}
       {labelItem && <LabelModal item={labelItem} onClose={() => setLabelItem(null)} />}
+      {historyItem && <HistoryModal item={historyItem.item} mode={historyItem.mode} activity={activity} auditLogs={auditLogs} onClose={() => setHistoryItem(null)} />}
+    </div>
+  );
+};
+
+/* ---------------- History / Audit popover (read-only) ---------------- */
+const HistoryModal: React.FC<{ item: InventoryItem; mode: 'history' | 'audit'; activity: ActivityEntry[]; auditLogs: AuditEntry[]; onClose: () => void }> = ({ item, mode, activity, auditLogs, onClose }) => {
+  const label = item.sku || item.item || item.id;
+  const fmt = (ts: number) => new Date(ts).toLocaleString();
+  // History: activity entries that mention this item's SKU or name. Audit: audit
+  // entries recorded against this item's id. Both are read-only views of data
+  // the app already holds.
+  const historyRows = activity.filter(a => (item.sku && a.text.includes(item.sku)) || (item.item && a.text.includes(item.item)));
+  const auditRows = auditLogs.filter(a => a.entityId === item.id);
+  const isAudit = mode === 'audit';
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4" onClick={onClose}>
+      <div className="bg-white dark:bg-slate-900 w-full max-w-lg rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-700 max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
+        <div className="px-5 py-3.5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
+          <h2 className="text-sm font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
+            {isAudit ? <ScrollText className="w-4 h-4 text-indigo-500" /> : <History className="w-4 h-4 text-indigo-500" />}
+            {isAudit ? 'Audit Log' : 'History'} · <span className="font-mono text-xs text-slate-500">{label}</span>
+          </h2>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"><X className="w-4 h-4" /></button>
+        </div>
+        <div className="p-5 overflow-y-auto custom-scrollbar">
+          {isAudit ? (
+            auditRows.length === 0 ? <p className="text-sm text-slate-400">No audit entries for this item.</p> : (
+              <ul className="space-y-2">
+                {auditRows.map(a => (
+                  <li key={a.id} className="text-sm border-l-2 border-indigo-200 dark:border-indigo-800 pl-3">
+                    <div className="font-medium text-slate-700 dark:text-slate-200">{a.action}</div>
+                    <div className="text-xs text-slate-400">{fmt(a.ts)} · {a.userEmail}</div>
+                  </li>
+                ))}
+              </ul>
+            )
+          ) : (
+            historyRows.length === 0 ? <p className="text-sm text-slate-400">No history entries for this item.</p> : (
+              <ul className="space-y-2">
+                {historyRows.map(a => (
+                  <li key={a.id} className="text-sm border-l-2 border-indigo-200 dark:border-indigo-800 pl-3">
+                    <div className="text-slate-700 dark:text-slate-200">{a.text}</div>
+                    <div className="text-xs text-slate-400">{fmt(a.ts)}</div>
+                  </li>
+                ))}
+              </ul>
+            )
+          )}
+        </div>
+      </div>
     </div>
   );
 };
@@ -456,12 +522,23 @@ const Sheet: React.FC<{
   selected: Set<string>; onToggleSel: (id: string) => void; onToggleAll: (rows: InventoryItem[]) => void;
   onUpdate: (id: string, f: keyof InventoryItem, v: any) => void; onDelete: (id: string) => void;
   onDuplicate: (i: InventoryItem) => void; onExpand: (i: InventoryItem) => void; onLabel: (i: InventoryItem) => void;
+  onHistory: (i: InventoryItem, mode: 'history' | 'audit') => void;
   onAddRow?: () => void; addLabel: string; lowFlag?: boolean;
-}> = ({ title, cols, rows, sort, onSort, selected, onToggleSel, onToggleAll, onUpdate, onDelete, onDuplicate, onExpand, onLabel, onAddRow, addLabel, lowFlag }) => {
+}> = ({ title, cols, rows, sort, onSort, selected, onToggleSel, onToggleAll, onUpdate, onDelete, onDuplicate, onExpand, onLabel, onHistory, onAddRow, addLabel, lowFlag }) => {
+  // Row overflow menu + inline Brand/Model editor. State lives at the Sheet root
+  // and the popovers render outside the sticky table subtree (fixed-positioned)
+  // so they aren't clipped or trapped under the sticky columns' stacking context.
+  const [menu, setMenu] = useState<{ i: InventoryItem; x: number; y: number } | null>(null);
+  const [itemPop, setItemPop] = useState<{ i: InventoryItem; x: number; y: number } | null>(null);
+  const openAt = (e: React.MouseEvent, width: number) => {
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    return { x: Math.min(r.left, window.innerWidth - width - 12), y: r.bottom + 4 };
+  };
+
   // Frozen identity columns stay pinned to the left while the rest scrolls.
   // Left offsets are the running width of the Actions column + preceding frozen
   // columns, so they must use fixed widths.
-  const ACTIONS_W = 132;
+  const ACTIONS_W = 108;
   const frozenLeft: Record<string, number> = {};
   { let acc = ACTIONS_W; for (const c of cols) { if (c.frozen) { frozenLeft[c.key] = acc; acc += c.w; } else break; } }
   const emph = (c: Col) =>
@@ -506,12 +583,10 @@ const Sheet: React.FC<{
               return (
                 <tr key={i.id} className={`hover:bg-slate-50 dark:hover:bg-slate-800/40 ${sel ? 'bg-indigo-50/50 dark:bg-indigo-900/10' : low ? 'bg-rose-50/40 dark:bg-rose-900/10' : ''}`}>
                   <td style={{ width: ACTIONS_W, minWidth: ACTIONS_W, left: 0 }} className={`px-2 py-1.5 whitespace-nowrap sticky z-10 ${frozenBg}`}>
-                    <div className="flex items-center gap-0.5">
-                      <button onClick={() => onToggleSel(i.id)} className="p-1">{sel ? <CheckSquare className="w-4 h-4 text-indigo-500" /> : <Square className="w-4 h-4 text-slate-300" />}</button>
-                      <button onClick={() => onLabel(i)} title="Print label" className="p-1 text-slate-400 hover:text-indigo-600"><QrCode className="w-3.5 h-3.5" /></button>
-                      <button onClick={() => onDuplicate(i)} title="Duplicate" className="p-1 text-slate-400 hover:text-indigo-600"><Copy className="w-3.5 h-3.5" /></button>
-                      <button onClick={() => onExpand(i)} title="Expanded details" className="p-1 text-slate-400 hover:text-indigo-600"><Maximize2 className="w-3.5 h-3.5" /></button>
-                      <button onClick={() => onDelete(i.id)} title="Delete" className="p-1 text-slate-400 hover:text-rose-500"><Trash2 className="w-3.5 h-3.5" /></button>
+                    <div className="flex items-center gap-1">
+                      <button onClick={() => onToggleSel(i.id)} className="p-1" title="Select">{sel ? <CheckSquare className="w-4 h-4 text-indigo-500" /> : <Square className="w-4 h-4 text-slate-300" />}</button>
+                      <button onClick={() => onExpand(i)} className="p-1 text-slate-400 hover:text-indigo-600" title="Edit"><Pencil className="w-4 h-4" /></button>
+                      <button onClick={e => setMenu({ i, ...openAt(e, 180) })} className="p-1 text-slate-400 hover:text-indigo-600" title="More actions"><MoreVertical className="w-4 h-4" /></button>
                     </div>
                   </td>
                   {cols.map(c => (
@@ -519,15 +594,24 @@ const Sheet: React.FC<{
                       style={{ minWidth: c.w, ...(c.frozen ? { width: c.w, left: frozenLeft[c.key], position: 'sticky' as const } : {}) }}
                       className={`p-0 align-top ${c.frozen ? `sticky z-10 ${frozenBg}` : ''}`}>
                       {c.type === 'computed' ? (
-                        <div className={`px-2 py-1.5 text-sm ${c.align === 'right' ? 'text-right font-mono' : ''} ${c.key === '__item' ? 'truncate' : ''} ${emph(c)}`}>
-                          {c.key === '__profit' && i.salePrice ? <span className={profitOf(i) >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}>{c.compute!(i)}</span> : c.compute!(i)}
-                        </div>
+                        c.key === '__item' ? (
+                          <button onClick={e => setItemPop({ i, ...openAt(e, 240) })} title="Edit brand & model"
+                            className={`w-full text-left px-2 py-1.5 text-sm truncate rounded hover:bg-indigo-50 dark:hover:bg-indigo-900/20 ${emph(c)}`}>
+                            {c.compute!(i)}
+                          </button>
+                        ) : (
+                          <div className={`px-2 py-1.5 text-sm ${c.align === 'right' ? 'text-right font-mono' : ''} ${emph(c)}`}>
+                            {c.key === '__profit' && i.salePrice ? <span className={profitOf(i) >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}>{c.compute!(i)}</span> : c.compute!(i)}
+                          </div>
+                        )
+                      ) : c.readOnly ? (
+                        <div className={`px-2 py-1.5 text-sm truncate ${emph(c)}`}>{((i[c.key as keyof InventoryItem] as any) ?? '') || '—'}</div>
                       ) : c.type === 'select' ? (
                         c.key === 'deviceStatus' ? (
-                          <div className="px-2 py-1.5 flex items-center">
+                          <div className="px-2 py-1 flex items-center">
                             <select value={(i.deviceStatus as any) ?? 'ready'} onChange={e => onUpdate(i.id, 'deviceStatus', e.target.value)}
-                              className={`appearance-none cursor-pointer rounded-full px-2.5 py-1 text-[11px] font-semibold outline-none focus:ring-2 focus:ring-indigo-500 ${STATUS_CELL[(i.deviceStatus as DeviceStatus) || 'ready']}`}>
-                              {c.options!.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                              className={`appearance-none cursor-pointer rounded px-2 py-0.5 text-[11px] font-semibold leading-tight outline-none focus:ring-2 focus:ring-indigo-500 ${STATUS_CELL[(i.deviceStatus as DeviceStatus) || 'ready']}`}>
+                              {c.options!.map(o => <option key={o.value} value={o.value}>{STATUS_SHORT[o.value as DeviceStatus] ?? o.label}</option>)}
                             </select>
                           </div>
                         ) : (
@@ -559,6 +643,58 @@ const Sheet: React.FC<{
           </tbody>
         </table>
       </div>
+
+      {/* Row overflow menu (rendered outside the table so it never clips) */}
+      {menu && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setMenu(null)} />
+          <div className="fixed z-50 w-44 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shadow-2xl py-1 text-sm" style={{ left: menu.x, top: menu.y }}>
+            {[
+              { icon: <Printer className="w-4 h-4" />, label: 'Print Label', run: () => onLabel(menu.i) },
+              { icon: <QrCode className="w-4 h-4" />, label: 'QR Code', run: () => onLabel(menu.i) },
+              { icon: <Copy className="w-4 h-4" />, label: 'Duplicate', run: () => onDuplicate(menu.i) },
+              { icon: <History className="w-4 h-4" />, label: 'View History', run: () => onHistory(menu.i, 'history') },
+              { icon: <ScrollText className="w-4 h-4" />, label: 'Audit Log', run: () => onHistory(menu.i, 'audit') },
+            ].map(m => (
+              <button key={m.label} onClick={() => { m.run(); setMenu(null); }} className="w-full text-left px-3 py-1.5 flex items-center gap-2 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800">
+                <span className="text-slate-400">{m.icon}</span>{m.label}
+              </button>
+            ))}
+            <div className="my-1 h-px bg-slate-100 dark:bg-slate-800" />
+            <button onClick={() => { onDelete(menu.i.id); setMenu(null); }} className="w-full text-left px-3 py-1.5 flex items-center gap-2 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-900/20">
+              <Trash2 className="w-4 h-4" /> Delete
+            </button>
+          </div>
+        </>
+      )}
+
+      {/* Inline Brand/Model editor for the Item cell */}
+      {itemPop && (
+        <BrandModelPopover item={itemPop.i} x={itemPop.x} y={itemPop.y} onUpdate={onUpdate} onClose={() => setItemPop(null)} />
+      )}
     </div>
+  );
+};
+
+/* Inline Brand + Model editor (keeps the underlying fields; writes through live) */
+const BrandModelPopover: React.FC<{ item: InventoryItem; x: number; y: number; onUpdate: (id: string, f: keyof InventoryItem, v: any) => void; onClose: () => void }> = ({ item, x, y, onUpdate, onClose }) => {
+  const [brand, setBrand] = useState(item.brand || '');
+  const [model, setModel] = useState(item.model || '');
+  const inputCls = 'mt-0.5 w-full px-2 py-1.5 text-sm bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md outline-none focus:ring-2 focus:ring-indigo-500 text-slate-900 dark:text-slate-100';
+  return (
+    <>
+      <div className="fixed inset-0 z-40" onClick={onClose} />
+      <div className="fixed z-50 w-60 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shadow-2xl p-3 space-y-2" style={{ left: x, top: y }}
+        onKeyDown={e => { if (e.key === 'Escape' || (e.key === 'Enter' && (e.target as HTMLElement).tagName === 'INPUT')) onClose(); }}>
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Edit Item</p>
+        <label className="block text-xs text-slate-500 dark:text-slate-400">Brand
+          <input autoFocus value={brand} onChange={e => { setBrand(e.target.value); onUpdate(item.id, 'brand', e.target.value); }} placeholder="e.g. Apple" className={inputCls} />
+        </label>
+        <label className="block text-xs text-slate-500 dark:text-slate-400">Model
+          <input value={model} onChange={e => { setModel(e.target.value); onUpdate(item.id, 'model', e.target.value); }} placeholder="e.g. iPhone 14 Pro" className={inputCls} />
+        </label>
+        <div className="flex justify-end"><button onClick={onClose} className="text-xs px-3 py-1 rounded-md bg-indigo-600 hover:bg-indigo-700 text-white font-medium">Done</button></div>
+      </div>
+    </>
   );
 };
