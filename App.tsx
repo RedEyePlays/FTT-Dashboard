@@ -371,6 +371,7 @@ const App: React.FC = () => {
               inventory={data}
               runners={runners}
               activity={activityLog}
+              auditLogs={auditLogs}
               onSave={handleSaveInventoryItem}
               onUpdate={handleUpdateItem}
               onDelete={handleDeleteItem}
