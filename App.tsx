@@ -1,6 +1,5 @@
 
-import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { LayoutDashboard, PlusCircle, Table, Activity, Sparkles, Moon, Sun, Lock, StickyNote, Settings, Calculator, Bot, MessageCircle, ShoppingCart, Search, Truck, ScrollText, Users as UsersIcon } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
 import { Dashboard } from './components/Dashboard';
 import { DataEntryForm } from './components/DataEntryForm';
 import { DataGrid } from './components/DataGrid';
@@ -17,75 +16,40 @@ import { DropOffView } from './components/DropOffView';
 import { InventoryView } from './components/InventoryView';
 import { UsersView } from './components/UsersView';
 import { AuditLogView } from './components/AuditLogView';
-import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, Runner, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, SalesTransaction, AppUser, WorkspaceInvite, AuditEntry, Role, Permission } from './types';
+import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, Runner, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission } from './types';
 import { skuPrefix, nextSku } from './services/sku';
 import { can } from './services/rbac';
 import { downloadJson, toCSV, triggerDownload } from './services/backup';
 import { INITIAL_DATA } from './constants';
-import { decryptData } from './services/security';
-import { auth, db } from './services/firebase';
-import { onAuthChange } from './services/auth';
-import { User, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from 'firebase/auth';
-import { doc, getDoc } from 'firebase/firestore';
+import { auth } from './services/firebase';
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import {
-  subscribeCollection, subscribeMeta, saveMeta, saveItem, deleteItem, syncArray,
-  logActivityDoc, commitSale, seedSampleData, migrateLegacyIfNeeded, CollName,
-  getUserDoc, setUserDoc, updateUserDoc, subscribeWorkspaceUsers, getInvite, setInvite, deleteInvite,
-  subscribeInvites, logAudit, exportWorkspaceData, recordBackup,
+  saveMeta, saveItem, deleteItem, syncArray,
+  logActivityDoc, commitSale, seedSampleData,
+  updateUserDoc, setInvite, deleteInvite,
+  logAudit, exportWorkspaceData, recordBackup,
 } from './services/firestoreDb';
-
-const collFor = (i: InventoryItem): CollName => (i.kind ?? 'device') === 'accessory' ? 'accessories' : 'inventory';
-const newId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-const mkActivity = (text: string): ActivityEntry => ({ id: newId(), ts: Date.now(), text });
+import { useWorkspaceData } from './hooks/useWorkspaceData';
+import { newId, mkActivity } from './domain/ids';
+import { collectionFor, decrementStock } from './domain/inventory';
+import { AppHeader } from './components/AppHeader';
+import { MobileNav } from './components/MobileNav';
+import { LoadingScreen, DbErrorScreen } from './components/StatusScreens';
 
 const App: React.FC = () => {
-  // --- AUTH STATE ---
-  const [user, setUser] = useState<User | null>(null);
-  const [isLoadingAuth, setIsLoadingAuth] = useState(true);
-  const [authError, setAuthError] = useState<string | null>(null);
+  // --- DATA LAYER (auth, role/workspace, Firestore subscriptions) ---
+  const {
+    user, isLoadingAuth, authError, setAuthError,
+    appUser, roleLoading, workspaceId, workspaceUsers, invites, auditLogs,
+    data, notes, setNotes, tasks, setTasks,
+    runners, dropOffs, settlements,
+    skuCounters, setSkuCounters, activityLog, lastBackup,
+    dbLoading, dbError, reconnect,
+    runnersRef, dropOffsRef, settlementsRef, customersRef, salesTransactionsRef, skuRef, dataRef,
+  } = useWorkspaceData();
 
-  // --- APP STATE ---
+  // --- UI STATE ---
   const [view, setView] = useState<ViewState>('dashboard');
-
-  // Data State — populated live from Firestore collections
-  const [devices, setDevices] = useState<InventoryItem[]>([]);
-  const [accessories, setAccessories] = useState<InventoryItem[]>([]);
-  const data = useMemo(() => [...devices, ...accessories], [devices, accessories]);
-  const [notes, setNotes] = useState<Note[]>([]);
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [runners, setRunners] = useState<Runner[]>([]);
-  const [dropOffs, setDropOffs] = useState<DropOff[]>([]);
-  const [settlements, setSettlements] = useState<Settlement[]>([]);
-  const [customers, setCustomers] = useState<Customer[]>([]);
-  const [salesTransactions, setSalesTransactions] = useState<SalesTransaction[]>([]);
-  const [skuCounters, setSkuCounters] = useState<Record<string, number>>({});
-  const [activityLog, setActivityLog] = useState<ActivityEntry[]>([]);
-  const [lastBackup, setLastBackup] = useState<number | undefined>(undefined);
-
-  // Users / roles
-  const [appUser, setAppUser] = useState<AppUser | null>(null);
-  const [roleLoading, setRoleLoading] = useState(true);
-  const [workspaceUsers, setWorkspaceUsers] = useState<AppUser[]>([]);
-  const [invites, setInvites] = useState<WorkspaceInvite[]>([]);
-  const [auditLogs, setAuditLogs] = useState<AuditEntry[]>([]);
-  const workspaceId = appUser?.workspaceId;
-
-  // Firestore connection state
-  const [dbLoading, setDbLoading] = useState(true);
-  const [dbError, setDbError] = useState<string | null>(null);
-  const [reconnectKey, setReconnectKey] = useState(0);
-
-  // Refs for latest snapshots (used to diff array-based updates + SKU gen)
-  const runnersRef = useRef<Runner[]>([]);
-  const dropOffsRef = useRef<DropOff[]>([]);
-  const settlementsRef = useRef<Settlement[]>([]);
-  const skuRef = useRef<Record<string, number>>({});
-  const dataRef = useRef<InventoryItem[]>([]);
-  useEffect(() => { runnersRef.current = runners; }, [runners]);
-  useEffect(() => { dropOffsRef.current = dropOffs; }, [dropOffs]);
-  useEffect(() => { settlementsRef.current = settlements; }, [settlements]);
-  useEffect(() => { skuRef.current = skuCounters; }, [skuCounters]);
-  useEffect(() => { dataRef.current = data; }, [data]);
 
   // AI Chat State (Shared between Sidebar and Tab)
   const [aiMessages, setAiMessages] = useState<ChatMessage[]>([{
@@ -109,100 +73,6 @@ const App: React.FC = () => {
     }
     return false;
   });
-
-  // Firebase Auth Listener
-  useEffect(() => {
-    const unsubscribe = onAuthChange((u) => {
-      setUser(u);
-      if (!u) {
-        setDevices([]); setAccessories([]); setNotes([]); setTasks([]);
-        setRunners([]); setDropOffs([]); setSettlements([]); setCustomers([]);
-        setSalesTransactions([]); setActivityLog([]); setSkuCounters({});
-        setAppUser(null); setWorkspaceUsers([]); setInvites([]); setAuditLogs([]);
-        setDbLoading(false); setRoleLoading(false);
-      }
-      setIsLoadingAuth(false);
-    });
-    return () => unsubscribe();
-  }, []);
-
-  // Resolve the signed-in user's role + workspace (create/claim on first login)
-  useEffect(() => {
-    if (!user) return;
-    let cancelled = false;
-    setRoleLoading(true);
-    (async () => {
-      try {
-        let record = await getUserDoc(user.uid);
-        if (!record) {
-          // First login: claim a pending invite by email, else become owner of a new workspace.
-          const invite = user.email ? await getInvite(user.email) : null;
-          record = invite
-            ? { id: user.uid, email: user.email || '', role: invite.role, workspaceId: invite.workspaceId, lastLogin: Date.now(), createdAt: Date.now() }
-            : { id: user.uid, email: user.email || '', role: 'owner', workspaceId: user.uid, lastLogin: Date.now(), createdAt: Date.now() };
-          await setUserDoc(record);
-          if (invite) await deleteInvite(invite.email).catch(() => {});
-        } else {
-          updateUserDoc(user.uid, { lastLogin: Date.now() }).catch(() => {});
-        }
-        if (cancelled) return;
-        if (record.disabled) {
-          setAuthError('Your account has been disabled. Contact the shop owner.');
-          await signOut(auth);
-          return;
-        }
-        setAppUser(record);
-      } catch (e: any) {
-        if (!cancelled) setDbError(e?.message || 'Failed to load your account');
-      } finally {
-        if (!cancelled) setRoleLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [user]);
-
-  // Firestore real-time subscriptions, keyed on the workspace (shared shop data)
-  useEffect(() => {
-    if (!user || !appUser || !workspaceId) return;
-    const wsId = workspaceId;
-    setDbLoading(true); setDbError(null);
-    const onErr = (e: Error) => { console.error('Firestore error:', e); setDbError(e.message || 'Failed to load data'); setDbLoading(false); };
-
-    // One-time migration of the legacy encrypted blob (owner's own workspace only).
-    if (wsId === user.uid) {
-      (async () => {
-        try {
-          const legacySnap = await getDoc(doc(db, 'user_data', wsId));
-          const enc = legacySnap.exists() ? (legacySnap.data() as any).data : null;
-          if (enc && user.email) {
-            const decrypted = decryptData(enc, user.email);
-            await migrateLegacyIfNeeded(wsId, decrypted);
-          }
-        } catch { /* non-fatal */ }
-      })();
-    }
-
-    const subs = [
-      subscribeCollection<InventoryItem>(wsId, 'inventory', rows => { setDevices(rows); setDbLoading(false); }, onErr),
-      subscribeCollection<InventoryItem>(wsId, 'accessories', setAccessories, onErr),
-      subscribeCollection<Runner>(wsId, 'runners', setRunners, onErr),
-      subscribeCollection<DropOff>(wsId, 'dropOffs', setDropOffs, onErr),
-      subscribeCollection<Settlement>(wsId, 'settlements', setSettlements, onErr),
-      subscribeCollection<Customer>(wsId, 'customers', setCustomers, onErr),
-      subscribeCollection<SalesTransaction>(wsId, 'salesTransactions', setSalesTransactions, onErr),
-      subscribeCollection<ActivityEntry>(wsId, 'activityLog', rows => setActivityLog(rows.sort((a, b) => b.ts - a.ts).slice(0, 60)), onErr),
-      subscribeCollection<AuditEntry>(wsId, 'auditLogs', rows => setAuditLogs(rows.sort((a, b) => b.ts - a.ts).slice(0, 1000)), onErr),
-      subscribeMeta(wsId, m => { setNotes(m.notes || []); setTasks(m.tasks || []); setSkuCounters(m.skuCounters || {}); setLastBackup(m.lastBackup); }, onErr),
-    ];
-    // Owner-only: workspace members + pending invites
-    if (appUser.role === 'owner') {
-      subs.push(subscribeWorkspaceUsers(wsId, setWorkspaceUsers, onErr));
-      subs.push(subscribeInvites(wsId, setInvites, onErr));
-    } else {
-      setWorkspaceUsers([appUser]);
-    }
-    return () => subs.forEach(u => u());
-  }, [user, appUser, workspaceId, reconnectKey]);
 
   // --- AUTH HANDLERS ---
   const handleAuthenticate = async (email: string, password: string, isRegister: boolean) => {
@@ -263,9 +133,9 @@ const App: React.FC = () => {
   const handleSaveItem = (item: InventoryItem) => {
     const isNew = !dataRef.current.some(i => i.id === item.id);
     if (uid && (isNew ? allow('inventory.add') : allow('inventory.edit'))) {
-      if (isNew) { logActivity(`${item.sku || item.item || 'Item'} added`); audit('inventory.add', collFor(item), item.id, undefined, item); }
-      else audit('inventory.edit', collFor(item), item.id);
-      saveItem(uid, collFor(item), item);
+      if (isNew) { logActivity(`${item.sku || item.item || 'Item'} added`); audit('inventory.add', collectionFor(item), item.id, undefined, item); }
+      else audit('inventory.edit', collectionFor(item), item.id);
+      saveItem(uid, collectionFor(item), item);
     }
     setView('grid');
     setEditingItem(undefined);
@@ -274,8 +144,8 @@ const App: React.FC = () => {
   const handleDeleteItem = (id: string) => {
     if (!uid || !allow('inventory.delete')) return;
     const target = dataRef.current.find(i => i.id === id);
-    audit('inventory.delete', target ? collFor(target) : 'inventory', id, target);
-    deleteItem(uid, target ? collFor(target) : 'inventory', id);
+    audit('inventory.delete', target ? collectionFor(target) : 'inventory', id, target);
+    deleteItem(uid, target ? collectionFor(target) : 'inventory', id);
   };
 
   // Update single field (inline edit)
@@ -285,13 +155,13 @@ const App: React.FC = () => {
     if (!target) return;
     const label = target.sku || target.item || id;
     if (field === 'deviceStatus') logActivity(`${label} marked ${String(value).replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}`);
-    else if (field === 'quantity') { logActivity(`${label} quantity updated`); audit('accessory.quantity', collFor(target), id, { quantity: target.quantity }, { quantity: value }); }
-    audit('inventory.edit', collFor(target), id, { [field]: (target as any)[field] }, { [field]: value });
-    saveItem(uid, collFor(target), { ...target, [field]: value });
+    else if (field === 'quantity') { logActivity(`${label} quantity updated`); audit('accessory.quantity', collectionFor(target), id, { quantity: target.quantity }, { quantity: value }); }
+    audit('inventory.edit', collectionFor(target), id, { [field]: (target as any)[field] }, { [field]: value });
+    saveItem(uid, collectionFor(target), { ...target, [field]: value });
   };
 
   // Update an entire row
-  const handleUpdateRow = (updatedItem: InventoryItem) => { if (uid && allow('inventory.edit')) saveItem(uid, collFor(updatedItem), updatedItem); };
+  const handleUpdateRow = (updatedItem: InventoryItem) => { if (uid && allow('inventory.edit')) saveItem(uid, collectionFor(updatedItem), updatedItem); };
 
   // Generate the next unique internal SKU for a kind/device type (never reused)
   const handleGenerateSku = (kind: ItemKind, deviceType?: DeviceType): string => {
@@ -308,9 +178,9 @@ const App: React.FC = () => {
     if (!uid) return;
     const isNew = !dataRef.current.some(i => i.id === item.id);
     if (isNew ? !allow('inventory.add') : !allow('inventory.edit')) return;
-    if (isNew) { logActivity(`${item.sku || item.item || 'Item'} added`); audit('inventory.add', collFor(item), item.id, undefined, item); }
-    else audit('inventory.edit', collFor(item), item.id);
-    saveItem(uid, collFor(item), item);
+    if (isNew) { logActivity(`${item.sku || item.item || 'Item'} added`); audit('inventory.add', collectionFor(item), item.id, undefined, item); }
+    else audit('inventory.edit', collectionFor(item), item.id);
+    saveItem(uid, collectionFor(item), item);
   };
 
   // Sell a cart: mark devices sold in Firestore, decrement accessory quantities,
@@ -320,7 +190,7 @@ const App: React.FC = () => {
     audit('sale.complete', 'sale', payload.transaction.id, undefined, { totalPaid: payload.transaction.totalPaid, lines: payload.transaction.lines.length });
     const accessoryUpdates = Object.entries(payload.accessoryQtys).map(([id, soldQty]) => {
       const acc = dataRef.current.find(i => i.id === id);
-      return { id, quantity: Math.max(0, (acc?.quantity ?? 0) - soldQty) };
+      return { id, quantity: decrementStock(acc?.quantity, soldQty) };
     });
     const activity: ActivityEntry[] = [
       ...payload.soldRows.map(d => mkActivity(`${d.sku || d.item} sold to ${d.customerName || d.soldTo || 'customer'}`)),
@@ -334,13 +204,13 @@ const App: React.FC = () => {
     (payload.newInventoryItems || []).forEach(item => {
       const kind: ItemKind = (item.kind ?? 'device');
       const withSku = item.sku ? item : { ...item, sku: handleGenerateSku(kind, item.deviceType) };
-      saveItem(uid, collFor(withSku), withSku);
+      saveItem(uid, collectionFor(withSku), withSku);
       logActivity(`${withSku.sku || withSku.item} added from custom sale`);
     });
   };
 
   const handleBulkImport = (items: InventoryItem[]) => {
-    if (uid) items.forEach(it => saveItem(uid, collFor(it), it));
+    if (uid) items.forEach(it => saveItem(uid, collectionFor(it), it));
     setView('grid');
   };
 
@@ -352,6 +222,8 @@ const App: React.FC = () => {
     await syncArray(uid, 'runners', restoredData.runners || [], runnersRef.current);
     await syncArray(uid, 'dropOffs', restoredData.dropOffs || [], dropOffsRef.current);
     await syncArray(uid, 'settlements', restoredData.settlements || [], settlementsRef.current);
+    await syncArray(uid, 'customers', restoredData.customers || [], customersRef.current);
+    await syncArray(uid, 'salesTransactions', restoredData.salesTransactions || [], salesTransactionsRef.current);
     await saveMeta(uid, { notes: restoredData.notes || [], tasks: restoredData.tasks || [], skuCounters: restoredData.skuCounters || {} });
   };
 
@@ -425,32 +297,8 @@ const App: React.FC = () => {
     setView('entry');
   };
 
-  const NavButton: React.FC<{ 
-    active: boolean; 
-    icon: React.ReactNode; 
-    label: string; 
-    onClick: () => void 
-  }> = ({ active, icon, label, onClick }) => (
-    <button
-      onClick={onClick}
-      className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-        active 
-          ? 'bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-300 dark:ring-indigo-700' 
-          : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200'
-      }`}
-    >
-      {icon}
-      {label}
-    </button>
-  );
-
   if (isLoadingAuth) {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center gap-3 bg-slate-50 dark:bg-slate-950 text-slate-500">
-        <div className="w-10 h-10 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" />
-        <p className="text-sm">Loading…</p>
-      </div>
-    );
+    return <LoadingScreen message="Loading…" />;
   }
 
   // --- RENDER LOCK SCREEN IF LOCKED ---
@@ -465,216 +313,43 @@ const App: React.FC = () => {
 
   // --- FIRESTORE CONNECTION STATES ---
   if (dbError) {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center gap-4 bg-slate-50 dark:bg-slate-950 text-center px-6">
-        <div className="w-14 h-14 rounded-full bg-rose-100 dark:bg-rose-900/30 flex items-center justify-center text-rose-500 text-2xl">!</div>
-        <div>
-          <p className="text-lg font-bold text-slate-800 dark:text-slate-100">Couldn't reach the database</p>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1 max-w-md">{dbError}</p>
-        </div>
-        <div className="flex gap-2">
-          <button onClick={() => { setDbError(null); setDbLoading(true); setReconnectKey(k => k + 1); }} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium">Retry</button>
-          <button onClick={handleLock} className="px-4 py-2 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-lg text-sm font-medium">Sign out</button>
-        </div>
-      </div>
-    );
+    return <DbErrorScreen message={dbError} onRetry={reconnect} onSignOut={handleLock} />;
   }
   if (roleLoading || dbLoading || !appUser) {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center gap-3 bg-slate-50 dark:bg-slate-950 text-slate-500">
-        <div className="w-10 h-10 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" />
-        <p className="text-sm">{roleLoading || !appUser ? 'Signing you in…' : 'Loading your inventory…'}</p>
-      </div>
-    );
+    return <LoadingScreen message={roleLoading || !appUser ? 'Signing you in…' : 'Loading your inventory…'} />;
   }
 
   return (
     <div className="min-h-screen bg-slate-50/50 dark:bg-slate-950 pb-20 flex flex-col transition-colors duration-200 relative">
       {/* Header */}
-      <header className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 sticky top-0 z-20 shadow-sm shrink-0">
-        <div className="w-full px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="bg-indigo-600 p-2 rounded-lg shadow-lg shadow-indigo-500/30">
-              <Activity className="w-5 h-5 text-white" />
-            </div>
-            <h1 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-700 to-violet-700 dark:from-indigo-400 dark:to-violet-400">
-              FlipThatTech Dashboard
-            </h1>
-            <span className="hidden sm:inline-flex items-center gap-1 ml-2 px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 text-[10px] font-bold uppercase tracking-wider">
-               <Lock className="w-3 h-3" /> Secure
-            </span>
-          </div>
-          <nav className="hidden md:flex items-center gap-2">
-            <NavButton 
-              active={view === 'dashboard'} 
-              icon={<LayoutDashboard className="w-4 h-4" />} 
-              label="Dashboard" 
-              onClick={() => setView('dashboard')} 
-            />
-            <NavButton 
-              active={view === 'grid'} 
-              icon={<Table className="w-4 h-4" />} 
-              label="Inventory"
-              onClick={() => setView('grid')} 
-            />
-            <NavButton 
-              active={view === 'notes'} 
-              icon={<StickyNote className="w-4 h-4" />} 
-              label="Notes" 
-              onClick={() => setView('notes')} 
-            />
-            <NavButton
-              active={view === 'pos'}
-              icon={<ShoppingCart className="w-4 h-4" />}
-              label="Quick Sale"
-              onClick={() => setView('pos')}
-            />
-            {allow('dropoffs.manage') && (
-              <NavButton
-                active={view === 'dropoff'}
-                icon={<Truck className="w-4 h-4" />}
-                label="Drop-Offs"
-                onClick={() => setView('dropoff')}
-              />
-            )}
-            {allow('audit.view') && (
-              <NavButton
-                active={view === 'audit'}
-                icon={<ScrollText className="w-4 h-4" />}
-                label="Audit"
-                onClick={() => setView('audit')}
-              />
-            )}
-            {allow('users.manage') && (
-              <NavButton
-                active={view === 'users'}
-                icon={<UsersIcon className="w-4 h-4" />}
-                label="Users"
-                onClick={() => setView('users')}
-              />
-            )}
-            <NavButton
-              active={view === 'ai'}
-              icon={<Bot className="w-4 h-4" />}
-              label="AI Assistant"
-              onClick={() => setView('ai')}
-            />
-
-            <div className="w-px h-6 bg-slate-200 dark:bg-slate-700 mx-2"></div>
-
-            <span className="hidden lg:inline text-xs text-slate-400 mr-1" title={appUser.email}>{appUser.email.split('@')[0]} · {appUser.role}</span>
-
-            <button
-              onClick={() => setShowFinder(true)}
-              className="p-2 text-slate-500 hover:text-indigo-600 dark:text-slate-400 dark:hover:text-indigo-400 rounded-lg hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-colors"
-              title="Find item (Finder)"
-            >
-              <Search className="w-4 h-4" />
-            </button>
-
-            <button
-              onClick={() => setDarkMode(!darkMode)}
-              className="p-2 text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-              title="Toggle Theme"
-            >
-              {darkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
-            </button>
-            
-            <button
-              onClick={() => setIsAiSidebarOpen(!isAiSidebarOpen)}
-              className={`p-2 rounded-lg transition-colors ${isAiSidebarOpen ? 'bg-indigo-100 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-400' : 'text-slate-500 hover:text-indigo-600 dark:text-slate-400 dark:hover:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20'}`}
-              title="Quick AI Chat"
-            >
-              <MessageCircle className="w-4 h-4" />
-            </button>
-
-            <button
-              onClick={() => setShowCalculator(!showCalculator)}
-              className={`p-2 rounded-lg transition-colors ${showCalculator ? 'bg-indigo-100 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-400' : 'text-slate-500 hover:text-indigo-600 dark:text-slate-400 dark:hover:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20'}`}
-              title="Profit Calculator"
-            >
-              <Calculator className="w-4 h-4" />
-            </button>
-
-            <button
-              onClick={() => setShowSettingsModal(true)}
-              className="p-2 text-slate-500 hover:text-indigo-600 dark:text-slate-400 dark:hover:text-indigo-400 rounded-lg hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-colors"
-              title="Settings & Backup"
-            >
-              <Settings className="w-4 h-4" />
-            </button>
-            
-            <button
-              onClick={handleLock}
-              className="p-2 text-slate-500 hover:text-rose-600 dark:text-slate-400 dark:hover:text-rose-400 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-900/20 transition-colors"
-              title="Lock App"
-            >
-              <Lock className="w-4 h-4" />
-            </button>
-
-            <button
-              onClick={() => setShowBulkModal(true)}
-              className="flex items-center gap-2 px-3 py-2 text-indigo-600 hover:bg-indigo-50 dark:text-indigo-400 dark:hover:bg-indigo-900/20 rounded-lg text-sm font-medium transition-colors"
-            >
-              <Sparkles className="w-4 h-4" />
-              AI Bulk Add
-            </button>
-            <button
-              onClick={handleStartAdd}
-              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-600 text-white rounded-lg text-sm font-medium transition-colors shadow-sm ml-2"
-            >
-              <PlusCircle className="w-4 h-4" />
-              Add Item
-            </button>
-          </nav>
-        </div>
-      </header>
+      <AppHeader
+        view={view}
+        onNavigate={setView}
+        allow={allow}
+        userEmail={appUser.email}
+        userRole={appUser.role}
+        darkMode={darkMode}
+        onToggleTheme={() => setDarkMode(!darkMode)}
+        isAiSidebarOpen={isAiSidebarOpen}
+        onToggleAiSidebar={() => setIsAiSidebarOpen(!isAiSidebarOpen)}
+        showCalculator={showCalculator}
+        onToggleCalculator={() => setShowCalculator(!showCalculator)}
+        onOpenFinder={() => setShowFinder(true)}
+        onOpenSettings={() => setShowSettingsModal(true)}
+        onOpenBulk={() => setShowBulkModal(true)}
+        onStartAdd={handleStartAdd}
+        onLock={handleLock}
+      />
 
       {/* Mobile Navigation */}
-      <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 p-2 flex justify-around z-50">
-         <button 
-           onClick={() => setView('dashboard')}
-           className={`flex flex-col items-center p-2 rounded-lg ${view === 'dashboard' ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-500 dark:text-slate-400'}`}
-         >
-           <LayoutDashboard className="w-6 h-6" />
-           <span className="text-[10px] mt-1">Dash</span>
-         </button>
-         <button 
-           onClick={() => setView('grid')}
-           className={`flex flex-col items-center p-2 rounded-lg ${view === 'grid' ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-500 dark:text-slate-400'}`}
-         >
-           <Table className="w-6 h-6" />
-           <span className="text-[10px] mt-1">Sheet</span>
-         </button>
-         <button
-           onClick={() => setView('pos')}
-           className={`flex flex-col items-center p-2 rounded-lg ${view === 'pos' ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-500 dark:text-slate-400'}`}
-         >
-           <ShoppingCart className="w-6 h-6" />
-           <span className="text-[10px] mt-1">Sell</span>
-         </button>
-         <button
-           onClick={handleStartAdd}
-           className={`flex flex-col items-center p-2 rounded-lg ${view === 'entry' ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-500 dark:text-slate-400'}`}
-         >
-           <PlusCircle className="w-6 h-6" />
-           <span className="text-[10px] mt-1">Add</span>
-         </button>
-         <button 
-           onClick={() => setIsAiSidebarOpen(true)}
-           className={`flex flex-col items-center p-2 rounded-lg ${view === 'ai' ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-500 dark:text-slate-400'}`}
-         >
-           <Bot className="w-6 h-6" />
-           <span className="text-[10px] mt-1">AI</span>
-         </button>
-         <button 
-           onClick={() => setShowCalculator(!showCalculator)}
-           className={`flex flex-col items-center p-2 rounded-lg ${showCalculator ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-500 dark:text-slate-400'}`}
-         >
-           <Calculator className="w-6 h-6" />
-           <span className="text-[10px] mt-1">Calc</span>
-         </button>
-      </div>
+      <MobileNav
+        view={view}
+        onNavigate={setView}
+        onStartAdd={handleStartAdd}
+        onOpenAiSidebar={() => setIsAiSidebarOpen(true)}
+        showCalculator={showCalculator}
+        onToggleCalculator={() => setShowCalculator(!showCalculator)}
+      />
 
       {/* Main Content */}
       <main className={`mx-auto px-4 sm:px-6 lg:px-8 py-8 flex-1 w-full flex flex-col ${view === 'grid' || view === 'ai' ? 'max-w-[98%]' : 'max-w-7xl'}`}>

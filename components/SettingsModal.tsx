@@ -2,6 +2,7 @@ import React, { useRef, useState } from 'react';
 import { Download, Upload, X, ShieldCheck, AlertTriangle, FileJson, Percent } from 'lucide-react';
 import { AppData } from '../types';
 import { BackupPanel } from './BackupPanel';
+import { normalizeRestore, isRestorableBackup } from '../domain/restore';
 
 export const getPOSSettings = () => {
   try {
@@ -54,18 +55,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, currentDa
         try {
           if (event.target?.result) {
             const parsed = JSON.parse(event.target.result as string);
-            
-            // Basic validation
-            if (!Array.isArray(parsed.inventory) && !Array.isArray(parsed.notes)) {
+
+            // Validate against the normalized shape so both the simple backup
+            // and the full JSON export are accepted.
+            if (!isRestorableBackup(parsed)) {
                throw new Error("Invalid file structure");
             }
 
-            // Normalize data structure
-            const restoredData: AppData = {
-              inventory: Array.isArray(parsed.inventory) ? parsed.inventory : [],
-              notes: Array.isArray(parsed.notes) ? parsed.notes : [],
-              tasks: Array.isArray(parsed.tasks) ? parsed.tasks : []
-            };
+            // Preserve every collection (inventory, accessories, sales history,
+            // customers, runners, drop-offs, settlements, notes, tasks).
+            const restoredData: AppData = normalizeRestore(parsed);
 
             if (confirm("WARNING: This will overwrite all current data with the backup file. Are you sure?")) {
                onRestore(restoredData);
