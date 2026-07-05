@@ -19,7 +19,10 @@ service cloud.firestore {
     function me() { return get(myUserPath()).data; }
     function myWorkspace() { return me().workspaceId; }
     function myRole() { return me().role; }
-    function activeMemberOf(ws) { return hasProfile() && me().disabled != true && myWorkspace() == ws; }
+    // `disabled` is optional on the user doc; use get(...,false) so a missing
+    // field is treated as "not disabled" instead of erroring (an errored rule
+    // denies, which previously blocked every workspace read for normal users).
+    function activeMemberOf(ws) { return hasProfile() && me().get('disabled', false) != true && myWorkspace() == ws; }
     function isOwnerOf(ws) { return activeMemberOf(ws) && myRole() == 'owner'; }
     function canWrite(ws) { return activeMemberOf(ws); } // members write shop data; deletes gated below
 
@@ -78,7 +81,7 @@ service cloud.firestore {
         (request.auth.uid == uid
           && request.resource.data.role == resource.data.role
           && request.resource.data.workspaceId == resource.data.workspaceId
-          && request.resource.data.disabled == resource.data.disabled)
+          && request.resource.data.get('disabled', false) == resource.data.get('disabled', false))
         || (hasProfile() && myRole() == 'owner' && resource.data.workspaceId == myWorkspace())
       );
 
