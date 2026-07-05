@@ -51,31 +51,39 @@ const STATUS_CELL: Record<DeviceStatus, string> = {
 };
 
 type ColType = 'text' | 'number' | 'date' | 'select' | 'computed';
-interface Col { key: string; label: string; type: ColType; w: number; align?: 'right'; options?: { value: string; label: string }[]; compute?: (i: InventoryItem) => string; sortVal?: (i: InventoryItem) => number | string; }
+// `frozen` pins a column to the left while scrolling; `emphasis` tunes text weight.
+interface Col { key: string; label: string; type: ColType; w: number; align?: 'right'; frozen?: boolean; emphasis?: 'strong' | 'muted'; options?: { value: string; label: string }[]; compute?: (i: InventoryItem) => string; sortVal?: (i: InventoryItem) => number | string; }
 const opt = (arr: string[]) => arr.map(v => ({ value: v, label: v }));
 
+// Combined Brand + Model display (falls back to the item name). Read-only —
+// Brand/Model remain editable via the Columns menu and the expand form.
+const itemLabel = (i: InventoryItem) => [i.brand, i.model].filter(Boolean).join(' ') || i.item || '—';
+
 const DEVICE_COLS: Col[] = [
-  { key: 'date', label: 'Date In', type: 'date', w: 130 },
-  { key: 'sku', label: 'SKU', type: 'text', w: 120 },
-  { key: 'imei', label: 'IMEI/Serial', type: 'text', w: 150 },
-  { key: 'deviceType', label: 'Type', type: 'select', w: 100, options: opt(DEVICE_TYPES) },
-  { key: 'brand', label: 'Brand', type: 'text', w: 100 },
-  { key: 'model', label: 'Model', type: 'text', w: 140 },
+  // Frozen identity block — stays visible while the row scrolls horizontally.
+  { key: 'date', label: 'Date In', type: 'date', w: 120, frozen: true },
+  { key: 'sku', label: 'SKU', type: 'text', w: 116, frozen: true, emphasis: 'muted' },
+  { key: 'imei', label: 'IMEI/Serial', type: 'text', w: 150, frozen: true, emphasis: 'muted' },
+  { key: '__item', label: 'Item', type: 'computed', w: 200, frozen: true, emphasis: 'strong', compute: itemLabel, sortVal: i => itemLabel(i).toLowerCase() },
+  // Scrolling attributes
+  { key: 'deviceType', label: 'Type', type: 'select', w: 78, options: opt(DEVICE_TYPES) },
   { key: 'storage', label: 'Storage', type: 'text', w: 90 },
   { key: 'color', label: 'Color', type: 'text', w: 100 },
   { key: 'batteryHealth', label: 'Battery', type: 'text', w: 80 },
+  { key: 'brand', label: 'Brand', type: 'text', w: 100 },
+  { key: 'model', label: 'Model', type: 'text', w: 140 },
   { key: 'condition', label: 'Condition', type: 'select', w: 120, options: opt(CONDITIONS) },
-  { key: 'boughtFrom', label: 'Bought From', type: 'text', w: 130 },
-  { key: 'purchaseSource', label: 'Source', type: 'text', w: 110 },
+  { key: 'boughtFrom', label: 'Bought From', type: 'text', w: 130, emphasis: 'muted' },
+  { key: 'purchaseSource', label: 'Source', type: 'text', w: 110, emphasis: 'muted' },
   { key: 'purchaseCost', label: 'Purchase', type: 'number', w: 100, align: 'right' },
   { key: 'repairCost', label: 'Repair', type: 'number', w: 90, align: 'right' },
   { key: '__total', label: 'Total Cost', type: 'computed', w: 100, align: 'right', compute: i => money(totalCost(i)), sortVal: totalCost },
-  { key: 'targetSalePrice', label: 'Target Sale', type: 'number', w: 100, align: 'right' },
+  { key: 'targetSalePrice', label: 'Target', type: 'number', w: 90, align: 'right' },
   { key: 'deviceStatus', label: 'Status', type: 'select', w: 150, options: STATUS_OPTS },
   { key: 'soldDate', label: 'Date Sold', type: 'date', w: 130 },
   { key: 'soldTo', label: 'Customer', type: 'text', w: 130 },
   { key: '__profit', label: 'Profit', type: 'computed', w: 100, align: 'right', compute: i => i.salePrice ? money(profitOf(i)) : '—', sortVal: profitOf },
-  { key: 'notes', label: 'Notes', type: 'text', w: 220 },
+  { key: 'notes', label: 'Notes', type: 'text', w: 220, emphasis: 'muted' },
 ];
 const ACCESSORY_COLS: Col[] = [
   { key: 'date', label: 'Date Added', type: 'date', w: 130 },
@@ -90,7 +98,10 @@ const ACCESSORY_COLS: Col[] = [
   { key: 'notes', label: 'Notes', type: 'text', w: 220 },
 ];
 
-const LS_HIDDEN = 'inv_hidden_cols_v1';
+// Bumped to v2 so existing users pick up the new default layout (Brand, Model,
+// and Condition hidden by default — still toggleable in the Columns menu).
+const LS_HIDDEN = 'inv_hidden_cols_v2';
+const DEFAULT_HIDDEN: Record<'device' | 'accessory', string[]> = { device: ['brand', 'model', 'condition'], accessory: [] };
 const LS_VIEWS = 'inv_saved_views_v1';
 const loadLS = <T,>(k: string, fb: T): T => { try { const r = localStorage.getItem(k); return r ? JSON.parse(r) : fb; } catch { return fb; } };
 
@@ -123,7 +134,7 @@ export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, o
   const [sort, setSort] = useState<Sort | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [hidden, setHidden] = useState<Record<'device' | 'accessory', string[]>>(() => loadLS(LS_HIDDEN, { device: [], accessory: [] }));
+  const [hidden, setHidden] = useState<Record<'device' | 'accessory', string[]>>(() => loadLS(LS_HIDDEN, DEFAULT_HIDDEN));
   const [views, setViews] = useState<SavedView[]>(() => loadLS(LS_VIEWS, []));
   const [menu, setMenu] = useState<null | 'cols' | 'views' | 'filter'>(null);
   const [expandItem, setExpandItem] = useState<InventoryItem | null>(null);
@@ -447,9 +458,18 @@ const Sheet: React.FC<{
   onDuplicate: (i: InventoryItem) => void; onExpand: (i: InventoryItem) => void; onLabel: (i: InventoryItem) => void;
   onAddRow?: () => void; addLabel: string; lowFlag?: boolean;
 }> = ({ title, cols, rows, sort, onSort, selected, onToggleSel, onToggleAll, onUpdate, onDelete, onDuplicate, onExpand, onLabel, onAddRow, addLabel, lowFlag }) => {
-  const cellCls = 'w-full px-2 py-2 bg-transparent outline-none text-sm text-slate-700 dark:text-slate-200 focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-indigo-500 rounded';
+  // Frozen identity columns stay pinned to the left while the rest scrolls.
+  // Left offsets are the running width of the Actions column + preceding frozen
+  // columns, so they must use fixed widths.
+  const ACTIONS_W = 132;
+  const frozenLeft: Record<string, number> = {};
+  { let acc = ACTIONS_W; for (const c of cols) { if (c.frozen) { frozenLeft[c.key] = acc; acc += c.w; } else break; } }
+  const emph = (c: Col) =>
+    c.emphasis === 'strong' ? 'font-semibold text-slate-900 dark:text-slate-100'
+      : c.emphasis === 'muted' ? 'text-slate-500 dark:text-slate-400'
+        : 'text-slate-700 dark:text-slate-200';
+  const cellBase = 'w-full px-2 py-1.5 bg-transparent outline-none text-sm focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-indigo-500 rounded';
   const allSel = rows.length > 0 && rows.every(r => selected.has(r.id));
-  const stickyLeft = 'sticky left-0 z-10 bg-white dark:bg-slate-900';
 
   return (
     <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl overflow-hidden">
@@ -460,15 +480,17 @@ const Sheet: React.FC<{
         <table className="border-collapse" style={{ minWidth: '100%' }}>
           <thead className="sticky top-0 z-20 bg-slate-50 dark:bg-slate-800">
             <tr className="text-[10px] uppercase tracking-wider text-slate-500 dark:text-slate-400 font-semibold">
-              <th className={`px-2 py-2.5 w-28 text-center border-b border-slate-200 dark:border-slate-700 ${stickyLeft} !z-30 bg-slate-50 dark:bg-slate-800`}>
+              <th style={{ width: ACTIONS_W, minWidth: ACTIONS_W, left: 0 }} className="px-2 py-2 text-center border-b border-slate-200 dark:border-slate-700 sticky !z-30 bg-slate-50 dark:bg-slate-800">
                 <div className="flex items-center gap-1 justify-center">
                   <button onClick={() => onToggleAll(rows)}>{allSel ? <CheckSquare className="w-4 h-4 text-indigo-500" /> : <Square className="w-4 h-4 text-slate-400" />}</button>
                   <span>Actions</span>
                 </div>
               </th>
               {cols.map(c => (
-                <th key={c.key} style={{ minWidth: c.w }} onClick={() => onSort(c.key)}
-                  className={`px-2 py-2.5 border-b border-slate-200 dark:border-slate-700 cursor-pointer select-none hover:text-indigo-600 ${c.align === 'right' ? 'text-right' : 'text-left'}`}>
+                <th key={c.key}
+                  style={{ minWidth: c.w, ...(c.frozen ? { width: c.w, left: frozenLeft[c.key], position: 'sticky' as const } : {}) }}
+                  onClick={() => onSort(c.key)}
+                  className={`px-2 py-2 border-b border-slate-200 dark:border-slate-700 cursor-pointer select-none hover:text-indigo-600 ${c.align === 'right' ? 'text-right' : 'text-left'} ${c.frozen ? 'z-30 bg-slate-50 dark:bg-slate-800' : ''}`}>
                   <span className="inline-flex items-center gap-1">{c.label}{sort?.key === c.key && (sort.dir === 'asc' ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />)}</span>
                 </th>
               ))}
@@ -479,9 +501,11 @@ const Sheet: React.FC<{
             {rows.map(i => {
               const low = lowFlag && isLow(i);
               const sel = selected.has(i.id);
+              // Frozen cells need an opaque background so scrolled content can't show through.
+              const frozenBg = sel ? 'bg-indigo-50 dark:bg-slate-800' : 'bg-white dark:bg-slate-900';
               return (
                 <tr key={i.id} className={`hover:bg-slate-50 dark:hover:bg-slate-800/40 ${sel ? 'bg-indigo-50/50 dark:bg-indigo-900/10' : low ? 'bg-rose-50/40 dark:bg-rose-900/10' : ''}`}>
-                  <td className={`px-2 py-1 whitespace-nowrap ${stickyLeft} ${sel ? 'bg-indigo-50 dark:bg-slate-800' : 'bg-white dark:bg-slate-900'}`}>
+                  <td style={{ width: ACTIONS_W, minWidth: ACTIONS_W, left: 0 }} className={`px-2 py-1.5 whitespace-nowrap sticky z-10 ${frozenBg}`}>
                     <div className="flex items-center gap-0.5">
                       <button onClick={() => onToggleSel(i.id)} className="p-1">{sel ? <CheckSquare className="w-4 h-4 text-indigo-500" /> : <Square className="w-4 h-4 text-slate-300" />}</button>
                       <button onClick={() => onLabel(i)} title="Print label" className="p-1 text-slate-400 hover:text-indigo-600"><QrCode className="w-3.5 h-3.5" /></button>
@@ -491,19 +515,23 @@ const Sheet: React.FC<{
                     </div>
                   </td>
                   {cols.map(c => (
-                    <td key={c.key} style={{ minWidth: c.w }} className="p-0 align-top">
+                    <td key={c.key}
+                      style={{ minWidth: c.w, ...(c.frozen ? { width: c.w, left: frozenLeft[c.key], position: 'sticky' as const } : {}) }}
+                      className={`p-0 align-top ${c.frozen ? `sticky z-10 ${frozenBg}` : ''}`}>
                       {c.type === 'computed' ? (
-                        <div className={`px-2 py-2 text-sm font-mono ${c.align === 'right' ? 'text-right' : ''} text-slate-500 dark:text-slate-400`}>
-                          {c.key === '__profit' && i.salePrice ? <span className={profitOf(i) >= 0 ? 'text-emerald-600' : 'text-rose-600'}>{c.compute!(i)}</span> : c.compute!(i)}
+                        <div className={`px-2 py-1.5 text-sm ${c.align === 'right' ? 'text-right font-mono' : ''} ${c.key === '__item' ? 'truncate' : ''} ${emph(c)}`}>
+                          {c.key === '__profit' && i.salePrice ? <span className={profitOf(i) >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}>{c.compute!(i)}</span> : c.compute!(i)}
                         </div>
                       ) : c.type === 'select' ? (
                         c.key === 'deviceStatus' ? (
-                          <select value={(i.deviceStatus as any) ?? 'ready'} onChange={e => onUpdate(i.id, 'deviceStatus', e.target.value)}
-                            className={`w-full mx-1 my-1 px-2 py-1 rounded-md text-xs font-semibold outline-none ${STATUS_CELL[(i.deviceStatus as DeviceStatus) || 'ready']}`}>
-                            {c.options!.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-                          </select>
+                          <div className="px-2 py-1.5 flex items-center">
+                            <select value={(i.deviceStatus as any) ?? 'ready'} onChange={e => onUpdate(i.id, 'deviceStatus', e.target.value)}
+                              className={`appearance-none cursor-pointer rounded-full px-2.5 py-1 text-[11px] font-semibold outline-none focus:ring-2 focus:ring-indigo-500 ${STATUS_CELL[(i.deviceStatus as DeviceStatus) || 'ready']}`}>
+                              {c.options!.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                            </select>
+                          </div>
                         ) : (
-                          <select value={(i[c.key as keyof InventoryItem] as any) ?? ''} onChange={e => onUpdate(i.id, c.key as keyof InventoryItem, e.target.value)} className={cellCls}>
+                          <select value={(i[c.key as keyof InventoryItem] as any) ?? ''} onChange={e => onUpdate(i.id, c.key as keyof InventoryItem, e.target.value)} className={`${cellBase} ${emph(c)}`}>
                             {c.options!.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                           </select>
                         )
@@ -513,7 +541,7 @@ const Sheet: React.FC<{
                           <input type={c.type === 'number' ? 'number' : c.type === 'date' ? 'date' : 'text'}
                             value={(i[c.key as keyof InventoryItem] as any) ?? (c.type === 'number' ? 0 : '')}
                             onChange={e => onUpdate(i.id, c.key as keyof InventoryItem, c.type === 'number' ? (parseFloat(e.target.value) || 0) : e.target.value)}
-                            className={`${cellCls} ${c.align === 'right' ? 'text-right font-mono' : ''} ${c.key === 'sku' ? 'font-mono text-xs' : ''} dark:[color-scheme:dark]`} />
+                            className={`${cellBase} ${emph(c)} ${c.align === 'right' ? 'text-right font-mono' : ''} ${c.key === 'sku' ? 'font-mono text-xs' : ''} dark:[color-scheme:dark]`} />
                         </div>
                       )}
                     </td>
