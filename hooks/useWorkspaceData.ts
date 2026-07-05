@@ -104,8 +104,8 @@ export function useWorkspaceData() {
           // First login: claim a pending invite by email, else become owner of a new workspace.
           const invite = user.email ? await getInvite(user.email) : null;
           record = invite
-            ? { id: user.uid, email: user.email || '', role: invite.role, workspaceId: invite.workspaceId, lastLogin: Date.now(), createdAt: Date.now() }
-            : { id: user.uid, email: user.email || '', role: 'owner', workspaceId: user.uid, lastLogin: Date.now(), createdAt: Date.now() };
+            ? { id: user.uid, email: user.email || '', role: invite.role, workspaceId: invite.workspaceId, disabled: false, lastLogin: Date.now(), createdAt: Date.now() }
+            : { id: user.uid, email: user.email || '', role: 'owner', workspaceId: user.uid, disabled: false, lastLogin: Date.now(), createdAt: Date.now() };
           await setUserDoc(record);
           if (invite) await deleteInvite(invite.email).catch(() => {});
         } else {
