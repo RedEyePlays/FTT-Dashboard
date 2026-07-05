@@ -15,6 +15,17 @@ View your app in AI Studio: https://ai.studio/apps/drive/14LwpKmFbK8-yXAg4NnTF3U
 
 1. Install dependencies:
    `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
+2. Set `VITE_API_KEY` in [.env](.env) to your Gemini API key (this is the
+   variable the app actually reads — see `services/geminiService.ts`).
 3. Run the app:
    `npm run dev`
+
+## Scripts
+
+- `npm run dev` — start the Vite dev server
+- `npm run build` — production build
+- `npm run typecheck` — TypeScript type-check (`tsc --noEmit`)
+- `npm test` — run the unit test suite (Vitest)
+
+CI (`.github/workflows/ci.yml`) runs type-check, tests, and build on every push
+and pull request.

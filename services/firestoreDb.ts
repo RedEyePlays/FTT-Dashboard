@@ -6,6 +6,7 @@ import {
   InventoryItem, Runner, DropOff, Settlement, Customer, SalesTransaction, ActivityEntry, Note, Task,
   AppUser, WorkspaceInvite, AuditEntry,
 } from '../types';
+import { collectionFor } from '../domain/inventory';
 
 // Shared shop data lives under user_data/{workspaceId}/<collection>, where
 // workspaceId is the owning account's uid. The `wsId` arg below is that id.
@@ -83,8 +84,7 @@ export async function commitSale(uid: string, payload: {
 export async function seedSampleData(uid: string, items: InventoryItem[]) {
   const batch = writeBatch(db);
   items.forEach(i => {
-    const name: CollName = (i.kind ?? 'device') === 'accessory' ? 'accessories' : 'inventory';
-    batch.set(docRef(uid, name, i.id), clean(i));
+    batch.set(docRef(uid, collectionFor(i), i.id), clean(i));
   });
   await batch.commit();
 }
@@ -101,8 +101,7 @@ export async function migrateLegacyIfNeeded(uid: string, legacy: {
   if (inv.length === 0 && !(legacy.runners?.length)) return false;
   const batch = writeBatch(db);
   inv.forEach(i => {
-    const name: CollName = (i.kind ?? 'device') === 'accessory' ? 'accessories' : 'inventory';
-    batch.set(docRef(uid, name, i.id), clean(i));
+    batch.set(docRef(uid, collectionFor(i), i.id), clean(i));
   });
   (legacy.runners || []).forEach(r => batch.set(docRef(uid, 'runners', r.id), clean(r)));
   (legacy.dropOffs || []).forEach(d => batch.set(docRef(uid, 'dropOffs', d.id), clean(d)));

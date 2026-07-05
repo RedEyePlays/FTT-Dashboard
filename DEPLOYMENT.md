@@ -63,5 +63,11 @@ Instead of a batch file, run these standard commands in your Command Prompt (mak
 6.  Visit your website!
 
 ## 6. First Login
-*   **PIN**: Enter **2522** to unlock the app.
-*   Go to **Settings (Gear Icon) > Change PIN** to set your own secure PIN.
+The app authenticates with **Firebase Authentication (email + password)** — there
+is no local PIN.
+
+*   On first visit, create an account (or sign in) on the auth screen.
+*   The first account to sign in becomes the **Owner** of a new workspace.
+    Additional staff join via an Owner-issued invite (Users tab). See
+    `MIGRATION.md` for the roles/workspace model and required Firebase setup
+    (deploy `firestore.rules`, enable the Email/Password provider).

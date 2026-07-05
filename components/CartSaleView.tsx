@@ -7,6 +7,9 @@ import {
 import { InventoryItem, ItemKind, SalesTransaction, Customer } from '../types';
 import { getPOSSettings } from './SettingsModal';
 import { LabelModal } from './LabelModal';
+import { newId } from '../domain/ids';
+import { kindOf } from '../domain/inventory';
+import { PLATFORMS } from '../domain/pos';
 
 export interface CartCheckout {
   soldRows: InventoryItem[];              // device rows to mark sold (replace by id)
@@ -21,18 +24,8 @@ interface Props {
   onComplete: (payload: CartCheckout) => void;
 }
 
-const PLATFORMS: { name: string; fee: number }[] = [
-  { name: 'None / In-Store', fee: 0 },
-  { name: 'eBay', fee: 13.25 },
-  { name: 'Amazon', fee: 15 },
-  { name: 'Facebook Marketplace', fee: 5 },
-  { name: 'Best Buy', fee: 10 },
-  { name: 'Swappa', fee: 3 },
-  { name: 'Other', fee: 0 },
-];
-
-const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-const kindOf = (i: InventoryItem): ItemKind => i.kind ?? 'device';
+// `uid` is kept as a local alias so the many call sites below stay unchanged.
+const uid = newId;
 
 type CustomCategory = 'device' | 'accessory' | 'service' | 'other';
 

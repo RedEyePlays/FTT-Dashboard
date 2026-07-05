@@ -231,6 +231,7 @@ export interface AppData {
   dropOffs?: DropOff[];
   settlements?: Settlement[];
   customers?: Customer[];
+  salesTransactions?: SalesTransaction[];
   skuCounters?: Record<string, number>; // monotonic per-prefix SKU counters
   activityLog?: ActivityEntry[];
 }
