@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { Dashboard } from './components/Dashboard';
+import { AnalyticsView } from './components/AnalyticsView';
 import { DataEntryForm } from './components/DataEntryForm';
 import { DataGrid } from './components/DataGrid';
 import { BulkEntryModal } from './components/BulkEntryModal';
@@ -42,7 +43,7 @@ const App: React.FC = () => {
     user, isLoadingAuth, authError, setAuthError,
     appUser, roleLoading, workspaceId, workspaceUsers, invites, auditLogs,
     data, notes, setNotes, tasks, setTasks,
-    runners, dropOffs, settlements,
+    runners, dropOffs, settlements, salesTransactions,
     skuCounters, setSkuCounters, activityLog, lastBackup,
     dbLoading, dbError, reconnect,
     runnersRef, dropOffsRef, settlementsRef, customersRef, salesTransactionsRef, skuRef, dataRef,
@@ -356,7 +357,12 @@ const App: React.FC = () => {
         <div className="animate-fadeIn flex-1 flex flex-col">
           {view === 'dashboard' && (
             allow('reports.view')
-              ? <Dashboard data={data} darkMode={darkMode} canViewProfit={allow('reports.profit')} />
+              ? <Dashboard data={data} salesTransactions={salesTransactions} activity={activityLog} canViewProfit={allow('reports.profit')} onViewAnalytics={() => setView('analytics')} />
+              : <div className="text-center text-slate-400 py-20">You don't have access to reports.</div>
+          )}
+          {view === 'analytics' && (
+            allow('reports.view')
+              ? <AnalyticsView data={data} darkMode={darkMode} canViewProfit={allow('reports.profit')} />
               : <div className="text-center text-slate-400 py-20">You don't have access to reports.</div>
           )}
           {(view === 'entry' || view === 'edit') && (
