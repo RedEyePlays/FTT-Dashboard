@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import {
   Wrench, Plus, Search, X, Trash2, Printer, FileText, Receipt, History as HistoryIcon,
-  ArrowLeft, DollarSign, ChevronRight, Building2, User, Package,
+  ArrowLeft, DollarSign, ChevronRight, Building2, ClipboardCheck, PackageCheck, ScrollText,
 } from 'lucide-react';
 import { Repair, RepairBatch, Customer, AuditEntry, RepairStatus, RepairType, DeviceType } from '../types';
 import {
@@ -9,7 +9,7 @@ import {
   balanceOwing, batchTotals, matchesRepair, matchesBatch,
 } from '../domain/repairs';
 import { newId } from '../domain/ids';
-import { printRetailReceipt, printBatchIntake, printBatchInvoice, printBatchSummary } from '../services/repairPrint';
+import { printRetailReceipt, printBatchIntake, printBatchInvoice, printBatchSummary, printDeviceSheet } from '../services/repairPrint';
 
 interface Props {
   repairs: Repair[];
@@ -45,6 +45,26 @@ const StatusPill: React.FC<{ value: RepairStatus; onChange?: (s: RepairStatus) =
   </select>
 );
 
+const Section: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
+  <div>
+    <h3 className="text-[11px] font-bold uppercase tracking-wide text-slate-400 mb-2 pb-1 border-b border-slate-100 dark:border-slate-800">{title}</h3>
+    {children}
+  </div>
+);
+
+const ACCENTS: Record<string, string> = {
+  blue: 'bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400',
+  emerald: 'bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400',
+  amber: 'bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400',
+  violet: 'bg-violet-100 text-violet-600 dark:bg-violet-900/30 dark:text-violet-400',
+};
+const SummaryCard: React.FC<{ icon: React.ReactNode; accent: string; label: string; value: number }> = ({ icon, accent, label, value }) => (
+  <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-3 flex items-center gap-3">
+    <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${ACCENTS[accent] || ACCENTS.blue}`}>{icon}</div>
+    <div className="min-w-0"><p className="text-[11px] uppercase tracking-wide text-slate-400 truncate">{label}</p><p className="text-xl font-bold text-slate-900 dark:text-white leading-tight">{value}</p></div>
+  </div>
+);
+
 export const RepairsView: React.FC<Props> = (props) => {
   const { repairs, batches, auditLogs, canDelete, onSaveRepair, onDeleteRepair, onSaveBatch, onDeleteBatch, onRecordPayment, onPrintAudit } = props;
   const [tab, setTab] = useState<'tickets' | 'batches'>('tickets');
@@ -63,6 +83,20 @@ export const RepairsView: React.FC<Props> = (props) => {
     .sort((a, b) => b.createdAt - a.createdAt), [batches, query]);
 
   const openBatch = batches.find(b => b.id === openBatchId) || null;
+
+  // Print a device sheet, resolving the parent batch (for wholesale context).
+  const printSheet = (r: Repair) => {
+    const b = r.batchId ? batches.find(x => x.id === r.batchId) : undefined;
+    printDeviceSheet(r, b ? { companyName: b.companyName, batchNumber: b.batchNumber } : undefined);
+    onPrintAudit('repair', r.id, 'device_sheet');
+  };
+
+  const summary = useMemo(() => ({
+    active: repairs.filter(r => r.status !== 'completed' && r.status !== 'cancelled').length,
+    ready: repairs.filter(r => r.status === 'ready_pickup').length,
+    approval: repairs.filter(r => r.status === 'waiting_approval').length,
+    batchesActive: batches.filter(b => b.status === 'active').length,
+  }), [repairs, batches]);
 
   // --- creators ---
   const newRetail = (): Repair => ({ id: newId(), repairNumber: '', type: 'retail', createdAt: Date.now(), date: today(), issue: '', repairPrice: 0, status: 'received', warrantyDays: 90, deposit: 0 });
@@ -107,7 +141,7 @@ export const RepairsView: React.FC<Props> = (props) => {
             </div>
             <div className="relative flex-1 min-w-[220px]">
               <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-              <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search repair #, customer, company, IMEI, phone, model…"
+              <input value={query} onChange={e => setQuery(e.target.value)} placeholder={tab === 'tickets' ? 'Search repair #, customer, phone, IMEI/serial, model, issue…' : 'Search batch #, company, contact, phone, email…'}
                 className="w-full pl-9 pr-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
             </div>
             {tab === 'tickets' && (
@@ -116,6 +150,14 @@ export const RepairsView: React.FC<Props> = (props) => {
                 {REPAIR_STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
               </select>
             )}
+          </div>
+
+          {/* Summary cards */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <SummaryCard icon={<Wrench className="w-4 h-4" />} accent="blue" label="Active Repairs" value={summary.active} />
+            <SummaryCard icon={<PackageCheck className="w-4 h-4" />} accent="emerald" label="Ready for Pickup" value={summary.ready} />
+            <SummaryCard icon={<ClipboardCheck className="w-4 h-4" />} accent="amber" label="Waiting Approval" value={summary.approval} />
+            <SummaryCard icon={<Building2 className="w-4 h-4" />} accent="violet" label="Active Batches" value={summary.batchesActive} />
           </div>
         </>
       )}
@@ -173,6 +215,8 @@ export const RepairsView: React.FC<Props> = (props) => {
           onAddDevice={() => setDrawer({ repair: newDevice(openBatch.id), isNew: true })}
           onEditDevice={(r) => setDrawer({ repair: r, isNew: false })}
           onStatus={(r, s) => onSaveRepair({ ...r, status: s }, r)}
+          onPrintDevice={printSheet}
+          onRemoveDevice={(r) => onDeleteRepair(r.id)}
           onEditBatch={() => setBatchForm({ batch: openBatch, isNew: false })}
           onDeleteBatch={() => { onDeleteBatch(openBatch.id); setOpenBatchId(null); }}
           onRecordPayment={onRecordPayment}
@@ -192,7 +236,8 @@ export const RepairsView: React.FC<Props> = (props) => {
           onClose={() => setDrawer(null)}
           onSave={saveDrawer}
           onDelete={() => { onDeleteRepair(drawer.repair.id); setDrawer(null); }}
-          onPrint={(doc) => { printRetailReceipt(drawer.repair, doc); onPrintAudit('repair', drawer.repair.id, doc); }} />
+          onPrint={(doc) => { printRetailReceipt(drawer.repair, doc); onPrintAudit('repair', drawer.repair.id, doc); }}
+          onPrintSheet={() => printSheet(drawer.repair)} />
       )}
 
       {/* Batch create/edit form */}
@@ -209,9 +254,10 @@ export const RepairsView: React.FC<Props> = (props) => {
 const BatchDetail: React.FC<{
   batch: RepairBatch; repairs: Repair[]; canDelete: boolean;
   onBack: () => void; onAddDevice: () => void; onEditDevice: (r: Repair) => void;
-  onStatus: (r: Repair, s: RepairStatus) => void; onEditBatch: () => void; onDeleteBatch: () => void;
+  onStatus: (r: Repair, s: RepairStatus) => void; onPrintDevice: (r: Repair) => void; onRemoveDevice: (r: Repair) => void;
+  onEditBatch: () => void; onDeleteBatch: () => void;
   onRecordPayment: (b: RepairBatch, amount: number) => void; onPrint: (doc: 'intake' | 'invoice' | 'summary') => void;
-}> = ({ batch, repairs, canDelete, onBack, onAddDevice, onEditDevice, onStatus, onEditBatch, onDeleteBatch, onRecordPayment, onPrint }) => {
+}> = ({ batch, repairs, canDelete, onBack, onAddDevice, onEditDevice, onStatus, onPrintDevice, onRemoveDevice, onEditBatch, onDeleteBatch, onRecordPayment, onPrint }) => {
   const devices = repairs.filter(r => r.batchId === batch.id).sort((a, b) => a.createdAt - b.createdAt);
   const t = batchTotals(batch, repairs);
   const [pay, setPay] = useState('');
@@ -230,10 +276,10 @@ const BatchDetail: React.FC<{
 
       {/* Totals */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        {[['Total Repairs', String(t.count)], ['Total Cost', money(t.totalCost)], ['Amount Paid', money(t.amountPaid)], ['Remaining', money(t.remaining)]].map(([k, v], i) => (
-          <div key={k} className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-3">
+        {[['Total Devices', String(t.count)], ['Total Repair Amount', money(t.totalCost)], ['Amount Paid', money(t.amountPaid)], ['Remaining Balance', money(t.remaining)]].map(([k, v], i) => (
+          <div key={k} className={`rounded-xl p-3 border ${i === 3 ? (t.remaining > 0 ? 'bg-rose-50 dark:bg-rose-900/10 border-rose-200 dark:border-rose-800' : 'bg-emerald-50 dark:bg-emerald-900/10 border-emerald-200 dark:border-emerald-800') : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700'}`}>
             <p className="text-[11px] uppercase tracking-wide text-slate-400">{k}</p>
-            <p className={`text-lg font-bold ${i === 3 && t.remaining > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-slate-900 dark:text-white'}`}>{v}</p>
+            <p className={`text-lg font-bold ${i === 3 ? (t.remaining > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400') : 'text-slate-900 dark:text-white'}`}>{v}</p>
           </div>
         ))}
       </div>
@@ -254,18 +300,25 @@ const BatchDetail: React.FC<{
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="bg-slate-50 dark:bg-slate-800/50 text-[10px] uppercase tracking-wider text-slate-500 dark:text-slate-400">
-            <tr><th className="text-left px-4 py-2">#</th><th className="text-left px-4 py-2">Device</th><th className="text-left px-4 py-2">IMEI/Serial</th><th className="text-left px-4 py-2">Issue</th><th className="text-left px-4 py-2">Status</th><th className="text-right px-4 py-2">Price</th></tr>
+            <tr><th className="text-left px-4 py-2">#</th><th className="text-left px-4 py-2">Device</th><th className="text-left px-4 py-2">IMEI/Serial</th><th className="text-left px-4 py-2">Issue</th><th className="text-left px-4 py-2">Status</th><th className="text-right px-4 py-2">Price</th><th className="text-right px-4 py-2">Actions</th></tr>
           </thead>
           <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-            {devices.length === 0 && <tr><td colSpan={6} className="text-center text-slate-400 py-8">No devices in this batch yet.</td></tr>}
+            {devices.length === 0 && <tr><td colSpan={7} className="text-center text-slate-400 py-8">No devices in this batch yet.</td></tr>}
             {devices.map((r, idx) => (
-              <tr key={r.id} onClick={() => onEditDevice(r)} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 cursor-pointer">
+              <tr key={r.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
                 <td className="px-4 py-2 text-slate-400">{idx + 1}</td>
-                <td className="px-4 py-2 font-medium text-slate-800 dark:text-slate-100">{deviceName(r)}</td>
+                <td className="px-4 py-2 font-medium text-slate-800 dark:text-slate-100 cursor-pointer" onClick={() => onEditDevice(r)}>{deviceName(r)}</td>
                 <td className="px-4 py-2 text-slate-500 dark:text-slate-400 font-mono text-xs">{r.imei || '—'}</td>
                 <td className="px-4 py-2 text-slate-500 dark:text-slate-400 truncate max-w-[200px]">{r.issue || '—'}</td>
                 <td className="px-4 py-2"><StatusPill value={r.status} onChange={s => onStatus(r, s)} /></td>
                 <td className="px-4 py-2 text-right font-medium text-slate-800 dark:text-slate-100">{money(r.repairPrice)}</td>
+                <td className="px-4 py-2">
+                  <div className="flex items-center justify-end gap-1">
+                    <button onClick={() => onEditDevice(r)} title="Edit" className="p-1 text-slate-400 hover:text-indigo-600"><FileText className="w-4 h-4" /></button>
+                    <button onClick={() => onPrintDevice(r)} title="Print device sheet" className="p-1 text-slate-400 hover:text-indigo-600"><Printer className="w-4 h-4" /></button>
+                    {canDelete && <button onClick={() => onRemoveDevice(r)} title="Remove" className="p-1 text-slate-400 hover:text-rose-500"><Trash2 className="w-4 h-4" /></button>}
+                  </div>
+                </td>
               </tr>
             ))}
           </tbody>
@@ -278,8 +331,8 @@ const BatchDetail: React.FC<{
 /* ---------------- Repair drawer ---------------- */
 const RepairDrawer: React.FC<{
   initial: Repair; isNew: boolean; canDelete: boolean; auditLogs: AuditEntry[];
-  onClose: () => void; onSave: (r: Repair) => void; onDelete: () => void; onPrint: (doc: 'intake' | 'repair' | 'pickup') => void;
-}> = ({ initial, isNew, canDelete, auditLogs, onClose, onSave, onDelete, onPrint }) => {
+  onClose: () => void; onSave: (r: Repair) => void; onDelete: () => void; onPrint: (doc: 'intake' | 'repair' | 'pickup') => void; onPrintSheet: () => void;
+}> = ({ initial, isNew, canDelete, auditLogs, onClose, onSave, onDelete, onPrint, onPrintSheet }) => {
   const [f, setF] = useState<Repair>(initial);
   const set = (patch: Partial<Repair>) => setF(prev => ({ ...prev, ...patch }));
   const isRetail = f.type === 'retail';
@@ -289,64 +342,73 @@ const RepairDrawer: React.FC<{
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-slate-900/40 backdrop-blur-sm" onClick={onClose}>
-      <div className="w-full max-w-lg h-full bg-white dark:bg-slate-900 shadow-2xl flex flex-col" onClick={e => e.stopPropagation()}>
+      <div className="w-full max-w-xl h-full bg-white dark:bg-slate-900 shadow-2xl flex flex-col" onClick={e => e.stopPropagation()}>
         <div className="px-5 py-3.5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
-          <h2 className="text-sm font-bold text-slate-800 dark:text-slate-100">{isNew ? (isRetail ? 'New Repair Ticket' : 'Add Device') : (isRetail ? 'Repair Ticket' : 'Device')}{f.repairNumber && <span className="font-mono text-xs text-slate-400 ml-2">{f.repairNumber}</span>}</h2>
+          <div className="flex items-center gap-3">
+            <h2 className="text-sm font-bold text-slate-800 dark:text-slate-100">{isNew ? (isRetail ? 'New Repair Ticket' : 'Add Device') : (isRetail ? 'Repair Ticket' : 'Device')}{f.repairNumber && <span className="font-mono text-xs text-slate-400 ml-2">{f.repairNumber}</span>}</h2>
+            <StatusPill value={f.status} onChange={s => set({ status: s })} />
+          </div>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"><X className="w-4 h-4" /></button>
         </div>
 
-        <div className="flex-1 overflow-y-auto custom-scrollbar p-5 space-y-4">
-          {/* Status */}
-          <Field label="Status"><div className="mt-1"><StatusPill value={f.status} onChange={s => set({ status: s })} /></div></Field>
-
+        <div className="flex-1 overflow-y-auto custom-scrollbar p-5 space-y-5">
           {isRetail && (
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="Customer"><input className={inputCls} value={f.customerName || ''} onChange={e => set({ customerName: e.target.value })} /></Field>
-              <Field label="Phone"><input className={inputCls} value={f.customerPhone || ''} onChange={e => set({ customerPhone: e.target.value })} /></Field>
-              <Field label="Email (optional)" className="col-span-2"><input className={inputCls} value={f.customerEmail || ''} onChange={e => set({ customerEmail: e.target.value })} /></Field>
-            </div>
-          )}
-
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Device Type"><select className={inputCls} value={f.deviceType || ''} onChange={e => set({ deviceType: e.target.value as DeviceType })}><option value="">—</option>{DEVICE_TYPES.map(d => <option key={d} value={d}>{d}</option>)}</select></Field>
-            <Field label="Brand"><input className={inputCls} value={f.brand || ''} onChange={e => set({ brand: e.target.value })} /></Field>
-            <Field label="Model"><input className={inputCls} value={f.model || ''} onChange={e => set({ model: e.target.value })} /></Field>
-            <Field label="IMEI / Serial"><input className={inputCls} value={f.imei || ''} onChange={e => set({ imei: e.target.value })} /></Field>
-            {isRetail && <>
-              <Field label="Storage"><input className={inputCls} value={f.storage || ''} onChange={e => set({ storage: e.target.value })} /></Field>
-              <Field label="Color"><input className={inputCls} value={f.color || ''} onChange={e => set({ color: e.target.value })} /></Field>
-              <Field label="Carrier (optional)"><input className={inputCls} value={f.carrier || ''} onChange={e => set({ carrier: e.target.value })} /></Field>
-              <Field label="Passcode (optional)"><input className={inputCls} value={f.passcode || ''} onChange={e => set({ passcode: e.target.value })} /></Field>
-            </>}
-          </div>
-
-          <Field label="Issue Description"><textarea rows={2} className={inputCls} value={f.issue} onChange={e => set({ issue: e.target.value })} /></Field>
-
-          {isRetail && (
-            <div>
-              <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400">Cosmetic Condition</span>
-              <div className="flex flex-wrap gap-1.5 mt-1">
-                {COSMETIC_OPTIONS.map(opt => {
-                  const on = (f.cosmetic?.checks || []).includes(opt);
-                  return <button key={opt} type="button" onClick={() => toggleCosmetic(opt)} className={`px-2 py-1 rounded-md text-xs border ${on ? 'bg-indigo-100 border-indigo-300 text-indigo-700 dark:bg-indigo-900/40 dark:border-indigo-700 dark:text-indigo-300' : 'border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400'}`}>{opt}</button>;
-                })}
+            <Section title="Customer">
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Customer"><input className={inputCls} value={f.customerName || ''} onChange={e => set({ customerName: e.target.value })} /></Field>
+                <Field label="Phone"><input className={inputCls} value={f.customerPhone || ''} onChange={e => set({ customerPhone: e.target.value })} /></Field>
+                <Field label="Email (optional)" className="col-span-2"><input className={inputCls} value={f.customerEmail || ''} onChange={e => set({ customerEmail: e.target.value })} /></Field>
               </div>
-              <input className={`${inputCls} mt-2`} placeholder="Cosmetic notes (optional)" value={f.cosmetic?.notes || ''} onChange={e => set({ cosmetic: { checks: f.cosmetic?.checks || [], notes: e.target.value } })} />
-            </div>
+            </Section>
           )}
 
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Repair Price"><input type="number" min="0" step="0.01" className={inputCls} value={f.repairPrice} onChange={e => set({ repairPrice: num(e.target.value) })} /></Field>
-            {isRetail && <Field label="Deposit"><input type="number" min="0" step="0.01" className={inputCls} value={f.deposit ?? 0} onChange={e => set({ deposit: num(e.target.value) })} /></Field>}
-            {isRetail && <Field label="Balance Owing"><input readOnly className={`${inputCls} opacity-70`} value={money(balanceOwing(f))} /></Field>}
-            {isRetail && <Field label="Warranty (days)"><input type="number" min="0" className={inputCls} value={f.warrantyDays ?? 0} onChange={e => set({ warrantyDays: num(e.target.value) })} /></Field>}
-            {isRetail && <Field label="Est. Completion"><input type="date" className={inputCls} value={f.estimatedCompletion || ''} onChange={e => set({ estimatedCompletion: e.target.value })} /></Field>}
-          </div>
+          <Section title="Device">
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Device Type"><select className={inputCls} value={f.deviceType || ''} onChange={e => set({ deviceType: e.target.value as DeviceType })}><option value="">—</option>{DEVICE_TYPES.map(d => <option key={d} value={d}>{d}</option>)}</select></Field>
+              <Field label="Brand"><input className={inputCls} value={f.brand || ''} onChange={e => set({ brand: e.target.value })} /></Field>
+              <Field label="Model"><input className={inputCls} value={f.model || ''} onChange={e => set({ model: e.target.value })} /></Field>
+              <Field label="IMEI / Serial"><input className={inputCls} value={f.imei || ''} onChange={e => set({ imei: e.target.value })} /></Field>
+              {isRetail && <>
+                <Field label="Storage"><input className={inputCls} value={f.storage || ''} onChange={e => set({ storage: e.target.value })} /></Field>
+                <Field label="Color"><input className={inputCls} value={f.color || ''} onChange={e => set({ color: e.target.value })} /></Field>
+                <Field label="Carrier (optional)"><input className={inputCls} value={f.carrier || ''} onChange={e => set({ carrier: e.target.value })} /></Field>
+                <Field label="Passcode (optional)"><input className={inputCls} value={f.passcode || ''} onChange={e => set({ passcode: e.target.value })} /></Field>
+              </>}
+            </div>
+          </Section>
 
-          <div className="grid grid-cols-1 gap-3">
-            <Field label="Internal Notes"><textarea rows={2} className={inputCls} value={f.internalNotes || ''} onChange={e => set({ internalNotes: e.target.value })} /></Field>
-            {isRetail && <Field label="Customer Notes"><textarea rows={2} className={inputCls} value={f.customerNotes || ''} onChange={e => set({ customerNotes: e.target.value })} /></Field>}
-          </div>
+          <Section title="Issue / Condition">
+            <Field label="Issue Description"><textarea rows={2} className={inputCls} value={f.issue} onChange={e => set({ issue: e.target.value })} /></Field>
+            {isRetail && (
+              <div className="mt-3">
+                <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400">Cosmetic Condition</span>
+                <div className="flex flex-wrap gap-1.5 mt-1">
+                  {COSMETIC_OPTIONS.map(opt => {
+                    const on = (f.cosmetic?.checks || []).includes(opt);
+                    return <button key={opt} type="button" onClick={() => toggleCosmetic(opt)} className={`px-2 py-1 rounded-md text-xs border ${on ? 'bg-indigo-100 border-indigo-300 text-indigo-700 dark:bg-indigo-900/40 dark:border-indigo-700 dark:text-indigo-300' : 'border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400'}`}>{opt}</button>;
+                  })}
+                </div>
+                <input className={`${inputCls} mt-2`} placeholder="Cosmetic notes (optional)" value={f.cosmetic?.notes || ''} onChange={e => set({ cosmetic: { checks: f.cosmetic?.checks || [], notes: e.target.value } })} />
+              </div>
+            )}
+          </Section>
+
+          <Section title="Payment / Warranty">
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Repair Price"><input type="number" min="0" step="0.01" className={inputCls} value={f.repairPrice} onChange={e => set({ repairPrice: num(e.target.value) })} /></Field>
+              {isRetail && <Field label="Deposit"><input type="number" min="0" step="0.01" className={inputCls} value={f.deposit ?? 0} onChange={e => set({ deposit: num(e.target.value) })} /></Field>}
+              {isRetail && <Field label="Balance Owing"><input readOnly className={`${inputCls} opacity-70`} value={money(balanceOwing(f))} /></Field>}
+              {isRetail && <Field label="Warranty (days)"><input type="number" min="0" className={inputCls} value={f.warrantyDays ?? 0} onChange={e => set({ warrantyDays: num(e.target.value) })} /></Field>}
+              {isRetail && <Field label="Est. Completion" className="col-span-2"><input type="date" className={inputCls} value={f.estimatedCompletion || ''} onChange={e => set({ estimatedCompletion: e.target.value })} /></Field>}
+            </div>
+          </Section>
+
+          <Section title="Notes">
+            <div className="grid grid-cols-1 gap-3">
+              <Field label="Internal Notes"><textarea rows={2} className={inputCls} value={f.internalNotes || ''} onChange={e => set({ internalNotes: e.target.value })} /></Field>
+              {isRetail && <Field label="Customer Notes"><textarea rows={2} className={inputCls} value={f.customerNotes || ''} onChange={e => set({ customerNotes: e.target.value })} /></Field>}
+            </div>
+          </Section>
 
           {/* Audit history */}
           {!isNew && (
@@ -361,13 +423,16 @@ const RepairDrawer: React.FC<{
           )}
         </div>
 
-        <div className="px-5 py-3 border-t border-slate-100 dark:border-slate-800 flex items-center gap-2">
-          <button onClick={() => onSave(f)} className="flex-1 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium">Save</button>
-          {isRetail && !isNew && (
+        <div className="px-5 py-3 border-t border-slate-100 dark:border-slate-800 flex items-center gap-2 flex-wrap">
+          <button onClick={() => onSave(f)} className="flex-1 min-w-[120px] px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium">Save</button>
+          {!isNew && (
             <div className="flex items-center gap-1">
-              <button onClick={() => onPrint('intake')} title="Intake receipt" className="p-2 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-500 hover:border-indigo-400"><FileText className="w-4 h-4" /></button>
-              <button onClick={() => onPrint('repair')} title="Repair receipt" className="p-2 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-500 hover:border-indigo-400"><Receipt className="w-4 h-4" /></button>
-              <button onClick={() => onPrint('pickup')} title="Pickup receipt" className="p-2 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-500 hover:border-indigo-400"><Printer className="w-4 h-4" /></button>
+              <button onClick={onPrintSheet} title="Print device sheet" className="p-2 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-500 hover:border-indigo-400"><ScrollText className="w-4 h-4" /></button>
+              {isRetail && <>
+                <button onClick={() => onPrint('intake')} title="Intake receipt" className="p-2 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-500 hover:border-indigo-400"><FileText className="w-4 h-4" /></button>
+                <button onClick={() => onPrint('repair')} title="Repair receipt" className="p-2 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-500 hover:border-indigo-400"><Receipt className="w-4 h-4" /></button>
+                <button onClick={() => onPrint('pickup')} title="Pickup receipt" className="p-2 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-500 hover:border-indigo-400"><Printer className="w-4 h-4" /></button>
+              </>}
             </div>
           )}
           {canDelete && !isNew && <button onClick={onDelete} className="p-2 text-slate-400 hover:text-rose-500"><Trash2 className="w-4 h-4" /></button>}

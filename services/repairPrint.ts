@@ -90,6 +90,33 @@ export const printBatchInvoice = (batch: RepairBatch, devices: Repair[]) => {
   openPrint(`Batch Invoice ${batch.batchNumber}`, 640, body);
 };
 
+// --- Per-device repair sheet (retail ticket or wholesale device) ---
+// Clean, printable on normal paper; compact enough to fold as a device label.
+export const printDeviceSheet = (r: Repair, ctx?: { companyName?: string; batchNumber?: string }) => {
+  const isRetail = r.type === 'retail';
+  const who = isRetail ? (r.customerName || 'Walk-in') : (ctx?.companyName || 'Wholesale');
+  const num = isRetail ? r.repairNumber : (ctx?.batchNumber ? `${ctx.batchNumber} · ${r.repairNumber}` : r.repairNumber);
+  const cosmetic = r.cosmetic?.checks?.length ? r.cosmetic.checks.join(', ') : '';
+  const money$ = isRetail
+    ? `${row('Repair Price', money(r.repairPrice))}${r.deposit ? row('Deposit', money(r.deposit)) : ''}<div class="row b"><span>Balance Owing</span><span>${money(balanceOwing(r))}</span></div>`
+    : row('Repair Price', money(r.repairPrice));
+  const body = `
+    <h2>${SHOP}</h2><div class="sub">Repair Device Sheet</div>
+    <div class="row b" style="font-size:15px;margin-top:4px"><span>${esc(num)}</span><span>${esc(REPAIR_STATUS_LABEL[r.status])}</span></div>
+    <div class="row"><span class="k">${isRetail ? 'Customer' : 'Company / Store'}</span><span>${esc(who)}</span></div>
+    ${isRetail && r.customerPhone ? row('Phone', r.customerPhone) : ''}
+    ${row('Date Received', r.date)}
+    <h3>Device</h3>
+    ${row('Type', r.deviceType)}${row('Brand / Model', [r.brand, r.model].filter(Boolean).join(' '))}${row('IMEI / Serial', r.imei)}
+    <h3>Issue</h3><div class="row"><span>${esc(r.issue) || '—'}</span></div>
+    ${cosmetic || r.cosmetic?.notes ? `<h3>Cosmetic Condition</h3>${cosmetic ? `<div class="row"><span>${esc(cosmetic)}</span></div>` : ''}${r.cosmetic?.notes ? `<div class="row"><span class="k">${esc(r.cosmetic.notes)}</span></div>` : ''}` : ''}
+    <h3>Charges</h3>${money$}
+    ${r.customerNotes ? `<h3>Customer Notes</h3><div class="row"><span>${esc(r.customerNotes)}</span></div>` : ''}
+    ${r.internalNotes ? `<h3>Internal Notes</h3><div class="row"><span class="k">${esc(r.internalNotes)}</span></div>` : ''}
+    <p class="foot">${esc(num)}</p>`;
+  openPrint(`Device Sheet ${r.repairNumber}`, 300, body);
+};
+
 export const printBatchSummary = (batch: RepairBatch, devices: Repair[]) => {
   const rows = devices.map((r, i) => `<tr><td>${i + 1}</td><td>${esc([r.brand, r.model].filter(Boolean).join(' ') || r.deviceType || '')}</td><td>${esc(r.imei)}</td><td>${esc(REPAIR_STATUS_LABEL[r.status])}</td><td class="r">${money(r.repairPrice)}</td></tr>`).join('');
   const body = `
