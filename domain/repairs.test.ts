@@ -75,14 +75,15 @@ describe('status helpers', () => {
 });
 
 describe('global search', () => {
-  const r = repair({ repairNumber: 'RPR-000042', customerName: 'John Doe', customerPhone: '555-1234', imei: '356789012340001', model: 'iPhone 14 Pro', brand: 'Apple' });
-  it('matches repair by number, customer, phone, imei, model, brand', () => {
+  const r = repair({ repairNumber: 'RPR-000042', customerName: 'John Doe', customerPhone: '555-1234', imei: '356789012340001', model: 'iPhone 14 Pro', brand: 'Apple', issue: 'cracked screen' });
+  it('matches repair by number, customer, phone, imei, model, brand, issue', () => {
     expect(matchesRepair(r, 'RPR-000042')).toBe(true);
     expect(matchesRepair(r, 'john')).toBe(true);
     expect(matchesRepair(r, '555')).toBe(true);
     expect(matchesRepair(r, '356789')).toBe(true);
     expect(matchesRepair(r, 'iphone 14')).toBe(true);
     expect(matchesRepair(r, 'apple')).toBe(true);
+    expect(matchesRepair(r, 'cracked')).toBe(true);
     expect(matchesRepair(r, 'nokia')).toBe(false);
     expect(matchesRepair(r, '')).toBe(false);
   });
