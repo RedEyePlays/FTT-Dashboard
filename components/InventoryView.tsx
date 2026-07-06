@@ -2,7 +2,7 @@ import React, { useState, useMemo, useRef, useEffect } from 'react';
 import {
   Search, Smartphone, Package, QrCode, Trash2, X, Plus, ScanLine, AlertTriangle,
   Columns3, SlidersHorizontal, Bookmark, Download, Upload, Copy, ChevronUp, ChevronDown,
-  Activity as ActivityIcon, CheckSquare, Square, DollarSign, Boxes, TrendingUp, Wrench,
+  CheckSquare, Square, DollarSign, Boxes, TrendingUp, Wrench,
   BadgeCheck, ShoppingBag, Pencil, MoreVertical, Printer, History, ScrollText,
 } from 'lucide-react';
 import { InventoryItem, Runner, ItemKind, DeviceType, DeviceStatus, ActivityEntry, AuditEntry } from '../types';
@@ -61,8 +61,10 @@ const STATUS_SHORT: Record<DeviceStatus, string> = {
 
 type ColType = 'text' | 'number' | 'date' | 'select' | 'computed';
 // `frozen` pins a column to the left while scrolling; `emphasis` tunes text
-// weight; `readOnly` shows the value as plain text (edited in the form instead).
-interface Col { key: string; label: string; type: ColType; w: number; align?: 'right'; frozen?: boolean; emphasis?: 'strong' | 'muted'; readOnly?: boolean; options?: { value: string; label: string }[]; compute?: (i: InventoryItem) => string; sortVal?: (i: InventoryItem) => number | string; }
+// weight; `readOnly` shows the value as plain text (edited in the form instead);
+// `hideCol` keeps the column out of the table + Columns menu but still exports it
+// (so removing a display column never drops the underlying data from CSV).
+interface Col { key: string; label: string; type: ColType; w: number; align?: 'right'; frozen?: boolean; emphasis?: 'strong' | 'muted'; readOnly?: boolean; hideCol?: boolean; options?: { value: string; label: string }[]; compute?: (i: InventoryItem) => string; sortVal?: (i: InventoryItem) => number | string; }
 const opt = (arr: string[]) => arr.map(v => ({ value: v, label: v }));
 
 // Combined Brand + Model display (falls back to the item name). Read-only —
@@ -75,13 +77,15 @@ const DEVICE_COLS: Col[] = [
   { key: 'sku', label: 'SKU', type: 'text', w: 116, frozen: true, emphasis: 'muted' },
   { key: 'imei', label: 'IMEI/Serial', type: 'text', w: 150, frozen: true, emphasis: 'muted' },
   { key: '__item', label: 'Item', type: 'computed', w: 170, frozen: true, emphasis: 'strong', compute: itemLabel, sortVal: i => itemLabel(i).toLowerCase() },
-  // Scrolling attributes. Type is plain text here (edited in the form).
-  { key: 'deviceType', label: 'Type', type: 'text', w: 76, readOnly: true },
+  // Type/Brand/Model are not shown in the table (Brand+Model live in the Item
+  // column and its inline editor; Type is edited in the form). Kept here with
+  // hideCol so CSV export still round-trips them.
+  { key: 'deviceType', label: 'Type', type: 'text', w: 76, hideCol: true },
+  { key: 'brand', label: 'Brand', type: 'text', w: 100, hideCol: true },
+  { key: 'model', label: 'Model', type: 'text', w: 140, hideCol: true },
   { key: 'storage', label: 'Storage', type: 'text', w: 90 },
   { key: 'color', label: 'Color', type: 'text', w: 100 },
   { key: 'batteryHealth', label: 'Battery', type: 'text', w: 80 },
-  { key: 'brand', label: 'Brand', type: 'text', w: 100 },
-  { key: 'model', label: 'Model', type: 'text', w: 140 },
   { key: 'condition', label: 'Condition', type: 'select', w: 120, options: opt(CONDITIONS) },
   { key: 'boughtFrom', label: 'Bought From', type: 'text', w: 130, emphasis: 'muted' },
   { key: 'purchaseSource', label: 'Source', type: 'text', w: 110, emphasis: 'muted' },
@@ -113,7 +117,7 @@ const ACCESSORY_COLS: Col[] = [
 // Bumped to v2 so existing users pick up the new default layout (Brand, Model,
 // and Condition hidden by default — still toggleable in the Columns menu).
 const LS_HIDDEN = 'inv_hidden_cols_v2';
-const DEFAULT_HIDDEN: Record<'device' | 'accessory', string[]> = { device: ['brand', 'model', 'condition'], accessory: [] };
+const DEFAULT_HIDDEN: Record<'device' | 'accessory', string[]> = { device: ['condition'], accessory: [] };
 const LS_VIEWS = 'inv_saved_views_v1';
 const loadLS = <T,>(k: string, fb: T): T => { try { const r = localStorage.getItem(k); return r ? JSON.parse(r) : fb; } catch { return fb; } };
 
@@ -281,7 +285,7 @@ export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, a
   const toggleCol = (kind: 'device' | 'accessory', key: string) =>
     setHidden(h => ({ ...h, [kind]: h[kind].includes(key) ? h[kind].filter(k => k !== key) : [...h[kind], key] }));
 
-  const visCols = (kind: 'device' | 'accessory', cols: Col[]) => cols.filter(c => !hidden[kind].includes(c.key));
+  const visCols = (kind: 'device' | 'accessory', cols: Col[]) => cols.filter(c => !c.hideCol && !hidden[kind].includes(c.key));
 
   const tabBtn = (id: Tab, label: string, n: number) => (
     <button onClick={() => setTab(id)} className={`px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap ${tab === id ? 'bg-indigo-600 text-white shadow-sm' : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700'}`}>
@@ -357,7 +361,7 @@ export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, a
               {(['device', 'accessory'] as const).map(k => (
                 <div key={k}>
                   <p className="text-xs font-semibold text-slate-500 mb-1 capitalize">{k}s</p>
-                  {(k === 'device' ? DEVICE_COLS : ACCESSORY_COLS).map(c => (
+                  {(k === 'device' ? DEVICE_COLS : ACCESSORY_COLS).filter(c => !c.hideCol).map(c => (
                     <label key={c.key} className="flex items-center gap-2 text-sm py-0.5 cursor-pointer text-slate-600 dark:text-slate-300">
                       <input type="checkbox" checked={!hidden[k].includes(c.key)} onChange={() => toggleCol(k, c.key)} className="rounded" /> {c.label}
                     </label>
@@ -435,15 +439,8 @@ export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, a
           )}
         </div>
 
-        {/* Side panels */}
+        {/* Side panel */}
         <div className="xl:w-72 shrink-0 flex flex-col gap-4 overflow-y-auto">
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl p-4">
-            <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200 flex items-center gap-2 mb-2"><ActivityIcon className="w-4 h-4 text-indigo-500" /> Recent Activity</h3>
-            {activity.length === 0 && <p className="text-xs text-slate-400">No activity yet.</p>}
-            <ul className="space-y-1.5">
-              {activity.slice(0, 8).map(a => <li key={a.id} className="text-xs text-slate-600 dark:text-slate-300 border-l-2 border-indigo-200 dark:border-indigo-800 pl-2">{a.text}</li>)}
-            </ul>
-          </div>
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl p-4">
             <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200 flex items-center gap-2 mb-2"><AlertTriangle className="w-4 h-4 text-rose-500" /> Low Stock</h3>
             {lowAll.length === 0 && <p className="text-xs text-slate-400">Everything is well stocked.</p>}
