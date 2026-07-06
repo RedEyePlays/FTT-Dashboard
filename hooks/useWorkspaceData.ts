@@ -3,7 +3,7 @@ import { User, signOut } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
 import {
   InventoryItem, Note, Task, Runner, DropOff, Settlement, Customer, SalesTransaction,
-  ActivityEntry, AppUser, WorkspaceInvite, AuditEntry,
+  ActivityEntry, AppUser, WorkspaceInvite, AuditEntry, Repair, RepairBatch,
 } from '../types';
 import { decryptData } from '../services/security';
 import { auth, db } from '../services/firebase';
@@ -43,6 +43,8 @@ export function useWorkspaceData() {
   const [settlements, setSettlements] = useState<Settlement[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [salesTransactions, setSalesTransactions] = useState<SalesTransaction[]>([]);
+  const [repairs, setRepairs] = useState<Repair[]>([]);
+  const [repairBatches, setRepairBatches] = useState<RepairBatch[]>([]);
   const [skuCounters, setSkuCounters] = useState<Record<string, number>>({});
   const [activityLog, setActivityLog] = useState<ActivityEntry[]>([]);
   const [lastBackup, setLastBackup] = useState<number | undefined>(undefined);
@@ -66,6 +68,8 @@ export function useWorkspaceData() {
   const settlementsRef = useRef<Settlement[]>([]);
   const customersRef = useRef<Customer[]>([]);
   const salesTransactionsRef = useRef<SalesTransaction[]>([]);
+  const repairsRef = useRef<Repair[]>([]);
+  const repairBatchesRef = useRef<RepairBatch[]>([]);
   const skuRef = useRef<Record<string, number>>({});
   const dataRef = useRef<InventoryItem[]>([]);
   useEffect(() => { runnersRef.current = runners; }, [runners]);
@@ -73,6 +77,8 @@ export function useWorkspaceData() {
   useEffect(() => { settlementsRef.current = settlements; }, [settlements]);
   useEffect(() => { customersRef.current = customers; }, [customers]);
   useEffect(() => { salesTransactionsRef.current = salesTransactions; }, [salesTransactions]);
+  useEffect(() => { repairsRef.current = repairs; }, [repairs]);
+  useEffect(() => { repairBatchesRef.current = repairBatches; }, [repairBatches]);
   useEffect(() => { skuRef.current = skuCounters; }, [skuCounters]);
   useEffect(() => { dataRef.current = data; }, [data]);
 
@@ -83,7 +89,7 @@ export function useWorkspaceData() {
       if (!u) {
         setDevices([]); setAccessories([]); setNotes([]); setTasks([]);
         setRunners([]); setDropOffs([]); setSettlements([]); setCustomers([]);
-        setSalesTransactions([]); setActivityLog([]); setSkuCounters({});
+        setSalesTransactions([]); setRepairs([]); setRepairBatches([]); setActivityLog([]); setSkuCounters({});
         setAppUser(null); setWorkspaceUsers([]); setInvites([]); setAuditLogs([]);
         setDbLoading(false); setRoleLoading(false);
       }
@@ -156,6 +162,8 @@ export function useWorkspaceData() {
       subscribeCollection<Settlement>(wsId, 'settlements', setSettlements, onErr),
       subscribeCollection<Customer>(wsId, 'customers', setCustomers, onErr),
       subscribeCollection<SalesTransaction>(wsId, 'salesTransactions', setSalesTransactions, onErr),
+      subscribeCollection<Repair>(wsId, 'repairs', setRepairs, onErr),
+      subscribeCollection<RepairBatch>(wsId, 'repairBatches', setRepairBatches, onErr),
       subscribeCollection<ActivityEntry>(wsId, 'activityLog', rows => setActivityLog(rows.sort((a, b) => b.ts - a.ts).slice(0, 60)), onErr),
       subscribeCollection<AuditEntry>(wsId, 'auditLogs', rows => setAuditLogs(rows.sort((a, b) => b.ts - a.ts).slice(0, 1000)), onErr),
       subscribeMeta(wsId, m => { setNotes(m.notes || []); setTasks(m.tasks || []); setSkuCounters(m.skuCounters || {}); setLastBackup(m.lastBackup); }, onErr),
@@ -181,10 +189,12 @@ export function useWorkspaceData() {
     // collections
     devices, accessories, data, notes, setNotes, tasks, setTasks,
     runners, dropOffs, settlements, customers, salesTransactions,
+    repairs, repairBatches,
     skuCounters, setSkuCounters, activityLog, lastBackup,
     // connection status
     dbLoading, dbError, setDbError, reconnect,
     // latest-snapshot refs
-    runnersRef, dropOffsRef, settlementsRef, customersRef, salesTransactionsRef, skuRef, dataRef,
+    runnersRef, dropOffsRef, settlementsRef, customersRef, salesTransactionsRef,
+    repairsRef, repairBatchesRef, skuRef, dataRef,
   };
 }

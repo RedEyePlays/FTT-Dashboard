@@ -13,6 +13,7 @@ import { collectionFor } from '../domain/inventory';
 export const COLLECTIONS = [
   'inventory', 'accessories', 'salesTransactions', 'customers',
   'dropOffs', 'runners', 'settlements', 'activityLog', 'auditLogs',
+  'repairs', 'repairBatches',
 ] as const;
 export type CollName = typeof COLLECTIONS[number];
 

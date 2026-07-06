@@ -1,18 +1,22 @@
 import React, { useMemo } from 'react';
-import { InventoryItem, SalesTransaction, ActivityEntry } from '../types';
+import { InventoryItem, SalesTransaction, ActivityEntry, Repair, RepairBatch } from '../types';
 import { kindOf } from '../domain/inventory';
+import { isInProgress } from '../domain/repairs';
 import {
   DollarSign, TrendingUp, CalendarDays, CalendarRange, Calendar, Smartphone, Package,
   Tag, Wrench, ShoppingCart, AlertTriangle, Clock, Receipt, Activity as ActivityIcon,
-  Store, BarChart3, ArrowRight,
+  Store, BarChart3, ArrowRight, ClipboardCheck, PackageSearch, PackageCheck, Building2, CheckCircle2, CalendarClock,
 } from 'lucide-react';
 
 interface DashboardProps {
   data: InventoryItem[];              // devices + accessories (inventory)
   salesTransactions: SalesTransaction[];
   activity: ActivityEntry[];
+  repairs?: Repair[];
+  repairBatches?: RepairBatch[];
   canViewProfit?: boolean;
   onViewAnalytics?: () => void;
+  onViewRepairs?: () => void;
 }
 
 // --- date helpers (all comparisons are on local YYYY-MM-DD strings) ---
@@ -30,8 +34,23 @@ const relTime = (ts: number) => {
 };
 const platformLabel = (p?: string) => (p && p !== 'None / In-Store' ? p : 'In-Store');
 
-export const Dashboard: React.FC<DashboardProps> = ({ data, salesTransactions, activity, canViewProfit = true, onViewAnalytics }) => {
+export const Dashboard: React.FC<DashboardProps> = ({ data, salesTransactions, activity, repairs = [], repairBatches = [], canViewProfit = true, onViewAnalytics, onViewRepairs }) => {
   const mask = (v: string) => (canViewProfit ? v : '•••');
+
+  const rep = useMemo(() => {
+    const todayStr = ymd(new Date());
+    const count = (pred: (r: Repair) => boolean) => repairs.filter(pred).length;
+    return {
+      inProgress: count(isInProgress),
+      waitingApproval: count(r => r.status === 'waiting_approval'),
+      waitingParts: count(r => r.status === 'waiting_parts'),
+      readyPickup: count(r => r.status === 'ready_pickup'),
+      batchesActive: repairBatches.filter(b => b.status === 'active').length,
+      completedToday: count(r => r.status === 'completed' && !!r.completedAt && ymd(new Date(r.completedAt)) === todayStr),
+      dueToday: count(r => r.status !== 'completed' && r.status !== 'cancelled' && r.estimatedCompletion === todayStr),
+    };
+  }, [repairs, repairBatches]);
+  const anyRepairs = repairs.length > 0 || repairBatches.length > 0;
 
   const m = useMemo(() => {
     const now = new Date();
@@ -155,6 +174,25 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, salesTransactions, a
         <Tile icon={<ShoppingCart className="w-5 h-5" />} accent="amber" label="Pending Purchases" value={String(m.pendingPurchases)} />
         <Tile icon={<AlertTriangle className="w-5 h-5" />} accent="rose" label="Low-Stock Accessories" value={String(m.lowStockList.length)} />
       </div>
+
+      {/* Repairs */}
+      {anyRepairs && (
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200 flex items-center gap-2"><Wrench className="w-4 h-4 text-indigo-500" /> Repairs</h3>
+            {onViewRepairs && <button onClick={onViewRepairs} className="text-xs text-indigo-600 dark:text-indigo-400 flex items-center gap-1 hover:underline">Open Repairs <ArrowRight className="w-3 h-3" /></button>}
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-4">
+            <Tile icon={<Wrench className="w-5 h-5" />} accent="blue" label="In Progress" value={String(rep.inProgress)} />
+            <Tile icon={<ClipboardCheck className="w-5 h-5" />} accent="amber" label="Waiting Approval" value={String(rep.waitingApproval)} />
+            <Tile icon={<PackageSearch className="w-5 h-5" />} accent="orange" label="Waiting on Parts" value={String(rep.waitingParts)} />
+            <Tile icon={<PackageCheck className="w-5 h-5" />} accent="emerald" label="Ready for Pickup" value={String(rep.readyPickup)} />
+            <Tile icon={<Building2 className="w-5 h-5" />} accent="violet" label="Active Batches" value={String(rep.batchesActive)} />
+            <Tile icon={<CalendarClock className="w-5 h-5" />} accent="rose" label="Due Today" value={String(rep.dueToday)} />
+            <Tile icon={<CheckCircle2 className="w-5 h-5" />} accent="slate" label="Completed Today" value={String(rep.completedToday)} />
+          </div>
+        </div>
+      )}
 
       {/* Recent sales + recent activity */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
