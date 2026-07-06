@@ -141,6 +141,9 @@ export interface Customer {
   phone: string;
   email?: string;
   notes?: string;
+  kind?: 'retail' | 'wholesale'; // wholesale = a repair business/shop
+  company?: string;              // wholesale company name
+  contactPerson?: string;        // wholesale contact
 }
 
 export interface ActivityEntry {
@@ -154,7 +157,7 @@ export type Role = 'owner' | 'manager' | 'employee';
 
 export type Permission =
   | 'inventory.add' | 'inventory.edit' | 'inventory.delete'
-  | 'sales.complete' | 'dropoffs.manage'
+  | 'sales.complete' | 'dropoffs.manage' | 'repairs.manage'
   | 'reports.view' | 'reports.profit'
   | 'users.manage' | 'audit.view' | 'backup.export' | 'settings.manage';
 
@@ -236,4 +239,75 @@ export interface AppData {
   activityLog?: ActivityEntry[];
 }
 
-export type ViewState = 'dashboard' | 'analytics' | 'entry' | 'edit' | 'grid' | 'notes' | 'ai' | 'pos' | 'dropoff' | 'users' | 'audit';
+export type ViewState = 'dashboard' | 'analytics' | 'entry' | 'edit' | 'grid' | 'notes' | 'ai' | 'pos' | 'dropoff' | 'repairs' | 'users' | 'audit';
+
+// --- Repairs ---
+export type RepairType = 'retail' | 'wholesale';
+
+// Simplified status set (no Quality Check / Picked Up).
+export type RepairStatus =
+  | 'received' | 'diagnosing' | 'waiting_approval' | 'waiting_parts'
+  | 'in_repair' | 'ready_pickup' | 'completed' | 'cancelled';
+
+export interface RepairCosmetic {
+  checks: string[]; // selected from a predefined cosmetic checklist
+  notes?: string;
+}
+
+export interface Repair {
+  id: string;
+  repairNumber: string;         // e.g. RPR-000123
+  type: RepairType;
+  batchId?: string;             // set for wholesale devices → repairBatches/{id}
+  createdAt: number;            // epoch ms
+  date: string;                 // YYYY-MM-DD (date created)
+
+  // Customer (retail) — link + snapshot
+  customerId?: string;
+  customerName?: string;
+  customerPhone?: string;
+  customerEmail?: string;
+
+  // Device
+  deviceType?: DeviceType;
+  brand?: string;
+  model?: string;
+  storage?: string;
+  color?: string;
+  imei?: string;
+  carrier?: string;
+  passcode?: string;
+
+  // Repair detail
+  issue: string;
+  cosmetic?: RepairCosmetic;
+  internalNotes?: string;
+  customerNotes?: string;
+  estimatedCompletion?: string; // YYYY-MM-DD
+  repairPrice: number;
+  deposit?: number;             // retail only
+  warrantyDays?: number;
+  warrantyUntil?: string;       // YYYY-MM-DD, stamped when completed
+  status: RepairStatus;
+  photos?: string[];            // reserved for future uploads
+  completedAt?: number;
+}
+
+export type RepairBatchStatus = 'active' | 'completed' | 'cancelled';
+
+export interface RepairBatch {
+  id: string;
+  batchNumber: string;          // e.g. WB-000045
+  createdAt: number;
+  dateReceived: string;         // YYYY-MM-DD
+  businessId?: string;          // → customers/{id} (kind: 'wholesale')
+  companyName: string;
+  contactPerson?: string;
+  phone?: string;
+  email?: string;
+  notes?: string;
+  status: RepairBatchStatus;
+  amountPaid: number;           // the only stored money fact; totals are computed
+  invoicedAt?: number;
+  completedAt?: number;
+}

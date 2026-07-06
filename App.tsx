@@ -17,8 +17,10 @@ import { DropOffView } from './components/DropOffView';
 import { InventoryView } from './components/InventoryView';
 import { UsersView } from './components/UsersView';
 import { AuditLogView } from './components/AuditLogView';
-import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, Runner, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission } from './types';
+import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, Runner, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission, Repair, RepairBatch } from './types';
 import { skuPrefix, nextSku } from './services/sku';
+import { REPAIR_PREFIX, BATCH_PREFIX, computeWarrantyUntil } from './domain/repairs';
+import { RepairsView } from './components/RepairsView';
 import { can } from './services/rbac';
 import { downloadJson, toCSV, triggerDownload } from './services/backup';
 import { INITIAL_DATA } from './constants';
@@ -43,10 +45,11 @@ const App: React.FC = () => {
     user, isLoadingAuth, authError, setAuthError,
     appUser, roleLoading, workspaceId, workspaceUsers, invites, auditLogs,
     data, notes, setNotes, tasks, setTasks,
-    runners, dropOffs, settlements, salesTransactions,
+    runners, dropOffs, settlements, salesTransactions, customers, repairs, repairBatches,
     skuCounters, setSkuCounters, activityLog, lastBackup,
     dbLoading, dbError, reconnect,
-    runnersRef, dropOffsRef, settlementsRef, customersRef, salesTransactionsRef, skuRef, dataRef,
+    runnersRef, dropOffsRef, settlementsRef, customersRef, salesTransactionsRef,
+    repairsRef, repairBatchesRef, skuRef, dataRef,
   } = useWorkspaceData();
 
   // --- UI STATE ---
@@ -293,6 +296,91 @@ const App: React.FC = () => {
     audit('backup.export', 'backup', undefined, undefined, { format: 'csv' });
   };
 
+  // --- Repairs (retail tickets + wholesale batches) ---
+  const genNumber = (prefix: string, used: string[]): string => {
+    const existing = used.map(sku => ({ sku })) as any;
+    const { sku, counters } = nextSku(prefix, skuRef.current, existing);
+    skuRef.current = counters; setSkuCounters(counters);
+    if (uid) saveMeta(uid, { skuCounters: counters });
+    return sku;
+  };
+  const handleGenRepairNumber = () => genNumber(REPAIR_PREFIX, repairsRef.current.map(r => r.repairNumber));
+  const handleGenBatchNumber = () => genNumber(BATCH_PREFIX, repairBatchesRef.current.map(b => b.batchNumber));
+
+  const handleSaveRepair = (repair: Repair, prev?: Repair) => {
+    if (!uid || !allow('repairs.manage')) return;
+    const isNew = !repairsRef.current.some(r => r.id === repair.id);
+    let next: Repair = { ...repair };
+    // Retail customer: create once, then reuse by customerId (builds history).
+    if (next.type === 'retail' && next.customerName && !next.customerId) {
+      const cust: Customer = { id: newId(), name: next.customerName, phone: next.customerPhone || '', email: next.customerEmail, kind: 'retail' };
+      saveItem(uid, 'customers', cust);
+      next.customerId = cust.id;
+    }
+    // Stamp completion + warranty when moving into completed.
+    if (next.status === 'completed' && !next.completedAt) {
+      const completedDate = new Date().toISOString().split('T')[0];
+      next = { ...next, completedAt: Date.now(), warrantyUntil: computeWarrantyUntil(completedDate, next.warrantyDays) || undefined };
+    }
+    saveItem(uid, 'repairs', next);
+    if (isNew) {
+      logActivity(`${next.repairNumber} repair created`);
+      audit('repair.create', 'repair', next.id, undefined, { repairNumber: next.repairNumber, status: next.status });
+    } else {
+      audit('repair.edit', 'repair', next.id);
+      if (prev && prev.status !== next.status) {
+        logActivity(`${next.repairNumber} → ${next.status.replace(/_/g, ' ')}`);
+        audit('repair.status_change', 'repair', next.id, { status: prev.status }, { status: next.status });
+        if (next.status === 'completed') audit('repair.completed', 'repair', next.id);
+      }
+      if (prev && prev.repairPrice !== next.repairPrice) audit('repair.price_change', 'repair', next.id, { repairPrice: prev.repairPrice }, { repairPrice: next.repairPrice });
+      if (prev && (prev.customerName !== next.customerName || prev.customerPhone !== next.customerPhone)) audit('repair.customer_update', 'repair', next.id);
+    }
+  };
+
+  const handleDeleteRepair = (id: string) => {
+    if (!uid || appUser?.role !== 'owner') return;
+    const t = repairsRef.current.find(r => r.id === id);
+    audit('repair.delete', 'repair', id, t);
+    deleteItem(uid, 'repairs', id);
+  };
+
+  const handleSaveBatch = (batch: RepairBatch, prev?: RepairBatch) => {
+    if (!uid || !allow('repairs.manage')) return;
+    const isNew = !repairBatchesRef.current.some(b => b.id === batch.id);
+    const next: RepairBatch = { ...batch };
+    if (next.companyName && !next.businessId) {
+      const cust: Customer = { id: newId(), name: next.companyName, phone: next.phone || '', email: next.email, kind: 'wholesale', company: next.companyName, contactPerson: next.contactPerson };
+      saveItem(uid, 'customers', cust);
+      next.businessId = cust.id;
+    }
+    saveItem(uid, 'repairBatches', next);
+    if (isNew) { logActivity(`${next.batchNumber} batch created`); audit('batch.create', 'repairBatch', next.id, undefined, { batchNumber: next.batchNumber }); }
+    else {
+      audit('batch.edit', 'repairBatch', next.id);
+      if (prev && prev.status !== next.status) { logActivity(`${next.batchNumber} → ${next.status}`); audit('batch.status_change', 'repairBatch', next.id, { status: prev.status }, { status: next.status }); }
+    }
+  };
+
+  const handleDeleteBatch = (id: string) => {
+    if (!uid || appUser?.role !== 'owner') return;
+    audit('batch.delete', 'repairBatch', id);
+    repairsRef.current.filter(r => r.batchId === id).forEach(r => deleteItem(uid, 'repairs', r.id));
+    deleteItem(uid, 'repairBatches', id);
+  };
+
+  const handleRecordBatchPayment = (batch: RepairBatch, amount: number) => {
+    if (!uid || !allow('repairs.manage') || !(amount > 0)) return;
+    const next: RepairBatch = { ...batch, amountPaid: (batch.amountPaid || 0) + amount };
+    saveItem(uid, 'repairBatches', next);
+    audit('batch.payment', 'repairBatch', batch.id, { amountPaid: batch.amountPaid }, { amountPaid: next.amountPaid });
+    logActivity(`${batch.batchNumber} payment $${amount.toFixed(2)}`);
+  };
+
+  const handleRepairPrintAudit = (entityType: string, id: string, docName: string) => {
+    audit('invoice.printed', entityType, id, undefined, { doc: docName });
+  };
+
   const handleStartAdd = () => {
     setEditingItem(undefined);
     setView('entry');
@@ -357,13 +445,30 @@ const App: React.FC = () => {
         <div className="animate-fadeIn flex-1 flex flex-col">
           {view === 'dashboard' && (
             allow('reports.view')
-              ? <Dashboard data={data} salesTransactions={salesTransactions} activity={activityLog} canViewProfit={allow('reports.profit')} onViewAnalytics={() => setView('analytics')} />
+              ? <Dashboard data={data} salesTransactions={salesTransactions} activity={activityLog} repairs={repairs} repairBatches={repairBatches} canViewProfit={allow('reports.profit')} onViewAnalytics={() => setView('analytics')} onViewRepairs={allow('repairs.manage') ? () => setView('repairs') : undefined} />
               : <div className="text-center text-slate-400 py-20">You don't have access to reports.</div>
           )}
           {view === 'analytics' && (
             allow('reports.view')
               ? <AnalyticsView data={data} darkMode={darkMode} canViewProfit={allow('reports.profit')} />
               : <div className="text-center text-slate-400 py-20">You don't have access to reports.</div>
+          )}
+          {view === 'repairs' && allow('repairs.manage') && (
+            <RepairsView
+              repairs={repairs}
+              batches={repairBatches}
+              customers={customers}
+              auditLogs={auditLogs}
+              canDelete={appUser.role === 'owner'}
+              onGenerateRepairNumber={handleGenRepairNumber}
+              onGenerateBatchNumber={handleGenBatchNumber}
+              onSaveRepair={handleSaveRepair}
+              onDeleteRepair={handleDeleteRepair}
+              onSaveBatch={handleSaveBatch}
+              onDeleteBatch={handleDeleteBatch}
+              onRecordPayment={handleRecordBatchPayment}
+              onPrintAudit={handleRepairPrintAudit}
+            />
           )}
           {(view === 'entry' || view === 'edit') && (
             <DataEntryForm 
@@ -478,8 +583,11 @@ const App: React.FC = () => {
       {showFinder && (
         <FinderModal
           inventory={data}
+          repairs={allow('repairs.manage') ? repairs : []}
+          batches={allow('repairs.manage') ? repairBatches : []}
           onClose={() => setShowFinder(false)}
           onEdit={item => { setEditingItem(item); setView('edit'); }}
+          onOpenRepairs={() => setView('repairs')}
         />
       )}
     </div>

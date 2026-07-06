@@ -1,14 +1,18 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, X, Package, CheckCircle, Clock, DollarSign, ChevronRight } from 'lucide-react';
-import { InventoryItem } from '../types';
+import { Search, X, Package, CheckCircle, Clock, DollarSign, ChevronRight, Wrench, Building2 } from 'lucide-react';
+import { InventoryItem, Repair, RepairBatch } from '../types';
+import { matchesRepair, matchesBatch, REPAIR_STATUS_LABEL } from '../domain/repairs';
 
 interface Props {
   inventory: InventoryItem[];
+  repairs?: Repair[];
+  batches?: RepairBatch[];
   onClose: () => void;
   onEdit?: (item: InventoryItem) => void;
+  onOpenRepairs?: () => void;
 }
 
-export const FinderModal: React.FC<Props> = ({ inventory, onClose, onEdit }) => {
+export const FinderModal: React.FC<Props> = ({ inventory, repairs = [], batches = [], onClose, onEdit, onOpenRepairs }) => {
   const [query, setQuery] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -31,6 +35,10 @@ export const FinderModal: React.FC<Props> = ({ inventory, onClose, onEdit }) => 
     i.date.includes(q) ||
     i.soldDate?.includes(q)
   ).slice(0, 20);
+
+  const repairResults = q.length < 1 ? [] : repairs.filter(r => matchesRepair(r, q)).slice(0, 8);
+  const batchResults = q.length < 1 ? [] : batches.filter(b => matchesBatch(b, q)).slice(0, 5);
+  const hasRepairHits = repairResults.length > 0 || batchResults.length > 0;
 
   const profit = (item: InventoryItem) =>
     item.salePrice - item.purchaseCost - item.repairCost - (item.shippingCost ?? 0) - (item.platformFees ?? 0);
@@ -69,9 +77,9 @@ export const FinderModal: React.FC<Props> = ({ inventory, onClose, onEdit }) => 
             </div>
           )}
 
-          {q.length > 0 && results.length === 0 && (
+          {q.length > 0 && results.length === 0 && !hasRepairHits && (
             <div className="py-12 text-center text-slate-400">
-              <p className="text-sm">No items found for "<span className="font-medium">{query}</span>"</p>
+              <p className="text-sm">No results for "<span className="font-medium">{query}</span>"</p>
             </div>
           )}
 
@@ -120,12 +128,37 @@ export const FinderModal: React.FC<Props> = ({ inventory, onClose, onEdit }) => 
               </button>
             );
           })}
+
+          {hasRepairHits && (
+            <div className="px-4 py-1.5 text-[10px] uppercase tracking-wider text-slate-400 bg-slate-50 dark:bg-slate-800/50 border-y border-slate-100 dark:border-slate-800">Repairs</div>
+          )}
+          {repairResults.map(r => (
+            <button key={r.id} onClick={() => { onOpenRepairs?.(); onClose(); }} className="w-full text-left flex items-center gap-4 px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors border-b border-slate-50 dark:border-slate-800/60">
+              <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0 bg-indigo-100 dark:bg-indigo-900/30"><Wrench className="w-4 h-4 text-indigo-600 dark:text-indigo-400" /></div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold text-slate-800 dark:text-slate-100 truncate">{[r.brand, r.model].filter(Boolean).join(' ') || r.deviceType || 'Repair'} <span className="font-mono text-xs text-slate-400">{r.repairNumber}</span></p>
+                <p className="text-xs text-slate-400 truncate">{r.customerName || (r.type === 'wholesale' ? 'Wholesale' : 'Walk-in')}{r.customerPhone ? ` · ${r.customerPhone}` : ''}{r.imei ? ` · ${r.imei}` : ''}</p>
+              </div>
+              <span className="text-xs text-slate-500 dark:text-slate-400 shrink-0">{REPAIR_STATUS_LABEL[r.status]}</span>
+              <ChevronRight className="w-4 h-4 text-slate-300 shrink-0" />
+            </button>
+          ))}
+          {batchResults.map(b => (
+            <button key={b.id} onClick={() => { onOpenRepairs?.(); onClose(); }} className="w-full text-left flex items-center gap-4 px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors border-b border-slate-50 dark:border-slate-800/60">
+              <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0 bg-violet-100 dark:bg-violet-900/30"><Building2 className="w-4 h-4 text-violet-600 dark:text-violet-400" /></div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold text-slate-800 dark:text-slate-100 truncate">{b.companyName} <span className="font-mono text-xs text-slate-400">{b.batchNumber}</span></p>
+                <p className="text-xs text-slate-400 truncate">Wholesale batch{b.contactPerson ? ` · ${b.contactPerson}` : ''}{b.phone ? ` · ${b.phone}` : ''}</p>
+              </div>
+              <ChevronRight className="w-4 h-4 text-slate-300 shrink-0" />
+            </button>
+          ))}
         </div>
 
-        {results.length > 0 && (
+        {(results.length > 0 || hasRepairHits) && (
           <div className="px-4 py-2 border-t border-slate-100 dark:border-slate-800 text-xs text-slate-400 flex justify-between">
-            <span>{results.length} result{results.length !== 1 ? 's' : ''}</span>
-            <span>Click to open item</span>
+            <span>{results.length + repairResults.length + batchResults.length} result{(results.length + repairResults.length + batchResults.length) !== 1 ? 's' : ''}</span>
+            <span>Click to open</span>
           </div>
         )}
       </div>

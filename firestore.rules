@@ -50,6 +50,17 @@ service cloud.firestore {
         allow update, delete: if false;
       }
 
+      // Repairs & repair batches: any active member may create/update; only the
+      // owner may delete (mirrors inventory).
+      match /repairs/{id} {
+        allow read, create, update: if activeMemberOf(ws);
+        allow delete: if isOwnerOf(ws);
+      }
+      match /repairBatches/{id} {
+        allow read, create, update: if activeMemberOf(ws);
+        allow delete: if isOwnerOf(ws);
+      }
+
       // Everything else in the workspace: active members read/write.
       match /{document=**} {
         allow read, write: if activeMemberOf(ws);
