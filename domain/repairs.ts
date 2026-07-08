@@ -75,7 +75,7 @@ export const computeWarrantyUntil = (completedDate: string, warrantyDays?: numbe
 export const matchesRepair = (r: Repair, q: string): boolean => {
   const s = q.toLowerCase().trim();
   if (!s) return false;
-  return [r.repairNumber, r.customerName, r.customerPhone, r.imei, r.model, r.brand, r.issue]
+  return [r.id, r.repairNumber, r.customerName, r.customerPhone, r.imei, r.model, r.brand, r.issue]
     .some(v => (v || '').toLowerCase().includes(s));
 };
 

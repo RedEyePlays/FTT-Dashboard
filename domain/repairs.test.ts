@@ -84,6 +84,7 @@ describe('global search', () => {
     expect(matchesRepair(r, 'iphone 14')).toBe(true);
     expect(matchesRepair(r, 'apple')).toBe(true);
     expect(matchesRepair(r, 'cracked')).toBe(true);
+    expect(matchesRepair(r, r.id)).toBe(true); // QR / repair ID
     expect(matchesRepair(r, 'nokia')).toBe(false);
     expect(matchesRepair(r, '')).toBe(false);
   });
