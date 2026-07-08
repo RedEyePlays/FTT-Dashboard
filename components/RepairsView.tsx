@@ -1,15 +1,16 @@
 import React, { useState, useMemo } from 'react';
 import {
   Wrench, Plus, Search, X, Trash2, Printer, FileText, Receipt, History as HistoryIcon,
-  ArrowLeft, DollarSign, ChevronRight, Building2, ClipboardCheck, PackageCheck, ScrollText,
+  ArrowLeft, DollarSign, ChevronRight, Building2, ClipboardCheck, PackageCheck, ScrollText, QrCode,
 } from 'lucide-react';
 import { Repair, RepairBatch, Customer, AuditEntry, RepairStatus, RepairType, DeviceType } from '../types';
 import {
-  REPAIR_STATUSES, REPAIR_STATUS_LABEL, REPAIR_STATUS_CELL, COSMETIC_OPTIONS,
+  REPAIR_STATUSES, REPAIR_STATUS_CELL,
   balanceOwing, batchTotals, matchesRepair, matchesBatch,
 } from '../domain/repairs';
 import { newId } from '../domain/ids';
 import { printRetailReceipt, printBatchIntake, printBatchInvoice, printBatchSummary, printDeviceSheet } from '../services/repairPrint';
+import { RepairLabelModal } from './RepairLabelModal';
 
 interface Props {
   repairs: Repair[];
@@ -67,22 +68,43 @@ const SummaryCard: React.FC<{ icon: React.ReactNode; accent: string; label: stri
 
 export const RepairsView: React.FC<Props> = (props) => {
   const { repairs, batches, auditLogs, canDelete, onSaveRepair, onDeleteRepair, onSaveBatch, onDeleteBatch, onRecordPayment, onPrintAudit } = props;
+  type Filter = 'all' | 'active' | 'overdue' | RepairStatus;
   const [tab, setTab] = useState<'tickets' | 'batches'>('tickets');
   const [query, setQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'all' | RepairStatus>('all');
+  const [statusFilter, setStatusFilter] = useState<Filter>('all');
   const [drawer, setDrawer] = useState<{ repair: Repair; isNew: boolean } | null>(null);
   const [openBatchId, setOpenBatchId] = useState<string | null>(null);
   const [batchForm, setBatchForm] = useState<{ batch: RepairBatch; isNew: boolean } | null>(null);
+  const [labelTarget, setLabelTarget] = useState<{ repair: Repair; context?: { batchNumber?: string; lineNumber?: number } } | null>(null);
+
+  const isOverdue = (r: Repair) => r.status !== 'completed' && r.status !== 'cancelled' && !!r.estimatedCompletion && r.estimatedCompletion < today();
+  const matchFilter = (r: Repair): boolean => {
+    if (statusFilter === 'all') return true;
+    if (statusFilter === 'active') return r.status !== 'completed' && r.status !== 'cancelled';
+    if (statusFilter === 'overdue') return isOverdue(r);
+    return r.status === statusFilter;
+  };
 
   const retail = useMemo(() => repairs.filter(r => r.type === 'retail')
-    .filter(r => (statusFilter === 'all' || r.status === statusFilter) && (!query || matchesRepair(r, query)))
+    .filter(r => matchFilter(r) && (!query || matchesRepair(r, query)))
     .sort((a, b) => b.createdAt - a.createdAt), [repairs, statusFilter, query]);
 
   const visibleBatches = useMemo(() => batches
-    .filter(b => !query || matchesBatch(b, query))
-    .sort((a, b) => b.createdAt - a.createdAt), [batches, query]);
+    .filter(b => !query || matchesBatch(b, query) || repairs.some(r => r.batchId === b.id && matchesRepair(r, query)))
+    .sort((a, b) => b.createdAt - a.createdAt), [batches, repairs, query]);
 
   const openBatch = batches.find(b => b.id === openBatchId) || null;
+
+  // Open the QR label modal, resolving batch context for wholesale devices.
+  const openLabel = (r: Repair) => {
+    if (r.batchId) {
+      const b = batches.find(x => x.id === r.batchId);
+      const devs = repairs.filter(x => x.batchId === r.batchId).sort((a, c) => a.createdAt - c.createdAt);
+      setLabelTarget({ repair: r, context: { batchNumber: b?.batchNumber, lineNumber: devs.findIndex(x => x.id === r.id) + 1 } });
+    } else {
+      setLabelTarget({ repair: r });
+    }
+  };
 
   // Print a device sheet, resolving the parent batch (for wholesale context).
   const printSheet = (r: Repair) => {
@@ -145,12 +167,21 @@ export const RepairsView: React.FC<Props> = (props) => {
                 className="w-full pl-9 pr-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
             </div>
             {tab === 'tickets' && (
-              <select value={statusFilter} onChange={e => setStatusFilter(e.target.value as any)} className="px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-700 dark:text-slate-200">
-                <option value="all">All statuses</option>
+              <select value={REPAIR_STATUSES.some(s => s.value === statusFilter) ? statusFilter : 'all'} onChange={e => setStatusFilter(e.target.value as any)} className="px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-700 dark:text-slate-200">
+                <option value="all">Any status…</option>
                 {REPAIR_STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
               </select>
             )}
           </div>
+
+          {/* Quick filters (tickets) */}
+          {tab === 'tickets' && (
+            <div className="flex flex-wrap gap-1.5">
+              {(([['all', 'All'], ['active', 'Active'], ['ready_pickup', 'Ready for Pickup'], ['waiting_approval', 'Waiting Approval'], ['overdue', 'Overdue']]) as [Filter, string][]).map(([v, label]) => (
+                <button key={v} onClick={() => setStatusFilter(v)} className={`px-2.5 py-1 rounded-full text-xs font-medium border ${statusFilter === v ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:border-indigo-400'}`}>{label}</button>
+              ))}
+            </div>
+          )}
 
           {/* Summary cards */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -173,8 +204,10 @@ export const RepairsView: React.FC<Props> = (props) => {
                     <p className="text-sm font-semibold text-slate-800 dark:text-slate-100 truncate">{deviceName(r)} <span className="font-mono text-xs text-slate-400 ml-1">{r.repairNumber}</span></p>
                     <p className="text-xs text-slate-400 truncate">{r.customerName || 'Walk-in'}{r.customerPhone ? ` · ${r.customerPhone}` : ''}{r.imei ? ` · ${r.imei}` : ''} · {r.date}</p>
                   </div>
+                  {isOverdue(r) && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300 shrink-0">Overdue</span>}
                   <div className="text-right shrink-0"><p className="text-sm font-semibold text-slate-900 dark:text-slate-100">{money(r.repairPrice)}</p>{balanceOwing(r) > 0 && <p className="text-[11px] text-rose-500">bal {money(balanceOwing(r))}</p>}</div>
                   <StatusPill value={r.status} onChange={s => onSaveRepair({ ...r, status: s }, r)} />
+                  <button onClick={e => { e.stopPropagation(); openLabel(r); }} title="Print QR label" className="p-1 text-slate-400 hover:text-indigo-600 shrink-0"><QrCode className="w-4 h-4" /></button>
                   <ChevronRight className="w-4 h-4 text-slate-300 shrink-0" />
                 </div>
               ))}
@@ -216,6 +249,7 @@ export const RepairsView: React.FC<Props> = (props) => {
           onEditDevice={(r) => setDrawer({ repair: r, isNew: false })}
           onStatus={(r, s) => onSaveRepair({ ...r, status: s }, r)}
           onPrintDevice={printSheet}
+          onPrintLabel={openLabel}
           onRemoveDevice={(r) => onDeleteRepair(r.id)}
           onEditBatch={() => setBatchForm({ batch: openBatch, isNew: false })}
           onDeleteBatch={() => { onDeleteBatch(openBatch.id); setOpenBatchId(null); }}
@@ -237,7 +271,8 @@ export const RepairsView: React.FC<Props> = (props) => {
           onSave={saveDrawer}
           onDelete={() => { onDeleteRepair(drawer.repair.id); setDrawer(null); }}
           onPrint={(doc) => { printRetailReceipt(drawer.repair, doc); onPrintAudit('repair', drawer.repair.id, doc); }}
-          onPrintSheet={() => printSheet(drawer.repair)} />
+          onPrintSheet={() => printSheet(drawer.repair)}
+          onPrintLabel={() => openLabel(drawer.repair)} />
       )}
 
       {/* Batch create/edit form */}
@@ -245,6 +280,13 @@ export const RepairsView: React.FC<Props> = (props) => {
         <BatchForm initial={batchForm.batch} isNew={batchForm.isNew}
           onClose={() => setBatchForm(null)}
           onSave={(b) => saveBatch(b, batchForm.isNew, batchForm.isNew ? undefined : batchForm.batch)} />
+      )}
+
+      {/* Repair QR label */}
+      {labelTarget && (
+        <RepairLabelModal repair={labelTarget.repair} context={labelTarget.context}
+          onClose={() => setLabelTarget(null)}
+          onPrinted={() => onPrintAudit('repair', labelTarget.repair.id, 'qr_label')} />
       )}
     </div>
   );
@@ -254,13 +296,16 @@ export const RepairsView: React.FC<Props> = (props) => {
 const BatchDetail: React.FC<{
   batch: RepairBatch; repairs: Repair[]; canDelete: boolean;
   onBack: () => void; onAddDevice: () => void; onEditDevice: (r: Repair) => void;
-  onStatus: (r: Repair, s: RepairStatus) => void; onPrintDevice: (r: Repair) => void; onRemoveDevice: (r: Repair) => void;
+  onStatus: (r: Repair, s: RepairStatus) => void; onPrintDevice: (r: Repair) => void; onPrintLabel: (r: Repair) => void; onRemoveDevice: (r: Repair) => void;
   onEditBatch: () => void; onDeleteBatch: () => void;
   onRecordPayment: (b: RepairBatch, amount: number) => void; onPrint: (doc: 'intake' | 'invoice' | 'summary') => void;
-}> = ({ batch, repairs, canDelete, onBack, onAddDevice, onEditDevice, onStatus, onPrintDevice, onRemoveDevice, onEditBatch, onDeleteBatch, onRecordPayment, onPrint }) => {
+}> = ({ batch, repairs, canDelete, onBack, onAddDevice, onEditDevice, onStatus, onPrintDevice, onPrintLabel, onRemoveDevice, onEditBatch, onDeleteBatch, onRecordPayment, onPrint }) => {
   const devices = repairs.filter(r => r.batchId === batch.id).sort((a, b) => a.createdAt - b.createdAt);
   const t = batchTotals(batch, repairs);
   const [pay, setPay] = useState('');
+  const statusCounts = REPAIR_STATUSES
+    .map(s => ({ ...s, n: devices.filter(d => d.status === s.value).length }))
+    .filter(s => s.n > 0);
 
   return (
     <div className="flex flex-col gap-4">
@@ -283,6 +328,15 @@ const BatchDetail: React.FC<{
           </div>
         ))}
       </div>
+
+      {/* Status counts */}
+      {statusCounts.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {statusCounts.map(s => (
+            <span key={s.value} className={`inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-semibold ${REPAIR_STATUS_CELL[s.value]}`}>{s.label}<span className="opacity-70">· {s.n}</span></span>
+          ))}
+        </div>
+      )}
 
       {/* Actions */}
       <div className="flex flex-wrap items-center gap-2">
@@ -316,6 +370,7 @@ const BatchDetail: React.FC<{
                   <div className="flex items-center justify-end gap-1">
                     <button onClick={() => onEditDevice(r)} title="Edit" className="p-1 text-slate-400 hover:text-indigo-600"><FileText className="w-4 h-4" /></button>
                     <button onClick={() => onPrintDevice(r)} title="Print device sheet" className="p-1 text-slate-400 hover:text-indigo-600"><Printer className="w-4 h-4" /></button>
+                    <button onClick={() => onPrintLabel(r)} title="Print QR label" className="p-1 text-slate-400 hover:text-indigo-600"><QrCode className="w-4 h-4" /></button>
                     {canDelete && <button onClick={() => onRemoveDevice(r)} title="Remove" className="p-1 text-slate-400 hover:text-rose-500"><Trash2 className="w-4 h-4" /></button>}
                   </div>
                 </td>
@@ -331,13 +386,12 @@ const BatchDetail: React.FC<{
 /* ---------------- Repair drawer ---------------- */
 const RepairDrawer: React.FC<{
   initial: Repair; isNew: boolean; canDelete: boolean; auditLogs: AuditEntry[];
-  onClose: () => void; onSave: (r: Repair) => void; onDelete: () => void; onPrint: (doc: 'intake' | 'repair' | 'pickup') => void; onPrintSheet: () => void;
-}> = ({ initial, isNew, canDelete, auditLogs, onClose, onSave, onDelete, onPrint, onPrintSheet }) => {
+  onClose: () => void; onSave: (r: Repair) => void; onDelete: () => void; onPrint: (doc: 'intake' | 'repair' | 'pickup') => void; onPrintSheet: () => void; onPrintLabel: () => void;
+}> = ({ initial, isNew, canDelete, auditLogs, onClose, onSave, onDelete, onPrint, onPrintSheet, onPrintLabel }) => {
   const [f, setF] = useState<Repair>(initial);
   const set = (patch: Partial<Repair>) => setF(prev => ({ ...prev, ...patch }));
   const isRetail = f.type === 'retail';
   const history = auditLogs.filter(a => a.entityId === f.id).slice(0, 20);
-  const toggleCosmetic = (opt: string) => set({ cosmetic: { checks: (f.cosmetic?.checks || []).includes(opt) ? (f.cosmetic!.checks).filter(c => c !== opt) : [...(f.cosmetic?.checks || []), opt], notes: f.cosmetic?.notes } });
   const num = (v: string) => parseFloat(v) || 0;
 
   return (
@@ -365,9 +419,8 @@ const RepairDrawer: React.FC<{
           <Section title="Device">
             <div className="grid grid-cols-2 gap-3">
               <Field label="Device Type"><select className={inputCls} value={f.deviceType || ''} onChange={e => set({ deviceType: e.target.value as DeviceType })}><option value="">—</option>{DEVICE_TYPES.map(d => <option key={d} value={d}>{d}</option>)}</select></Field>
-              <Field label="Brand"><input className={inputCls} value={f.brand || ''} onChange={e => set({ brand: e.target.value })} /></Field>
-              <Field label="Model"><input className={inputCls} value={f.model || ''} onChange={e => set({ model: e.target.value })} /></Field>
               <Field label="IMEI / Serial"><input className={inputCls} value={f.imei || ''} onChange={e => set({ imei: e.target.value })} /></Field>
+              <Field label="Brand / Model" className="col-span-2"><input className={inputCls} placeholder="e.g. Apple iPhone 14 Pro" value={[f.brand, f.model].filter(Boolean).join(' ')} onChange={e => set({ brand: '', model: e.target.value })} /></Field>
               {isRetail && <>
                 <Field label="Storage"><input className={inputCls} value={f.storage || ''} onChange={e => set({ storage: e.target.value })} /></Field>
                 <Field label="Color"><input className={inputCls} value={f.color || ''} onChange={e => set({ color: e.target.value })} /></Field>
@@ -380,16 +433,7 @@ const RepairDrawer: React.FC<{
           <Section title="Issue / Condition">
             <Field label="Issue Description"><textarea rows={2} className={inputCls} value={f.issue} onChange={e => set({ issue: e.target.value })} /></Field>
             {isRetail && (
-              <div className="mt-3">
-                <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400">Cosmetic Condition</span>
-                <div className="flex flex-wrap gap-1.5 mt-1">
-                  {COSMETIC_OPTIONS.map(opt => {
-                    const on = (f.cosmetic?.checks || []).includes(opt);
-                    return <button key={opt} type="button" onClick={() => toggleCosmetic(opt)} className={`px-2 py-1 rounded-md text-xs border ${on ? 'bg-indigo-100 border-indigo-300 text-indigo-700 dark:bg-indigo-900/40 dark:border-indigo-700 dark:text-indigo-300' : 'border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400'}`}>{opt}</button>;
-                  })}
-                </div>
-                <input className={`${inputCls} mt-2`} placeholder="Cosmetic notes (optional)" value={f.cosmetic?.notes || ''} onChange={e => set({ cosmetic: { checks: f.cosmetic?.checks || [], notes: e.target.value } })} />
-              </div>
+              <Field label="Cosmetic Condition" className="mt-3"><textarea rows={2} className={inputCls} placeholder="e.g. Cracked screen, scratches on back, minor dents…" value={f.cosmetic?.notes || ''} onChange={e => set({ cosmetic: { checks: [], notes: e.target.value } })} /></Field>
             )}
           </Section>
 
@@ -427,6 +471,7 @@ const RepairDrawer: React.FC<{
           <button onClick={() => onSave(f)} className="flex-1 min-w-[120px] px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium">Save</button>
           {!isNew && (
             <div className="flex items-center gap-1">
+              <button onClick={onPrintLabel} title="Print QR label" className="p-2 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-500 hover:border-indigo-400"><QrCode className="w-4 h-4" /></button>
               <button onClick={onPrintSheet} title="Print device sheet" className="p-2 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-500 hover:border-indigo-400"><ScrollText className="w-4 h-4" /></button>
               {isRetail && <>
                 <button onClick={() => onPrint('intake')} title="Intake receipt" className="p-2 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-500 hover:border-indigo-400"><FileText className="w-4 h-4" /></button>
