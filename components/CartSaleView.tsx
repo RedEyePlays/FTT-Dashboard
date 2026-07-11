@@ -10,6 +10,7 @@ import { LabelModal } from './LabelModal';
 import { newId } from '../domain/ids';
 import { kindOf } from '../domain/inventory';
 import { PLATFORMS } from '../domain/pos';
+import { CustomerSearchInput } from './CustomerSearchInput';
 
 export interface CartCheckout {
   soldRows: InventoryItem[];              // device rows to mark sold (replace by id)
@@ -21,6 +22,7 @@ export interface CartCheckout {
 
 interface Props {
   inventory: InventoryItem[];
+  customers?: Customer[];
   onComplete: (payload: CartCheckout) => void;
 }
 
@@ -50,7 +52,7 @@ interface CartLine {
   addToInventory?: boolean;
 }
 
-export const CartSaleView: React.FC<Props> = ({ inventory, onComplete }) => {
+export const CartSaleView: React.FC<Props> = ({ inventory, customers = [], onComplete }) => {
   const [cart, setCart] = useState<CartLine[]>([]);
   const [picker, setPicker] = useState<null | ItemKind>(null);
   const [search, setSearch] = useState('');
@@ -64,6 +66,7 @@ export const CartSaleView: React.FC<Props> = ({ inventory, onComplete }) => {
   const [customerPhone, setCustomerPhone] = useState('');
   const [customerEmail, setCustomerEmail] = useState('');
   const [customerNotes, setCustomerNotes] = useState('');
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string | undefined>(undefined);
 
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'mixed'>('cash');
   const [cashTaxStatus, setCashTaxStatus] = useState<'none' | 'separate' | 'included'>('none');
@@ -256,7 +259,7 @@ export const CartSaleView: React.FC<Props> = ({ inventory, onComplete }) => {
     });
 
     const customer: Customer | undefined = customerName.trim()
-      ? { id: (customerPhone.trim() || customerName.trim().toLowerCase().replace(/\s+/g, '-')), name: customerName.trim(), phone: customerPhone.trim(), email: customerEmail.trim() || undefined, notes: customerNotes.trim() || undefined }
+      ? { id: (selectedCustomerId || customerPhone.trim() || customerName.trim().toLowerCase().replace(/\s+/g, '-')), name: customerName.trim(), phone: customerPhone.trim(), email: customerEmail.trim() || undefined, notes: customerNotes.trim() || undefined }
       : undefined;
 
     const transaction: SalesTransaction = {
@@ -279,7 +282,7 @@ export const CartSaleView: React.FC<Props> = ({ inventory, onComplete }) => {
   };
 
   const reset = () => {
-    setCart([]); setCustomerName(''); setCustomerPhone(''); setCustomerEmail(''); setCustomerNotes('');
+    setCart([]); setCustomerName(''); setCustomerPhone(''); setCustomerEmail(''); setCustomerNotes(''); setSelectedCustomerId(undefined);
     setPaymentNotes(''); setPaymentMethod('cash'); setCashTaxStatus('none');
     setCashAmount(''); setCardAmount(''); setEtransferAmount(''); setTaxCollected('');
     setPlatformName('None / In-Store'); setPlatformFeePercent('0');
@@ -472,7 +475,11 @@ export const CartSaleView: React.FC<Props> = ({ inventory, onComplete }) => {
         {/* Customer */}
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl p-5 space-y-3">
           <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Customer</p>
-          <IconInput icon={<User className="w-4 h-4" />} placeholder="Customer name *" value={customerName} onChange={setCustomerName} />
+          {customers.length > 0 && (
+            <CustomerSearchInput customers={customers} placeholder="Find existing customer…"
+              onSelect={c => { setCustomerName(c.name); setCustomerPhone(c.phone || ''); setCustomerEmail(c.email || ''); setSelectedCustomerId(c.id); }} />
+          )}
+          <IconInput icon={<User className="w-4 h-4" />} placeholder="Customer name *" value={customerName} onChange={v => { setCustomerName(v); setSelectedCustomerId(undefined); }} />
           <IconInput icon={<Phone className="w-4 h-4" />} placeholder="Phone number" value={customerPhone} onChange={setCustomerPhone} />
           <IconInput icon={<Mail className="w-4 h-4" />} placeholder="Email (optional)" value={customerEmail} onChange={setCustomerEmail} />
           <IconInput icon={<FileText className="w-4 h-4" />} placeholder="Customer notes" value={customerNotes} onChange={setCustomerNotes} />

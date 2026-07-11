@@ -140,10 +140,13 @@ export interface Customer {
   name: string;
   phone: string;
   email?: string;
-  notes?: string;
+  notes?: string;                // internal notes
   kind?: 'retail' | 'wholesale'; // wholesale = a repair business/shop
   company?: string;              // wholesale company name
   contactPerson?: string;        // wholesale contact
+  preferredContact?: 'phone' | 'email' | 'text';
+  tags?: string[];               // VIP, Wholesale, Business, …
+  createdAt?: number;            // epoch ms, best-effort first-seen fallback
 }
 
 export interface ActivityEntry {
@@ -239,7 +242,7 @@ export interface AppData {
   activityLog?: ActivityEntry[];
 }
 
-export type ViewState = 'dashboard' | 'analytics' | 'entry' | 'edit' | 'grid' | 'notes' | 'ai' | 'pos' | 'dropoff' | 'repairs' | 'users' | 'audit';
+export type ViewState = 'dashboard' | 'analytics' | 'entry' | 'edit' | 'grid' | 'notes' | 'ai' | 'pos' | 'dropoff' | 'repairs' | 'customers' | 'users' | 'audit';
 
 // --- Repairs ---
 export type RepairType = 'retail' | 'wholesale';

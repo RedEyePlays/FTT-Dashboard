@@ -11,6 +11,7 @@ import {
 import { newId } from '../domain/ids';
 import { printRetailReceipt, printBatchIntake, printBatchInvoice, printBatchSummary, printDeviceSheet } from '../services/repairPrint';
 import { RepairLabelModal } from './RepairLabelModal';
+import { CustomerSearchInput } from './CustomerSearchInput';
 
 interface Props {
   repairs: Repair[];
@@ -266,7 +267,7 @@ export const RepairsView: React.FC<Props> = (props) => {
       {/* Repair drawer (retail ticket OR wholesale device) */}
       {drawer && (
         <RepairDrawer key={drawer.repair.id} initial={drawer.repair} isNew={drawer.isNew} canDelete={canDelete}
-          auditLogs={auditLogs}
+          auditLogs={auditLogs} customers={props.customers}
           onClose={() => setDrawer(null)}
           onSave={saveDrawer}
           onDelete={() => { onDeleteRepair(drawer.repair.id); setDrawer(null); }}
@@ -385,9 +386,9 @@ const BatchDetail: React.FC<{
 
 /* ---------------- Repair drawer ---------------- */
 const RepairDrawer: React.FC<{
-  initial: Repair; isNew: boolean; canDelete: boolean; auditLogs: AuditEntry[];
+  initial: Repair; isNew: boolean; canDelete: boolean; auditLogs: AuditEntry[]; customers: Customer[];
   onClose: () => void; onSave: (r: Repair) => void; onDelete: () => void; onPrint: (doc: 'intake' | 'repair' | 'pickup') => void; onPrintSheet: () => void; onPrintLabel: () => void;
-}> = ({ initial, isNew, canDelete, auditLogs, onClose, onSave, onDelete, onPrint, onPrintSheet, onPrintLabel }) => {
+}> = ({ initial, isNew, canDelete, auditLogs, customers, onClose, onSave, onDelete, onPrint, onPrintSheet, onPrintLabel }) => {
   const [f, setF] = useState<Repair>(initial);
   const set = (patch: Partial<Repair>) => setF(prev => ({ ...prev, ...patch }));
   const isRetail = f.type === 'retail';
@@ -408,8 +409,14 @@ const RepairDrawer: React.FC<{
         <div className="flex-1 overflow-y-auto custom-scrollbar p-5 space-y-5">
           {isRetail && (
             <Section title="Customer">
+              {customers.length > 0 && (
+                <div className="mb-3">
+                  <CustomerSearchInput customers={customers} kind="retail" placeholder="Find existing customer…"
+                    onSelect={c => set({ customerId: c.id, customerName: c.name, customerPhone: c.phone || '', customerEmail: c.email || '' })} />
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-3">
-                <Field label="Customer"><input className={inputCls} value={f.customerName || ''} onChange={e => set({ customerName: e.target.value })} /></Field>
+                <Field label="Customer"><input className={inputCls} value={f.customerName || ''} onChange={e => set({ customerName: e.target.value, customerId: undefined })} /></Field>
                 <Field label="Phone"><input className={inputCls} value={f.customerPhone || ''} onChange={e => set({ customerPhone: e.target.value })} /></Field>
                 <Field label="Email (optional)" className="col-span-2"><input className={inputCls} value={f.customerEmail || ''} onChange={e => set({ customerEmail: e.target.value })} /></Field>
               </div>

@@ -2,7 +2,7 @@ import React from 'react';
 import {
   LayoutDashboard, PlusCircle, Table, Activity, Sparkles, Moon, Sun, Lock, StickyNote,
   Settings, Calculator, Bot, MessageCircle, ShoppingCart, Search, Truck, ScrollText,
-  Users as UsersIcon, BarChart3, Wrench,
+  Users as UsersIcon, BarChart3, Wrench, Contact,
 } from 'lucide-react';
 import { ViewState, Permission } from '../types';
 import { NavButton } from './NavButton';
@@ -57,6 +57,9 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
         <NavButton active={view === 'pos'} icon={<ShoppingCart className="w-4 h-4" />} label="Quick Sale" onClick={() => onNavigate('pos')} />
         {allow('repairs.manage') && (
           <NavButton active={view === 'repairs'} icon={<Wrench className="w-4 h-4" />} label="Repairs" onClick={() => onNavigate('repairs')} />
+        )}
+        {allow('reports.view') && (
+          <NavButton active={view === 'customers'} icon={<Contact className="w-4 h-4" />} label="Customers" onClick={() => onNavigate('customers')} />
         )}
         {allow('dropoffs.manage') && (
           <NavButton active={view === 'dropoff'} icon={<Truck className="w-4 h-4" />} label="Drop-Offs" onClick={() => onNavigate('dropoff')} />
