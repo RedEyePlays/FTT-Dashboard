@@ -79,13 +79,29 @@ export async function detectZebra(): Promise<ZebraDetect> {
   return { available: false, devices: [] };
 }
 
-/** Send raw ZPL to a device via Browser Print. Resolves on 2xx, else throws. */
-export async function sendZpl(host: string, device: ZebraDevice, zpl: string): Promise<void> {
-  await fetchJson(`${host}/write`, {
+/** Send raw ZPL to a device via Browser Print. Resolves with the response text
+ * (usually empty) on 2xx, else throws. */
+export async function sendZpl(host: string, device: ZebraDevice, zpl: string): Promise<string> {
+  const res = await fetchJson(`${host}/write`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ device, data: zpl }),
   });
+  return typeof res === 'string' ? res : JSON.stringify(res);
+}
+
+/** UTF-8 byte length of a ZPL payload (what actually goes over the wire). */
+export const zplBytes = (zpl: string): number =>
+  (typeof TextEncoder !== 'undefined' ? new TextEncoder().encode(zpl).length : zpl.length);
+
+/** Infer the printer's control language from a ~HI host-identification reply.
+ * ZPL firmware answers ~HI at all (model,firmware,dpm,mem); EPL units generally
+ * do not, so a non-empty reply is treated as ZPL unless it names EPL. */
+export function inferLanguage(hostId: string | null): 'ZPL' | 'EPL' | 'unknown' {
+  if (!hostId) return 'unknown';
+  if (/epl/i.test(hostId)) return 'EPL';
+  if (/zpl|dpi|dpm|,V\d|ZTC|ZD\d|GK\d|GX\d|ZT\d/i.test(hostId)) return 'ZPL';
+  return 'unknown';
 }
 
 /**

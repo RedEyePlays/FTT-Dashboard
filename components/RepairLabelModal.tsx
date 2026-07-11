@@ -1,10 +1,21 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Printer, X, QrCode, FileDown, Settings, Zap, Check, AlertCircle } from 'lucide-react';
+import { Printer, X, QrCode, FileDown, Settings, Zap, Check, AlertCircle, Activity } from 'lucide-react';
 import QRCode from 'qrcode';
 import { jsPDF } from 'jspdf';
 import { Repair } from '../types';
 import { LABEL_SIZES, LabelSizeId, Dpi, buildZpl } from '../services/zpl';
-import { detectZebra, sendZpl, ZebraDetect } from '../services/zebra';
+import { detectZebra, sendZpl, probeModel, inferLanguage, zplBytes, ZebraDetect } from '../services/zebra';
+
+// Smallest valid ZPL for a 2x1 @ 203 dpi label — used by the Print Test Label
+// diagnostic to isolate the printer/media path from our generated ZPL.
+const TEST_ZPL = [
+  '^XA',
+  '^PW406',
+  '^LL203',
+  '^FO20,20^A0N,30,30^FDFlipThatTech Test^FS',
+  '^FO20,70^BQN,2,4^FDLA,TEST-123^FS',
+  '^XZ',
+].join('\n');
 
 interface Props {
   repair: Repair;
@@ -39,6 +50,16 @@ export const RepairLabelModal: React.FC<Props> = ({ repair: r, context, onClose,
   const [showSettings, setShowSettings] = useState(false);
   const [status, setStatus] = useState<{ kind: 'ok' | 'err'; msg: string } | null>(null);
 
+  // Temporary diagnostics to isolate where Zebra printing is failing.
+  const [diag, setDiag] = useState<{
+    language: 'ZPL' | 'EPL' | 'unknown';
+    model?: string;
+    path?: 'Direct Zebra ZPL' | 'Browser HTML fallback';
+    endpoint?: string;
+    lastResult?: string;
+    zplLen?: number;
+  }>({ language: 'unknown' });
+
   const isWholesale = r.type === 'wholesale';
   const idLine = isWholesale
     ? `${context?.batchNumber || 'Batch'}${context?.lineNumber ? ` · #${context.lineNumber}` : ''}`
@@ -61,6 +82,19 @@ export const RepairLabelModal: React.FC<Props> = ({ repair: r, context, onClose,
     });
     return () => { alive = false; };
   }, []);
+
+  const selectedDevice = zebra.devices.find(d => d.uid === settings.deviceUid) || zebra.devices[0];
+
+  // Probe the selected printer's control language (best-effort ~HI round-trip).
+  useEffect(() => {
+    if (!zebra.host || !selectedDevice) { setDiag(d => ({ ...d, language: 'unknown', model: undefined })); return; }
+    let alive = true;
+    probeModel(zebra.host, selectedDevice).then(model => {
+      if (!alive) return;
+      setDiag(d => ({ ...d, model: model || undefined, language: inferLanguage(model) }));
+    });
+    return () => { alive = false; };
+  }, [zebra.host, selectedDevice?.uid]);
 
   const persist = (next: Partial<ZebraSettings>) => {
     setSettings(prev => {
@@ -122,25 +156,42 @@ export const RepairLabelModal: React.FC<Props> = ({ repair: r, context, onClose,
       <script>window.onload=function(){window.focus();window.print();setTimeout(function(){window.close();},300);};</script>
       </body></html>`);
     win.document.close();
+    setDiag(d => ({ ...d, path: 'Browser HTML fallback', endpoint: 'window.print()', lastResult: 'Opened browser print dialog', zplLen: undefined }));
     onPrinted?.();
   };
 
-  const handleZebra = async () => {
+  // Shared ZPL transport used by both the real label and the test label, so the
+  // diagnostic panel reflects whichever was sent last.
+  const sendToZebra = async (zpl: string, label: string) => {
     setStatus(null);
-    const dev = zebra.devices.find(d => d.uid === settings.deviceUid) || zebra.devices[0];
-    if (!zebra.host || !dev) { setStatus({ kind: 'err', msg: 'No Zebra printer selected.' }); return; }
-    const zpl = buildZpl(
-      { org: 'FlipThatTech', idLine, device, imei: r.imei, issue: r.issue, qrData: r.id },
-      dims, settings.dpi, settings.density === '' ? undefined : settings.density,
-    );
+    const dev = selectedDevice;
+    const endpoint = zebra.host ? `${zebra.host}/write` : '(no host)';
+    setDiag(d => ({ ...d, path: 'Direct Zebra ZPL', endpoint, zplLen: zplBytes(zpl) }));
+    if (!zebra.host || !dev) {
+      setDiag(d => ({ ...d, lastResult: 'No Zebra printer selected.' }));
+      setStatus({ kind: 'err', msg: 'No Zebra printer selected.' });
+      return;
+    }
     try {
-      await sendZpl(zebra.host, dev, zpl);
-      setStatus({ kind: 'ok', msg: `Sent to ${dev.name}` });
+      const res = await sendZpl(zebra.host, dev, zpl);
+      setDiag(d => ({ ...d, lastResult: `OK (${res ? res.slice(0, 120) : 'empty 2xx response'})` }));
+      setStatus({ kind: 'ok', msg: `${label} sent to ${dev.name}` });
       onPrinted?.();
     } catch (e: any) {
+      setDiag(d => ({ ...d, lastResult: `ERROR: ${e?.message || 'unreachable'}` }));
       setStatus({ kind: 'err', msg: `Zebra print failed: ${e?.message || 'unreachable'}. Use Browser Print.` });
     }
   };
+
+  const handleZebra = () => sendToZebra(
+    buildZpl(
+      { org: 'FlipThatTech', idLine, device, imei: r.imei, issue: r.issue, qrData: r.id },
+      dims, settings.dpi, settings.density === '' ? undefined : settings.density,
+    ),
+    'Label',
+  );
+
+  const handleTest = () => sendToZebra(TEST_ZPL, 'Test label');
 
   const handlePdf = () => {
     const pdf = new jsPDF({ unit: 'in', format: [dims.w, dims.h], orientation: dims.w > dims.h ? 'landscape' : 'portrait' });
@@ -229,6 +280,27 @@ export const RepairLabelModal: React.FC<Props> = ({ repair: r, context, onClose,
 
           <div className="flex justify-center bg-slate-100 dark:bg-slate-800 rounded-xl p-4">
             <div dangerouslySetInnerHTML={{ __html: labelHtml('px', previewPpi) }} />
+          </div>
+
+          {/* Temporary diagnostics panel — isolates detection / language / endpoint / ZPL / media. */}
+          <div className="rounded-xl border border-amber-300/60 dark:border-amber-500/30 bg-amber-50/60 dark:bg-amber-500/5 p-3 space-y-1.5">
+            <div className="flex items-center gap-2 text-xs font-semibold text-amber-700 dark:text-amber-400"><Activity className="w-3.5 h-3.5" /> Diagnostics (temporary)</div>
+            <dl className="text-[11px] leading-relaxed grid grid-cols-[auto,1fr] gap-x-3 text-slate-600 dark:text-slate-300 font-mono">
+              <dt className="text-slate-400">Browser Print detected</dt><dd>{zebra.available ? 'yes' : 'no'}</dd>
+              <dt className="text-slate-400">Printer name</dt><dd>{selectedDevice?.name || '—'}</dd>
+              <dt className="text-slate-400">Connection type</dt><dd>{selectedDevice?.connection || '—'}</dd>
+              <dt className="text-slate-400">Language reported</dt><dd>{diag.language}{diag.model ? ` (${diag.model.slice(0, 40)})` : ''}</dd>
+              <dt className="text-slate-400">DPI selected</dt><dd>{settings.dpi}</dd>
+              <dt className="text-slate-400">Label size selected</dt><dd>{dims.label} ({dotsW}×{dotsH} dots)</dd>
+              <dt className="text-slate-400">Print path used</dt><dd>{diag.path || '—'}</dd>
+              <dt className="text-slate-400">Last endpoint</dt><dd className="break-all">{diag.endpoint || '—'}</dd>
+              <dt className="text-slate-400">Last response/error</dt><dd className="break-all">{diag.lastResult || '—'}</dd>
+              <dt className="text-slate-400">ZPL byte length</dt><dd>{diag.zplLen ?? '—'}</dd>
+            </dl>
+            <button onClick={handleTest} disabled={!zebra.available || !selectedDevice}
+              className="mt-1 w-full flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-medium bg-amber-600 hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed text-white">
+              <Zap className="w-3.5 h-3.5" /> Print Test Label (minimal ZPL, 2×1 @ 203 dpi)
+            </button>
           </div>
 
           {status && (
