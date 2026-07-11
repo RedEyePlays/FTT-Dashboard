@@ -38,35 +38,48 @@ export const RepairLabelModal: React.FC<Props> = ({ repair: r, context, onClose,
     QRCode.toDataURL(r.id, { margin: 0, width: 300, errorCorrectionLevel: 'M' }).then(setQr).catch(() => setQr(''));
   }, [r.id]);
 
-  const labelHtml = (ppi: number) => {
-    const w = dims.w * ppi, h = dims.h * ppi;
-    const pad = Math.round(ppi * 0.06);
-    const big = Math.max(10, Math.round(ppi * (dims.w >= 4 ? 0.2 : 0.13)));
-    const mid = Math.max(8, Math.round(ppi * (dims.w >= 4 ? 0.12 : 0.085)));
-    const small = Math.max(7, Math.round(ppi * (dims.w >= 4 ? 0.095 : 0.07)));
-    const qrSize = Math.round(Math.min(w, h) * (dims.h >= 3 ? 0.4 : 0.62));
+  // Render the label using a unit suffix ("px" for the on-screen preview, "in"
+  // for print). Physical inch units keep the print output DPI-independent so it
+  // fills the label exactly on a Zebra thermal printer regardless of driver DPI.
+  const labelHtml = (unit: 'px' | 'in', scale: number) => {
+    const u = (n: number) => `${+(n * scale).toFixed(4)}${unit}`;
+    const w = dims.w, h = dims.h;
+    const pad = 0.06;
+    const big = dims.w >= 4 ? 0.2 : 0.13;
+    const mid = dims.w >= 4 ? 0.12 : 0.085;
+    const small = dims.w >= 4 ? 0.095 : 0.07;
+    const qrSize = Math.min(w, h) * (dims.h >= 3 ? 0.4 : 0.62);
+    // Solid black on white with no decorative border: thermal heads print 1-bit.
+    const border = unit === 'px' ? 'border:1px solid #e5e7eb;' : '';
     return `
-      <div style="box-sizing:border-box;width:${w}px;height:${h}px;padding:${pad}px;
-        font-family:'Inter',system-ui,Arial,sans-serif;color:#000;background:#fff;border:1px solid #e5e7eb;
-        display:flex;gap:${pad}px;overflow:hidden;">
-        <div style="flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:${Math.round(pad/3)}px;">
-          <div style="font-weight:800;font-size:${small}px;letter-spacing:.5px;">FlipThatTech</div>
-          <div style="font-family:'Courier New',monospace;font-weight:800;font-size:${big}px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(idLine)}</div>
-          <div style="font-weight:700;font-size:${mid}px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(device)}</div>
-          ${r.imei ? `<div style="font-size:${small}px;font-family:'Courier New',monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(r.imei)}</div>` : ''}
-          ${r.issue ? `<div style="font-size:${small}px;color:#374151;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(r.issue)}</div>` : ''}
+      <div style="box-sizing:border-box;width:${u(w)};height:${u(h)};padding:${u(pad)};
+        font-family:'Inter',system-ui,Arial,sans-serif;color:#000;background:#fff;${border}
+        display:flex;gap:${u(pad)};overflow:hidden;">
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:${u(pad / 3)};">
+          <div style="font-weight:800;font-size:${u(small)};letter-spacing:.5px;">FlipThatTech</div>
+          <div style="font-family:'Courier New',monospace;font-weight:800;font-size:${u(big)};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(idLine)}</div>
+          <div style="font-weight:700;font-size:${u(mid)};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(device)}</div>
+          ${r.imei ? `<div style="font-size:${u(small)};font-family:'Courier New',monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(r.imei)}</div>` : ''}
+          ${r.issue ? `<div style="font-size:${u(small)};color:#374151;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(r.issue)}</div>` : ''}
         </div>
-        ${qr ? `<img src="${qr}" style="width:${qrSize}px;height:${qrSize}px;align-self:center;" />` : ''}
+        ${qr ? `<img src="${qr}" style="width:${u(qrSize)};height:${u(qrSize)};align-self:center;" />` : ''}
       </div>`;
   };
 
   const handlePrint = () => {
     const win = window.open('', '_blank', 'width=500,height=650');
     if (!win) return;
-    win.document.write(`<html><head><title>Repair Label ${esc(r.repairNumber)}</title>
-      <style>@page{size:${dims.w}in ${dims.h}in;margin:0;} body{margin:0;display:flex;align-items:center;justify-content:center;}</style>
-      </head><body>${labelHtml(96)}
-      <script>window.onload=function(){window.print();setTimeout(function(){window.close();},300);};</script>
+    // The print document IS the label: page box = label size, zero margins, no
+    // browser header/footer, and the label fills the entire printable area.
+    win.document.write(`<!DOCTYPE html><html><head><title>Repair Label ${esc(r.repairNumber)}</title>
+      <style>
+        @page { size: ${dims.w}in ${dims.h}in; margin: 0; }
+        html, body { margin: 0; padding: 0; width: ${dims.w}in; height: ${dims.h}in; }
+        * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        body { -webkit-font-smoothing: none; }
+      </style>
+      </head><body>${labelHtml('in', 1)}
+      <script>window.onload=function(){window.focus();window.print();setTimeout(function(){window.close();},300);};</script>
       </body></html>`);
     win.document.close();
     onPrinted?.();
@@ -110,7 +123,7 @@ export const RepairLabelModal: React.FC<Props> = ({ repair: r, context, onClose,
             </div>
           </div>
           <div className="flex justify-center bg-slate-100 dark:bg-slate-800 rounded-xl p-4">
-            <div dangerouslySetInnerHTML={{ __html: labelHtml(previewPpi) }} />
+            <div dangerouslySetInnerHTML={{ __html: labelHtml('px', previewPpi) }} />
           </div>
           <div className="flex gap-2">
             <button onClick={handlePrint} className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium"><Printer className="w-4 h-4" /> Print</button>
