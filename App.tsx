@@ -21,6 +21,7 @@ import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, Runner, Dro
 import { skuPrefix, nextSku } from './services/sku';
 import { REPAIR_PREFIX, BATCH_PREFIX, computeWarrantyUntil } from './domain/repairs';
 import { RepairsView } from './components/RepairsView';
+import { CustomersView } from './components/CustomersView';
 import { can } from './services/rbac';
 import { downloadJson, toCSV, triggerDownload } from './services/backup';
 import { INITIAL_DATA } from './constants';
@@ -381,6 +382,13 @@ const App: React.FC = () => {
     audit('invoice.printed', entityType, id, undefined, { doc: docName });
   };
 
+  // Customer profile edits (notes / tags / preferred contact / basic fields).
+  const handleSaveCustomer = (customer: Customer, prev?: Customer) => {
+    if (!uid) return;
+    saveItem(uid, 'customers', customer);
+    audit('customer.update', 'customer', customer.id, prev, customer);
+  };
+
   const handleStartAdd = () => {
     setEditingItem(undefined);
     setView('entry');
@@ -453,6 +461,17 @@ const App: React.FC = () => {
               ? <AnalyticsView data={data} darkMode={darkMode} canViewProfit={allow('reports.profit')} />
               : <div className="text-center text-slate-400 py-20">You don't have access to reports.</div>
           )}
+          {view === 'customers' && allow('reports.view') && (
+            <CustomersView
+              customers={customers}
+              salesTransactions={salesTransactions}
+              repairs={repairs}
+              batches={repairBatches}
+              canViewProfit={allow('reports.profit')}
+              canEdit={allow('sales.complete') || allow('repairs.manage')}
+              onSaveCustomer={handleSaveCustomer}
+            />
+          )}
           {view === 'repairs' && allow('repairs.manage') && (
             <RepairsView
               repairs={repairs}
@@ -493,6 +512,7 @@ const App: React.FC = () => {
           {view === 'pos' && (
             <QuickSaleView
               inventory={data}
+              customers={customers}
               onSellCart={handleSellCart}
             />
           )}
