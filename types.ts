@@ -156,13 +156,17 @@ export interface ActivityEntry {
 }
 
 // --- Users / roles / audit ---
-export type Role = 'owner' | 'manager' | 'employee';
+export type Role = 'owner' | 'manager' | 'employee' | 'technician';
 
 export type Permission =
   | 'inventory.add' | 'inventory.edit' | 'inventory.delete'
-  | 'sales.complete' | 'dropoffs.manage' | 'repairs.manage'
+  | 'sales.complete' | 'dropoffs.manage'
+  | 'repairs.manage'  // full repair management: create/delete, price, batches, customer
+  | 'repairs.tech'    // technician-scoped: view + update repair work fields & status
   | 'reports.view' | 'reports.profit'
-  | 'users.manage' | 'audit.view' | 'backup.export' | 'settings.manage';
+  | 'users.manage'    // full user/role management (owner)
+  | 'users.tech'      // manage technician accounts only (owner + manager)
+  | 'audit.view' | 'backup.export' | 'settings.manage';
 
 export interface AppUser {
   id: string;            // Firebase Auth uid
@@ -247,10 +251,11 @@ export type ViewState = 'dashboard' | 'analytics' | 'entry' | 'edit' | 'grid' | 
 // --- Repairs ---
 export type RepairType = 'retail' | 'wholesale';
 
-// Simplified status set (no Quality Check / Picked Up).
+// Status set. `completed` is retained for backward compatibility with existing
+// records; `picked_up` is the technician-workflow terminal (device returned).
 export type RepairStatus =
   | 'received' | 'diagnosing' | 'waiting_approval' | 'waiting_parts'
-  | 'in_repair' | 'ready_pickup' | 'completed' | 'cancelled';
+  | 'in_repair' | 'testing' | 'ready_pickup' | 'completed' | 'picked_up' | 'cancelled';
 
 export interface RepairCosmetic {
   checks: string[]; // selected from a predefined cosmetic checklist
@@ -286,6 +291,15 @@ export interface Repair {
   cosmetic?: RepairCosmetic;
   internalNotes?: string;
   customerNotes?: string;
+
+  // Technician-facing work log (editable by technicians).
+  techNotes?: string;        // technician notes
+  diagnostics?: string;      // diagnostic findings
+  workPerformed?: string;    // work performed
+  partsUsed?: string;        // parts used (free text)
+  testingResults?: string;   // testing results / notes
+  testChecks?: string[];     // testing checklist selections
+
   estimatedCompletion?: string; // YYYY-MM-DD
   repairPrice: number;
   deposit?: number;             // retail only

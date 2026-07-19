@@ -35,6 +35,35 @@ describe('can()', () => {
     expect(can('employee', 'inventory.delete', { allowProfit: true })).toBe(false);
   });
 
+  it('technician is repair-scoped and profit-free', () => {
+    // Can do the repair work…
+    expect(can('technician', 'repairs.tech')).toBe(true);
+    // …but not full repair management, financials, inventory, users, or settings.
+    expect(can('technician', 'repairs.manage')).toBe(false);
+    expect(can('technician', 'reports.profit')).toBe(false);
+    expect(can('technician', 'reports.view')).toBe(false);
+    expect(can('technician', 'inventory.add')).toBe(false);
+    expect(can('technician', 'inventory.delete')).toBe(false);
+    expect(can('technician', 'sales.complete')).toBe(false);
+    expect(can('technician', 'users.manage')).toBe(false);
+    expect(can('technician', 'users.tech')).toBe(false);
+    expect(can('technician', 'settings.manage')).toBe(false);
+  });
+
+  it('owner and manager can manage technician accounts; employees cannot', () => {
+    expect(can('owner', 'users.tech')).toBe(true);
+    expect(can('manager', 'users.tech')).toBe(true);
+    expect(can('employee', 'users.tech')).toBe(false);
+    // Full user management stays owner-only.
+    expect(can('manager', 'users.manage')).toBe(false);
+  });
+
+  it('all roles that touch repairs have repairs.tech', () => {
+    for (const role of ['owner', 'manager', 'employee', 'technician'] as const) {
+      expect(can(role, 'repairs.tech')).toBe(true);
+    }
+  });
+
   it('an undefined role has no permissions', () => {
     expect(can(undefined, 'reports.view')).toBe(false);
   });
