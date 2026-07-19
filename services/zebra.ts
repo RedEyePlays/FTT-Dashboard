@@ -89,37 +89,3 @@ export async function sendZpl(host: string, device: ZebraDevice, zpl: string): P
   });
   return typeof res === 'string' ? res : JSON.stringify(res);
 }
-
-/** UTF-8 byte length of a ZPL payload (what actually goes over the wire). */
-export const zplBytes = (zpl: string): number =>
-  (typeof TextEncoder !== 'undefined' ? new TextEncoder().encode(zpl).length : zpl.length);
-
-/** Infer the printer's control language from a ~HI host-identification reply.
- * ZPL firmware answers ~HI at all (model,firmware,dpm,mem); EPL units generally
- * do not, so a non-empty reply is treated as ZPL unless it names EPL. */
-export function inferLanguage(hostId: string | null): 'ZPL' | 'EPL' | 'unknown' {
-  if (!hostId) return 'unknown';
-  if (/epl/i.test(hostId)) return 'EPL';
-  if (/zpl|dpi|dpm|,V\d|ZTC|ZD\d|GK\d|GX\d|ZT\d/i.test(hostId)) return 'ZPL';
-  return 'unknown';
-}
-
-/**
- * Best-effort model/language probe: send ~HI (Host Identification) and read the
- * reply. ZPL-capable firmware answers with the model + a "V..." firmware string.
- * Returns null if the round-trip isn't supported.
- */
-export async function probeModel(host: string, device: ZebraDevice): Promise<string | null> {
-  try {
-    await sendZpl(host, device, '~HI');
-    const reply = await fetchJson(`${host}/read`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ device }),
-    });
-    const s = typeof reply === 'string' ? reply : (reply && (reply.data || reply.output)) || '';
-    return typeof s === 'string' && s.trim() ? s.trim() : null;
-  } catch {
-    return null;
-  }
-}

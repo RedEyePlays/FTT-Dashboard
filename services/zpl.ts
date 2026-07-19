@@ -1,16 +1,21 @@
 // Pure ZPL II generation for repair labels. No DOM / network here so it can be
 // unit-tested; the Browser Print transport lives in services/zebra.ts.
 
-export type LabelSizeId = '2x1' | '2x2' | '2x3' | '4x6';
+export type LabelSizeId = 'dymo-36x89' | '2x1' | '2x2' | '2x3' | '4x6';
 
 export interface LabelDims {
   id: LabelSizeId;
   w: number; // inches
   h: number; // inches
   label: string;
+  dymo?: boolean; // Dymo LabelWriter address stock (printed landscape)
 }
 
+const mm = (v: number) => v / 25.4; // millimetres → inches
+
+// Dymo 36 × 89 mm (LabelWriter large address, landscape) is the primary size.
 export const LABEL_SIZES: LabelDims[] = [
+  { id: 'dymo-36x89', w: mm(89), h: mm(36), label: 'Dymo 36 × 89 mm', dymo: true },
   { id: '2x1', w: 2, h: 1, label: '2 × 1"' },
   { id: '2x2', w: 2, h: 2, label: '2 × 2"' },
   { id: '2x3', w: 2, h: 3, label: '2 × 3"' },
