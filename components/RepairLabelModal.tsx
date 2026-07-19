@@ -7,6 +7,7 @@ import { Repair } from '../types';
 import { REPAIR_STATUS_LABEL } from '../domain/repairs';
 import { LABEL_SIZES, LabelSizeId, Dpi, buildZpl } from '../services/zpl';
 import { detectZebra, sendZpl, ZebraDetect } from '../services/zebra';
+import { LabelContent, labelPreview, labelPrintDoc, mmOf } from '../services/labelLayout';
 
 interface Props {
   repair: Repair;
@@ -19,12 +20,10 @@ interface Props {
 type Size = LabelSizeId;
 const SIZES = LABEL_SIZES;
 
-const esc = (s?: string) => (s || '').replace(/[<>&]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c] as string));
-
 const genBarcode = (value: string): string => {
   try {
     const c = document.createElement('canvas');
-    JsBarcode(c, value || '0', { format: 'CODE128', displayValue: false, margin: 0, height: 60, width: 2 });
+    JsBarcode(c, value || '0', { format: 'CODE128', displayValue: false, margin: 0, height: 80, width: 2 });
     return c.toDataURL('image/png');
   } catch { return ''; }
 };
@@ -41,11 +40,11 @@ const loadSettings = (): LabelSettings => {
       density: typeof s.density === 'number' ? s.density : '',
       defaultSize: SIZES.some(z => z.id === s.defaultSize) ? s.defaultSize : 'dymo-36x89',
       deviceUid: s.deviceUid,
-      showBarcode: !!s.showBarcode,
-      showStatus: s.showStatus !== false, // default on for repairs
+      showBarcode: s.showBarcode !== false, // default on
+      showStatus: s.showStatus !== false,   // default on
     };
   } catch {
-    return { dpi: 203, density: '', defaultSize: 'dymo-36x89', showBarcode: false, showStatus: true };
+    return { dpi: 203, density: '', defaultSize: 'dymo-36x89', showBarcode: true, showStatus: true };
   }
 };
 
@@ -60,19 +59,20 @@ export const RepairLabelModal: React.FC<Props> = ({ repair: r, context, onClose,
 
   const isWholesale = r.type === 'wholesale';
   // The human-readable Repair ID (retail ticket number, or batch + line no.).
-  const idLine = isWholesale
+  const repairId = isWholesale
     ? `${context?.batchNumber || 'Batch'}${context?.lineNumber ? ` · #${context.lineNumber}` : ''}`
     : r.repairNumber;
+  const barcodeValue = r.repairNumber || r.id;
   const device = [r.brand, r.model].filter(Boolean).join(' ') || r.deviceType || 'Device';
+  const repairType = r.type ? `${r.type[0].toUpperCase()}${r.type.slice(1)} repair` : '';
   const statusLabel = r.status ? REPAIR_STATUS_LABEL[r.status] : '';
-  const dims = SIZES.find(s => s.id === size)!;
+  const media = SIZES.find(s => s.id === size)!;
 
   useEffect(() => {
-    // QR encodes the repair/device document id so a scan finds the record.
-    QRCode.toDataURL(r.id, { margin: 0, width: 300, errorCorrectionLevel: 'M' }).then(setQr).catch(() => setQr(''));
-    // Barcode encodes the human Repair ID.
-    setBarcode(genBarcode(r.repairNumber || r.id));
-  }, [r.id, r.repairNumber]);
+    // QR encodes the Repair ID (with a quiet zone); barcode encodes it too.
+    QRCode.toDataURL(barcodeValue, { margin: 2, width: 320, errorCorrectionLevel: 'M' }).then(setQr).catch(() => setQr(''));
+    setBarcode(genBarcode(barcodeValue));
+  }, [barcodeValue]);
 
   // Detect Zebra Browser Print once when the modal opens.
   useEffect(() => {
@@ -95,80 +95,21 @@ export const RepairLabelModal: React.FC<Props> = ({ repair: r, context, onClose,
     });
   };
 
-  // Render the label at a scale/unit ("px" for the on-screen preview, "in" for
-  // print). Inch units keep print output correct at any printer DPI.
-  const labelHtml = (unit: 'px' | 'in', scale: number) => {
-    const u = (n: number) => `${+(n * scale).toFixed(4)}${unit}`;
-    const w = dims.w, h = dims.h;
-    const pad = 0.06;
-    const border = unit === 'px' ? 'border:1px solid #e5e7eb;' : '';
-    const pos = unit === 'in' ? 'position:absolute;top:0;left:0;' : '';
-
-    const statusPill = settings.showStatus && statusLabel
-      ? `<span style="border:${u(0.014)} solid #000;border-radius:${u(0.5)};padding:${u(0.01)} ${u(0.05)};font-size:${u(dims.dymo ? 0.075 : 0.065)};font-weight:800;text-transform:uppercase;letter-spacing:.5px;white-space:nowrap;">${esc(statusLabel)}</span>`
-      : '';
-
-    if (dims.dymo) {
-      // Landscape Dymo layout: text column on the left, a large QR on the right
-      // filling the label height, optional barcode under the text.
-      const idF = 0.2, devF = 0.12, smallF = 0.085, qrS = h - pad * 2, bcH = 0.24;
-      return `
-        <div style="box-sizing:border-box;${pos}width:${u(w)};height:${u(h)};padding:${u(pad)};
-          font-family:'Inter',system-ui,Arial,sans-serif;color:#000;background:#fff;${border}
-          display:flex;gap:${u(pad)};overflow:hidden;">
-          <div style="flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:${u(0.02)};">
-            <div style="font-weight:800;font-size:${u(smallF)};letter-spacing:.5px;">FlipThatTech</div>
-            <div style="font-family:'Courier New',monospace;font-weight:800;font-size:${u(idF)};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(idLine)}</div>
-            <div style="font-weight:700;font-size:${u(devF)};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(device)}</div>
-            ${r.imei ? `<div style="font-size:${u(smallF)};color:#374151;font-family:'Courier New',monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(r.imei)}</div>` : ''}
-            ${statusPill ? `<div style="margin-top:${u(0.02)};">${statusPill}</div>` : ''}
-            ${settings.showBarcode && barcode ? `<img src="${barcode}" style="width:100%;height:${u(bcH)};object-fit:contain;object-position:left;margin-top:${u(0.02)};" />` : ''}
-          </div>
-          ${qr ? `<img src="${qr}" style="width:${u(qrS)};height:${u(qrS)};align-self:center;flex-shrink:0;" />` : ''}
-        </div>`;
-    }
-
-    // Generic thermal layout for the inch sizes.
-    const big = w >= 4 ? 0.2 : 0.13;
-    const mid = w >= 4 ? 0.12 : 0.085;
-    const small = w >= 4 ? 0.095 : 0.07;
-    const qrSize = Math.min(w, h) * (h >= 3 ? 0.4 : 0.62);
-    return `
-      <div style="box-sizing:border-box;${pos}width:${u(w)};height:${u(h)};padding:${u(pad)};
-        font-family:'Inter',system-ui,Arial,sans-serif;color:#000;background:#fff;${border}
-        display:flex;gap:${u(pad)};overflow:hidden;">
-        <div style="flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:${u(pad / 3)};">
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:${u(0.04)};">
-            <span style="font-weight:800;font-size:${u(small)};letter-spacing:.5px;">FlipThatTech</span>
-            ${statusPill}
-          </div>
-          <div style="font-family:'Courier New',monospace;font-weight:800;font-size:${u(big)};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(idLine)}</div>
-          <div style="font-weight:700;font-size:${u(mid)};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(device)}</div>
-          ${r.imei ? `<div style="font-size:${u(small)};font-family:'Courier New',monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(r.imei)}</div>` : ''}
-          ${r.issue ? `<div style="font-size:${u(small)};color:#374151;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(r.issue)}</div>` : ''}
-          ${settings.showBarcode && barcode ? `<img src="${barcode}" style="width:100%;height:${u(h * 0.14)};object-fit:contain;object-position:left;margin-top:${u(0.02)};" />` : ''}
-        </div>
-        ${qr ? `<img src="${qr}" style="width:${u(qrSize)};height:${u(qrSize)};align-self:center;" />` : ''}
-      </div>`;
+  const content: LabelContent = {
+    org: 'FlipThatTech',
+    code: repairId,
+    device,
+    sub: repairType || undefined,
+    serial: r.imei || undefined,
+    status: statusLabel || undefined,
   };
+  const images = { qr, barcode };
+  const opts = { showBarcode: settings.showBarcode, showStatus: settings.showStatus };
 
   const handlePrint = () => {
     const win = window.open('', '_blank', 'width=520,height=680');
     if (!win) return;
-    // The print document IS the label: @page equals the template size (landscape
-    // geometry when wider than tall, e.g. Dymo/2x1); html/body match those
-    // physical dimensions with margin/padding 0, overflow hidden, no border; the
-    // label is anchored top-left rather than centered on a larger sheet.
-    win.document.write(`<!DOCTYPE html><html><head><title>Repair Label ${esc(r.repairNumber)}</title>
-      <style>
-        @page { size: ${dims.w}in ${dims.h}in; margin: 0; }
-        html, body { margin: 0; padding: 0; width: ${dims.w}in; height: ${dims.h}in; overflow: hidden; background: #fff; }
-        body { position: relative; -webkit-font-smoothing: none; }
-        * { -webkit-print-color-adjust: exact; print-color-adjust: exact; box-sizing: border-box; }
-      </style>
-      </head><body>${labelHtml('in', 1)}
-      <script>window.onload=function(){window.focus();window.print();setTimeout(function(){window.close();},300);};</script>
-      </body></html>`);
+    win.document.write(labelPrintDoc(`Repair Label ${r.repairNumber}`, media, content, images, opts));
     win.document.close();
     onPrinted?.();
   };
@@ -178,8 +119,8 @@ export const RepairLabelModal: React.FC<Props> = ({ repair: r, context, onClose,
     const dev = selectedDevice;
     if (!zebra.host || !dev) { setStatus({ kind: 'err', msg: 'No Zebra printer selected.' }); return; }
     const zpl = buildZpl(
-      { org: 'FlipThatTech', idLine, device, imei: r.imei, issue: r.issue, qrData: r.id },
-      dims, settings.dpi, settings.density === '' ? undefined : settings.density,
+      { org: 'FlipThatTech', idLine: repairId, device, imei: r.imei, issue: statusLabel || r.issue, qrData: barcodeValue },
+      media, settings.dpi, settings.density === '' ? undefined : settings.density,
     );
     try {
       await sendZpl(zebra.host, dev, zpl);
@@ -191,26 +132,26 @@ export const RepairLabelModal: React.FC<Props> = ({ repair: r, context, onClose,
   };
 
   const handlePdf = () => {
-    const pdf = new jsPDF({ unit: 'in', format: [dims.w, dims.h], orientation: dims.w > dims.h ? 'landscape' : 'portrait' });
-    const pad = 0.06;
-    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(8); pdf.text('FlipThatTech', pad, pad + 0.12);
-    pdf.setFont('courier', 'bold'); pdf.setFontSize(dims.w >= 4 ? 20 : 13); pdf.text(idLine.slice(0, 22), pad, pad + (dims.w >= 4 ? 0.5 : 0.34));
-    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(dims.w >= 4 ? 12 : 9); pdf.text(device.slice(0, 26), pad, pad + (dims.w >= 4 ? 0.72 : 0.5));
+    const { w, h } = mmOf(media);
+    const pdf = new jsPDF({ unit: 'mm', format: [w, h], orientation: w > h ? 'landscape' : 'portrait' });
+    const pad = media.dymo ? 1.3 : 1.6;
+    const qrS = media.dymo ? h - pad * 2 - (settings.showBarcode ? 6.5 : 0) : Math.min(w, h) * (media.h >= 3 ? 0.42 : 0.6);
+    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(7); pdf.text('FlipThatTech', pad, pad + 2.6);
+    pdf.setFont('courier', 'bold'); pdf.setFontSize(media.dymo ? 20 : 14); pdf.text(repairId.slice(0, 22), pad, pad + 9);
+    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(media.dymo ? 12 : 10); pdf.text(device.slice(0, 30), pad, pad + 14.5);
     pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8);
-    let y = pad + (dims.w >= 4 ? 0.92 : 0.64);
-    if (r.imei) { pdf.text(r.imei.slice(0, 24), pad, y); y += 0.15; }
-    if (settings.showStatus && statusLabel) { pdf.setFont('helvetica', 'bold'); pdf.text(statusLabel.toUpperCase(), pad, y); pdf.setFont('helvetica', 'normal'); y += 0.15; }
-    else if (r.issue) { pdf.text(r.issue.slice(0, 28), pad, y); }
-    const qrS = dims.dymo ? dims.h - pad * 2 : Math.min(dims.w, dims.h) * (dims.h >= 3 ? 0.38 : 0.56);
-    if (qr) pdf.addImage(qr, 'PNG', dims.w - pad - qrS, (dims.h - qrS) / 2, qrS, qrS);
-    if (settings.showBarcode && barcode) pdf.addImage(barcode, 'PNG', pad, dims.h - pad - 0.32, (dims.dymo ? dims.w * 0.55 : dims.w) - pad * 2, 0.28);
+    let y = pad + 19;
+    if (repairType) { pdf.text(repairType, pad, y); y += 4.5; }
+    if (r.imei) { pdf.setFont('courier', 'bold'); pdf.setFontSize(11); pdf.text(r.imei, pad, y); pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8); y += 5; }
+    if (settings.showStatus && statusLabel) { pdf.setFont('helvetica', 'bold'); pdf.text(statusLabel.toUpperCase(), pad, y); pdf.setFont('helvetica', 'normal'); }
+    if (qr) pdf.addImage(qr, 'PNG', w - pad - qrS, pad, qrS, qrS);
+    if (settings.showBarcode && barcode) pdf.addImage(barcode, 'PNG', pad, h - pad - 5.5, w - pad * 2, 5.5);
     pdf.save(`${r.repairNumber || 'repair-label'}.pdf`);
     onPrinted?.();
   };
 
-  const previewPpi = Math.min(120, 300 / Math.max(dims.w, dims.h));
-  const dotsW = useMemo(() => Math.round(dims.w * settings.dpi), [dims.w, settings.dpi]);
-  const dotsH = useMemo(() => Math.round(dims.h * settings.dpi), [dims.h, settings.dpi]);
+  const dotsW = useMemo(() => Math.round(media.w * settings.dpi), [media.w, settings.dpi]);
+  const dotsH = useMemo(() => Math.round(media.h * settings.dpi), [media.h, settings.dpi]);
 
   return (
     <div className="fixed inset-0 z-[65] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-fadeIn" onClick={onClose}>
@@ -284,12 +225,12 @@ export const RepairLabelModal: React.FC<Props> = ({ repair: r, context, onClose,
                   placeholder="Printer default"
                   className="w-full text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-1.5" />
               </div>
-              <p className="text-[11px] text-slate-400">Direct Zebra labels print at {dotsW}×{dotsH} dots ({dims.label} @ {settings.dpi} dpi).</p>
+              <p className="text-[11px] text-slate-400">Direct Zebra labels print at {dotsW}×{dotsH} dots ({media.label} @ {settings.dpi} dpi).</p>
             </div>
           )}
 
-          <div className="flex justify-center bg-slate-100 dark:bg-slate-800 rounded-xl p-4">
-            <div dangerouslySetInnerHTML={{ __html: labelHtml('px', previewPpi) }} />
+          <div className="flex justify-center bg-slate-100 dark:bg-slate-800 rounded-xl p-4 overflow-auto">
+            <div dangerouslySetInnerHTML={{ __html: labelPreview(media, content, images, opts) }} />
           </div>
 
           {status && (
@@ -301,7 +242,7 @@ export const RepairLabelModal: React.FC<Props> = ({ repair: r, context, onClose,
           <div className="space-y-2">
             {zebra.available && zebra.devices.length > 0 && (
               <button onClick={handleZebra} className="w-full flex items-center justify-center gap-2 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium">
-                <Zap className="w-4 h-4" /> Print to Zebra ({dims.label})
+                <Zap className="w-4 h-4" /> Print to Zebra ({media.label})
               </button>
             )}
             <div className="flex gap-2">
