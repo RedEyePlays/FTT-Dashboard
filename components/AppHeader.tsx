@@ -2,7 +2,7 @@ import React from 'react';
 import {
   LayoutDashboard, PlusCircle, Table, Activity, Sparkles, Moon, Sun, Lock, StickyNote,
   Settings, Calculator, Bot, MessageCircle, ShoppingCart, Search, Truck, ScrollText,
-  Users as UsersIcon, BarChart3, Wrench, Contact,
+  Users as UsersIcon, BarChart3, Wrench, Contact, Menu,
 } from 'lucide-react';
 import { ViewState, Permission } from '../types';
 import { NavButton } from './NavButton';
@@ -14,6 +14,8 @@ interface AppHeaderProps {
   onNavigate: (v: ViewState) => void;
   allow: (p: Permission) => boolean;
   isTech?: boolean; // technician = simplified, repair-only header
+  pageTitle?: string;       // shown in the mobile header bar
+  onOpenDrawer?: () => void; // opens the mobile slide-out nav
   userEmail: string;
   userRole: string;
   darkMode: boolean;
@@ -30,24 +32,38 @@ interface AppHeaderProps {
 }
 
 export const AppHeader: React.FC<AppHeaderProps> = ({
-  view, onNavigate, allow, isTech, userEmail, userRole,
+  view, onNavigate, allow, isTech, pageTitle, onOpenDrawer, userEmail, userRole,
   darkMode, onToggleTheme, isAiSidebarOpen, onToggleAiSidebar,
   showCalculator, onToggleCalculator, onOpenFinder, onOpenSettings,
   onOpenBulk, onStartAdd, onLock,
 }) => (
-  <header className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 sticky top-0 z-20 shadow-sm shrink-0">
-    <div className="w-full px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-      <div className="flex items-center gap-2">
-        <div className="bg-indigo-600 p-2 rounded-lg shadow-lg shadow-indigo-500/30">
+  <header className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 sticky top-0 z-20 shadow-sm shrink-0 safe-t">
+    <div className="w-full px-3 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-2">
+      <div className="flex items-center gap-2 min-w-0">
+        <div className="bg-indigo-600 p-2 rounded-lg shadow-lg shadow-indigo-500/30 shrink-0">
           <Activity className="w-5 h-5 text-white" />
         </div>
-        <h1 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-700 to-violet-700 dark:from-indigo-400 dark:to-violet-400">
+        {/* Full brand on ≥sm; the current page title on phones. */}
+        <h1 className="hidden sm:block text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-700 to-violet-700 dark:from-indigo-400 dark:to-violet-400">
           FlipThatTech Dashboard
         </h1>
+        {!isTech && <span className="sm:hidden text-base font-bold text-slate-800 dark:text-slate-100 truncate">{pageTitle || 'FlipThatTech'}</span>}
         <span className="hidden sm:inline-flex items-center gap-1 ml-2 px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 text-[10px] font-bold uppercase tracking-wider">
            <Lock className="w-3 h-3" /> Secure
         </span>
       </div>
+
+      {/* Mobile header actions: theme + hamburger (opens the nav drawer). */}
+      {!isTech && (
+        <div className="flex md:hidden items-center gap-1">
+          <button onClick={onToggleTheme} aria-label="Toggle theme" className="tap-target flex items-center justify-center text-slate-500 dark:text-slate-400 rounded-lg">
+            {darkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+          </button>
+          <button onClick={onOpenDrawer} aria-label="Open menu" className="tap-target flex items-center justify-center text-slate-600 dark:text-slate-300 rounded-lg">
+            <Menu className="w-6 h-6" />
+          </button>
+        </div>
+      )}
       {isTech ? (
         // Technician: repair-only header — no inventory / sales / settings / users.
         <nav className="flex items-center gap-2">

@@ -212,15 +212,15 @@ export const RepairsView: React.FC<Props> = (props) => {
           {retail.length === 0 ? <p className="text-sm text-slate-400 text-center py-12">No repair tickets.</p> : (
             <div className="divide-y divide-slate-100 dark:divide-slate-800">
               {retail.map(r => (
-                <div key={r.id} onClick={() => setDrawer({ repair: r, isNew: false })} className="flex items-center gap-3 px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-800/50 cursor-pointer">
-                  <div className="min-w-0 flex-1">
+                <div key={r.id} onClick={() => setDrawer({ repair: r, isNew: false })} className="flex flex-wrap sm:flex-nowrap items-center gap-x-3 gap-y-2 px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-800/50 cursor-pointer">
+                  <div className="min-w-0 flex-1 basis-full sm:basis-0">
                     <p className="text-sm font-semibold text-slate-800 dark:text-slate-100 truncate">{deviceName(r)} <span className="font-mono text-xs text-slate-400 ml-1">{r.repairNumber}</span></p>
                     <p className="text-xs text-slate-400 truncate">{r.customerName || 'Walk-in'}{r.customerPhone ? ` · ${r.customerPhone}` : ''}{r.imei ? ` · ${r.imei}` : ''} · {r.date}</p>
                   </div>
                   {isOverdue(r) && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300 shrink-0">Overdue</span>}
-                  <div className="text-right shrink-0"><p className="text-sm font-semibold text-slate-900 dark:text-slate-100">{money(r.repairPrice)}</p>{balanceOwing(r) > 0 && <p className="text-[11px] text-rose-500">bal {money(balanceOwing(r))}</p>}</div>
+                  <div className="text-right shrink-0 ml-auto sm:ml-0"><p className="text-sm font-semibold text-slate-900 dark:text-slate-100">{money(r.repairPrice)}</p>{balanceOwing(r) > 0 && <p className="text-[11px] text-rose-500">bal {money(balanceOwing(r))}</p>}</div>
                   <StatusPill value={r.status} onChange={s => onSaveRepair({ ...r, status: s }, r)} />
-                  <button onClick={e => { e.stopPropagation(); openLabel(r); }} title="Print QR label" className="p-1 text-slate-400 hover:text-indigo-600 shrink-0"><QrCode className="w-4 h-4" /></button>
+                  <button onClick={e => { e.stopPropagation(); openLabel(r); }} title="Print QR label" aria-label="Print QR label" className="tap-target flex items-center justify-center text-slate-400 hover:text-indigo-600 shrink-0"><QrCode className="w-4 h-4" /></button>
                   <ChevronRight className="w-4 h-4 text-slate-300 shrink-0" />
                 </div>
               ))}

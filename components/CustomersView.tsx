@@ -12,6 +12,8 @@ import {
 } from '../domain/customers';
 import { REPAIR_STATUS_CELL, REPAIR_STATUS_LABEL } from '../domain/repairs';
 import { printRetailReceipt } from '../services/repairPrint';
+import { useIsMobile } from '../hooks/useMediaQuery';
+import { MobileDataCard, CardRow, EmptyState } from './responsive';
 
 interface Props {
   customers: Customer[];
@@ -61,6 +63,7 @@ export const CustomersView: React.FC<Props> = (props) => {
 
   const duplicates = useMemo(() => findDuplicateGroups(customers), [customers]);
 
+  const isMobile = useIsMobile();
   const selected = customers.find(c => c.id === selectedId) || null;
   if (selected) {
     return <CustomerProfile {...props} customer={selected} data={data} onBack={() => setSelectedId(null)} />;
@@ -70,12 +73,12 @@ export const CustomersView: React.FC<Props> = (props) => {
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-2xl font-bold text-slate-900 dark:text-white flex items-center gap-2"><Users className="w-6 h-6 text-indigo-500" /> Customers <span className="text-sm font-normal text-slate-400">{customers.length}</span></h2>
-        <div className="flex items-center gap-2">
-          <div className="relative">
+        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+          <div className="relative flex-1 min-w-0 sm:min-w-[16rem]">
             <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-            <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search name, phone, email, Repair ID, SKU, IMEI…" className="w-72 pl-9 pr-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+            <input type="search" inputMode="search" value={query} onChange={e => setQuery(e.target.value)} placeholder="Search name, phone, email, Repair ID, SKU, IMEI…" className="w-full pl-9 pr-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
           </div>
-          <select value={sort} onChange={e => setSort(e.target.value as CustomerSort)} className="px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-700 dark:text-slate-200">
+          <select value={sort} onChange={e => setSort(e.target.value as CustomerSort)} className="px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-700 dark:text-slate-200 shrink-0">
             <option value="recent">Last Visit</option>
             <option value="spent">Lifetime Spend</option>
             <option value="repairs">Number of Repairs</option>
@@ -111,44 +114,66 @@ export const CustomersView: React.FC<Props> = (props) => {
         </div>
       )}
 
-      <div className={`${cardStyle} overflow-x-auto`}>
-        <table className="w-full text-sm">
-          <thead className="bg-slate-50 dark:bg-slate-800/50 text-[10px] uppercase tracking-wider text-slate-500 dark:text-slate-400">
-            <tr>
-              <th className="text-left px-4 py-2.5">Customer</th>
-              <th className="text-left px-4 py-2.5">Contact</th>
-              <th className="text-right px-4 py-2.5">Purchases</th>
-              <th className="text-right px-4 py-2.5">Repairs</th>
-              <th className="text-right px-4 py-2.5">Lifetime</th>
-              <th className="text-right px-4 py-2.5">Balance</th>
-              <th className="text-right px-4 py-2.5">Last Visit</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-            {rows.length === 0 && <tr><td colSpan={8} className="text-center text-slate-400 py-12">No customers found.</td></tr>}
-            {rows.map(({ c, s }) => (
-              <tr key={c.id} onClick={() => setSelectedId(c.id)} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 cursor-pointer">
-                <td className="px-4 py-2.5">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-medium text-slate-800 dark:text-slate-100">{c.name || c.company || 'Customer'}</span>
-                    {s.hasOpenRepairs && <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">Open repair</span>}
-                    {(c.tags || []).slice(0, 2).map(t => <span key={t} className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300">{t}</span>)}
-                    {c.kind === 'wholesale' && <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300">Wholesale</span>}
-                  </div>
-                </td>
-                <td className="px-4 py-2.5 text-slate-500 dark:text-slate-400 text-xs">{[c.phone, c.email].filter(Boolean).join(' · ') || '—'}</td>
-                <td className="px-4 py-2.5 text-right text-slate-700 dark:text-slate-200">{s.purchaseCount}</td>
-                <td className="px-4 py-2.5 text-right text-slate-700 dark:text-slate-200">{s.repairCount}</td>
-                <td className="px-4 py-2.5 text-right font-medium text-slate-900 dark:text-slate-100">{canViewProfit ? money0(s.lifetimeSpent) : '•••'}</td>
-                <td className={`px-4 py-2.5 text-right text-xs font-medium ${s.outstandingBalance > 0.005 ? 'text-rose-600 dark:text-rose-400' : 'text-slate-400'}`}>{s.outstandingBalance > 0.005 ? money0(s.outstandingBalance) : '—'}</td>
-                <td className="px-4 py-2.5 text-right text-slate-500 dark:text-slate-400 text-xs">{fmtDate(s.lastActivity)}</td>
-                <td className="px-2 py-2.5"><ChevronRight className="w-4 h-4 text-slate-300" /></td>
+      {rows.length === 0 ? (
+        <div className={cardStyle}><EmptyState icon={<Users className="w-6 h-6" />} title="No customers found" hint="Try a different search or filter." /></div>
+      ) : isMobile ? (
+        /* Mobile: compact cards (name, phone, open repairs, lifetime, last visit) */
+        <div className="flex flex-col gap-2">
+          {rows.map(({ c, s }) => (
+            <MobileDataCard key={c.id} onOpen={() => setSelectedId(c.id)}
+              title={c.name || c.company || 'Customer'}
+              badge={<>
+                {s.hasOpenRepairs && <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">Open repair</span>}
+                {c.kind === 'wholesale' && <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300">Wholesale</span>}
+              </>}
+              actions={<ChevronRight className="w-5 h-5 text-slate-300 shrink-0" />}>
+              {c.phone && <CardRow label="Phone"><a href={`tel:${c.phone}`} onClick={e => e.stopPropagation()} className="text-indigo-600 dark:text-indigo-400">{c.phone}</a></CardRow>}
+              <CardRow label="Open repairs">{s.activeRepairs}</CardRow>
+              {canViewProfit && <CardRow label="Lifetime">{money0(s.lifetimeSpent)}</CardRow>}
+              {s.outstandingBalance > 0.005 && <CardRow label="Balance"><span className="text-rose-600 dark:text-rose-400">{money0(s.outstandingBalance)}</span></CardRow>}
+              <CardRow label="Last visit">{fmtDate(s.lastActivity)}</CardRow>
+            </MobileDataCard>
+          ))}
+        </div>
+      ) : (
+        <div className={`${cardStyle} overflow-x-auto`}>
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 dark:bg-slate-800/50 text-[10px] uppercase tracking-wider text-slate-500 dark:text-slate-400">
+              <tr>
+                <th className="text-left px-4 py-2.5">Customer</th>
+                <th className="text-left px-4 py-2.5">Contact</th>
+                <th className="text-right px-4 py-2.5">Purchases</th>
+                <th className="text-right px-4 py-2.5">Repairs</th>
+                <th className="text-right px-4 py-2.5">Lifetime</th>
+                <th className="text-right px-4 py-2.5">Balance</th>
+                <th className="text-right px-4 py-2.5">Last Visit</th>
+                <th></th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+              {rows.map(({ c, s }) => (
+                <tr key={c.id} onClick={() => setSelectedId(c.id)} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 cursor-pointer">
+                  <td className="px-4 py-2.5">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-medium text-slate-800 dark:text-slate-100">{c.name || c.company || 'Customer'}</span>
+                      {s.hasOpenRepairs && <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">Open repair</span>}
+                      {(c.tags || []).slice(0, 2).map(t => <span key={t} className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300">{t}</span>)}
+                      {c.kind === 'wholesale' && <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300">Wholesale</span>}
+                    </div>
+                  </td>
+                  <td className="px-4 py-2.5 text-slate-500 dark:text-slate-400 text-xs">{[c.phone, c.email].filter(Boolean).join(' · ') || '—'}</td>
+                  <td className="px-4 py-2.5 text-right text-slate-700 dark:text-slate-200">{s.purchaseCount}</td>
+                  <td className="px-4 py-2.5 text-right text-slate-700 dark:text-slate-200">{s.repairCount}</td>
+                  <td className="px-4 py-2.5 text-right font-medium text-slate-900 dark:text-slate-100">{canViewProfit ? money0(s.lifetimeSpent) : '•••'}</td>
+                  <td className={`px-4 py-2.5 text-right text-xs font-medium ${s.outstandingBalance > 0.005 ? 'text-rose-600 dark:text-rose-400' : 'text-slate-400'}`}>{s.outstandingBalance > 0.005 ? money0(s.outstandingBalance) : '—'}</td>
+                  <td className="px-4 py-2.5 text-right text-slate-500 dark:text-slate-400 text-xs">{fmtDate(s.lastActivity)}</td>
+                  <td className="px-2 py-2.5"><ChevronRight className="w-4 h-4 text-slate-300" /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {mergeGroup && <MergeModal group={mergeGroup} data={data} onClose={() => setMergeGroup(null)} onMerge={props.onMergeCustomers} />}
     </div>

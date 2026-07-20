@@ -40,6 +40,14 @@ import { newId, mkActivity } from './domain/ids';
 import { collectionFor, decrementStock } from './domain/inventory';
 import { AppHeader } from './components/AppHeader';
 import { MobileNav } from './components/MobileNav';
+import { MobileDrawer } from './components/MobileDrawer';
+
+// Page titles for the mobile header bar.
+const PAGE_TITLES: Record<ViewState, string> = {
+  dashboard: 'Dashboard', analytics: 'Analytics', entry: 'Add Item', edit: 'Edit Item',
+  grid: 'Inventory', notes: 'Notes', ai: 'AI Assistant', pos: 'Checkout', dropoff: 'Drop-Offs',
+  repairs: 'Repairs', customers: 'Customers', users: 'Users', audit: 'Audit Log',
+};
 import { LoadingScreen, DbErrorScreen } from './components/StatusScreens';
 
 const App: React.FC = () => {
@@ -59,6 +67,7 @@ const App: React.FC = () => {
   const [view, setView] = useState<ViewState>('dashboard');
   // A customer to pre-seed the POS / Repairs view with (from a CRM quick action).
   const [prefillCustomer, setPrefillCustomer] = useState<Customer | undefined>(undefined);
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   // AI Chat State (Shared between Sidebar and Tab)
   const [aiMessages, setAiMessages] = useState<ChatMessage[]>([{
@@ -518,6 +527,8 @@ const App: React.FC = () => {
         view={view}
         onNavigate={setView}
         allow={allow}
+        pageTitle={PAGE_TITLES[view]}
+        onOpenDrawer={() => setDrawerOpen(true)}
         userEmail={appUser.email}
         userRole={appUser.role}
         darkMode={darkMode}
@@ -533,18 +544,28 @@ const App: React.FC = () => {
         onLock={handleLock}
       />
 
-      {/* Mobile Navigation */}
-      <MobileNav
+      {/* Mobile slide-out nav (all destinations + actions) */}
+      <MobileDrawer
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
         view={view}
         onNavigate={setView}
-        onStartAdd={handleStartAdd}
-        onOpenAiSidebar={() => setIsAiSidebarOpen(true)}
-        showCalculator={showCalculator}
-        onToggleCalculator={() => setShowCalculator(!showCalculator)}
+        allow={allow}
+        userRole={appUser.role}
+        userEmail={appUser.email}
+        darkMode={darkMode}
+        onToggleTheme={() => setDarkMode(!darkMode)}
+        onOpenFinder={() => setShowFinder(true)}
+        onOpenSettings={() => setShowSettingsModal(true)}
+        onOpenBulk={() => setShowBulkModal(true)}
+        onLock={handleLock}
       />
 
+      {/* Mobile bottom navigation (top 5 destinations) */}
+      <MobileNav view={view} onNavigate={setView} allow={allow} onOpenMore={() => setDrawerOpen(true)} />
+
       {/* Main Content */}
-      <main className={`mx-auto px-4 sm:px-6 lg:px-8 py-8 flex-1 w-full flex flex-col ${view === 'grid' || view === 'ai' ? 'max-w-[98%]' : 'max-w-7xl'}`}>
+      <main className={`mx-auto px-3 sm:px-6 lg:px-8 py-6 sm:py-8 flex-1 w-full flex flex-col ${view === 'grid' || view === 'ai' ? 'max-w-[98%]' : 'max-w-7xl'}`}>
         <div className="animate-fadeIn flex-1 flex flex-col">
           {view === 'dashboard' && (
             allow('reports.view')
