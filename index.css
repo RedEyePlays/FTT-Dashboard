@@ -1,3 +1,55 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* ------------------------------------------------------------------ *
+ * Responsive & accessibility base (branding/colors unchanged).
+ * ------------------------------------------------------------------ */
+
+/* Never allow the page itself to scroll sideways — wide content must scroll
+   inside its own container instead. */
+html, body {
+  overflow-x: hidden;
+  max-width: 100%;
+}
+#root {
+  overflow-x: hidden;
+}
+
+/* Prevent iOS/Android from auto-zooming when focusing an input: inputs must be
+   ≥16px on small screens. Larger screens keep the compact sizing. */
+@media (max-width: 640px) {
+  input, select, textarea {
+    font-size: 16px;
+  }
+}
+
+/* Visible keyboard focus for interactive elements (does not affect mouse). */
+:focus-visible {
+  outline: 2px solid #6366f1;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Phone safe areas (notches / home indicators). */
+.safe-b { padding-bottom: env(safe-area-inset-bottom); }
+.safe-t { padding-top: env(safe-area-inset-top); }
+
+/* Comfortable minimum tap target on touch devices. */
+.tap-target { min-width: 44px; min-height: 44px; }
+
+/* Respect reduced-motion preferences. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* When a modal/drawer is open, lock background scroll. */
+body.no-scroll {
+  overflow: hidden;
+  touch-action: none;
+}
