@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import {
   ShoppingCart, Trash2, X, Search, User, Phone, FileText, Mail,
   Banknote, CreditCard, Blend, CheckCircle, Package, Smartphone, ScanLine, History,
@@ -23,6 +23,8 @@ export interface CartCheckout {
 interface Props {
   inventory: InventoryItem[];
   customers?: Customer[];
+  initialCustomer?: Customer;   // pre-seed the sale customer (CRM quick action)
+  onConsumeInitial?: () => void;
   onComplete: (payload: CartCheckout) => void;
 }
 
@@ -52,7 +54,7 @@ interface CartLine {
   addToInventory?: boolean;
 }
 
-export const CartSaleView: React.FC<Props> = ({ inventory, customers = [], onComplete }) => {
+export const CartSaleView: React.FC<Props> = ({ inventory, customers = [], initialCustomer, onConsumeInitial, onComplete }) => {
   const [cart, setCart] = useState<CartLine[]>([]);
   const [picker, setPicker] = useState<null | ItemKind>(null);
   const [search, setSearch] = useState('');
@@ -67,6 +69,17 @@ export const CartSaleView: React.FC<Props> = ({ inventory, customers = [], onCom
   const [customerEmail, setCustomerEmail] = useState('');
   const [customerNotes, setCustomerNotes] = useState('');
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | undefined>(undefined);
+
+  // Pre-seed the customer when arriving from a CRM "Start Sale" quick action.
+  useEffect(() => {
+    if (!initialCustomer) return;
+    setCustomerName(initialCustomer.name || '');
+    setCustomerPhone(initialCustomer.phone || '');
+    setCustomerEmail(initialCustomer.email || '');
+    setSelectedCustomerId(initialCustomer.id);
+    onConsumeInitial?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialCustomer?.id]);
 
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'mixed'>('cash');
   const [cashTaxStatus, setCashTaxStatus] = useState<'none' | 'separate' | 'included'>('none');

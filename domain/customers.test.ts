@@ -91,3 +91,96 @@ describe('matchCustomer', () => {
     expect(matchCustomer(c, '')).toBe(true);
   });
 });
+
+import { customerDevices, findDuplicateGroups, planMerge, passesFilter, sortCustomers, customerSearchMatch, normPhone } from './customers';
+import { InventoryItem } from '../types';
+
+const invDev = (p: Partial<InventoryItem>): InventoryItem => ({ id: 'i', kind: 'device', sku: 'SKU1', date: '2026-01-01', item: 'iPhone 15 Pro', imei: 'IMEI-1', purchaseCost: 0, repairCost: 0, ...p } as InventoryItem);
+
+describe('CRM stats + devices', () => {
+  it('derives active repairs, warranty claims, outstanding balance', () => {
+    const c = cust({ id: 'c1', phone: '555-1', tags: ['VIP'] });
+    const future = new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0];
+    const s = customerStats(c, {
+      salesTransactions: [tx({ customerId: 'c1', totalPaid: 100 })],
+      repairs: [
+        rep({ id: 'r1', customerId: 'c1', status: 'in_repair', repairPrice: 200, deposit: 50 }), // open, owes 150
+        rep({ id: 'r2', customerId: 'c1', status: 'picked_up', repairPrice: 80, warrantyUntil: future }), // warranty active
+      ],
+      batches: [],
+    });
+    expect(s.activeRepairs).toBe(1);
+    expect(s.warrantyClaims).toBe(1);
+    expect(s.outstandingBalance).toBe(150);
+    expect(s.isVIP).toBe(true);
+    expect(s.hasOpenRepairs).toBe(true);
+  });
+
+  it('builds device history linking a purchase + repair by IMEI', () => {
+    const c = cust({ id: 'c1', phone: '555' });
+    const s = customerStats(c, {
+      salesTransactions: [tx({ customerId: 'c1', date: '2026-01-05', lines: [{ kind: 'device', inventoryId: 'i9', name: 'iPhone 15 Pro', quantity: 1, unitPrice: 900 } as any] })],
+      repairs: [rep({ customerId: 'c1', imei: 'IMEI-9', brand: 'Apple', model: 'iPhone 15 Pro', createdAt: new Date('2026-03-01').getTime() })],
+      batches: [],
+    });
+    const devices = customerDevices(s, [invDev({ id: 'i9', imei: 'IMEI-9', item: 'iPhone 15 Pro' })]);
+    const iphone = devices.find(d => d.imei === 'IMEI-9');
+    expect(iphone).toBeTruthy();
+    expect(iphone!.events.length).toBe(2); // purchase + repair on the same device
+  });
+});
+
+describe('filters + sort + deep search', () => {
+  const c = cust({ id: 'c1', phone: '555', tags: ['VIP'] });
+  const s = customerStats(c, { salesTransactions: [], repairs: [rep({ customerId: 'c1', status: 'in_repair', repairPrice: 100 })], batches: [] });
+  it('filters by open repairs / vip / balance', () => {
+    expect(passesFilter('open_repairs', s)).toBe(true);
+    expect(passesFilter('vip', s)).toBe(true);
+    expect(passesFilter('balance', s)).toBe(true);
+    expect(passesFilter('warranty', s)).toBe(false);
+  });
+  it('deep search matches a linked repair number and sku', () => {
+    const st = customerStats(c, {
+      salesTransactions: [tx({ customerId: 'c1', lines: [{ kind: 'device', sku: 'ABC-123', name: 'Pixel', quantity: 1, unitPrice: 1 } as any] })],
+      repairs: [rep({ customerId: 'c1', repairNumber: 'RPR-000777' })],
+      batches: [],
+    });
+    expect(customerSearchMatch(c, st, 'RPR-000777')).toBe(true);
+    expect(customerSearchMatch(c, st, 'abc-123')).toBe(true);
+    expect(customerSearchMatch(c, st, 'nomatch')).toBe(false);
+  });
+  it('sorts by repairs count desc', () => {
+    const rows = [
+      { c: cust({ id: 'a' }), s: customerStats(cust({ id: 'a' }), { salesTransactions: [], repairs: [], batches: [] }) },
+      { c, s },
+    ];
+    expect(sortCustomers(rows, 'repairs')[0].c.id).toBe('c1');
+  });
+});
+
+describe('duplicate detection + merge', () => {
+  it('groups customers sharing a normalized phone', () => {
+    const a = cust({ id: 'a', phone: '(555) 111-2222' });
+    const b = cust({ id: 'b', phone: '5551112222', name: 'Dupe' });
+    const groups = findDuplicateGroups([a, b, cust({ id: 'c', phone: '999' })]);
+    expect(groups.length).toBe(1);
+    expect(groups[0].customers.map(x => x.id).sort()).toEqual(['a', 'b']);
+    expect(normPhone('(555) 111-2222')).toBe('5551112222');
+  });
+
+  it('planMerge relinks records and removes the duplicate', () => {
+    const a = cust({ id: 'a', phone: '555', tags: ['VIP'], email: '' });
+    const b = cust({ id: 'b', phone: '555', tags: ['Student'], email: 'b@x.com' });
+    const data = {
+      salesTransactions: [tx({ id: 't1', customerId: 'b', totalPaid: 10 })],
+      repairs: [rep({ id: 'r1', customerId: 'b' })],
+      batches: [],
+    };
+    const plan = planMerge(a, [b], data);
+    expect(plan.removeIds).toEqual(['b']);
+    expect(plan.reassignSales).toEqual(['t1']);
+    expect(plan.reassignRepairs).toEqual(['r1']);
+    expect(plan.customer.email).toBe('b@x.com');           // enriched from dup
+    expect(plan.customer.tags!.sort()).toEqual(['Student', 'VIP']); // unioned
+  });
+});
