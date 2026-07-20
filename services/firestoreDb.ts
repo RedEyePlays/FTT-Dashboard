@@ -7,6 +7,7 @@ import {
   AppUser, WorkspaceInvite, AuditEntry,
 } from '../types';
 import { collectionFor } from '../domain/inventory';
+import { AppSettings } from '../domain/settings';
 
 // Shared shop data lives under user_data/{workspaceId}/<collection>, where
 // workspaceId is the owning account's uid. The `wsId` arg below is that id.
@@ -40,11 +41,15 @@ export function subscribeCollection<T extends { id: string }>(
     onError);
 }
 
-export interface AppMeta { notes?: Note[]; tasks?: Task[]; skuCounters?: Record<string, number>; lastBackup?: number; }
+export interface AppMeta { notes?: Note[]; tasks?: Task[]; skuCounters?: Record<string, number>; lastBackup?: number; settings?: Partial<AppSettings>; }
 export function subscribeMeta(uid: string, cb: (m: AppMeta) => void, onError: (e: Error) => void) {
   return onSnapshot(metaRef(uid), snap => cb((snap.data() as AppMeta) || {}), onError);
 }
 export const saveMeta = (uid: string, meta: Partial<AppMeta>) => setDoc(metaRef(uid), clean(meta), { merge: true });
+
+// Owner-configurable business settings, stored on the workspace meta doc. Written
+// whole (not merged field-by-field) so removing a list entry actually deletes it.
+export const saveSettings = (uid: string, settings: AppSettings) => setDoc(metaRef(uid), clean({ settings }), { merge: true });
 
 export const saveItem = (uid: string, name: CollName, item: { id: string } & Record<string, any>) =>
   setDoc(docRef(uid, name, item.id), clean(item));

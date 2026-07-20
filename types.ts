@@ -265,7 +265,7 @@ export interface AppData {
   activityLog?: ActivityEntry[];
 }
 
-export type ViewState = 'dashboard' | 'analytics' | 'entry' | 'edit' | 'grid' | 'notes' | 'ai' | 'pos' | 'dropoff' | 'repairs' | 'customers' | 'users' | 'audit';
+export type ViewState = 'dashboard' | 'analytics' | 'entry' | 'edit' | 'grid' | 'notes' | 'ai' | 'pos' | 'dropoff' | 'repairs' | 'customers' | 'users' | 'audit' | 'settings';
 
 // --- Repairs ---
 export type RepairType = 'retail' | 'wholesale';

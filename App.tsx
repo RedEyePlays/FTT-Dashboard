@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Dashboard } from './components/Dashboard';
 import { OwnerAnalytics } from './components/OwnerAnalytics';
 import { DataEntryForm } from './components/DataEntryForm';
@@ -8,6 +8,8 @@ import { BulkEntryModal } from './components/BulkEntryModal';
 import { AuthScreen } from './components/AuthScreen';
 import { NotesBoard } from './components/NotesBoard';
 import { SettingsModal } from './components/SettingsModal';
+import { SettingsView } from './components/SettingsView';
+import { BackupPanel } from './components/BackupPanel';
 import { CalculatorTool } from './components/CalculatorTool';
 import { AIChatView } from './components/AIChatView';
 import { QuickSaleView } from './components/QuickSaleView';
@@ -33,8 +35,9 @@ import {
   saveMeta, saveItem, deleteItem, syncArray,
   logActivityDoc, commitSale, seedSampleData,
   updateUserDoc, setInvite, deleteInvite,
-  logAudit, exportWorkspaceData, recordBackup,
+  logAudit, exportWorkspaceData, recordBackup, saveSettings,
 } from './services/firestoreDb';
+import { AppSettings } from './domain/settings';
 import { useWorkspaceData } from './hooks/useWorkspaceData';
 import { newId, mkActivity } from './domain/ids';
 import { collectionFor, decrementStock } from './domain/inventory';
@@ -47,6 +50,7 @@ const PAGE_TITLES: Record<ViewState, string> = {
   dashboard: 'Dashboard', analytics: 'Analytics', entry: 'Add Item', edit: 'Edit Item',
   grid: 'Inventory', notes: 'Notes', ai: 'AI Assistant', pos: 'Checkout', dropoff: 'Drop-Offs',
   repairs: 'Repairs', customers: 'Customers', users: 'Users', audit: 'Audit Log',
+  settings: 'Settings',
 };
 import { LoadingScreen, DbErrorScreen } from './components/StatusScreens';
 
@@ -57,7 +61,7 @@ const App: React.FC = () => {
     appUser, roleLoading, workspaceId, workspaceUsers, invites, auditLogs,
     data, notes, setNotes, tasks, setTasks,
     runners, dropOffs, settlements, salesTransactions, customers, repairs, repairBatches,
-    skuCounters, setSkuCounters, activityLog, lastBackup,
+    skuCounters, setSkuCounters, activityLog, lastBackup, settings,
     dbLoading, dbError, reconnect,
     runnersRef, dropOffsRef, settlementsRef, customersRef, salesTransactionsRef,
     repairsRef, repairBatchesRef, skuRef, dataRef,
@@ -146,6 +150,44 @@ const App: React.FC = () => {
       localStorage.setItem('bizTrackTheme', 'light');
     }
   }, [darkMode]);
+
+  // Apply the workspace theme preference. 'system' follows the OS setting live;
+  // 'light'/'dark' pin it. The header toggle still works within a session.
+  useEffect(() => {
+    const t = settings.appearance.theme;
+    if (t === 'system') {
+      if (typeof window === 'undefined' || !window.matchMedia) return;
+      const mq = window.matchMedia('(prefers-color-scheme: dark)');
+      setDarkMode(mq.matches);
+      const handler = (e: MediaQueryListEvent) => setDarkMode(e.matches);
+      mq.addEventListener('change', handler);
+      return () => mq.removeEventListener('change', handler);
+    }
+    setDarkMode(t === 'dark');
+  }, [settings.appearance.theme]);
+
+  // Apply the configured default landing page once, on first load.
+  const landingAppliedRef = useRef(false);
+  useEffect(() => {
+    if (landingAppliedRef.current || !appUser || dbLoading) return;
+    landingAppliedRef.current = true;
+    const lv = settings.dashboard.landingView;
+    if (lv && lv !== 'dashboard' && lv !== 'entry' && lv !== 'edit') setView(lv);
+  }, [appUser, dbLoading, settings.dashboard.landingView]);
+
+  // Persist owner settings to Firestore, and mirror the few values that other
+  // components read from localStorage (POS tax rate, default label template).
+  const handleSaveSettings = async (next: AppSettings) => {
+    if (!uid || !allow('settings.manage')) return;
+    await saveSettings(uid, next);
+    audit('settings.update', 'settings', 'app');
+    logActivity('Settings updated');
+    try {
+      localStorage.setItem('posSettings', JSON.stringify({ taxRate: next.tax.percent }));
+      const prevTpl = JSON.parse(localStorage.getItem('ftt_label_tpl_v1') || '{}');
+      localStorage.setItem('ftt_label_tpl_v1', JSON.stringify({ ...prevTpl, template: next.labels.defaultSize }));
+    } catch { /* ignore */ }
+  };
 
   // --- Inventory writes go straight to Firestore; live subs update the UI ---
   const handleSaveItem = (item: InventoryItem) => {
@@ -538,7 +580,7 @@ const App: React.FC = () => {
         showCalculator={showCalculator}
         onToggleCalculator={() => setShowCalculator(!showCalculator)}
         onOpenFinder={() => setShowFinder(true)}
-        onOpenSettings={() => setShowSettingsModal(true)}
+        onOpenSettings={() => setView('settings')}
         onOpenBulk={() => setShowBulkModal(true)}
         onStartAdd={handleStartAdd}
         onLock={handleLock}
@@ -556,7 +598,7 @@ const App: React.FC = () => {
         darkMode={darkMode}
         onToggleTheme={() => setDarkMode(!darkMode)}
         onOpenFinder={() => setShowFinder(true)}
-        onOpenSettings={() => setShowSettingsModal(true)}
+        onOpenSettings={() => setView('settings')}
         onOpenBulk={() => setShowBulkModal(true)}
         onLock={handleLock}
       />
@@ -682,6 +724,28 @@ const App: React.FC = () => {
           )}
           {view === 'audit' && allow('audit.view') && (
             <AuditLogView logs={auditLogs} users={workspaceUsers} />
+          )}
+          {view === 'settings' && (
+            <SettingsView
+              settings={settings}
+              onSave={handleSaveSettings}
+              canManage={allow('settings.manage')}
+              role={appUser.role}
+              backupSlot={
+                <div className="space-y-3">
+                  {allow('backup.export') && (
+                    <BackupPanel lastBackup={lastBackup} onExportJson={handleExportJson} onExportCsv={handleExportCsv} />
+                  )}
+                  {allow('settings.manage') && (
+                    <button
+                      onClick={() => setShowSettingsModal(true)}
+                      className="w-full flex items-center justify-center gap-2 py-2.5 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg text-sm font-medium">
+                      Restore or import a backup…
+                    </button>
+                  )}
+                </div>
+              }
+            />
           )}
         </div>
       </main>
