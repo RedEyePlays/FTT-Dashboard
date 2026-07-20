@@ -8,12 +8,15 @@ import {
 import { InventoryItem, Runner, ItemKind, DeviceType, DeviceStatus, ActivityEntry, AuditEntry } from '../types';
 import { ItemFormModal } from './ItemFormModal';
 import { LabelModal } from './LabelModal';
+import { useIsMobile } from '../hooks/useMediaQuery';
+import { ResponsiveDialog, EmptyState } from './responsive';
 
 interface Props {
   inventory: InventoryItem[];
   runners: Runner[];
   activity: ActivityEntry[];
   auditLogs?: AuditEntry[]; // display-only, for the per-row Audit Log popover
+  canViewCost?: boolean;    // owner/authorized — show purchase cost on mobile cards
   onSave: (item: InventoryItem) => void;
   onUpdate: (id: string, field: keyof InventoryItem, value: any) => void;
   onDelete: (id: string) => void;
@@ -144,7 +147,10 @@ const parseCSV = (text: string): Record<string, string>[] => {
   return rows.filter(r => r.some(x => x !== '')).map(r => Object.fromEntries(header.map((h, i) => [h.trim(), r[i] ?? ''])));
 };
 
-export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, auditLogs = [], onSave, onUpdate, onDelete, onGenerateSku, onSeed }) => {
+export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, auditLogs = [], canViewCost = false, onSave, onUpdate, onDelete, onGenerateSku, onSeed }) => {
+  const isMobile = useIsMobile();
+  const [selectMode, setSelectMode] = useState(false); // mobile multi-select
+  const [mobileFilter, setMobileFilter] = useState(false);
   const [tab, setTab] = useState<Tab>('all');
   const [historyItem, setHistoryItem] = useState<{ item: InventoryItem; mode: 'history' | 'audit' } | null>(null);
   const [query, setQuery] = useState('');
@@ -217,6 +223,14 @@ export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, a
   const soldDevices = devices.filter(isSold);
   const lowAccessories = accessories.filter(isLow);
   const lowAll = useMemo(() => inventory.filter(isLow), [inventory]);
+
+  // Card sections for the mobile layout (mirrors the desktop sheets per tab).
+  const mobileSections = useMemo(() => {
+    const secs: { title: string; rows: InventoryItem[] }[] = [];
+    if (tab === 'all' || tab === 'devices' || tab === 'sold') secs.push({ title: tab === 'sold' ? 'Sold Devices' : 'Devices', rows: tab === 'sold' ? soldDevices : devices });
+    if (tab === 'all' || tab === 'accessories' || tab === 'lowstock') secs.push({ title: tab === 'lowstock' ? 'Low Stock Accessories' : 'Accessories', rows: tab === 'lowstock' ? lowAccessories : accessories });
+    return secs;
+  }, [tab, devices, accessories, soldDevices, lowAccessories]);
 
   // --- actions ---
   const addDeviceRow = () => {
@@ -339,10 +353,13 @@ export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, a
           <span className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1 text-[11px] text-slate-400"><ScanLine className="w-3.5 h-3.5" /> scanner ready</span>
         </div>
 
-        {/* Filter */}
+        {/* Mobile: selection-mode toggle */}
+        <button onClick={() => { setSelectMode(m => !m); setSelected(new Set()); }} className="md:hidden flex items-center gap-2 px-3 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-700 dark:text-slate-200"><CheckSquare className="w-4 h-4" /> {selectMode ? 'Done' : 'Select'}</button>
+
+        {/* Filter (dropdown on desktop, bottom sheet on mobile) */}
         <div className="relative" onClick={e => e.stopPropagation()}>
-          <button onClick={() => setMenu(menu === 'filter' ? null : 'filter')} className="flex items-center gap-2 px-3 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-700 dark:text-slate-200 hover:border-indigo-400"><SlidersHorizontal className="w-4 h-4" /> Filters{statusFilter !== 'all' && <span className="w-2 h-2 rounded-full bg-indigo-500" />}</button>
-          {menu === 'filter' && (
+          <button onClick={() => (isMobile ? setMobileFilter(true) : setMenu(menu === 'filter' ? null : 'filter'))} className="flex items-center gap-2 px-3 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-700 dark:text-slate-200 hover:border-indigo-400"><SlidersHorizontal className="w-4 h-4" /> Filters{statusFilter !== 'all' && <span className="w-2 h-2 rounded-full bg-indigo-500" />}</button>
+          {menu === 'filter' && !isMobile && (
             <div className="absolute right-0 mt-1 w-56 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shadow-lg z-30 p-3">
               <p className="text-xs font-semibold text-slate-500 mb-1">Device Status</p>
               <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="w-full p-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md text-sm">
@@ -353,8 +370,8 @@ export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, a
           )}
         </div>
 
-        {/* Columns */}
-        <div className="relative" onClick={e => e.stopPropagation()}>
+        {/* Columns (desktop table only) */}
+        <div className="relative hidden md:block" onClick={e => e.stopPropagation()}>
           <button onClick={() => setMenu(menu === 'cols' ? null : 'cols')} className="flex items-center gap-2 px-3 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-700 dark:text-slate-200 hover:border-indigo-400"><Columns3 className="w-4 h-4" /> Columns</button>
           {menu === 'cols' && (
             <div className="absolute right-0 mt-1 w-64 max-h-80 overflow-y-auto bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shadow-lg z-30 p-3 space-y-2">
@@ -372,8 +389,8 @@ export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, a
           )}
         </div>
 
-        {/* Saved views */}
-        <div className="relative" onClick={e => e.stopPropagation()}>
+        {/* Saved views (desktop) */}
+        <div className="relative hidden md:block" onClick={e => e.stopPropagation()}>
           <button onClick={() => setMenu(menu === 'views' ? null : 'views')} className="flex items-center gap-2 px-3 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-700 dark:text-slate-200 hover:border-indigo-400"><Bookmark className="w-4 h-4" /> Views</button>
           {menu === 'views' && (
             <div className="absolute right-0 mt-1 w-56 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shadow-lg z-30 p-2">
@@ -389,12 +406,12 @@ export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, a
           )}
         </div>
 
-        <button onClick={exportAll} title="Export CSV" className="flex items-center gap-2 px-3 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-700 dark:text-slate-200 hover:border-indigo-400"><Download className="w-4 h-4" /></button>
-        <button onClick={() => fileRef.current?.click()} title="Import CSV" className="flex items-center gap-2 px-3 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-700 dark:text-slate-200 hover:border-indigo-400"><Upload className="w-4 h-4" /></button>
+        <button onClick={exportAll} title="Export CSV" className="hidden md:flex items-center gap-2 px-3 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-700 dark:text-slate-200 hover:border-indigo-400"><Download className="w-4 h-4" /></button>
+        <button onClick={() => fileRef.current?.click()} title="Import CSV" className="hidden md:flex items-center gap-2 px-3 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-700 dark:text-slate-200 hover:border-indigo-400"><Upload className="w-4 h-4" /></button>
         <input ref={fileRef} type="file" accept=".csv" className="hidden" onChange={e => e.target.files?.[0] && importCSV(e.target.files[0])} />
 
-        <button onClick={addDeviceRow} className="flex items-center gap-2 px-3 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium"><Smartphone className="w-4 h-4" /> Add Device</button>
-        <button onClick={addAccessoryRow} className="flex items-center gap-2 px-3 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-lg text-sm font-medium hover:border-indigo-400"><Package className="w-4 h-4" /> Add Accessory</button>
+        <button onClick={addDeviceRow} className="flex items-center gap-2 px-3 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium"><Smartphone className="w-4 h-4" /> <span className="hidden sm:inline">Add Device</span></button>
+        <button onClick={addAccessoryRow} className="hidden sm:flex items-center gap-2 px-3 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-lg text-sm font-medium hover:border-indigo-400"><Package className="w-4 h-4" /> Add Accessory</button>
       </div>
 
       {/* Tabs */}
@@ -406,9 +423,9 @@ export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, a
         {tabBtn('lowstock', 'Low Stock', counts.lowstock)}
       </div>
 
-      {/* Bulk action bar */}
+      {/* Bulk action bar (desktop) */}
       {selected.size > 0 && (
-        <div className="flex items-center gap-2 flex-wrap bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800 rounded-lg px-3 py-2">
+        <div className="hidden md:flex items-center gap-2 flex-wrap bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800 rounded-lg px-3 py-2">
           <span className="text-sm font-medium text-indigo-700 dark:text-indigo-300">{selected.size} selected</span>
           <select onChange={e => { if (e.target.value) { bulkStatus(e.target.value as DeviceStatus); e.target.value = ''; } }} className="text-sm bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md px-2 py-1">
             <option value="">Set status…</option>
@@ -420,8 +437,43 @@ export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, a
         </div>
       )}
 
-      {/* Sheets + side panels */}
-      <div className="flex-1 flex flex-col xl:flex-row gap-4 overflow-hidden">
+      {/* Mobile: inventory cards (desktop table preserved below via md: gating) */}
+      {isMobile && (
+        <div className="flex flex-col gap-4 pb-24">
+          {mobileSections.length === 0 && <EmptyState icon={<Boxes className="w-6 h-6" />} title="Nothing here" hint="Try a different tab, search, or filter." />}
+          {mobileSections.map(sec => (
+            <div key={sec.title}>
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-2 px-0.5">{sec.title} <span className="text-slate-400">{sec.rows.length}</span></h3>
+              {sec.rows.length === 0 ? <p className="text-sm text-slate-400 py-4 text-center">None.</p> : (
+                <div className="flex flex-col gap-2">
+                  {sec.rows.map(i => (
+                    <InvCard key={i.id} item={i} canViewCost={canViewCost} selectMode={selectMode} selected={selected.has(i.id)}
+                      onToggleSel={() => toggleSel(i.id)} onOpen={() => setExpandItem(i)} onLabel={() => setLabelItem(i)}
+                      onUpdate={onUpdate} onDelete={onDelete} onDuplicate={duplicate} onHistory={mode => setHistoryItem({ item: i, mode })} />
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Mobile: bottom bulk action bar (selection mode) */}
+      {isMobile && selectMode && selected.size > 0 && (
+        <div className="md:hidden fixed left-0 right-0 bottom-14 z-40 bg-white/95 dark:bg-slate-900/95 backdrop-blur border-t border-slate-200 dark:border-slate-800 px-3 py-2 flex items-center gap-2 safe-b">
+          <span className="text-sm font-medium text-indigo-700 dark:text-indigo-300">{selected.size}</span>
+          <select onChange={e => { if (e.target.value) { bulkStatus(e.target.value as DeviceStatus); e.target.value = ''; } }} className="text-sm bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md px-2 py-1.5 flex-1">
+            <option value="">Set status…</option>
+            {STATUS_OPTS.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+          </select>
+          <button onClick={() => exportCSV(inventory.filter(i => selected.has(i.id)), [...DEVICE_COLS, ...ACCESSORY_COLS], 'selection')} aria-label="Export selection" className="tap-target flex items-center justify-center rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300"><Download className="w-4 h-4" /></button>
+          <button onClick={bulkDelete} aria-label="Delete selection" className="tap-target flex items-center justify-center rounded-md bg-rose-50 text-rose-600 dark:bg-rose-900/30 dark:text-rose-300"><Trash2 className="w-4 h-4" /></button>
+          <button onClick={() => setSelected(new Set())} className="text-sm px-2 py-1 rounded-md text-slate-500">Clear</button>
+        </div>
+      )}
+
+      {/* Sheets + side panels (desktop/tablet) */}
+      <div className="hidden md:flex flex-1 flex-col xl:flex-row gap-4 overflow-hidden">
         <div className="flex-1 flex flex-col gap-6 overflow-auto min-w-0">
           {(tab === 'all' || tab === 'devices' || tab === 'sold') && (
             <Sheet title={tab === 'sold' ? 'Sold Devices' : 'Devices'} cols={visCols('device', DEVICE_COLS)} rows={tab === 'sold' ? soldDevices : devices}
@@ -455,6 +507,38 @@ export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, a
           </div>
         </div>
       </div>
+
+      {/* Mobile filter + sort sheet */}
+      <ResponsiveDialog open={mobileFilter} onClose={() => setMobileFilter(false)} title="Filters & sort"
+        footer={<button onClick={() => setMobileFilter(false)} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium">Done</button>}>
+        <div className="space-y-4">
+          <div>
+            <p className="text-xs font-semibold text-slate-500 mb-1">Device Status</p>
+            <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="w-full p-2.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm">
+              <option value="all">All statuses</option>
+              {STATUS_OPTS.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+            </select>
+          </div>
+          <div>
+            <p className="text-xs font-semibold text-slate-500 mb-1">Sort by</p>
+            <select value={sort ? `${sort.key}:${sort.dir}` : ''} onChange={e => { const v = e.target.value; setSort(v ? { key: v.split(':')[0], dir: v.split(':')[1] as 'asc' | 'desc' } : null); }}
+              className="w-full p-2.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm">
+              <option value="">Newest first (default)</option>
+              <option value="item:asc">Name A–Z</option>
+              <option value="item:desc">Name Z–A</option>
+              <option value="salePrice:desc">Sale price high–low</option>
+              <option value="salePrice:asc">Sale price low–high</option>
+            </select>
+          </div>
+          <div>
+            <p className="text-xs font-semibold text-slate-500 mb-1">Add</p>
+            <div className="flex gap-2">
+              <button onClick={() => { addDeviceRow(); setMobileFilter(false); }} className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium"><Smartphone className="w-4 h-4" /> Device</button>
+              <button onClick={() => { addAccessoryRow(); setMobileFilter(false); }} className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-lg text-sm font-medium"><Package className="w-4 h-4" /> Accessory</button>
+            </div>
+          </div>
+        </div>
+      </ResponsiveDialog>
 
       {expandItem && <ItemFormModal initial={expandItem} runners={runners} onSave={onSave} onGenerateSku={onGenerateSku} onClose={() => setExpandItem(null)} />}
       {labelItem && <LabelModal item={labelItem} onClose={() => setLabelItem(null)} />}
@@ -693,5 +777,97 @@ const BrandModelPopover: React.FC<{ item: InventoryItem; x: number; y: number; o
         <div className="flex justify-end"><button onClick={onClose} className="text-xs px-3 py-1 rounded-md bg-indigo-600 hover:bg-indigo-700 text-white font-medium">Done</button></div>
       </div>
     </>
+  );
+};
+
+/* ---------------- Mobile inventory card ---------------- */
+const salePriceOf = (i: InventoryItem) => kindOf(i) === 'device' ? (i.salePrice || i.targetSalePrice || 0) : (i.sellingPrice || 0);
+const costOf = (i: InventoryItem) => kindOf(i) === 'device' ? (i.purchaseCost || 0) : (i.costPerUnit || 0);
+const nameOf = (i: InventoryItem) => i.item || [i.brand, i.model].filter(Boolean).join(' ') || i.sku || 'Item';
+
+const InvCard: React.FC<{
+  item: InventoryItem;
+  canViewCost: boolean;
+  selectMode: boolean;
+  selected: boolean;
+  onToggleSel: () => void;
+  onOpen: () => void;
+  onLabel: () => void;
+  onUpdate: (id: string, field: keyof InventoryItem, value: any) => void;
+  onDelete: (id: string) => void;
+  onDuplicate: (i: InventoryItem) => void;
+  onHistory: (mode: 'history' | 'audit') => void;
+}> = ({ item: i, canViewCost, selectMode, selected, onToggleSel, onOpen, onLabel, onUpdate, onDelete, onDuplicate, onHistory }) => {
+  const [menu, setMenu] = useState(false);
+  const isDevice = kindOf(i) === 'device';
+  const copy = (v?: string) => v && navigator.clipboard?.writeText(v).catch(() => {});
+  const tap = () => (selectMode ? onToggleSel() : onOpen());
+
+  const Row: React.FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => (
+    <div className="flex items-center justify-between gap-3 py-0.5"><span className="text-xs text-slate-400 shrink-0">{label}</span><span className="text-sm text-slate-700 dark:text-slate-200 truncate text-right">{children}</span></div>
+  );
+
+  return (
+    <div className={`relative bg-white dark:bg-slate-900 border rounded-xl p-3 ${selected ? 'border-indigo-400 ring-1 ring-indigo-400' : 'border-slate-200 dark:border-slate-700'}`}>
+      <div className="flex items-start gap-2">
+        {selectMode && (
+          <button onClick={onToggleSel} aria-label={selected ? 'Deselect' : 'Select'} className="tap-target flex items-center justify-center -ml-1 text-indigo-600">
+            {selected ? <CheckSquare className="w-5 h-5" /> : <Square className="w-5 h-5 text-slate-300" />}
+          </button>
+        )}
+        <button onClick={tap} className="text-left min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-semibold text-slate-800 dark:text-slate-100 truncate">{nameOf(i)}</span>
+            {isDevice
+              ? <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${STATUS_CELL[(i.deviceStatus as DeviceStatus) || 'ready']}`}>{STATUS_SHORT[(i.deviceStatus as DeviceStatus) || 'ready']}</span>
+              : (i.quantity ?? 0) <= (i.lowStockThreshold ?? 0) && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300">Low · {i.quantity ?? 0}</span>}
+          </div>
+        </button>
+        <div className="flex items-center gap-0.5 shrink-0">
+          <button onClick={onLabel} aria-label="Print label" title="Print label" className="tap-target flex items-center justify-center text-slate-400 hover:text-indigo-600"><Printer className="w-4 h-4" /></button>
+          <button onClick={() => setMenu(m => !m)} aria-label="More actions" className="tap-target flex items-center justify-center text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"><MoreVertical className="w-5 h-5" /></button>
+        </div>
+      </div>
+
+      <button onClick={tap} className="w-full text-left mt-2 block">
+        {(i.brand || i.model) && <Row label="Brand / Model">{[i.brand, i.model].filter(Boolean).join(' ') || '—'}</Row>}
+        <Row label="SKU"><span className="font-mono">{i.sku || '—'}</span></Row>
+        {isDevice && i.imei && <Row label="IMEI / Serial"><span className="font-mono">{i.imei}</span></Row>}
+        {isDevice && (i.storage || i.color) && <Row label="Storage / Color">{[i.storage, i.color].filter(Boolean).join(' · ') || '—'}</Row>}
+        <Row label="Sale price"><span className="font-semibold">{money(salePriceOf(i))}</span></Row>
+        {canViewCost && <Row label="Purchase cost">{money(costOf(i))}</Row>}
+        <Row label="Date added">{i.date || '—'}</Row>
+      </button>
+
+      {/* Quick status change (devices) */}
+      {isDevice && !selectMode && (
+        <div className="mt-2">
+          <select value={(i.deviceStatus as any) ?? 'ready'} onChange={e => onUpdate(i.id, 'deviceStatus', e.target.value)}
+            className={`w-full appearance-none cursor-pointer rounded-lg px-2.5 py-2 text-xs font-semibold outline-none ${STATUS_CELL[(i.deviceStatus as DeviceStatus) || 'ready']}`}>
+            {STATUS_OPTS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+        </div>
+      )}
+
+      {menu && (
+        <>
+          <div className="fixed inset-0 z-20" onClick={() => setMenu(false)} />
+          <div className="absolute right-2 top-11 z-30 w-52 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shadow-lg py-1 text-sm">
+            {[
+              { icon: <Pencil className="w-4 h-4" />, label: 'Open / Edit', run: onOpen },
+              { icon: <QrCode className="w-4 h-4" />, label: 'Print Label', run: onLabel },
+              { icon: <Copy className="w-4 h-4" />, label: 'Copy SKU', run: () => copy(i.sku) },
+              ...(isDevice && i.imei ? [{ icon: <Copy className="w-4 h-4" />, label: 'Copy IMEI/Serial', run: () => copy(i.imei) }] : []),
+              { icon: <Copy className="w-4 h-4" />, label: 'Duplicate', run: () => onDuplicate(i) },
+              { icon: <History className="w-4 h-4" />, label: 'View History', run: () => onHistory('history') },
+              { icon: <ScrollText className="w-4 h-4" />, label: 'Audit Log', run: () => onHistory('audit') },
+              { icon: <Trash2 className="w-4 h-4" />, label: 'Delete', run: () => onDelete(i.id), danger: true },
+            ].map((a, idx) => (
+              <button key={idx} onClick={() => { a.run(); setMenu(false); }} className={`w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-slate-100 dark:hover:bg-slate-800 ${(a as any).danger ? 'text-rose-600' : 'text-slate-700 dark:text-slate-200'}`}>{a.icon}{a.label}</button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
   );
 };

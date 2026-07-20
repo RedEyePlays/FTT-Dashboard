@@ -53,9 +53,12 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
         </span>
       </div>
 
-      {/* Mobile header actions: theme + hamburger (opens the nav drawer). */}
+      {/* Mobile header actions: search + theme + hamburger (opens the nav drawer). */}
       {!isTech && (
         <div className="flex md:hidden items-center gap-1">
+          <button onClick={onOpenFinder} aria-label="Search" className="tap-target flex items-center justify-center text-slate-500 dark:text-slate-400 rounded-lg">
+            <Search className="w-5 h-5" />
+          </button>
           <button onClick={onToggleTheme} aria-label="Toggle theme" className="tap-target flex items-center justify-center text-slate-500 dark:text-slate-400 rounded-lg">
             {darkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
           </button>
@@ -107,8 +110,11 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
 
         <span className="hidden lg:inline text-xs text-slate-400 mr-1" title={userEmail}>{userEmail.split('@')[0]} · {userRole}</span>
 
-        <button onClick={onOpenFinder} className="p-2 text-slate-500 hover:text-indigo-600 dark:text-slate-400 dark:hover:text-indigo-400 rounded-lg hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-colors" title="Find item (Finder)">
+        <button onClick={onOpenFinder} title="Search (Ctrl/Cmd + K)" aria-label="Open global search"
+          className="flex items-center gap-2 pl-2.5 pr-2 py-1.5 text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-slate-700 rounded-lg hover:border-indigo-400 transition-colors">
           <Search className="w-4 h-4" />
+          <span className="hidden lg:inline text-xs">Search</span>
+          <kbd className="hidden lg:inline text-[10px] border border-slate-200 dark:border-slate-700 rounded px-1 py-0.5">⌘K</kbd>
         </button>
 
         <button onClick={onToggleTheme} className="p-2 text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors" title="Toggle Theme">
