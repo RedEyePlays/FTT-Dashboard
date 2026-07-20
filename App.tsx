@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Dashboard } from './components/Dashboard';
 import { OwnerAnalytics } from './components/OwnerAnalytics';
 import { DataEntryForm } from './components/DataEntryForm';
@@ -12,7 +12,8 @@ import { CalculatorTool } from './components/CalculatorTool';
 import { AIChatView } from './components/AIChatView';
 import { QuickSaleView } from './components/QuickSaleView';
 import type { CartCheckout } from './components/CartSaleView';
-import { FinderModal } from './components/FinderModal';
+import { GlobalSearch } from './components/GlobalSearch';
+import { SearchData, SearchResult, SearchPage } from './domain/search';
 import { DropOffView } from './components/DropOffView';
 import { InventoryView } from './components/InventoryView';
 import { UsersView } from './components/UsersView';
@@ -68,6 +69,9 @@ const App: React.FC = () => {
   // A customer to pre-seed the POS / Repairs view with (from a CRM quick action).
   const [prefillCustomer, setPrefillCustomer] = useState<Customer | undefined>(undefined);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  // Deep-link targets from Global Search (open a specific record on the target view).
+  const [focusRepairId, setFocusRepairId] = useState<string | undefined>(undefined);
+  const [focusCustomerId, setFocusCustomerId] = useState<string | undefined>(undefined);
 
   // AI Chat State (Shared between Sidebar and Tab)
   const [aiMessages, setAiMessages] = useState<ChatMessage[]>([{
@@ -127,6 +131,49 @@ const App: React.FC = () => {
     logAudit(uid, { id: newId(), ts: Date.now(), userId: appUser.id, userEmail: appUser.email, action, entityType, entityId, before, after }).catch(() => {});
   };
 
+  // --- Global Search: permission-scoped data (empty categories = no results) ---
+  const canAnalytics = (appUser?.role === 'owner' || appUser?.role === 'manager') && allow('reports.profit');
+  const searchPages: SearchPage[] = useMemo(() => {
+    const p: SearchPage[] = [{ id: 'dashboard', label: 'Dashboard', keywords: 'home overview', view: 'dashboard' }];
+    if (canAnalytics) p.push({ id: 'analytics', label: 'Analytics', keywords: 'reports owner profit', view: 'analytics' });
+    p.push({ id: 'grid', label: 'Inventory', keywords: 'stock devices accessories', view: 'grid' });
+    p.push({ id: 'pos', label: 'Checkout', keywords: 'sell quick sale pos sales', view: 'pos' });
+    if (allow('repairs.tech')) p.push({ id: 'repairs', label: 'Repairs', keywords: 'tickets', view: 'repairs' });
+    if (allow('reports.view')) p.push({ id: 'customers', label: 'Customers', keywords: 'crm clients', view: 'customers' });
+    if (allow('dropoffs.manage')) p.push({ id: 'dropoff', label: 'Drop-Offs', view: 'dropoff' });
+    if (allow('audit.view')) p.push({ id: 'audit', label: 'Audit Log', view: 'audit' });
+    if (allow('users.tech')) p.push({ id: 'users', label: 'Users', keywords: 'staff roles permissions', view: 'users' });
+    p.push({ id: 'notes', label: 'Notes', view: 'notes' });
+    p.push({ id: 'ai', label: 'AI Assistant', view: 'ai' });
+    p.push({ id: 'labels', label: 'Labels', keywords: 'print qr barcode', view: 'grid' });
+    p.push({ id: 'settings', label: 'Settings', keywords: 'backup preferences', action: 'settings' });
+    return p;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [appUser?.role, appUser?.allowProfit]);
+
+  const searchData: SearchData = useMemo(() => ({
+    inventory: data,
+    repairs: allow('repairs.tech') ? repairs : [],
+    batches: [],
+    customers: allow('reports.view') ? customers : [],
+    sales: allow('reports.view') ? salesTransactions : [],
+    users: allow('users.tech') ? workspaceUsers : [],
+    pages: searchPages,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [data, repairs, customers, salesTransactions, workspaceUsers, searchPages, appUser?.role, appUser?.allowProfit]);
+
+  const handleSearchSelect = (r: SearchResult) => {
+    setShowFinder(false);
+    switch (r.type) {
+      case 'page': if (r.action === 'settings') setShowSettingsModal(true); else if (r.view) setView(r.view); break;
+      case 'inventory': { const it = data.find(i => i.id === r.itemId); if (it) { setEditingItem(it); setView('edit'); } break; }
+      case 'repair': setFocusRepairId(r.itemId); setView('repairs'); break;
+      case 'customer': setFocusCustomerId(r.itemId); setView('customers'); break;
+      case 'sale': if (r.customerId) { setFocusCustomerId(r.customerId); setView('customers'); } break;
+      case 'user': setView('users'); break;
+    }
+  };
+
   // Seed sample data into Firestore (demo option only)
   const handleSeedSampleData = async () => {
     if (!uid || !allow('inventory.add')) return;
@@ -135,6 +182,15 @@ const App: React.FC = () => {
     audit('backup.seed', 'inventory');
   };
 
+
+  // Global Search: Cmd/Ctrl+K toggles the command palette.
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); setShowFinder(s => !s); }
+    };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, []);
 
   // THEME HANDLING
   useEffect(() => {
@@ -587,6 +643,8 @@ const App: React.FC = () => {
               auditLogs={auditLogs}
               canViewProfit={allow('reports.profit')}
               canEdit={allow('sales.complete') || allow('repairs.manage')}
+              initialCustomerId={focusCustomerId}
+              onConsumeInitial={() => setFocusCustomerId(undefined)}
               onSaveCustomer={handleSaveCustomer}
               onMergeCustomers={handleMergeCustomers}
               onStartSale={allow('sales.complete') ? startSaleFor : undefined}
@@ -601,7 +659,8 @@ const App: React.FC = () => {
               auditLogs={auditLogs}
               canDelete={appUser.role === 'owner'}
               initialCustomer={prefillCustomer}
-              onConsumeInitial={() => setPrefillCustomer(undefined)}
+              initialRepairId={focusRepairId}
+              onConsumeInitial={() => { setPrefillCustomer(undefined); setFocusRepairId(undefined); }}
               onGenerateRepairNumber={handleGenRepairNumber}
               onGenerateBatchNumber={handleGenBatchNumber}
               onSaveRepair={handleSaveRepair}
@@ -727,16 +786,13 @@ const App: React.FC = () => {
          />
       )}
 
-      {showFinder && (
-        <FinderModal
-          inventory={data}
-          repairs={allow('repairs.manage') ? repairs : []}
-          batches={allow('repairs.manage') ? repairBatches : []}
-          onClose={() => setShowFinder(false)}
-          onEdit={item => { setEditingItem(item); setView('edit'); }}
-          onOpenRepairs={() => setView('repairs')}
-        />
-      )}
+      <GlobalSearch
+        open={showFinder}
+        onClose={() => setShowFinder(false)}
+        data={searchData}
+        canViewCost={allow('reports.profit')}
+        onSelect={handleSearchSelect}
+      />
     </div>
   );
 };
