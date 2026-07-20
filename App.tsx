@@ -625,6 +625,7 @@ const App: React.FC = () => {
               runners={runners}
               activity={activityLog}
               auditLogs={auditLogs}
+              canViewCost={allow('reports.profit')}
               onSave={handleSaveInventoryItem}
               onUpdate={handleUpdateItem}
               onDelete={handleDeleteItem}
