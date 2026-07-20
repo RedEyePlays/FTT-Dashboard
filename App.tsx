@@ -19,8 +19,9 @@ import { UsersView } from './components/UsersView';
 import { AuditLogView } from './components/AuditLogView';
 import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, Runner, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission, Repair, RepairBatch } from './types';
 import { skuPrefix, nextSku } from './services/sku';
-import { REPAIR_PREFIX, BATCH_PREFIX, computeWarrantyUntil } from './domain/repairs';
+import { REPAIR_PREFIX, BATCH_PREFIX, computeWarrantyUntil, applyTechEdit, TECH_EDITABLE_FIELDS } from './domain/repairs';
 import { RepairsView } from './components/RepairsView';
+import { TechRepairsView } from './components/TechRepairsView';
 import { CustomersView } from './components/CustomersView';
 import { can } from './services/rbac';
 import { downloadJson, toCSV, triggerDownload } from './services/backup';
@@ -256,15 +257,23 @@ const App: React.FC = () => {
   const saveDropOffs = (d: DropOff[]) => { if (uid && allow('dropoffs.manage')) { syncArray(uid, 'dropOffs', d, dropOffsRef.current); audit('dropoff.edit', 'dropOff'); } };
   const saveSettlements = (s: Settlement[]) => { if (uid && allow('dropoffs.manage')) { syncArray(uid, 'settlements', s, settlementsRef.current); audit('dropoff.settle', 'settlement'); } };
 
-  // --- Users / roles management (Owner only) ---
+  // --- Users / roles management ---
+  // Owners manage everyone (users.manage). Managers (users.tech) may manage only
+  // technician accounts. A manager acting on a non-technician is a no-op here and
+  // is also blocked by firestore.rules.
+  const targetRoleOf = (targetUid: string): Role | undefined => workspaceUsers.find(u => u.id === targetUid)?.role;
+  const canActOnUser = (role: Role | undefined): boolean =>
+    allow('users.manage') || (allow('users.tech') && role === 'technician');
+
   const handleSetRole = (targetUid: string, role: Role) => {
+    // Role changes are owner-only (managers can invite/disable techs, not re-role).
     if (!allow('users.manage') || targetUid === appUser?.id) return;
-    const before = workspaceUsers.find(u => u.id === targetUid)?.role;
+    const before = targetRoleOf(targetUid);
     updateUserDoc(targetUid, { role }).catch(() => {});
     audit('user.role_change', 'user', targetUid, { role: before }, { role });
   };
   const handleSetDisabled = (targetUid: string, disabled: boolean) => {
-    if (!allow('users.manage') || targetUid === appUser?.id) return;
+    if (targetUid === appUser?.id || !canActOnUser(targetRoleOf(targetUid))) return;
     updateUserDoc(targetUid, { disabled }).catch(() => {});
     audit(disabled ? 'user.disable' : 'user.enable', 'user', targetUid);
   };
@@ -274,12 +283,18 @@ const App: React.FC = () => {
     audit('user.allow_profit', 'user', targetUid, undefined, { allowProfit });
   };
   const handleInvite = (email: string, role: Role) => {
-    if (!allow('users.manage') || !workspaceId) return;
+    if (!workspaceId) return;
+    // Managers may only invite technicians; owners may invite any role.
+    if (!(allow('users.manage') || (allow('users.tech') && role === 'technician'))) return;
     const inv: WorkspaceInvite = { id: email.toLowerCase(), email: email.toLowerCase(), workspaceId, role, invitedBy: appUser?.email, createdAt: Date.now() };
     setInvite(inv).catch(() => {});
     audit('user.invite', 'user', email, undefined, { role });
   };
-  const handleDeleteInvite = (email: string) => { if (allow('users.manage')) deleteInvite(email).catch(() => {}); };
+  const handleDeleteInvite = (email: string) => {
+    const inv = invites.find(i => i.email === email.toLowerCase());
+    if (!(allow('users.manage') || (allow('users.tech') && inv?.role === 'technician'))) return;
+    deleteInvite(email).catch(() => {});
+  };
 
   // --- Backups (Owner only) ---
   const handleExportJson = async () => {
@@ -336,6 +351,30 @@ const App: React.FC = () => {
       }
       if (prev && prev.repairPrice !== next.repairPrice) audit('repair.price_change', 'repair', next.id, { repairPrice: prev.repairPrice }, { repairPrice: next.repairPrice });
       if (prev && (prev.customerName !== next.customerName || prev.customerPhone !== next.customerPhone)) audit('repair.customer_update', 'repair', next.id);
+    }
+  };
+
+  // Technician-scoped update: only the whitelisted work fields + status are
+  // persisted (applyTechEdit), and each change is audited. Used by TechRepairsView.
+  const handleTechUpdateRepair = (stored: Repair, draft: Partial<Repair>) => {
+    if (!uid || !allow('repairs.tech')) return;
+    let next = applyTechEdit(stored, draft);
+    // Stamp completion + warranty when the device is picked up (terminal).
+    if ((next.status === 'picked_up' || next.status === 'completed') && !next.completedAt) {
+      const completedDate = new Date().toISOString().split('T')[0];
+      next = { ...next, completedAt: Date.now(), warrantyUntil: computeWarrantyUntil(completedDate, next.warrantyDays) || undefined };
+    }
+    saveItem(uid, 'repairs', next);
+    if (stored.status !== next.status) {
+      logActivity(`${next.repairNumber} → ${next.status.replace(/_/g, ' ')}`);
+      audit('repair.status_change', 'repair', next.id, { status: stored.status }, { status: next.status });
+    }
+    // Audit each changed work field (before → after) for full traceability.
+    for (const f of TECH_EDITABLE_FIELDS) {
+      if (f === 'status') continue;
+      const b = (stored as any)[f], a = (next as any)[f];
+      const changed = f === 'testChecks' ? (b || []).join('|') !== (a || []).join('|') : b !== a;
+      if (changed) audit(`repair.tech.${f}`, 'repair', next.id, { [f]: b }, { [f]: a });
     }
   };
 
@@ -414,6 +453,42 @@ const App: React.FC = () => {
   }
   if (roleLoading || dbLoading || !appUser) {
     return <LoadingScreen message={roleLoading || !appUser ? 'Signing you in…' : 'Loading your inventory…'} />;
+  }
+
+  // --- Technician: simplified, repair-only experience (same workspace) ---
+  if (appUser.role === 'technician') {
+    return (
+      <div className="min-h-screen bg-slate-50/50 dark:bg-slate-950 pb-10 flex flex-col transition-colors duration-200">
+        <AppHeader
+          isTech
+          view="repairs"
+          onNavigate={setView}
+          allow={allow}
+          userEmail={appUser.email}
+          userRole={appUser.role}
+          darkMode={darkMode}
+          onToggleTheme={() => setDarkMode(!darkMode)}
+          isAiSidebarOpen={false}
+          onToggleAiSidebar={() => {}}
+          showCalculator={false}
+          onToggleCalculator={() => {}}
+          onOpenFinder={() => {}}
+          onOpenSettings={() => {}}
+          onOpenBulk={() => {}}
+          onStartAdd={() => {}}
+          onLock={handleLock}
+        />
+        <main className="mx-auto px-4 sm:px-6 lg:px-8 py-8 flex-1 w-full max-w-6xl">
+          <TechRepairsView
+            repairs={repairs}
+            batches={repairBatches}
+            auditLogs={auditLogs}
+            onTechUpdate={handleTechUpdateRepair}
+            onPrintAudit={handleRepairPrintAudit}
+          />
+        </main>
+      </div>
+    );
   }
 
   return (
@@ -542,11 +617,12 @@ const App: React.FC = () => {
                onUpdateMessages={setAiMessages}
             />
           )}
-          {view === 'users' && allow('users.manage') && (
+          {view === 'users' && allow('users.tech') && (
             <UsersView
               me={appUser}
               users={workspaceUsers}
               invites={invites}
+              canManageAll={allow('users.manage')}
               onSetRole={handleSetRole}
               onSetDisabled={handleSetDisabled}
               onSetAllowProfit={handleSetAllowProfit}

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   balanceOwing, batchTotals, batchDevicesComplete, addDays, computeWarrantyUntil,
   matchesRepair, matchesBatch, isInProgress, isRepairOpen,
+  applyTechEdit, repairAgeDays, TECH_STATUSES,
 } from './repairs';
 import { Repair, RepairBatch } from '../types';
 
@@ -96,5 +97,61 @@ describe('global search', () => {
     expect(matchesBatch(b, '555-9999')).toBe(true);
     expect(matchesBatch(b, 'mia@fixit')).toBe(true);
     expect(matchesBatch(b, 'nope')).toBe(false);
+  });
+});
+
+describe('applyTechEdit', () => {
+  const stored = repair({
+    id: 'r1', repairPrice: 200, deposit: 50, customerName: 'Jane', model: 'iPhone 14',
+    status: 'received',
+  });
+
+  it('overlays only whitelisted technician fields', () => {
+    const next = applyTechEdit(stored, {
+      status: 'in_repair', techNotes: 'opened device', diagnostics: 'bad battery',
+      workPerformed: 'replaced battery', partsUsed: 'OEM battery', testingResults: 'passed',
+      testChecks: ['Power', 'Charging'],
+    });
+    expect(next.status).toBe('in_repair');
+    expect(next.techNotes).toBe('opened device');
+    expect(next.diagnostics).toBe('bad battery');
+    expect(next.workPerformed).toBe('replaced battery');
+    expect(next.partsUsed).toBe('OEM battery');
+    expect(next.testingResults).toBe('passed');
+    expect(next.testChecks).toEqual(['Power', 'Charging']);
+  });
+
+  it('ignores attempts to change price, customer, or device', () => {
+    const next = applyTechEdit(stored, {
+      repairPrice: 5, deposit: 0, customerName: 'Hacker', model: 'cheap', status: 'testing',
+    } as any);
+    expect(next.repairPrice).toBe(200);
+    expect(next.deposit).toBe(50);
+    expect(next.customerName).toBe('Jane');
+    expect(next.model).toBe('iPhone 14');
+    expect(next.status).toBe('testing'); // allowed field still applied
+  });
+
+  it('rejects a status outside the technician-allowed set', () => {
+    const next = applyTechEdit(stored, { status: 'completed' as any });
+    expect(next.status).toBe('received'); // unchanged
+    expect(TECH_STATUSES).not.toContain('completed');
+  });
+});
+
+describe('repairAgeDays', () => {
+  it('counts whole days since createdAt', () => {
+    const now = new Date('2026-07-10T00:00:00').getTime();
+    expect(repairAgeDays(repair({ createdAt: new Date('2026-07-01T00:00:00').getTime() }), now)).toBe(9);
+    expect(repairAgeDays(repair({ createdAt: now }), now)).toBe(0);
+  });
+});
+
+describe('terminal statuses', () => {
+  it('picked_up and completed are closed; testing is open', () => {
+    expect(isRepairOpen(repair({ status: 'picked_up' }))).toBe(false);
+    expect(isRepairOpen(repair({ status: 'completed' }))).toBe(false);
+    expect(isRepairOpen(repair({ status: 'testing' }))).toBe(true);
+    expect(isInProgress(repair({ status: 'testing' }))).toBe(true);
   });
 });

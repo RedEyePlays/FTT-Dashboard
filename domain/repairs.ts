@@ -4,16 +4,25 @@ import { Repair, RepairBatch, RepairStatus } from '../types';
 export const REPAIR_PREFIX = 'RPR';
 export const BATCH_PREFIX = 'WB';
 
-// --- Statuses (simplified set) ---
+// --- Statuses ---
 export const REPAIR_STATUSES: { value: RepairStatus; label: string }[] = [
   { value: 'received', label: 'Received' },
   { value: 'diagnosing', label: 'Diagnosing' },
   { value: 'waiting_approval', label: 'Waiting for Approval' },
-  { value: 'waiting_parts', label: 'Waiting on Parts' },
+  { value: 'waiting_parts', label: 'Waiting for Parts' },
   { value: 'in_repair', label: 'In Repair' },
+  { value: 'testing', label: 'Testing' },
   { value: 'ready_pickup', label: 'Ready for Pickup' },
   { value: 'completed', label: 'Completed' },
+  { value: 'picked_up', label: 'Picked Up' },
   { value: 'cancelled', label: 'Cancelled' },
+];
+
+// The status set technicians may set (per spec). Excludes the legacy
+// 'completed' status in favour of the explicit 'picked_up' terminal.
+export const TECH_STATUSES: RepairStatus[] = [
+  'received', 'diagnosing', 'waiting_approval', 'waiting_parts',
+  'in_repair', 'testing', 'ready_pickup', 'picked_up', 'cancelled',
 ];
 
 export const REPAIR_STATUS_LABEL: Record<RepairStatus, string> =
@@ -25,16 +34,50 @@ export const REPAIR_STATUS_CELL: Record<RepairStatus, string> = {
   waiting_approval: 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300',
   waiting_parts: 'bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300',
   in_repair: 'bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300',
+  testing: 'bg-purple-100 text-purple-800 dark:bg-purple-900/40 dark:text-purple-300',
   ready_pickup: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300',
   completed: 'bg-emerald-600 text-white dark:bg-emerald-700',
+  picked_up: 'bg-teal-600 text-white dark:bg-teal-700',
   cancelled: 'bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-300',
 };
 
-// Open = actively occupying the shop (everything except terminal states).
-export const isRepairOpen = (r: Repair) => r.status !== 'completed' && r.status !== 'cancelled';
+// Terminal states — the repair no longer occupies the shop.
+const TERMINAL: RepairStatus[] = ['completed', 'picked_up', 'cancelled'];
+export const isRepairOpen = (r: Repair) => !TERMINAL.includes(r.status);
 // "In progress" grouping for the dashboard.
-const IN_PROGRESS: RepairStatus[] = ['received', 'diagnosing', 'in_repair'];
+const IN_PROGRESS: RepairStatus[] = ['received', 'diagnosing', 'in_repair', 'testing'];
 export const isInProgress = (r: Repair) => IN_PROGRESS.includes(r.status);
+
+// --- Technician editing guard ---
+// The only repair fields a technician is authorised to change. Enforced in the
+// app write path (applyTechEdit) AND mirrored in firestore.rules server-side.
+export const TECH_EDITABLE_FIELDS = [
+  'status', 'techNotes', 'diagnostics', 'workPerformed',
+  'partsUsed', 'testingResults', 'testChecks',
+] as const;
+export type TechEditableField = typeof TECH_EDITABLE_FIELDS[number];
+
+/**
+ * Build the repair to persist for a technician edit: start from the stored
+ * record and overlay ONLY the whitelisted fields from the incoming draft, so a
+ * technician can never change price, customer, device, etc. `status` is further
+ * constrained to the technician-allowed set. Returns the guarded next repair.
+ */
+export function applyTechEdit(stored: Repair, draft: Partial<Repair>): Repair {
+  const next: Repair = { ...stored };
+  for (const key of TECH_EDITABLE_FIELDS) {
+    if (key === 'status') {
+      if (draft.status && TECH_STATUSES.includes(draft.status)) next.status = draft.status;
+    } else if (key in draft) {
+      (next as any)[key] = (draft as any)[key];
+    }
+  }
+  return next;
+}
+
+// Whole days a repair has been open (received → now).
+export const repairAgeDays = (r: Repair, now: number = Date.now()): number =>
+  Math.max(0, Math.floor((now - (r.createdAt || now)) / 86400000));
 
 // --- Cosmetic condition checklist ---
 export const COSMETIC_OPTIONS = [

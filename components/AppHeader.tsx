@@ -13,6 +13,7 @@ interface AppHeaderProps {
   view: ViewState;
   onNavigate: (v: ViewState) => void;
   allow: (p: Permission) => boolean;
+  isTech?: boolean; // technician = simplified, repair-only header
   userEmail: string;
   userRole: string;
   darkMode: boolean;
@@ -29,7 +30,7 @@ interface AppHeaderProps {
 }
 
 export const AppHeader: React.FC<AppHeaderProps> = ({
-  view, onNavigate, allow, userEmail, userRole,
+  view, onNavigate, allow, isTech, userEmail, userRole,
   darkMode, onToggleTheme, isAiSidebarOpen, onToggleAiSidebar,
   showCalculator, onToggleCalculator, onOpenFinder, onOpenSettings,
   onOpenBulk, onStartAdd, onLock,
@@ -47,6 +48,20 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
            <Lock className="w-3 h-3" /> Secure
         </span>
       </div>
+      {isTech ? (
+        // Technician: repair-only header — no inventory / sales / settings / users.
+        <nav className="flex items-center gap-2">
+          <NavButton active icon={<Wrench className="w-4 h-4" />} label="Repairs" onClick={() => onNavigate('repairs')} />
+          <div className="w-px h-6 bg-slate-200 dark:bg-slate-700 mx-2"></div>
+          <span className="hidden sm:inline text-xs text-slate-400 mr-1" title={userEmail}>{userEmail.split('@')[0]} · {userRole}</span>
+          <button onClick={onToggleTheme} className="p-2 text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors" title="Toggle Theme">
+            {darkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+          </button>
+          <button onClick={onLock} className="p-2 text-slate-500 hover:text-rose-600 dark:text-slate-400 dark:hover:text-rose-400 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-900/20 transition-colors" title="Lock App">
+            <Lock className="w-4 h-4" />
+          </button>
+        </nav>
+      ) : (
       <nav className="hidden md:flex items-center gap-2">
         <NavButton active={view === 'dashboard'} icon={<LayoutDashboard className="w-4 h-4" />} label="Dashboard" onClick={() => onNavigate('dashboard')} />
         {allow('reports.view') && (
@@ -55,7 +70,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
         <NavButton active={view === 'grid'} icon={<Table className="w-4 h-4" />} label="Inventory" onClick={() => onNavigate('grid')} />
         <NavButton active={view === 'notes'} icon={<StickyNote className="w-4 h-4" />} label="Notes" onClick={() => onNavigate('notes')} />
         <NavButton active={view === 'pos'} icon={<ShoppingCart className="w-4 h-4" />} label="Quick Sale" onClick={() => onNavigate('pos')} />
-        {allow('repairs.manage') && (
+        {allow('repairs.tech') && (
           <NavButton active={view === 'repairs'} icon={<Wrench className="w-4 h-4" />} label="Repairs" onClick={() => onNavigate('repairs')} />
         )}
         {allow('reports.view') && (
@@ -67,7 +82,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
         {allow('audit.view') && (
           <NavButton active={view === 'audit'} icon={<ScrollText className="w-4 h-4" />} label="Audit" onClick={() => onNavigate('audit')} />
         )}
-        {allow('users.manage') && (
+        {allow('users.tech') && (
           <NavButton active={view === 'users'} icon={<UsersIcon className="w-4 h-4" />} label="Users" onClick={() => onNavigate('users')} />
         )}
         <NavButton active={view === 'ai'} icon={<Bot className="w-4 h-4" />} label="AI Assistant" onClick={() => onNavigate('ai')} />
@@ -109,6 +124,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           Add Item
         </button>
       </nav>
+      )}
     </div>
   </header>
 );

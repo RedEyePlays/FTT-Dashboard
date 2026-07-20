@@ -24,54 +24,79 @@ service cloud.firestore {
     // denies, which previously blocked every workspace read for normal users).
     function activeMemberOf(ws) { return hasProfile() && me().get('disabled', false) != true && myWorkspace() == ws; }
     function isOwnerOf(ws) { return activeMemberOf(ws) && myRole() == 'owner'; }
-    function canWrite(ws) { return activeMemberOf(ws); } // members write shop data; deletes gated below
+    function isTechOf(ws) { return activeMemberOf(ws) && myRole() == 'technician'; }
+    // A non-technician active member (owner/manager/employee) — the roles that
+    // may write general shop data.
+    function isStaffOf(ws) { return activeMemberOf(ws) && myRole() != 'technician'; }
+
+    // The only repair fields a technician may change (mirrors TECH_EDITABLE_FIELDS
+    // in domain/repairs.ts, plus the completedAt/warrantyUntil the app stamps when
+    // a device is picked up).
+    function techRepairKeys() {
+      return ['status', 'techNotes', 'diagnostics', 'workPerformed', 'partsUsed',
+              'testingResults', 'testChecks', 'completedAt', 'warrantyUntil'];
+    }
+    function techRepairUpdateOk() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(techRepairKeys());
+    }
 
     // ---- Shared shop data ----
     match /user_data/{ws} {
       // The parent doc holds the legacy encrypted blob (read once for migration).
+      // Technicians may read the workspace but never write the blob.
       allow read: if activeMemberOf(ws) || request.auth.uid == ws;
-      allow write: if activeMemberOf(ws) || request.auth.uid == ws;
+      allow write: if isStaffOf(ws) || request.auth.uid == ws;
 
-      // Inventory & accessories: any active member may create/update; only the
-      // owner may delete (mirrors inventory.delete = owner-only in the app).
+      // Inventory & accessories: staff (non-technician) create/update; only the
+      // owner may delete. Technicians have no inventory write access at all.
       match /inventory/{id} {
-        allow read, create, update: if activeMemberOf(ws);
+        allow read: if activeMemberOf(ws);
+        allow create, update: if isStaffOf(ws);
         allow delete: if isOwnerOf(ws);
       }
       match /accessories/{id} {
-        allow read, create, update: if activeMemberOf(ws);
+        allow read: if activeMemberOf(ws);
+        allow create, update: if isStaffOf(ws);
         allow delete: if isOwnerOf(ws);
       }
 
-      // Audit logs are append-only: create allowed, no update/delete from clients.
+      // Audit logs are append-only: any active member (incl. technicians) may
+      // create; no update/delete from clients.
       match /auditLogs/{id} {
         allow read: if activeMemberOf(ws);
         allow create: if activeMemberOf(ws);
         allow update, delete: if false;
       }
 
-      // Repairs & repair batches: any active member may create/update; only the
-      // owner may delete (mirrors inventory).
+      // Repairs: staff may create/update freely; technicians may update only the
+      // whitelisted work fields (never create or delete). Owner-only delete.
       match /repairs/{id} {
-        allow read, create, update: if activeMemberOf(ws);
+        allow read: if activeMemberOf(ws);
+        allow create: if isStaffOf(ws);
+        allow update: if isStaffOf(ws) || (isTechOf(ws) && techRepairUpdateOk());
         allow delete: if isOwnerOf(ws);
       }
+      // Repair batches: staff manage; technicians read only. Owner-only delete.
       match /repairBatches/{id} {
-        allow read, create, update: if activeMemberOf(ws);
+        allow read: if activeMemberOf(ws);
+        allow create, update: if isStaffOf(ws);
         allow delete: if isOwnerOf(ws);
       }
 
-      // Everything else in the workspace: active members read/write.
+      // Everything else in the workspace (customers, sales, settings, dropoffs…):
+      // active staff read/write; technicians read-only.
       match /{document=**} {
-        allow read, write: if activeMemberOf(ws);
+        allow read: if activeMemberOf(ws);
+        allow write: if isStaffOf(ws);
       }
     }
 
     // ---- Users registry ----
     match /users/{uid} {
-      // A user reads their own profile; owners read profiles in their workspace.
+      // A user reads their own profile; owners and managers read profiles in
+      // their workspace (managers need this to list/manage technicians).
       allow read: if signedIn() && (request.auth.uid == uid
-        || (hasProfile() && myRole() == 'owner' && resource.data.workspaceId == myWorkspace()));
+        || (hasProfile() && (myRole() == 'owner' || myRole() == 'manager') && resource.data.workspaceId == myWorkspace()));
 
       // First-login self-provisioning: create only your own doc, and either become
       // the owner of your own workspace, or claim a matching invite.
@@ -87,13 +112,20 @@ service cloud.firestore {
         );
 
       // Self may only update lastLogin; an owner may change role/disabled/allowProfit
-      // for members of their workspace.
+      // for members of their workspace; a manager may only toggle `disabled` on a
+      // technician account (no role or workspace changes).
       allow update: if signedIn() && (
         (request.auth.uid == uid
           && request.resource.data.role == resource.data.role
           && request.resource.data.workspaceId == resource.data.workspaceId
           && request.resource.data.get('disabled', false) == resource.data.get('disabled', false))
         || (hasProfile() && myRole() == 'owner' && resource.data.workspaceId == myWorkspace())
+        || (hasProfile() && myRole() == 'manager'
+            && resource.data.workspaceId == myWorkspace()
+            && resource.data.role == 'technician'
+            && request.resource.data.role == 'technician'
+            && request.resource.data.workspaceId == resource.data.workspaceId
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['disabled']))
       );
 
       allow delete: if hasProfile() && myRole() == 'owner' && resource.data.workspaceId == myWorkspace();
@@ -101,17 +133,23 @@ service cloud.firestore {
 
     // ---- Invites ----
     match /workspaceInvites/{email} {
-      // The invited user may read their own invite (to claim it); owners manage them.
+      // The invited user may read their own invite (to claim it); owners and
+      // managers read them (managers to list technician invites).
       allow read: if signedIn() && (
         request.auth.token.email.lower() == email
-        || (hasProfile() && myRole() == 'owner')
+        || (hasProfile() && (myRole() == 'owner' || myRole() == 'manager'))
       );
-      allow create, update: if hasProfile() && myRole() == 'owner'
-        && request.resource.data.workspaceId == myWorkspace();
-      // Deletable by the invitee (on claim) or the owner.
+      // Owners create/update any invite; managers only technician invites.
+      allow create, update: if hasProfile()
+        && request.resource.data.workspaceId == myWorkspace()
+        && (myRole() == 'owner'
+            || (myRole() == 'manager' && request.resource.data.role == 'technician'));
+      // Deletable by the invitee (on claim), the owner, or a manager for a
+      // technician invite.
       allow delete: if signedIn() && (
         request.auth.token.email.lower() == email
         || (hasProfile() && myRole() == 'owner')
+        || (hasProfile() && myRole() == 'manager' && resource.data.role == 'technician' && resource.data.workspaceId == myWorkspace())
       );
     }
   }
