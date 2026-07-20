@@ -6,6 +6,7 @@ import {
   ActivityEntry, AppUser, WorkspaceInvite, AuditEntry, Repair, RepairBatch,
 } from '../types';
 import { decryptData } from '../services/security';
+import { AppSettings, mergeSettings } from '../domain/settings';
 import { auth, db } from '../services/firebase';
 import { onAuthChange } from '../services/auth';
 import {
@@ -48,6 +49,7 @@ export function useWorkspaceData() {
   const [skuCounters, setSkuCounters] = useState<Record<string, number>>({});
   const [activityLog, setActivityLog] = useState<ActivityEntry[]>([]);
   const [lastBackup, setLastBackup] = useState<number | undefined>(undefined);
+  const [settings, setSettings] = useState<AppSettings>(() => mergeSettings());
 
   // Users / roles
   const [appUser, setAppUser] = useState<AppUser | null>(null);
@@ -166,7 +168,7 @@ export function useWorkspaceData() {
       subscribeCollection<RepairBatch>(wsId, 'repairBatches', setRepairBatches, onErr),
       subscribeCollection<ActivityEntry>(wsId, 'activityLog', rows => setActivityLog(rows.sort((a, b) => b.ts - a.ts).slice(0, 60)), onErr),
       subscribeCollection<AuditEntry>(wsId, 'auditLogs', rows => setAuditLogs(rows.sort((a, b) => b.ts - a.ts).slice(0, 1000)), onErr),
-      subscribeMeta(wsId, m => { setNotes(m.notes || []); setTasks(m.tasks || []); setSkuCounters(m.skuCounters || {}); setLastBackup(m.lastBackup); }, onErr),
+      subscribeMeta(wsId, m => { setNotes(m.notes || []); setTasks(m.tasks || []); setSkuCounters(m.skuCounters || {}); setLastBackup(m.lastBackup); setSettings(mergeSettings(m.settings)); }, onErr),
     ];
     // Owner-only: workspace members + pending invites
     if (appUser.role === 'owner') {
@@ -190,7 +192,7 @@ export function useWorkspaceData() {
     devices, accessories, data, notes, setNotes, tasks, setTasks,
     runners, dropOffs, settlements, customers, salesTransactions,
     repairs, repairBatches,
-    skuCounters, setSkuCounters, activityLog, lastBackup,
+    skuCounters, setSkuCounters, activityLog, lastBackup, settings,
     // connection status
     dbLoading, dbError, setDbError, reconnect,
     // latest-snapshot refs
