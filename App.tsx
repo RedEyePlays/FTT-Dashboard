@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { Dashboard } from './components/Dashboard';
-import { AnalyticsView } from './components/AnalyticsView';
+import { OwnerAnalytics } from './components/OwnerAnalytics';
 import { DataEntryForm } from './components/DataEntryForm';
 import { DataGrid } from './components/DataGrid';
 import { BulkEntryModal } from './components/BulkEntryModal';
@@ -552,9 +552,9 @@ const App: React.FC = () => {
               : <div className="text-center text-slate-400 py-20">You don't have access to reports.</div>
           )}
           {view === 'analytics' && (
-            allow('reports.view')
-              ? <AnalyticsView data={data} darkMode={darkMode} canViewProfit={allow('reports.profit')} />
-              : <div className="text-center text-slate-400 py-20">You don't have access to reports.</div>
+            (appUser.role === 'owner' || appUser.role === 'manager') && allow('reports.profit')
+              ? <OwnerAnalytics salesTransactions={salesTransactions} repairs={repairs} inventory={data} customers={customers} auditLogs={auditLogs} activity={activityLog} darkMode={darkMode} />
+              : <div className="text-center text-slate-400 py-20">Owner analytics are restricted to owners (and managers granted financial access).</div>
           )}
           {view === 'customers' && allow('reports.view') && (
             <CustomersView

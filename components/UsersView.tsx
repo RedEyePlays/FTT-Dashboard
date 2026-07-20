@@ -96,9 +96,9 @@ export const UsersView: React.FC<Props> = ({ me, users, invites, canManageAll = 
                 ) : (
                   <span className="text-xs font-medium px-2 py-1 rounded bg-slate-100 dark:bg-slate-800 text-slate-500">{ROLE_LABEL[u.role]}</span>
                 )}
-                {canManageAll && u.role === 'employee' && (
-                  <label className="flex items-center gap-1 text-xs text-slate-600 dark:text-slate-300 cursor-pointer" title="Allow this employee to see profit-sensitive figures">
-                    <input type="checkbox" checked={!!u.allowProfit} onChange={e => onSetAllowProfit(u.id, e.target.checked)} className="rounded" /> <Eye className="w-3.5 h-3.5" /> Profit
+                {canManageAll && (u.role === 'employee' || u.role === 'manager') && (
+                  <label className="flex items-center gap-1 text-xs text-slate-600 dark:text-slate-300 cursor-pointer" title="Allow this user to see profit, margins & the analytics dashboard">
+                    <input type="checkbox" checked={!!u.allowProfit} onChange={e => onSetAllowProfit(u.id, e.target.checked)} className="rounded" /> <Eye className="w-3.5 h-3.5" /> Financials
                   </label>
                 )}
                 <button onClick={() => onSetDisabled(u.id, !u.disabled)} disabled={isMe}
