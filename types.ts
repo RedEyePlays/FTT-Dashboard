@@ -145,8 +145,27 @@ export interface Customer {
   company?: string;              // wholesale company name
   contactPerson?: string;        // wholesale contact
   preferredContact?: 'phone' | 'email' | 'text';
-  tags?: string[];               // VIP, Wholesale, Business, …
+  tags?: string[];               // VIP, Wholesale, Business, Student, …
   createdAt?: number;            // epoch ms, best-effort first-seen fallback
+
+  // Future-ready (reserved; not yet surfaced in the UI). The CRM stats derive
+  // everything else from linked records, but these are per-customer balances /
+  // programmes that will need to be stored on the customer document.
+  storeCredit?: number;          // store credit balance
+  loyaltyPoints?: number;        // loyalty points balance
+  giftCardIds?: string[];        // → gift cards issued to this customer
+}
+
+// Reserved for future customer interaction history (SMS / email / marketing /
+// appointments). Stored under user_data/{ws}/customerInteractions when built.
+export interface CustomerInteraction {
+  id: string;
+  customerId: string;
+  ts: number;
+  channel: 'sms' | 'email' | 'call' | 'note' | 'appointment' | 'campaign';
+  direction?: 'in' | 'out';
+  subject?: string;
+  body?: string;
 }
 
 export interface ActivityEntry {

@@ -23,6 +23,7 @@ import { REPAIR_PREFIX, BATCH_PREFIX, computeWarrantyUntil, applyTechEdit, TECH_
 import { RepairsView } from './components/RepairsView';
 import { TechRepairsView } from './components/TechRepairsView';
 import { CustomersView } from './components/CustomersView';
+import { MergePlan } from './domain/customers';
 import { can } from './services/rbac';
 import { downloadJson, toCSV, triggerDownload } from './services/backup';
 import { INITIAL_DATA } from './constants';
@@ -56,6 +57,8 @@ const App: React.FC = () => {
 
   // --- UI STATE ---
   const [view, setView] = useState<ViewState>('dashboard');
+  // A customer to pre-seed the POS / Repairs view with (from a CRM quick action).
+  const [prefillCustomer, setPrefillCustomer] = useState<Customer | undefined>(undefined);
 
   // AI Chat State (Shared between Sidebar and Tab)
   const [aiMessages, setAiMessages] = useState<ChatMessage[]>([{
@@ -428,6 +431,23 @@ const App: React.FC = () => {
     audit('customer.update', 'customer', customer.id, prev, customer);
   };
 
+  // Merge duplicate customers: keep the primary, relink every linked record, and
+  // delete the duplicate customer docs. (See domain/customers.planMerge.)
+  const handleMergeCustomers = (plan: MergePlan) => {
+    if (!uid || !(allow('sales.complete') || allow('repairs.manage'))) return;
+    const pid = plan.customer.id;
+    saveItem(uid, 'customers', plan.customer);
+    plan.reassignSales.forEach(id => { const t = salesTransactions.find(x => x.id === id); if (t) saveItem(uid, 'salesTransactions', { ...t, customerId: pid, customerPhone: plan.customer.phone, customerEmail: plan.customer.email }); });
+    plan.reassignRepairs.forEach(id => { const r = repairs.find(x => x.id === id); if (r) saveItem(uid, 'repairs', { ...r, customerId: pid, customerPhone: plan.customer.phone, customerEmail: plan.customer.email }); });
+    plan.reassignBatches.forEach(id => { const b = repairBatches.find(x => x.id === id); if (b) saveItem(uid, 'repairBatches', { ...b, businessId: pid }); });
+    plan.removeIds.forEach(id => deleteItem(uid, 'customers', id));
+    audit('customer.merge', 'customer', pid, { removed: plan.removeIds }, { linked: plan.reassignSales.length + plan.reassignRepairs.length + plan.reassignBatches.length });
+  };
+
+  // Quick actions from a customer profile: seed the target view with the customer.
+  const startSaleFor = (c: Customer) => { setPrefillCustomer(c); setView('pos'); };
+  const createRepairFor = (c: Customer) => { setPrefillCustomer(c); setView('repairs'); };
+
   const handleStartAdd = () => {
     setEditingItem(undefined);
     setView('entry');
@@ -542,9 +562,14 @@ const App: React.FC = () => {
               salesTransactions={salesTransactions}
               repairs={repairs}
               batches={repairBatches}
+              inventory={data}
+              auditLogs={auditLogs}
               canViewProfit={allow('reports.profit')}
               canEdit={allow('sales.complete') || allow('repairs.manage')}
               onSaveCustomer={handleSaveCustomer}
+              onMergeCustomers={handleMergeCustomers}
+              onStartSale={allow('sales.complete') ? startSaleFor : undefined}
+              onCreateRepair={allow('repairs.manage') ? createRepairFor : undefined}
             />
           )}
           {view === 'repairs' && allow('repairs.manage') && (
@@ -554,6 +579,8 @@ const App: React.FC = () => {
               customers={customers}
               auditLogs={auditLogs}
               canDelete={appUser.role === 'owner'}
+              initialCustomer={prefillCustomer}
+              onConsumeInitial={() => setPrefillCustomer(undefined)}
               onGenerateRepairNumber={handleGenRepairNumber}
               onGenerateBatchNumber={handleGenBatchNumber}
               onSaveRepair={handleSaveRepair}
@@ -588,6 +615,8 @@ const App: React.FC = () => {
             <QuickSaleView
               inventory={data}
               customers={customers}
+              initialCustomer={prefillCustomer}
+              onConsumeInitial={() => setPrefillCustomer(undefined)}
               onSellCart={handleSellCart}
             />
           )}

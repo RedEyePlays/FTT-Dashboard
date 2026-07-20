@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Wrench, Plus, Search, X, Trash2, Printer, FileText, Receipt, History as HistoryIcon,
   ArrowLeft, DollarSign, ChevronRight, Building2, ClipboardCheck, PackageCheck, ScrollText, QrCode,
@@ -27,6 +27,8 @@ interface Props {
   onDeleteBatch: (id: string) => void;
   onRecordPayment: (b: RepairBatch, amount: number) => void;
   onPrintAudit: (entityType: string, id: string, doc: string) => void;
+  initialCustomer?: Customer;      // open a new prefilled ticket (CRM quick action)
+  onConsumeInitial?: () => void;
 }
 
 const DEVICE_TYPES: DeviceType[] = ['Phone', 'Tablet', 'Laptop', 'Console', 'Watch', 'Other'];
@@ -123,6 +125,16 @@ export const RepairsView: React.FC<Props> = (props) => {
 
   // --- creators ---
   const newRetail = (): Repair => ({ id: newId(), repairNumber: '', type: 'retail', createdAt: Date.now(), date: today(), issue: '', repairPrice: 0, status: 'received', warrantyDays: 90, deposit: 0 });
+
+  // Open a new prefilled ticket when arriving from a CRM "Create Repair" action.
+  useEffect(() => {
+    const c = props.initialCustomer;
+    if (!c) return;
+    setTab('tickets');
+    setDrawer({ repair: { ...newRetail(), customerId: c.id, customerName: c.name, customerPhone: c.phone, customerEmail: c.email }, isNew: true });
+    props.onConsumeInitial?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.initialCustomer?.id]);
   const newDevice = (batchId: string): Repair => ({ id: newId(), repairNumber: '', type: 'wholesale', batchId, createdAt: Date.now(), date: today(), issue: '', repairPrice: 0, status: 'received' });
   const newBatch = (): RepairBatch => ({ id: newId(), batchNumber: '', createdAt: Date.now(), dateReceived: today(), companyName: '', status: 'active', amountPaid: 0 });
 
