@@ -64,7 +64,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
       ) : (
       <nav className="hidden md:flex items-center gap-2">
         <NavButton active={view === 'dashboard'} icon={<LayoutDashboard className="w-4 h-4" />} label="Dashboard" onClick={() => onNavigate('dashboard')} />
-        {allow('reports.view') && (
+        {(userRole === 'owner' || userRole === 'manager') && allow('reports.profit') && (
           <NavButton active={view === 'analytics'} icon={<BarChart3 className="w-4 h-4" />} label="Analytics" onClick={() => onNavigate('analytics')} />
         )}
         <NavButton active={view === 'grid'} icon={<Table className="w-4 h-4" />} label="Inventory" onClick={() => onNavigate('grid')} />

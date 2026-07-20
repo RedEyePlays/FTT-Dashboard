@@ -316,6 +316,7 @@ export interface Repair {
   diagnostics?: string;      // diagnostic findings
   workPerformed?: string;    // work performed
   partsUsed?: string;        // parts used (free text)
+  partsCost?: number;        // parts cost (for repair profit / analytics; default 0)
   testingResults?: string;   // testing results / notes
   testChecks?: string[];     // testing checklist selections
 

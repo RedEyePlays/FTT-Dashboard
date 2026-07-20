@@ -10,11 +10,19 @@ describe('can()', () => {
 
   it('manager lacks owner-only permissions', () => {
     expect(can('manager', 'inventory.edit')).toBe(true);
-    expect(can('manager', 'reports.profit')).toBe(true);
     expect(can('manager', 'users.manage')).toBe(false);
     expect(can('manager', 'inventory.delete')).toBe(false);
     expect(can('manager', 'backup.export')).toBe(false);
     expect(can('manager', 'settings.manage')).toBe(false);
+  });
+
+  it('financials are owner-default; manager/employee need the allowProfit override', () => {
+    expect(can('owner', 'reports.profit')).toBe(true);
+    expect(can('manager', 'reports.profit')).toBe(false);
+    expect(can('manager', 'reports.profit', { allowProfit: true })).toBe(true);
+    expect(can('employee', 'reports.profit')).toBe(false);
+    expect(can('employee', 'reports.profit', { allowProfit: true })).toBe(true);
+    expect(can('technician', 'reports.profit', { allowProfit: true })).toBe(false);
   });
 
   it('employee has the minimal set', () => {
