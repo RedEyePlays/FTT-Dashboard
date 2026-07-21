@@ -84,37 +84,39 @@ const itemLabel = getDeviceDisplayName;
 
 const DEVICE_COLS: Col[] = [
   // Frozen identity block — stays visible while the row scrolls horizontally.
-  { key: 'date', label: 'Date In', type: 'date', w: 120, frozen: true },
-  { key: 'sku', label: 'SKU', type: 'text', w: 116, frozen: true, emphasis: 'muted' },
-  { key: 'imei', label: 'IMEI/Serial', type: 'text', w: 150, frozen: true, emphasis: 'muted' },
-  { key: '__item', label: 'Item', type: 'computed', w: 170, frozen: true, emphasis: 'strong', compute: itemLabel, sortVal: i => itemLabel(i).toLowerCase() },
+  { key: 'date', label: 'Date In', type: 'date', w: 116, frozen: true },
+  { key: 'sku', label: 'SKU', type: 'text', w: 104, frozen: true, emphasis: 'muted' },
+  { key: 'imei', label: 'IMEI/Serial', type: 'text', w: 132, frozen: true, emphasis: 'muted' },
+  { key: '__item', label: 'Item', type: 'computed', w: 190, frozen: true, emphasis: 'strong', compute: itemLabel, sortVal: i => itemLabel(i).toLowerCase() },
   // Type/Brand/Model are not shown in the table (Brand+Model live in the Item
   // column and its inline editor; Type is edited in the form). Kept here with
   // hideCol so CSV export still round-trips them.
   { key: 'deviceType', label: 'Type', type: 'text', w: 76, hideCol: true },
   { key: 'brand', label: 'Brand', type: 'text', w: 100, hideCol: true },
   { key: 'model', label: 'Model', type: 'text', w: 140, hideCol: true },
-  { key: 'storage', label: 'Storage', type: 'text', w: 90 },
-  { key: 'color', label: 'Color', type: 'text', w: 100 },
-  { key: 'batteryHealth', label: 'Battery', type: 'text', w: 80 },
-  { key: 'condition', label: 'Condition', type: 'select', w: 120, options: opt(CONDITIONS) },
+  { key: 'storage', label: 'Storage', type: 'text', w: 78 },
+  { key: 'color', label: 'Color', type: 'text', w: 88 },
+  { key: 'batteryHealth', label: 'Battery', type: 'text', w: 70 },
+  { key: 'condition', label: 'Condition', type: 'select', w: 108, options: opt(CONDITIONS) },
   // 'Bought From' is no longer shown in the grid (or Columns menu). Kept here
   // with hideCol so the value still round-trips through CSV export and stays in
   // Firestore; it remains editable in the expand form.
   { key: 'boughtFrom', label: 'Bought From', type: 'text', w: 130, emphasis: 'muted', hideCol: true },
-  { key: 'purchaseSource', label: 'Source', type: 'text', w: 110, emphasis: 'muted' },
-  // Financial group — kept contiguous.
-  { key: 'purchaseCost', label: 'Purchase', type: 'number', w: 100, align: 'right' },
-  { key: 'repairCost', label: 'Repair', type: 'number', w: 90, align: 'right' },
-  { key: '__total', label: 'Total Cost', type: 'computed', w: 100, align: 'right', compute: i => money(totalCost(i)), sortVal: totalCost },
-  { key: 'targetSalePrice', label: 'Target', type: 'number', w: 90, align: 'right' },
-  { key: '__profit', label: 'Profit', type: 'computed', w: 100, align: 'right', compute: i => i.salePrice ? money(profitOf(i)) : '—', sortVal: profitOf },
+  { key: 'purchaseSource', label: 'Source', type: 'text', w: 92, emphasis: 'muted' },
+  // Financial group — kept contiguous. Widths tuned for typical currency values.
+  { key: 'purchaseCost', label: 'Purchase', type: 'number', w: 92, align: 'right' },
+  { key: 'repairCost', label: 'Repair', type: 'number', w: 82, align: 'right' },
+  { key: '__total', label: 'Total Cost', type: 'computed', w: 96, align: 'right', compute: i => money(totalCost(i)), sortVal: totalCost },
+  { key: 'targetSalePrice', label: 'Target', type: 'number', w: 88, align: 'right' },
+  // Actual = the real sale price the device sold for; drives the Profit column.
+  { key: 'salePrice', label: 'Actual', type: 'number', w: 88, align: 'right' },
+  { key: '__profit', label: 'Profit', type: 'computed', w: 96, align: 'right', compute: i => i.salePrice ? money(profitOf(i)) : '—', sortVal: profitOf },
   // Sale group. (The device Status column is intentionally not shown in the
   // grid — status is still stored and driven via the Filters, the item form,
   // bulk actions, sold detection and analytics.)
-  { key: 'soldDate', label: 'Date Sold', type: 'date', w: 130 },
-  { key: 'soldTo', label: 'Customer', type: 'text', w: 130 },
-  { key: 'notes', label: 'Notes', type: 'text', w: 220, emphasis: 'muted' },
+  { key: 'soldDate', label: 'Date Sold', type: 'date', w: 116 },
+  { key: 'soldTo', label: 'Customer', type: 'text', w: 120 },
+  { key: 'notes', label: 'Notes', type: 'text', w: 200, emphasis: 'muted' },
 ];
 const ACCESSORY_COLS: Col[] = [
   { key: 'date', label: 'Date Added', type: 'date', w: 130 },
