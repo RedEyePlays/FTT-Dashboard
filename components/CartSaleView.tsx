@@ -5,6 +5,7 @@ import {
   Printer, Eye, RotateCcw, QrCode, Sparkles,
 } from 'lucide-react';
 import { InventoryItem, Customer } from '../types';
+import { getDeviceDisplayName } from '../domain/inventory';
 import { LabelModal } from './LabelModal';
 import { PLATFORMS } from '../domain/pos';
 import { CustomerSearchInput } from './CustomerSearchInput';
@@ -203,7 +204,7 @@ export const CartSaleView: React.FC<Props> = (props) => {
             <div className="bg-indigo-50 dark:bg-indigo-900/20 rounded-lg p-2 text-xs text-indigo-700 dark:text-indigo-300">
               <p className="font-semibold flex items-center gap-1"><History className="w-3 h-3" /> {previousPurchases.length} previous purchase{previousPurchases.length !== 1 ? 's' : ''}</p>
               <ul className="mt-1 space-y-0.5 text-indigo-600/80 dark:text-indigo-300/80">
-                {previousPurchases.slice(0, 4).map(p => <li key={p.id} className="truncate">{p.soldDate}: {p.item} — ${(p.salePrice || 0).toFixed(2)}</li>)}
+                {previousPurchases.slice(0, 4).map(p => <li key={p.id} className="truncate">{p.soldDate}: {getDeviceDisplayName(p)} — ${(p.salePrice || 0).toFixed(2)}</li>)}
               </ul>
             </div>
           )}
@@ -275,7 +276,7 @@ export const CartSaleView: React.FC<Props> = (props) => {
                 <button key={i.id} onClick={() => picker === 'device' ? addDevice(i) : addAccessory(i)}
                   className="w-full text-left px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-800 border-b border-slate-50 dark:border-slate-800/60 flex justify-between items-center">
                   <div className="min-w-0">
-                    <p className="text-sm font-semibold text-slate-800 dark:text-slate-100 truncate">{i.item || [i.brand, i.model].filter(Boolean).join(' ')}</p>
+                    <p className="text-sm font-semibold text-slate-800 dark:text-slate-100 truncate">{getDeviceDisplayName(i)}</p>
                     <p className="text-xs text-slate-400 truncate font-mono">{i.sku || i.imei || i.manufacturerBarcode || '—'}</p>
                   </div>
                   <span className="text-xs text-slate-500 shrink-0 ml-3">

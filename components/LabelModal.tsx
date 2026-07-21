@@ -4,6 +4,7 @@ import QRCode from 'qrcode';
 import JsBarcode from 'jsbarcode';
 import { jsPDF } from 'jspdf';
 import { InventoryItem, DeviceStatus } from '../types';
+import { getDeviceDisplayName } from '../domain/inventory';
 import { LabelMedia, LabelContent, labelPreview, labelPrintDoc, mmOf } from '../services/labelLayout';
 
 interface Props {
@@ -62,7 +63,8 @@ export const LabelModal: React.FC<Props> = ({ item, onClose }) => {
   const [barcode, setBarcode] = useState('');
 
   const sku = item.sku || item.imei || '';
-  const name = item.item || [item.brand, item.model].filter(Boolean).join(' ') || 'Item';
+  const dn = getDeviceDisplayName(item);
+  const name = dn === '—' ? 'Item' : dn;
   const media = TEMPLATES.find(t => t.id === prefs.template)!;
   const status = item.deviceStatus ? STATUS_LABEL[item.deviceStatus] : '';
 
