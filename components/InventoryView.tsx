@@ -11,6 +11,7 @@ import { LabelModal } from './LabelModal';
 import { useIsMobile } from '../hooks/useMediaQuery';
 import { ResponsiveDialog, EmptyState } from './responsive';
 import { InvSection, INV_SECTIONS } from '../domain/inventoryNav';
+import { getDeviceDisplayName } from '../domain/inventory';
 
 interface Props {
   inventory: InventoryItem[];
@@ -77,19 +78,9 @@ type ColType = 'text' | 'number' | 'date' | 'select' | 'computed';
 interface Col { key: string; label: string; type: ColType; w: number; align?: 'right'; frozen?: boolean; emphasis?: 'strong' | 'muted'; readOnly?: boolean; hideCol?: boolean; options?: { value: string; label: string }[]; compute?: (i: InventoryItem) => string; sortVal?: (i: InventoryItem) => number | string; }
 const opt = (arr: string[]) => arr.map(v => ({ value: v, label: v }));
 
-// Combined Brand + Model display (falls back to the item name). Read-only —
-// Brand/Model stay in the data and remain editable via the expand form. The
-// brand is not repeated when the model already starts with it (e.g. brand
-// "Samsung" + model "Samsung Galaxy S24" → "Samsung Galaxy S24").
-export const deviceName = (i: InventoryItem): string => {
-  const brand = (i.brand || '').trim();
-  const model = (i.model || '').trim();
-  if (brand && model) {
-    return model.toLowerCase().startsWith(brand.toLowerCase()) ? model : `${brand} ${model}`;
-  }
-  return brand || model || i.item || '—';
-};
-const itemLabel = deviceName;
+// The Item column / card title use the shared getDeviceDisplayName helper so the
+// combined name (with legacy fallbacks) is identical everywhere it appears.
+const itemLabel = getDeviceDisplayName;
 
 const DEVICE_COLS: Col[] = [
   // Frozen identity block — stays visible while the row scrolls horizontally.
@@ -205,7 +196,9 @@ export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, a
   const matchesQuery = (i: InventoryItem) => {
     const q = query.toLowerCase().trim();
     if (!q) return true;
-    return [i.sku, i.manufacturerBarcode, i.imei, i.item, i.brand, i.model].some(v => (v || '').toLowerCase().includes(q));
+    // Include the combined display value so search matches the Item column (and
+    // legacy-named rows), alongside the raw brand/model/item fields.
+    return [i.sku, i.manufacturerBarcode, i.imei, i.item, i.brand, i.model, getDeviceDisplayName(i)].some(v => (v || '').toLowerCase().includes(q));
   };
 
   const applySort = (rows: InventoryItem[], cols: Col[]) => {
@@ -771,6 +764,12 @@ const BrandModelPopover: React.FC<{ item: InventoryItem; x: number; y: number; o
   const [brand, setBrand] = useState(item.brand || '');
   const [model, setModel] = useState(item.model || '');
   const inputCls = 'mt-0.5 w-full px-2 py-1.5 text-sm bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md outline-none focus:ring-2 focus:ring-indigo-500 text-slate-900 dark:text-slate-100';
+  // Keep the legacy `item` field in step with the combined name so every
+  // consumer that reads `item` matches the Item column exactly.
+  const syncItem = (b: string, m: string) => {
+    const combined = getDeviceDisplayName({ brand: b, model: m });
+    onUpdate(item.id, 'item', combined === '—' ? '' : combined);
+  };
   return (
     <>
       <div className="fixed inset-0 z-40" onClick={onClose} />
@@ -778,10 +777,10 @@ const BrandModelPopover: React.FC<{ item: InventoryItem; x: number; y: number; o
         onKeyDown={e => { if (e.key === 'Escape' || (e.key === 'Enter' && (e.target as HTMLElement).tagName === 'INPUT')) onClose(); }}>
         <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Edit Item</p>
         <label className="block text-xs text-slate-500 dark:text-slate-400">Brand
-          <input autoFocus value={brand} onChange={e => { setBrand(e.target.value); onUpdate(item.id, 'brand', e.target.value); }} placeholder="e.g. Apple" className={inputCls} />
+          <input autoFocus value={brand} onChange={e => { const v = e.target.value; setBrand(v); onUpdate(item.id, 'brand', v); syncItem(v, model); }} placeholder="e.g. Apple" className={inputCls} />
         </label>
         <label className="block text-xs text-slate-500 dark:text-slate-400">Model
-          <input value={model} onChange={e => { setModel(e.target.value); onUpdate(item.id, 'model', e.target.value); }} placeholder="e.g. iPhone 14 Pro" className={inputCls} />
+          <input value={model} onChange={e => { const v = e.target.value; setModel(v); onUpdate(item.id, 'model', v); syncItem(brand, v); }} placeholder="e.g. iPhone 14 Pro" className={inputCls} />
         </label>
         <div className="flex justify-end"><button onClick={onClose} className="text-xs px-3 py-1 rounded-md bg-indigo-600 hover:bg-indigo-700 text-white font-medium">Done</button></div>
       </div>
@@ -792,7 +791,11 @@ const BrandModelPopover: React.FC<{ item: InventoryItem; x: number; y: number; o
 /* ---------------- Mobile inventory card ---------------- */
 const salePriceOf = (i: InventoryItem) => kindOf(i) === 'device' ? (i.salePrice || i.targetSalePrice || 0) : (i.sellingPrice || 0);
 const costOf = (i: InventoryItem) => kindOf(i) === 'device' ? (i.purchaseCost || 0) : (i.costPerUnit || 0);
-const nameOf = (i: InventoryItem) => kindOf(i) === 'device' ? deviceName(i) : (i.item || i.sku || 'Item');
+const nameOf = (i: InventoryItem) => {
+  if (kindOf(i) === 'accessory') return i.item || i.sku || 'Item';
+  const n = getDeviceDisplayName(i);
+  return n === '—' ? (i.sku || 'Item') : n;
+};
 
 const InvCard: React.FC<{
   item: InventoryItem;
