@@ -136,6 +136,11 @@ const ACCESSORY_COLS: Col[] = [
 const LS_HIDDEN = 'inv_hidden_cols_v2';
 const DEFAULT_HIDDEN: Record<'device' | 'accessory', string[]> = { device: ['condition'], accessory: [] };
 const LS_VIEWS = 'inv_saved_views_v1';
+// Per-column width overrides from drag-resizing, kept per kind (device/accessory)
+// and per column key. Empty = use the column's default width.
+const LS_COLW = 'inv_col_widths_v1';
+type ColWidths = Record<'device' | 'accessory', Record<string, number>>;
+const MIN_COL_W = 56; // smallest a column can be dragged to
 const loadLS = <T,>(k: string, fb: T): T => { try { const r = localStorage.getItem(k); return r ? JSON.parse(r) : fb; } catch { return fb; } };
 
 // --- CSV helpers ---
@@ -179,11 +184,20 @@ export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, a
   const [menu, setMenu] = useState<null | 'cols' | 'views' | 'filter'>(null);
   const [expandItem, setExpandItem] = useState<InventoryItem | null>(null);
   const [labelItem, setLabelItem] = useState<InventoryItem | null>(null);
+  const [colW, setColW] = useState<ColWidths>(() => loadLS(LS_COLW, { device: {}, accessory: {} }));
   const searchRef = useRef<HTMLInputElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { localStorage.setItem(LS_HIDDEN, JSON.stringify(hidden)); }, [hidden]);
   useEffect(() => { localStorage.setItem(LS_VIEWS, JSON.stringify(views)); }, [views]);
+  useEffect(() => { localStorage.setItem(LS_COLW, JSON.stringify(colW)); }, [colW]);
+
+  // Drag-resize: set / clear a column's width override for the active kind.
+  const setColumnWidth = (kind: 'device' | 'accessory', key: string, w: number) =>
+    setColW(c => ({ ...c, [kind]: { ...c[kind], [key]: Math.max(MIN_COL_W, Math.round(w)) } }));
+  const resetColumnWidth = (kind: 'device' | 'accessory', key: string) =>
+    setColW(c => { const next = { ...c[kind] }; delete next[key]; return { ...c, [kind]: next }; });
+  const resetAllWidths = (kind: 'device' | 'accessory') => setColW(c => ({ ...c, [kind]: {} }));
   // Reset pagination + selection whenever the active page or its filters change.
   useEffect(() => { setPageNum(1); setSelected(new Set()); }, [page, query, statusFilter, sort]);
 
@@ -409,6 +423,12 @@ export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, a
                       <input type="checkbox" checked={!hidden[activeKind].includes(c.key)} onChange={() => toggleCol(activeKind, c.key)} className="rounded" /> {c.label}
                     </label>
                   ))}
+                  <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
+                  <button onClick={() => resetAllWidths(activeKind)} disabled={Object.keys(colW[activeKind]).length === 0}
+                    className="w-full text-left px-1 py-1 text-xs text-indigo-600 dark:text-indigo-400 hover:underline disabled:text-slate-400 disabled:no-underline disabled:cursor-default">
+                    Reset column widths
+                  </button>
+                  <p className="text-[11px] text-slate-400 leading-tight mt-1">Tip: drag a column's right edge to resize; double-click the edge to reset it.</p>
                 </div>
               )}
             </div>
@@ -477,6 +497,7 @@ export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, a
                 sort={sort} onSort={onSortToggle} selected={selected} onToggleSel={toggleSel} onToggleAll={toggleSelAll}
                 onUpdate={onUpdate} onDelete={onDelete} onDuplicate={duplicate} onExpand={setExpandItem} onLabel={setLabelItem}
                 onHistory={(it, mode) => setHistoryItem({ item: it, mode })}
+                widths={colW[activeKind]} onResize={(key, w) => setColumnWidth(activeKind, key, w)} onResetWidth={(key) => resetColumnWidth(activeKind, key)}
                 onAddRow={(page === 'devices' || page === 'accessories') ? (activeKind === 'device' ? addDeviceRow : addAccessoryRow) : undefined}
                 addLabel={activeKind === 'device' ? 'Add Device row' : 'Add Accessory row'} lowFlag={page === 'lowstock'} />
             </div>
@@ -608,8 +629,9 @@ const Sheet: React.FC<{
   onUpdate: (id: string, f: keyof InventoryItem, v: any) => void; onDelete: (id: string) => void;
   onDuplicate: (i: InventoryItem) => void; onExpand: (i: InventoryItem) => void; onLabel: (i: InventoryItem) => void;
   onHistory: (i: InventoryItem, mode: 'history' | 'audit') => void;
+  widths?: Record<string, number>; onResize?: (key: string, w: number) => void; onResetWidth?: (key: string) => void;
   onAddRow?: () => void; addLabel: string; lowFlag?: boolean;
-}> = ({ title, total, cols, rows, sort, onSort, selected, onToggleSel, onToggleAll, onUpdate, onDelete, onDuplicate, onExpand, onLabel, onHistory, onAddRow, addLabel, lowFlag }) => {
+}> = ({ title, total, cols, rows, sort, onSort, selected, onToggleSel, onToggleAll, onUpdate, onDelete, onDuplicate, onExpand, onLabel, onHistory, widths, onResize, onResetWidth, onAddRow, addLabel, lowFlag }) => {
   // Row overflow menu + inline Brand/Model editor. State lives at the Sheet root
   // and the popovers render outside the sticky table subtree (fixed-positioned)
   // so they aren't clipped or trapped under the sticky columns' stacking context.
@@ -620,12 +642,32 @@ const Sheet: React.FC<{
     return { x: Math.min(r.left, window.innerWidth - width - 12), y: r.bottom + 4 };
   };
 
+  // Effective width = the user's drag-resized override, else the column default.
+  const wOf = (c: Col) => widths?.[c.key] ?? c.w;
+
+  // Begin a drag-resize on a column's right-edge handle. Tracks the mouse on the
+  // document so the drag continues even when the pointer leaves the header cell.
+  const startResize = (e: React.MouseEvent, c: Col) => {
+    e.preventDefault(); e.stopPropagation();
+    const startX = e.clientX;
+    const startW = wOf(c);
+    const onMove = (ev: MouseEvent) => onResize?.(c.key, startW + (ev.clientX - startX));
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.style.cursor = ''; document.body.style.userSelect = '';
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    document.body.style.cursor = 'col-resize'; document.body.style.userSelect = 'none';
+  };
+
   // Frozen identity columns stay pinned to the left while the rest scrolls.
   // Left offsets are the running width of the Actions column + preceding frozen
-  // columns, so they must use fixed widths.
+  // columns, so they use the effective (possibly resized) widths.
   const ACTIONS_W = 108;
   const frozenLeft: Record<string, number> = {};
-  { let acc = ACTIONS_W; for (const c of cols) { if (c.frozen) { frozenLeft[c.key] = acc; acc += c.w; } else break; } }
+  { let acc = ACTIONS_W; for (const c of cols) { if (c.frozen) { frozenLeft[c.key] = acc; acc += wOf(c); } else break; } }
   const emph = (c: Col) =>
     c.emphasis === 'strong' ? 'font-semibold text-slate-900 dark:text-slate-100'
       : c.emphasis === 'muted' ? 'text-slate-500 dark:text-slate-400'
@@ -650,10 +692,17 @@ const Sheet: React.FC<{
               </th>
               {cols.map(c => (
                 <th key={c.key}
-                  style={{ minWidth: c.w, ...(c.frozen ? { width: c.w, left: frozenLeft[c.key], position: 'sticky' as const } : {}) }}
+                  style={{ width: wOf(c), minWidth: wOf(c), maxWidth: wOf(c), ...(c.frozen ? { left: frozenLeft[c.key], position: 'sticky' as const } : {}) }}
                   onClick={() => onSort(c.key)}
-                  className={`px-2 py-2 border-b border-slate-200 dark:border-slate-700 cursor-pointer select-none hover:text-indigo-600 ${c.align === 'right' ? 'text-right' : 'text-left'} ${c.frozen ? 'z-30 bg-slate-50 dark:bg-slate-800' : ''}`}>
+                  className={`relative px-2 py-2 border-b border-slate-200 dark:border-slate-700 cursor-pointer select-none hover:text-indigo-600 ${c.align === 'right' ? 'text-right' : 'text-left'} ${c.frozen ? 'z-30 bg-slate-50 dark:bg-slate-800' : ''}`}>
                   <span className="inline-flex items-center gap-1">{c.label}{sort?.key === c.key && (sort.dir === 'asc' ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />)}</span>
+                  {onResize && (
+                    <span onMouseDown={e => startResize(e, c)} onClick={e => e.stopPropagation()} onDoubleClick={e => { e.stopPropagation(); onResetWidth?.(c.key); }}
+                      title="Drag to resize · double-click to reset"
+                      className="group/rz absolute top-0 right-0 h-full w-2.5 flex justify-center cursor-col-resize z-10">
+                      <span className="block w-px h-full bg-slate-200 dark:bg-slate-700 group-hover/rz:bg-indigo-500 group-hover/rz:w-0.5" />
+                    </span>
+                  )}
                 </th>
               ))}
             </tr>
@@ -676,7 +725,7 @@ const Sheet: React.FC<{
                   </td>
                   {cols.map(c => (
                     <td key={c.key}
-                      style={{ minWidth: c.w, ...(c.frozen ? { width: c.w, left: frozenLeft[c.key], position: 'sticky' as const } : {}) }}
+                      style={{ width: wOf(c), minWidth: wOf(c), maxWidth: wOf(c), ...(c.frozen ? { left: frozenLeft[c.key], position: 'sticky' as const } : {}) }}
                       className={`p-0 align-top ${c.frozen ? `sticky z-10 ${frozenBg}` : ''}`}>
                       {c.type === 'computed' ? (
                         c.key === '__item' ? (
