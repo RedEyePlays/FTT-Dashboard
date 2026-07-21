@@ -86,7 +86,7 @@ const DEVICE_COLS: Col[] = [
   // Frozen identity block — stays visible while the row scrolls horizontally.
   { key: 'date', label: 'Date In', type: 'date', w: 116, frozen: true },
   { key: 'sku', label: 'SKU', type: 'text', w: 104, frozen: true, emphasis: 'muted' },
-  { key: 'imei', label: 'IMEI/Serial', type: 'text', w: 132, frozen: true, emphasis: 'muted' },
+  { key: 'imei', label: 'IMEI/Serial', type: 'text', w: 156, frozen: true, emphasis: 'muted' },
   { key: '__item', label: 'Item', type: 'computed', w: 190, frozen: true, emphasis: 'strong', compute: itemLabel, sortVal: i => itemLabel(i).toLowerCase() },
   // Type/Brand/Model are not shown in the table (Brand+Model live in the Item
   // column and its inline editor; Type is edited in the form). Kept here with
@@ -96,7 +96,7 @@ const DEVICE_COLS: Col[] = [
   { key: 'model', label: 'Model', type: 'text', w: 140, hideCol: true },
   { key: 'storage', label: 'Storage', type: 'text', w: 78 },
   { key: 'color', label: 'Color', type: 'text', w: 88 },
-  { key: 'batteryHealth', label: 'Battery', type: 'text', w: 70 },
+  { key: 'batteryHealth', label: 'Battery', type: 'text', w: 62 },
   { key: 'condition', label: 'Condition', type: 'select', w: 108, options: opt(CONDITIONS) },
   // 'Bought From' is no longer shown in the grid (or Columns menu). Kept here
   // with hideCol so the value still round-trips through CSV export and stays in
@@ -104,12 +104,12 @@ const DEVICE_COLS: Col[] = [
   { key: 'boughtFrom', label: 'Bought From', type: 'text', w: 130, emphasis: 'muted', hideCol: true },
   { key: 'purchaseSource', label: 'Source', type: 'text', w: 92, emphasis: 'muted' },
   // Financial group — kept contiguous. Widths tuned for typical currency values.
-  { key: 'purchaseCost', label: 'Purchase', type: 'number', w: 92, align: 'right' },
-  { key: 'repairCost', label: 'Repair', type: 'number', w: 82, align: 'right' },
+  { key: 'purchaseCost', label: 'Purchase', type: 'number', w: 82, align: 'right' },
+  { key: 'repairCost', label: 'Repair', type: 'number', w: 72, align: 'right' },
   { key: '__total', label: 'Total Cost', type: 'computed', w: 96, align: 'right', compute: i => money(totalCost(i)), sortVal: totalCost },
-  { key: 'targetSalePrice', label: 'Target', type: 'number', w: 88, align: 'right' },
+  { key: 'targetSalePrice', label: 'Target', type: 'number', w: 76, align: 'right' },
   // Actual = the real sale price the device sold for; drives the Profit column.
-  { key: 'salePrice', label: 'Actual', type: 'number', w: 88, align: 'right' },
+  { key: 'salePrice', label: 'Actual', type: 'number', w: 76, align: 'right' },
   { key: '__profit', label: 'Profit', type: 'computed', w: 96, align: 'right', compute: i => i.salePrice ? money(profitOf(i)) : '—', sortVal: profitOf },
   // Sale group. (The device Status column is intentionally not shown in the
   // grid — status is still stored and driven via the Filters, the item form,
