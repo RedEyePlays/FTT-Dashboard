@@ -28,6 +28,7 @@ interface Props {
   onRecordPayment: (b: RepairBatch, amount: number) => void;
   onPrintAudit: (entityType: string, id: string, doc: string) => void;
   initialCustomer?: Customer;      // open a new prefilled ticket (CRM quick action)
+  initialRepairId?: string;        // open an existing ticket (global search)
   onConsumeInitial?: () => void;
 }
 
@@ -135,6 +136,16 @@ export const RepairsView: React.FC<Props> = (props) => {
     props.onConsumeInitial?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.initialCustomer?.id]);
+
+  // Open an existing ticket by id (from global search).
+  useEffect(() => {
+    const id = props.initialRepairId;
+    if (!id) return;
+    const r = props.repairs.find(x => x.id === id);
+    if (r) { setTab('tickets'); setDrawer({ repair: r, isNew: false }); }
+    props.onConsumeInitial?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.initialRepairId]);
   const newDevice = (batchId: string): Repair => ({ id: newId(), repairNumber: '', type: 'wholesale', batchId, createdAt: Date.now(), date: today(), issue: '', repairPrice: 0, status: 'received' });
   const newBatch = (): RepairBatch => ({ id: newId(), batchNumber: '', createdAt: Date.now(), dateReceived: today(), companyName: '', status: 'active', amountPaid: 0 });
 

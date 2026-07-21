@@ -71,62 +71,18 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   const moreItems = [...overflow, ...more];
   const moreActive = moreItems.some(i => i.view === view);
 
-  const initials = (userEmail.split('@')[0] || 'U').slice(0, 2).toUpperCase();
-
-  const AiMenu = (
-    <HeaderMenu
-      label="AI tools"
-      align="right"
-      panelClassName="w-52"
-      triggerClassName="flex items-center gap-1.5 px-3 h-10 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
-      trigger={<><Bot className="w-4 h-4" /><span>AI</span><ChevronDown className="w-3.5 h-3.5 opacity-60" /></>}
-    >
-      {(close) => (<>
-        <MenuItem icon={<Bot className="w-4 h-4" />} label="AI Assistant" active={view === 'ai'} onClick={() => { onNavigate('ai'); close(); }} />
-        <MenuItem icon={<MessageCircle className="w-4 h-4" />} label="Quick AI Chat" onClick={() => { onToggleAiSidebar(); close(); }} />
-        <MenuItem icon={<Sparkles className="w-4 h-4" />} label="AI Bulk Add" onClick={() => { onOpenBulk(); close(); }} />
-      </>)}
-    </HeaderMenu>
-  );
-
-  const MoreMenu = (
-    <HeaderMenu
-      label="More"
-      align="right"
-      panelClassName="w-56"
-      triggerClassName={`flex items-center gap-1.5 px-3 h-10 rounded-lg text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${
-        moreActive
-          ? 'bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300'
-          : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100'
-      }`}
-      trigger={<><MoreHorizontal className="w-4 h-4" /><span>More</span><ChevronDown className="w-3.5 h-3.5 opacity-60" /></>}
-    >
-      {(close) => (<>
-        {moreItems.map(i => (
-          <MenuItem key={i.key} icon={i.icon} label={i.label} active={i.view === view} onClick={() => { onNavigate(i.view); close(); }} />
-        ))}
-        <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
-        <MenuItem icon={<Calculator className="w-4 h-4" />} label="Profit Calculator" onClick={() => { onToggleCalculator(); close(); }} />
-      </>)}
-    </HeaderMenu>
-  );
-
-  const ProfileMenu = (
-    <HeaderMenu
-      label="Account menu"
-      align="right"
-      panelClassName="w-60"
-      triggerClassName="tap-target flex items-center justify-center rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
-      trigger={
-        <span className="w-9 h-9 rounded-full bg-gradient-to-br from-indigo-500 to-violet-600 text-white text-xs font-bold flex items-center justify-center shadow-sm">
-          {initials}
-        </span>
-      }
-    >
-      {(close) => (<>
-        <div className="px-3 py-2 mb-1 border-b border-slate-100 dark:border-slate-800">
-          <p className="text-sm font-semibold text-slate-800 dark:text-slate-100 truncate">{userEmail.split('@')[0]}</p>
-          <p className="text-xs text-slate-400 capitalize">{userRole}</p>
+      {/* Mobile header actions: search + theme + hamburger (opens the nav drawer). */}
+      {!isTech && (
+        <div className="flex md:hidden items-center gap-1">
+          <button onClick={onOpenFinder} aria-label="Search" className="tap-target flex items-center justify-center text-slate-500 dark:text-slate-400 rounded-lg">
+            <Search className="w-5 h-5" />
+          </button>
+          <button onClick={onToggleTheme} aria-label="Toggle theme" className="tap-target flex items-center justify-center text-slate-500 dark:text-slate-400 rounded-lg">
+            {darkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+          </button>
+          <button onClick={onOpenDrawer} aria-label="Open menu" className="tap-target flex items-center justify-center text-slate-600 dark:text-slate-300 rounded-lg">
+            <Menu className="w-6 h-6" />
+          </button>
         </div>
         <MenuItem
           icon={darkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
@@ -148,19 +104,11 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     </HeaderMenu>
   );
 
-  return (
-    <header className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 sticky top-0 z-30 shadow-sm shrink-0 safe-t">
-      <div className="w-full px-3 sm:px-4 lg:px-6 h-16 flex items-center gap-2 sm:gap-4">
-        {/* Brand */}
-        <button onClick={() => onNavigate(isTech ? 'repairs' : 'dashboard')} className="flex items-center gap-2 min-w-0 shrink-0 rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500" aria-label="FlipThatTech home">
-          <span className="bg-indigo-600 p-2 rounded-lg shadow-lg shadow-indigo-500/30 shrink-0">
-            <Activity className="w-5 h-5 text-white" />
-          </span>
-          <span className="hidden sm:block text-lg font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-700 to-violet-700 dark:from-indigo-400 dark:to-violet-400 whitespace-nowrap">
-            FlipThatTech
-          </span>
-          {/* Phones: show the current page title instead of the brand. */}
-          {!isTech && <span className="sm:hidden text-base font-bold text-slate-800 dark:text-slate-100 truncate">{pageTitle || 'FlipThatTech'}</span>}
+        <button onClick={onOpenFinder} title="Search (Ctrl/Cmd + K)" aria-label="Open global search"
+          className="flex items-center gap-2 pl-2.5 pr-2 py-1.5 text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-slate-700 rounded-lg hover:border-indigo-400 transition-colors">
+          <Search className="w-4 h-4" />
+          <span className="hidden lg:inline text-xs">Search</span>
+          <kbd className="hidden lg:inline text-[10px] border border-slate-200 dark:border-slate-700 rounded px-1 py-0.5">⌘K</kbd>
         </button>
 
         {isTech ? (

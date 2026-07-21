@@ -24,6 +24,8 @@ interface Props {
   auditLogs: AuditEntry[];
   canViewProfit: boolean;
   canEdit: boolean;
+  initialCustomerId?: string;   // open this customer's profile (from global search)
+  onConsumeInitial?: () => void;
   onSaveCustomer: (c: Customer, prev?: Customer) => void;
   onMergeCustomers?: (plan: MergePlan) => void;
   onStartSale?: (c: Customer) => void;
@@ -64,6 +66,13 @@ export const CustomersView: React.FC<Props> = (props) => {
   const duplicates = useMemo(() => findDuplicateGroups(customers), [customers]);
 
   const isMobile = useIsMobile();
+
+  // Deep-link: open a specific customer's profile (from global search).
+  React.useEffect(() => {
+    if (props.initialCustomerId) { setSelectedId(props.initialCustomerId); props.onConsumeInitial?.(); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.initialCustomerId]);
+
   const selected = customers.find(c => c.id === selectedId) || null;
   if (selected) {
     return <CustomerProfile {...props} customer={selected} data={data} onBack={() => setSelectedId(null)} />;
