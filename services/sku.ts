@@ -1,19 +1,15 @@
 import { DeviceType, ItemKind, InventoryItem } from '../types';
 
-// SKU prefix per device type; accessories/other share fixed prefixes.
-export const DEVICE_TYPE_PREFIX: Record<DeviceType, string> = {
-  Phone: 'PHN',
-  Laptop: 'LAP',
-  Tablet: 'TAB',
-  Console: 'CON',
-  Watch: 'WCH',
-  Other: 'OTH',
-};
+// Neutral, sequential SKU prefix for ALL new inventory (devices + accessories).
+// Previously SKUs were namespaced per device type (PHN-, LAP-, ACC-, …); new
+// items now share one running counter under this prefix, e.g. FTT-000001.
+export const INVENTORY_SKU_PREFIX = 'FTT';
 
-export const skuPrefix = (kind: ItemKind, deviceType?: DeviceType): string => {
-  if (kind === 'accessory') return 'ACC';
-  return DEVICE_TYPE_PREFIX[deviceType || 'Other'] || 'OTH';
-};
+// New items get a neutral sequential SKU regardless of kind/device type.
+// Existing SKUs (legacy prefixes) are stored as-is and display unchanged — only
+// newly generated SKUs use INVENTORY_SKU_PREFIX. The signature is unchanged so
+// callers/tests stay stable; the kind/deviceType args are intentionally ignored.
+export const skuPrefix = (_kind: ItemKind, _deviceType?: DeviceType): string => INVENTORY_SKU_PREFIX;
 
 export const formatSku = (prefix: string, n: number): string =>
   `${prefix}-${String(n).padStart(6, '0')}`;
