@@ -2,14 +2,15 @@ import React, { useState, useMemo, useRef, useEffect } from 'react';
 import {
   Search, Smartphone, Package, QrCode, Trash2, X, Plus, ScanLine, AlertTriangle,
   Columns3, SlidersHorizontal, Bookmark, Download, Upload, Copy, ChevronUp, ChevronDown,
-  ChevronLeft, ChevronRight, CheckSquare, Square, DollarSign, Boxes, TrendingUp, Wrench,
-  BadgeCheck, ShoppingBag, Pencil, MoreVertical, Printer, History, ScrollText,
+  ChevronLeft, ChevronRight, CheckSquare, Square, Boxes,
+  Pencil, MoreVertical, Printer, History, ScrollText,
 } from 'lucide-react';
 import { InventoryItem, Runner, ItemKind, DeviceType, DeviceStatus, ActivityEntry, AuditEntry } from '../types';
 import { ItemFormModal } from './ItemFormModal';
 import { LabelModal } from './LabelModal';
 import { useIsMobile } from '../hooks/useMediaQuery';
 import { ResponsiveDialog, EmptyState } from './responsive';
+import { InvSection, INV_SECTIONS } from '../domain/inventoryNav';
 
 interface Props {
   inventory: InventoryItem[];
@@ -17,6 +18,8 @@ interface Props {
   activity: ActivityEntry[];
   auditLogs?: AuditEntry[]; // display-only, for the per-row Audit Log popover
   canViewCost?: boolean;    // owner/authorized — show purchase cost on mobile cards
+  section: InvSection;              // active inventory section (URL-driven)
+  onSelectSection: (s: InvSection) => void; // switch section (updates the route)
   onSave: (item: InventoryItem) => void;
   onUpdate: (id: string, field: keyof InventoryItem, value: any) => void;
   onDelete: (id: string) => void;
@@ -24,9 +27,9 @@ interface Props {
   onSeed?: () => void;
 }
 
-// 'home' is the Inventory landing page; the others are independent sub-pages,
-// each with its own single table, controls, pagination, bulk actions and Add.
-type Page = 'home' | 'devices' | 'accessories' | 'sold' | 'lowstock';
+// Each section is an independent view with its own table, controls, pagination,
+// bulk actions and Add button. The active section is owned by App (URL-routed).
+type Page = InvSection;
 interface Sort { key: string; dir: 'asc' | 'desc'; }
 interface SavedView { name: string; page: Page; query: string; sort: Sort | null; statusFilter: string; hidden: Record<'device' | 'accessory', string[]>; }
 
@@ -75,8 +78,18 @@ interface Col { key: string; label: string; type: ColType; w: number; align?: 'r
 const opt = (arr: string[]) => arr.map(v => ({ value: v, label: v }));
 
 // Combined Brand + Model display (falls back to the item name). Read-only —
-// Brand/Model remain editable via the Columns menu and the expand form.
-const itemLabel = (i: InventoryItem) => [i.brand, i.model].filter(Boolean).join(' ') || i.item || '—';
+// Brand/Model stay in the data and remain editable via the expand form. The
+// brand is not repeated when the model already starts with it (e.g. brand
+// "Samsung" + model "Samsung Galaxy S24" → "Samsung Galaxy S24").
+export const deviceName = (i: InventoryItem): string => {
+  const brand = (i.brand || '').trim();
+  const model = (i.model || '').trim();
+  if (brand && model) {
+    return model.toLowerCase().startsWith(brand.toLowerCase()) ? model : `${brand} ${model}`;
+  }
+  return brand || model || i.item || '—';
+};
+const itemLabel = deviceName;
 
 const DEVICE_COLS: Col[] = [
   // Frozen identity block — stays visible while the row scrolls horizontally.
@@ -105,8 +118,9 @@ const DEVICE_COLS: Col[] = [
   { key: '__total', label: 'Total Cost', type: 'computed', w: 100, align: 'right', compute: i => money(totalCost(i)), sortVal: totalCost },
   { key: 'targetSalePrice', label: 'Target', type: 'number', w: 90, align: 'right' },
   { key: '__profit', label: 'Profit', type: 'computed', w: 100, align: 'right', compute: i => i.salePrice ? money(profitOf(i)) : '—', sortVal: profitOf },
-  // Sale group.
-  { key: 'deviceStatus', label: 'Status', type: 'select', w: 120, options: STATUS_OPTS },
+  // Sale group. (The device Status column is intentionally not shown in the
+  // grid — status is still stored and driven via the Filters, the item form,
+  // bulk actions, sold detection and analytics.)
   { key: 'soldDate', label: 'Date Sold', type: 'date', w: 130 },
   { key: 'soldTo', label: 'Customer', type: 'text', w: 130 },
   { key: 'notes', label: 'Notes', type: 'text', w: 220, emphasis: 'muted' },
@@ -154,11 +168,13 @@ const parseCSV = (text: string): Record<string, string>[] => {
   return rows.filter(r => r.some(x => x !== '')).map(r => Object.fromEntries(header.map((h, i) => [h.trim(), r[i] ?? ''])));
 };
 
-export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, auditLogs = [], canViewCost = false, onSave, onUpdate, onDelete, onGenerateSku, onSeed }) => {
+export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, auditLogs = [], canViewCost = false, section, onSelectSection, onSave, onUpdate, onDelete, onGenerateSku, onSeed }) => {
   const isMobile = useIsMobile();
   const [selectMode, setSelectMode] = useState(false); // mobile multi-select
   const [mobileFilter, setMobileFilter] = useState(false);
-  const [page, setPage] = useState<Page>('home');
+  // The active section is controlled by App (URL-routed); `setPage` navigates.
+  const page = section;
+  const setPage = onSelectSection;
   const [pageNum, setPageNum] = useState(1); // pagination within the active sub-page
   const [historyItem, setHistoryItem] = useState<{ item: InventoryItem; mode: 'history' | 'audit' } | null>(null);
   const [query, setQuery] = useState('');
@@ -177,21 +193,6 @@ export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, a
   useEffect(() => { localStorage.setItem(LS_VIEWS, JSON.stringify(views)); }, [views]);
   // Reset pagination + selection whenever the active page or its filters change.
   useEffect(() => { setPageNum(1); setSelected(new Set()); }, [page, query, statusFilter, sort]);
-
-  const summary = useMemo(() => {
-    const devices = inventory.filter(i => kindOf(i) === 'device');
-    const accessories = inventory.filter(i => kindOf(i) === 'accessory');
-    const invCost = inventory.reduce((s, i) => s + (kindOf(i) === 'accessory' ? (i.costPerUnit || 0) * (i.quantity || 0) : totalCost(i)), 0);
-    const retail = inventory.reduce((s, i) => s + (kindOf(i) === 'accessory' ? (i.sellingPrice || 0) * (i.quantity || 0) : (i.targetSalePrice || 0)), 0);
-    return {
-      totalDevices: devices.length,
-      invCost, retail,
-      ready: devices.filter(i => i.deviceStatus === 'ready').length,
-      pendingRepair: devices.filter(i => i.deviceStatus === 'pending_repair').length,
-      sold: inventory.filter(isSold).length,
-      low: accessories.filter(isLow).length,
-    };
-  }, [inventory]);
 
   const counts = useMemo(() => ({
     all: inventory.length,
@@ -319,26 +320,28 @@ export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, a
 
   const visCols = (kind: 'device' | 'accessory', cols: Col[]) => cols.filter(c => !c.hideCol && !hidden[kind].includes(c.key));
 
-  // Landing-page navigation tile → opens an independent sub-page.
-  const navTile = (id: Page, label: string, desc: string, n: number, icon: React.ReactNode, accent: string) => (
-    <button key={id} onClick={() => setPage(id)}
-      className="group text-left bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl p-4 hover:border-indigo-400 dark:hover:border-indigo-500 hover:shadow-md transition-all flex items-center gap-4">
-      <div className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 ${accent}`}>{icon}</div>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center justify-between gap-2">
-          <p className="font-bold text-slate-800 dark:text-slate-100">{label}</p>
-          <span className="text-lg font-bold text-slate-800 dark:text-slate-100">{n}</span>
-        </div>
-        <p className="text-xs text-slate-500 dark:text-slate-400 truncate">{desc}</p>
-      </div>
-    </button>
-  );
+  const sectionCount: Record<InvSection, number> = { devices: counts.devices, accessories: counts.accessories, sold: counts.sold, lowstock: counts.lowstock };
 
-  const card = (icon: React.ReactNode, label: string, value: string, accent: string) => (
-    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-3 flex items-center gap-3">
-      <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${accent}`}>{icon}</div>
-      <div className="min-w-0"><p className="text-[11px] text-slate-400 uppercase tracking-wide truncate">{label}</p><p className="text-lg font-bold text-slate-800 dark:text-slate-100 leading-tight">{value}</p></div>
-    </div>
+  // Compact top navigation: switches inventory sections (not table filters).
+  // A single horizontally-scrollable pill row serves both desktop and mobile,
+  // so it never causes page-level horizontal overflow.
+  const SectionSwitcher = (
+    <nav aria-label="Inventory sections" className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
+      {INV_SECTIONS.map(s => {
+        const active = page === s.id;
+        return (
+          <button key={s.id} onClick={() => setPage(s.id)} aria-current={active ? 'page' : undefined}
+            className={`shrink-0 whitespace-nowrap flex items-center gap-2 px-3.5 py-2 rounded-lg text-sm font-medium border transition-colors ${
+              active
+                ? 'bg-indigo-600 border-indigo-600 text-white shadow-sm'
+                : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 hover:border-indigo-300'
+            }`}>
+            {s.label}
+            <span className={`text-xs ${active ? 'text-indigo-100' : 'text-slate-400'}`}>{sectionCount[s.id]}</span>
+          </button>
+        );
+      })}
+    </nav>
   );
 
   if (inventory.length === 0) {
@@ -360,56 +363,14 @@ export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, a
 
   return (
     <div className="flex flex-col gap-4 h-full" onClick={() => menu && setMenu(null)}>
-      {page === 'home' ? (
-        /* ------------------------- Inventory landing ------------------------- */
-        <>
-          <div>
-            <h2 className="text-xl font-bold text-slate-800 dark:text-slate-100">Inventory</h2>
-            <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">Choose a list to manage. Each has its own table, search, filters and actions.</p>
-          </div>
+      {/* Top section switcher (Devices / Accessories / Sold / Low Stock) */}
+      {SectionSwitcher}
 
-          {/* Summary cards */}
-          <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-3">
-            {card(<Boxes className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />, 'Total Devices', String(summary.totalDevices), 'bg-indigo-100 dark:bg-indigo-900/30')}
-            {card(<DollarSign className="w-4 h-4 text-slate-600 dark:text-slate-300" />, 'Inventory Cost', money(summary.invCost), 'bg-slate-100 dark:bg-slate-800')}
-            {card(<TrendingUp className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />, 'Est. Retail', money(summary.retail), 'bg-emerald-100 dark:bg-emerald-900/30')}
-            {card(<BadgeCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />, 'Ready', String(summary.ready), 'bg-emerald-100 dark:bg-emerald-900/30')}
-            {card(<Wrench className="w-4 h-4 text-orange-600 dark:text-orange-400" />, 'Pending Repair', String(summary.pendingRepair), 'bg-orange-100 dark:bg-orange-900/30')}
-            {card(<ShoppingBag className="w-4 h-4 text-slate-600 dark:text-slate-300" />, 'Sold', String(summary.sold), 'bg-slate-100 dark:bg-slate-800')}
-            {card(<AlertTriangle className="w-4 h-4 text-rose-600 dark:text-rose-400" />, 'Low Stock', String(summary.low), 'bg-rose-100 dark:bg-rose-900/30')}
-          </div>
-
-          {/* Navigation tiles → independent sub-pages */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {navTile('devices', 'Devices', 'Phones, tablets, laptops & more', counts.devices, <Smartphone className="w-6 h-6 text-indigo-600 dark:text-indigo-400" />, 'bg-indigo-100 dark:bg-indigo-900/30')}
-            {navTile('accessories', 'Accessories', 'Cases, cables, chargers & parts', counts.accessories, <Package className="w-6 h-6 text-violet-600 dark:text-violet-400" />, 'bg-violet-100 dark:bg-violet-900/30')}
-            {navTile('sold', 'Sold', 'Completed device sales', counts.sold, <ShoppingBag className="w-6 h-6 text-slate-600 dark:text-slate-300" />, 'bg-slate-100 dark:bg-slate-800')}
-            {navTile('lowstock', 'Low Stock', 'Accessories at or below their threshold', counts.lowstock, <AlertTriangle className="w-6 h-6 text-rose-600 dark:text-rose-400" />, 'bg-rose-100 dark:bg-rose-900/30')}
-          </div>
-
-          {/* Quick add + CSV */}
-          <div className="flex flex-wrap gap-2">
-            <button onClick={addDeviceRow} className="flex items-center gap-2 px-3 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium"><Smartphone className="w-4 h-4" /> Add Device</button>
-            <button onClick={addAccessoryRow} className="flex items-center gap-2 px-3 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-lg text-sm font-medium hover:border-indigo-400"><Package className="w-4 h-4" /> Add Accessory</button>
-            <button onClick={exportAll} className="hidden sm:flex items-center gap-2 px-3 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-700 dark:text-slate-200 hover:border-indigo-400"><Download className="w-4 h-4" /> Export CSV</button>
-            <button onClick={() => fileRef.current?.click()} className="hidden sm:flex items-center gap-2 px-3 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-700 dark:text-slate-200 hover:border-indigo-400"><Upload className="w-4 h-4" /> Import CSV</button>
-            <input ref={fileRef} type="file" accept=".csv" className="hidden" onChange={e => e.target.files?.[0] && importCSV(e.target.files[0])} />
-          </div>
-        </>
-      ) : (
-        /* --------------------- Sub-page: one table per page --------------------- */
-        <>
-          {/* Breadcrumb + title */}
-          <div className="flex items-center gap-3">
-            <button onClick={() => setPage('home')} aria-label="Back to Inventory" className="tap-target flex items-center justify-center rounded-lg border border-slate-200 dark:border-slate-700 text-slate-500 hover:text-indigo-600 hover:border-indigo-400"><ChevronLeft className="w-5 h-5" /></button>
-            <div className="min-w-0">
-              <div className="flex items-center gap-1 text-xs text-slate-400">
-                <button onClick={() => setPage('home')} className="hover:text-indigo-600">Inventory</button>
-                <ChevronRight className="w-3 h-3" /><span className="text-slate-500 dark:text-slate-300">{activeTitle}</span>
-              </div>
-              <h2 className="text-lg font-bold text-slate-800 dark:text-slate-100 leading-tight">{activeTitle} <span className="text-sm font-normal text-slate-400">{activeRows.length}</span></h2>
-            </div>
-          </div>
+      {/* Section title */}
+      <div className="flex items-baseline gap-2">
+        <h2 className="text-lg font-bold text-slate-800 dark:text-slate-100 leading-tight">{activeTitle}</h2>
+        <span className="text-sm text-slate-400">{activeRows.length}</span>
+      </div>
 
           {/* Controls (scoped to this page) */}
           <div className="flex flex-wrap items-center gap-2">
@@ -553,8 +514,6 @@ export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, a
               <button onClick={() => setSelected(new Set())} className="text-sm px-2 py-1 rounded-md text-slate-500">Clear</button>
             </div>
           )}
-        </>
-      )}
 
       {/* Mobile filter + sort sheet */}
       <ResponsiveDialog open={mobileFilter} onClose={() => setMobileFilter(false)} title="Filters & sort"
@@ -833,7 +792,7 @@ const BrandModelPopover: React.FC<{ item: InventoryItem; x: number; y: number; o
 /* ---------------- Mobile inventory card ---------------- */
 const salePriceOf = (i: InventoryItem) => kindOf(i) === 'device' ? (i.salePrice || i.targetSalePrice || 0) : (i.sellingPrice || 0);
 const costOf = (i: InventoryItem) => kindOf(i) === 'device' ? (i.purchaseCost || 0) : (i.costPerUnit || 0);
-const nameOf = (i: InventoryItem) => i.item || [i.brand, i.model].filter(Boolean).join(' ') || i.sku || 'Item';
+const nameOf = (i: InventoryItem) => kindOf(i) === 'device' ? deviceName(i) : (i.item || i.sku || 'Item');
 
 const InvCard: React.FC<{
   item: InventoryItem;
@@ -847,7 +806,7 @@ const InvCard: React.FC<{
   onDelete: (id: string) => void;
   onDuplicate: (i: InventoryItem) => void;
   onHistory: (mode: 'history' | 'audit') => void;
-}> = ({ item: i, canViewCost, selectMode, selected, onToggleSel, onOpen, onLabel, onUpdate, onDelete, onDuplicate, onHistory }) => {
+}> = ({ item: i, canViewCost, selectMode, selected, onToggleSel, onOpen, onLabel, onDelete, onDuplicate, onHistory }) => {
   const [menu, setMenu] = useState(false);
   const isDevice = kindOf(i) === 'device';
   const copy = (v?: string) => v && navigator.clipboard?.writeText(v).catch(() => {});
@@ -868,9 +827,9 @@ const InvCard: React.FC<{
         <button onClick={tap} className="text-left min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-semibold text-slate-800 dark:text-slate-100 truncate">{nameOf(i)}</span>
-            {isDevice
-              ? <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${STATUS_CELL[(i.deviceStatus as DeviceStatus) || 'ready']}`}>{STATUS_SHORT[(i.deviceStatus as DeviceStatus) || 'ready']}</span>
-              : (i.quantity ?? 0) <= (i.lowStockThreshold ?? 0) && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300">Low · {i.quantity ?? 0}</span>}
+            {/* Devices no longer show a status badge here (status removed from the
+                device view); accessories still flag low stock. */}
+            {!isDevice && (i.quantity ?? 0) <= (i.lowStockThreshold ?? 0) && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300">Low · {i.quantity ?? 0}</span>}
           </div>
         </button>
         <div className="flex items-center gap-0.5 shrink-0">
@@ -880,7 +839,6 @@ const InvCard: React.FC<{
       </div>
 
       <button onClick={tap} className="w-full text-left mt-2 block">
-        {(i.brand || i.model) && <Row label="Brand / Model">{[i.brand, i.model].filter(Boolean).join(' ') || '—'}</Row>}
         <Row label="SKU"><span className="font-mono">{i.sku || '—'}</span></Row>
         {isDevice && i.imei && <Row label="IMEI / Serial"><span className="font-mono">{i.imei}</span></Row>}
         {isDevice && (i.storage || i.color) && <Row label="Storage / Color">{[i.storage, i.color].filter(Boolean).join(' · ') || '—'}</Row>}
@@ -888,16 +846,6 @@ const InvCard: React.FC<{
         {canViewCost && <Row label="Purchase cost">{money(costOf(i))}</Row>}
         <Row label="Date added">{i.date || '—'}</Row>
       </button>
-
-      {/* Quick status change (devices) */}
-      {isDevice && !selectMode && (
-        <div className="mt-2">
-          <select value={(i.deviceStatus as any) ?? 'ready'} onChange={e => onUpdate(i.id, 'deviceStatus', e.target.value)}
-            className={`w-full appearance-none cursor-pointer rounded-lg px-2.5 py-2 text-xs font-semibold outline-none ${STATUS_CELL[(i.deviceStatus as DeviceStatus) || 'ready']}`}>
-            {STATUS_OPTS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-          </select>
-        </div>
-      )}
 
       {menu && (
         <>
