@@ -595,9 +595,7 @@ const App: React.FC = () => {
           userRole={appUser.role}
           darkMode={darkMode}
           onToggleTheme={() => setDarkMode(!darkMode)}
-          isAiSidebarOpen={false}
           onToggleAiSidebar={() => {}}
-          showCalculator={false}
           onToggleCalculator={() => {}}
           onOpenFinder={() => {}}
           onOpenSettings={() => {}}
@@ -631,15 +629,14 @@ const App: React.FC = () => {
         userRole={appUser.role}
         darkMode={darkMode}
         onToggleTheme={() => setDarkMode(!darkMode)}
-        isAiSidebarOpen={isAiSidebarOpen}
         onToggleAiSidebar={() => setIsAiSidebarOpen(!isAiSidebarOpen)}
-        showCalculator={showCalculator}
         onToggleCalculator={() => setShowCalculator(!showCalculator)}
         onOpenFinder={() => setShowFinder(true)}
         onOpenSettings={() => setView('settings')}
         onOpenBulk={() => setShowBulkModal(true)}
         onStartAdd={handleStartAdd}
         onLock={handleLock}
+        activity={activityLog}
       />
 
       {/* Mobile slide-out nav (all destinations + actions) */}

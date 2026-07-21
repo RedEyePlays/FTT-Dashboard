@@ -58,7 +58,7 @@ export const MobileDrawer: React.FC<Props> = ({
   const actions: Item[] = [
     { label: 'Find item', icon: <Search className="w-5 h-5" />, on: () => act(onOpenFinder), show: true },
     { label: 'AI Bulk Add', icon: <Sparkles className="w-5 h-5" />, on: () => act(onOpenBulk), show: true },
-    { label: 'Settings & Backup', icon: <Settings className="w-5 h-5" />, on: () => act(onOpenSettings), show: true },
+    { label: 'Settings', icon: <Settings className="w-5 h-5" />, on: () => act(onOpenSettings), show: allow('settings.manage') },
     { label: darkMode ? 'Light theme' : 'Dark theme', icon: darkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />, on: () => onToggleTheme(), show: true },
     { label: 'Lock app', icon: <Lock className="w-5 h-5" />, on: () => act(onLock), show: true },
   ];
