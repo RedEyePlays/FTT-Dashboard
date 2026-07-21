@@ -42,6 +42,7 @@ import { AppSettings } from './domain/settings';
 import { useWorkspaceData } from './hooks/useWorkspaceData';
 import { newId, mkActivity } from './domain/ids';
 import { collectionFor, decrementStock } from './domain/inventory';
+import { InvSection, DEFAULT_INV_SECTION, invPath, parseInvPath } from './domain/inventoryNav';
 import { AppHeader } from './components/AppHeader';
 import { MobileNav } from './components/MobileNav';
 import { MobileDrawer } from './components/MobileDrawer';
@@ -70,6 +71,8 @@ const App: React.FC = () => {
 
   // --- UI STATE ---
   const [view, setView] = useState<ViewState>('dashboard');
+  // Active Inventory sub-section, mirrored to the URL (/inventory/<section>).
+  const [invSection, setInvSection] = useState<InvSection>(DEFAULT_INV_SECTION);
   // A customer to pre-seed the POS / Repairs view with (from a CRM quick action).
   const [prefillCustomer, setPrefillCustomer] = useState<Customer | undefined>(undefined);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -169,7 +172,7 @@ const App: React.FC = () => {
   const handleSearchSelect = (r: SearchResult) => {
     setShowFinder(false);
     switch (r.type) {
-      case 'page': if (r.action === 'settings') setShowSettingsModal(true); else if (r.view) setView(r.view); break;
+      case 'page': if (r.action === 'settings') setShowSettingsModal(true); else if (r.view) navigate(r.view); break;
       case 'inventory': { const it = data.find(i => i.id === r.itemId); if (it) { setEditingItem(it); setView('edit'); } break; }
       case 'repair': setFocusRepairId(r.itemId); setView('repairs'); break;
       case 'customer': setFocusCustomerId(r.itemId); setView('customers'); break;
@@ -231,6 +234,42 @@ const App: React.FC = () => {
     if (lv && lv !== 'dashboard' && lv !== 'entry' && lv !== 'edit') setView(lv);
   }, [appUser, dbLoading, settings.dashboard.landingView]);
 
+  // --- Inventory routing (/inventory/<section>) -------------------------------
+  // Open Inventory at a section, syncing the URL so refresh + shared links work.
+  const goInventory = (s: InvSection) => {
+    setInvSection(s);
+    setView('grid');
+    const path = invPath(s);
+    if (window.location.pathname !== path) window.history.pushState(null, '', path);
+  };
+  // Navigation wrapper for the nav surfaces: clicking Inventory opens Devices;
+  // leaving Inventory clears the /inventory path back to root.
+  const navigate = (v: ViewState) => {
+    if (v === 'grid') { goInventory(DEFAULT_INV_SECTION); return; }
+    if (parseInvPath(window.location.pathname)) window.history.pushState(null, '', '/');
+    setView(v);
+  };
+  // On first load, restore the section from the URL (/inventory → devices).
+  useEffect(() => {
+    const s = parseInvPath(window.location.pathname);
+    if (s) {
+      landingAppliedRef.current = true; // an explicit inventory URL wins over the configured landing page
+      setInvSection(s);
+      setView('grid');
+      const path = invPath(s);
+      if (window.location.pathname !== path) window.history.replaceState(null, '', path);
+    }
+    // Back/forward between inventory sections (and out to the app).
+    const onPop = () => {
+      const sec = parseInvPath(window.location.pathname);
+      if (sec) { setInvSection(sec); setView('grid'); }
+      else setView('dashboard');
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Persist owner settings to Firestore, and mirror the few values that other
   // components read from localStorage (POS tax rate, default label template).
   const handleSaveSettings = async (next: AppSettings) => {
@@ -253,7 +292,7 @@ const App: React.FC = () => {
       else audit('inventory.edit', collectionFor(item), item.id);
       saveItem(uid, collectionFor(item), item);
     }
-    setView('grid');
+    goInventory(DEFAULT_INV_SECTION);
     setEditingItem(undefined);
   };
 
@@ -327,7 +366,7 @@ const App: React.FC = () => {
 
   const handleBulkImport = (items: InventoryItem[]) => {
     if (uid) items.forEach(it => saveItem(uid, collectionFor(it), it));
-    setView('grid');
+    goInventory(DEFAULT_INV_SECTION);
   };
 
   const handleRestoreData = async (restoredData: AppData) => {
@@ -589,7 +628,7 @@ const App: React.FC = () => {
         <AppHeader
           isTech
           view="repairs"
-          onNavigate={setView}
+          onNavigate={navigate}
           allow={allow}
           userEmail={appUser.email}
           userRole={appUser.role}
@@ -621,7 +660,7 @@ const App: React.FC = () => {
       {/* Header */}
       <AppHeader
         view={view}
-        onNavigate={setView}
+        onNavigate={navigate}
         allow={allow}
         pageTitle={PAGE_TITLES[view]}
         onOpenDrawer={() => setDrawerOpen(true)}
@@ -644,7 +683,7 @@ const App: React.FC = () => {
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         view={view}
-        onNavigate={setView}
+        onNavigate={navigate}
         allow={allow}
         userRole={appUser.role}
         userEmail={appUser.email}
@@ -657,7 +696,7 @@ const App: React.FC = () => {
       />
 
       {/* Mobile bottom navigation (top 5 destinations) */}
-      <MobileNav view={view} onNavigate={setView} allow={allow} onOpenMore={() => setDrawerOpen(true)} />
+      <MobileNav view={view} onNavigate={navigate} allow={allow} onOpenMore={() => setDrawerOpen(true)} />
 
       {/* Main Content */}
       <main className={`mx-auto px-3 sm:px-6 lg:px-8 py-6 sm:py-8 flex-1 w-full flex flex-col ${view === 'grid' || view === 'ai' ? 'max-w-[98%]' : 'max-w-7xl'}`}>
@@ -724,6 +763,8 @@ const App: React.FC = () => {
               activity={activityLog}
               auditLogs={auditLogs}
               canViewCost={allow('reports.profit')}
+              section={invSection}
+              onSelectSection={goInventory}
               onSave={handleSaveInventoryItem}
               onUpdate={handleUpdateItem}
               onDelete={handleDeleteItem}
