@@ -5,6 +5,7 @@ import {
   Printer, RotateCcw, Eye, X,
 } from 'lucide-react';
 import { InventoryItem, Customer } from '../types';
+import { getDeviceDisplayName } from '../domain/inventory';
 import { useCheckout, CartCheckout } from '../hooks/useCheckout';
 import { CustomerSearchInput } from './CustomerSearchInput';
 import { LabelModal } from './LabelModal';
@@ -262,7 +263,7 @@ export const MobileCheckout: React.FC<Props> = (props) => {
             {pickerItems.map(i => (
               <button key={i.id} onClick={() => { pick === 'device' ? cx.addDevice(i) : cx.addAccessory(i); setPick(null); }}
                 className="w-full text-left px-3 py-3 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-800 flex justify-between items-center">
-                <div className="min-w-0"><p className="font-semibold text-slate-800 dark:text-slate-100 truncate">{i.item || [i.brand, i.model].filter(Boolean).join(' ')}</p><p className="text-xs font-mono text-slate-400 truncate">{i.sku || i.imei || i.manufacturerBarcode || '—'}</p></div>
+                <div className="min-w-0"><p className="font-semibold text-slate-800 dark:text-slate-100 truncate">{getDeviceDisplayName(i)}</p><p className="text-xs font-mono text-slate-400 truncate">{i.sku || i.imei || i.manufacturerBarcode || '—'}</p></div>
                 <span className="text-xs text-slate-500 shrink-0 ml-2">{pick === 'device' ? money(i.targetSalePrice || 0) : `${i.quantity} · ${money(i.sellingPrice || 0)}`}</span>
               </button>
             ))}
