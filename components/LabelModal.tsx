@@ -4,7 +4,7 @@ import QRCode from 'qrcode';
 import JsBarcode from 'jsbarcode';
 import { jsPDF } from 'jspdf';
 import { InventoryItem, DeviceStatus } from '../types';
-import { getDeviceDisplayName } from '../domain/inventory';
+import { getDeviceDisplayName, kindOf } from '../domain/inventory';
 import { LabelMedia, LabelContent, labelPreview, labelPrintDoc, mmOf } from '../services/labelLayout';
 
 interface Props {
@@ -49,12 +49,20 @@ const loadPrefs = (): LabelPrefs => {
   }
 };
 
-const genBarcode = (value: string): string => {
-  try {
+// Pick a retail symbology for a plain numeric UPC/EAN; otherwise CODE128.
+const barcodeFormat = (v: string): string =>
+  /^\d{12}$/.test(v) ? 'UPC' : /^\d{13}$/.test(v) ? 'EAN13' : /^\d{8}$/.test(v) ? 'EAN8' : 'CODE128';
+
+const genBarcode = (value: string, opts?: { format?: string; displayValue?: boolean }): string => {
+  const displayValue = opts?.displayValue ?? false;
+  const render = (format: string): string => {
     const c = document.createElement('canvas');
-    JsBarcode(c, value || '0', { format: 'CODE128', displayValue: false, margin: 0, height: 80, width: 2 });
+    JsBarcode(c, value || '0', { format, displayValue, margin: displayValue ? 6 : 0, height: 90, width: 2, fontSize: 20, textMargin: 2 });
     return c.toDataURL('image/png');
-  } catch { return ''; }
+  };
+  try { return render(opts?.format || 'CODE128'); }
+  // A value that doesn't fit the chosen retail symbology falls back to CODE128.
+  catch { try { return render('CODE128'); } catch { return ''; } }
 };
 
 export const LabelModal: React.FC<Props> = ({ item, onClose }) => {
@@ -62,17 +70,26 @@ export const LabelModal: React.FC<Props> = ({ item, onClose }) => {
   const [qr, setQr] = useState('');
   const [barcode, setBarcode] = useState('');
 
+  const isAccessory = kindOf(item) === 'accessory';
   const sku = item.sku || item.imei || '';
+  // Accessories print a UPC barcode only — prefer the manufacturer UPC.
+  const upc = (item.manufacturerBarcode || item.sku || '').trim();
   const dn = getDeviceDisplayName(item);
   const name = dn === '—' ? 'Item' : dn;
   const media = TEMPLATES.find(t => t.id === prefs.template)!;
   const status = item.deviceStatus ? STATUS_LABEL[item.deviceStatus] : '';
 
   useEffect(() => {
-    // QR + barcode both encode the SKU; margin:2 gives the QR a scan quiet zone.
+    if (isAccessory) {
+      // UPC barcode only: encode the manufacturer UPC with readable digits, no QR.
+      setQr('');
+      setBarcode(genBarcode(upc || sku, { format: barcodeFormat(upc || sku), displayValue: true }));
+      return;
+    }
+    // Devices: QR + optional CODE128 barcode, both encoding the SKU.
     QRCode.toDataURL(sku || 'N/A', { margin: 2, width: 320, errorCorrectionLevel: 'M' }).then(setQr).catch(() => setQr(''));
     setBarcode(genBarcode(sku));
-  }, [sku]);
+  }, [sku, upc, isAccessory]);
 
   const update = (next: Partial<LabelPrefs>) => {
     setPrefs(prev => {
@@ -84,14 +101,17 @@ export const LabelModal: React.FC<Props> = ({ item, onClose }) => {
 
   const content: LabelContent = {
     org: 'FlipThatTech',
-    code: sku,
+    code: isAccessory ? (upc || sku) : sku,
     device: name,
     sub: [item.storage, item.color].filter(Boolean).join(' · ') || undefined,
     serial: item.imei || undefined,
     status: status || undefined,
   };
-  const images = { qr, barcode };
-  const opts = { showBarcode: prefs.showBarcode, showStatus: prefs.showStatus };
+  const images = { qr: isAccessory ? '' : qr, barcode };
+  // Accessories: barcode-only label (no QR / text / status).
+  const opts = isAccessory
+    ? { showBarcode: true, showStatus: false, barcodeOnly: true }
+    : { showBarcode: prefs.showBarcode, showStatus: prefs.showStatus };
 
   const handlePrint = () => {
     const win = window.open('', '_blank', 'width=520,height=680');
@@ -104,6 +124,19 @@ export const LabelModal: React.FC<Props> = ({ item, onClose }) => {
     const { w, h } = mmOf(media);
     // PDF in mm; DYMO stays landscape here since a PDF has no feed constraint.
     const pdf = new jsPDF({ unit: 'mm', format: [w, h], orientation: w > h ? 'landscape' : 'portrait' });
+
+    if (isAccessory) {
+      // UPC barcode only, centered, proportionally scaled to the label.
+      const pad = 2;
+      if (barcode) {
+        const bw = w - pad * 2;
+        const bh = Math.min(h - pad * 2, bw * 0.5);
+        pdf.addImage(barcode, 'PNG', pad, (h - bh) / 2, bw, bh);
+      }
+      pdf.save(`${upc || sku || 'label'}.pdf`);
+      return;
+    }
+
     const pad = media.dymo ? 1.3 : 1.6;
     const qrS = media.dymo ? h - pad * 2 - (prefs.showBarcode ? 6.5 : 0) : Math.min(w, h) * (media.h >= 3 ? 0.42 : 0.6);
     pdf.setFont('helvetica', 'bold'); pdf.setFontSize(7); pdf.text('FlipThatTech', pad, pad + 2.6);
@@ -140,16 +173,22 @@ export const LabelModal: React.FC<Props> = ({ item, onClose }) => {
             </div>
           </div>
 
-          <div className="flex flex-col gap-2">
-            <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300 cursor-pointer">
-              <input type="checkbox" checked={prefs.showBarcode} onChange={e => update({ showBarcode: e.target.checked })} className="rounded" />
-              Show barcode
-            </label>
-            <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300 cursor-pointer">
-              <input type="checkbox" checked={prefs.showStatus} onChange={e => update({ showStatus: e.target.checked })} className="rounded" disabled={!status} />
-              Show status badge{!status && <span className="text-xs text-slate-400">(no status on this item)</span>}
-            </label>
-          </div>
+          {isAccessory ? (
+            <div className="text-xs text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2">
+              Accessory labels print the <span className="font-semibold">UPC barcode only</span> ({barcodeFormat(upc || sku) === 'CODE128' ? 'CODE128' : barcodeFormat(upc || sku)}) from {item.manufacturerBarcode ? 'the manufacturer barcode' : 'the SKU'}.
+            </div>
+          ) : (
+            <div className="flex flex-col gap-2">
+              <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300 cursor-pointer">
+                <input type="checkbox" checked={prefs.showBarcode} onChange={e => update({ showBarcode: e.target.checked })} className="rounded" />
+                Show barcode
+              </label>
+              <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300 cursor-pointer">
+                <input type="checkbox" checked={prefs.showStatus} onChange={e => update({ showStatus: e.target.checked })} className="rounded" disabled={!status} />
+                Show status badge{!status && <span className="text-xs text-slate-400">(no status on this item)</span>}
+              </label>
+            </div>
+          )}
 
           <div className="flex justify-center bg-slate-100 dark:bg-slate-800 rounded-xl p-4 overflow-auto">
             <div dangerouslySetInnerHTML={{ __html: labelPreview(media, content, images, opts) }} />
