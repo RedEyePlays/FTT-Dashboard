@@ -12,7 +12,7 @@ import { useIsMobile } from '../hooks/useMediaQuery';
 import { ResponsiveDialog, EmptyState } from './responsive';
 import { InvSection, INV_SECTIONS } from '../domain/inventoryNav';
 import { getDeviceDisplayName } from '../domain/inventory';
-import { columnWidth, clampWidth, tableWidth } from '../domain/columnLayout';
+import { clampWidth, fitWidths } from '../domain/columnLayout';
 
 interface Props {
   inventory: InventoryItem[];
@@ -83,53 +83,58 @@ const opt = (arr: string[]) => arr.map(v => ({ value: v, label: v }));
 // combined name (with legacy fallbacks) is identical everywhere it appears.
 const itemLabel = getDeviceDisplayName;
 
+// Minimums are kept lean so the full default column set still fits within the
+// container (no horizontal scroll) even at ~1024px — the bounded fit shrinks
+// columns toward these mins. Notes is capped at 300 and opened via a drawer.
 const DEVICE_COLS: Col[] = [
-  // Frozen identity block — stays visible while the row scrolls horizontally.
-  { key: 'date', label: 'Date In', type: 'date', w: 116, min: 92, max: 140, frozen: true },
-  { key: 'sku', label: 'SKU', type: 'text', w: 116, min: 100, max: 160, frozen: true, emphasis: 'muted' },
-  { key: 'imei', label: 'IMEI/Serial', type: 'text', w: 160, min: 130, max: 240, frozen: true, emphasis: 'muted' },
-  { key: '__item', label: 'Item', type: 'computed', w: 200, min: 160, flex: true, frozen: true, emphasis: 'strong', compute: itemLabel, sortVal: i => itemLabel(i).toLowerCase() },
+  // Frozen identity block — stays pinned to the left. Defaults are compact so the
+  // full set leaves some unused width to grow into on wide screens; mins sum
+  // small enough that everything still fits (no scroll) down to ~1024px.
+  { key: 'date', label: 'Date In', type: 'date', w: 96, min: 54, max: 140, frozen: true },
+  { key: 'sku', label: 'SKU', type: 'text', w: 100, min: 68, max: 160, frozen: true, emphasis: 'muted' },
+  { key: 'imei', label: 'IMEI/Serial', type: 'text', w: 140, min: 68, max: 240, frozen: true, emphasis: 'muted' },
+  { key: '__item', label: 'Item', type: 'computed', w: 170, min: 80, max: 400, flex: true, frozen: true, emphasis: 'strong', compute: itemLabel, sortVal: i => itemLabel(i).toLowerCase() },
   // Type/Brand/Model are not shown in the table (Brand+Model live in the Item
   // column and its inline editor; Type is edited in the form). Kept here with
   // hideCol so CSV export still round-trips them.
   { key: 'deviceType', label: 'Type', type: 'text', w: 76, hideCol: true },
   { key: 'brand', label: 'Brand', type: 'text', w: 100, hideCol: true },
   { key: 'model', label: 'Model', type: 'text', w: 140, hideCol: true },
-  { key: 'storage', label: 'Storage', type: 'text', w: 90, min: 72, max: 120 },
-  { key: 'color', label: 'Color', type: 'text', w: 100, min: 80, max: 150 },
-  { key: 'batteryHealth', label: 'Battery', type: 'text', w: 72, min: 56, max: 110 },
-  { key: 'condition', label: 'Condition', type: 'select', w: 108, min: 88, max: 150, options: opt(CONDITIONS) },
+  { key: 'storage', label: 'Storage', type: 'text', w: 84, min: 46, max: 120 },
+  { key: 'color', label: 'Color', type: 'text', w: 90, min: 48, max: 150 },
+  { key: 'batteryHealth', label: 'Battery', type: 'text', w: 68, min: 40, max: 110 },
+  { key: 'condition', label: 'Condition', type: 'select', w: 108, min: 80, max: 150, options: opt(CONDITIONS) },
   // 'Bought From' is no longer shown in the grid (or Columns menu). Kept here
   // with hideCol so the value still round-trips through CSV export and stays in
   // Firestore; it remains editable in the expand form.
   { key: 'boughtFrom', label: 'Bought From', type: 'text', w: 130, emphasis: 'muted', hideCol: true },
-  { key: 'purchaseSource', label: 'Source', type: 'text', w: 100, min: 80, max: 140, emphasis: 'muted' },
+  { key: 'purchaseSource', label: 'Source', type: 'text', w: 84, min: 42, max: 140, emphasis: 'muted' },
   // Financial group — kept contiguous.
-  { key: 'purchaseCost', label: 'Purchase', type: 'number', w: 96, min: 80, max: 130, align: 'right' },
-  { key: 'repairCost', label: 'Repair', type: 'number', w: 92, min: 78, max: 130, align: 'right' },
-  { key: '__total', label: 'Total Cost', type: 'computed', w: 100, min: 82, max: 130, align: 'right', compute: i => money(totalCost(i)), sortVal: totalCost },
-  { key: 'targetSalePrice', label: 'Target', type: 'number', w: 92, min: 78, max: 130, align: 'right' },
+  { key: 'purchaseCost', label: 'Purchase', type: 'number', w: 80, min: 46, max: 130, align: 'right' },
+  { key: 'repairCost', label: 'Repair', type: 'number', w: 78, min: 44, max: 130, align: 'right' },
+  { key: '__total', label: 'Total Cost', type: 'computed', w: 84, min: 48, max: 130, align: 'right', compute: i => money(totalCost(i)), sortVal: totalCost },
+  { key: 'targetSalePrice', label: 'Target', type: 'number', w: 78, min: 44, max: 130, align: 'right' },
   // Actual = the real sale price the device sold for; drives the Profit column.
-  { key: 'salePrice', label: 'Actual', type: 'number', w: 92, min: 78, max: 130, align: 'right' },
-  { key: '__profit', label: 'Profit', type: 'computed', w: 100, min: 82, max: 130, align: 'right', compute: i => i.salePrice ? money(profitOf(i)) : '—', sortVal: profitOf },
+  { key: 'salePrice', label: 'Actual', type: 'number', w: 78, min: 44, max: 130, align: 'right' },
+  { key: '__profit', label: 'Profit', type: 'computed', w: 84, min: 48, max: 130, align: 'right', compute: i => i.salePrice ? money(profitOf(i)) : '—', sortVal: profitOf },
   // Sale group. (The device Status column is intentionally not shown in the
   // grid — status is still stored and driven via the Filters, the item form,
   // bulk actions, sold detection and analytics.)
-  { key: 'soldDate', label: 'Date Sold', type: 'date', w: 116, min: 92, max: 150 },
-  { key: 'soldTo', label: 'Customer', type: 'text', w: 130, min: 100, max: 220 },
-  { key: 'notes', label: 'Notes', type: 'text', w: 200, min: 150, flex: true, emphasis: 'muted' },
+  { key: 'soldDate', label: 'Date Sold', type: 'date', w: 96, min: 50, max: 150 },
+  { key: 'soldTo', label: 'Customer', type: 'text', w: 104, min: 46, max: 220 },
+  { key: 'notes', label: 'Notes', type: 'text', w: 140, min: 54, max: 300, flex: true, emphasis: 'muted' },
 ];
 const ACCESSORY_COLS: Col[] = [
-  { key: 'date', label: 'Date Added', type: 'date', w: 130, min: 100, max: 150 },
-  { key: 'sku', label: 'SKU', type: 'text', w: 120, min: 110, max: 160, emphasis: 'muted' },
-  { key: 'manufacturerBarcode', label: 'Barcode', type: 'text', w: 160, min: 130, max: 220 },
-  { key: 'item', label: 'Item Name', type: 'text', w: 220, min: 160, flex: true, emphasis: 'strong' },
-  { key: 'category', label: 'Category', type: 'text', w: 130, min: 100, max: 160 },
-  { key: 'quantity', label: 'Quantity', type: 'number', w: 96, min: 84, max: 130, align: 'right' },
-  { key: 'costPerUnit', label: 'Cost/Unit', type: 'number', w: 100, min: 90, max: 140, align: 'right' },
-  { key: 'sellingPrice', label: 'Selling Price', type: 'number', w: 110, min: 90, max: 140, align: 'right' },
-  { key: 'lowStockThreshold', label: 'Low Stock', type: 'number', w: 100, min: 90, max: 140, align: 'right' },
-  { key: 'notes', label: 'Notes', type: 'text', w: 220, min: 160, flex: true, emphasis: 'muted' },
+  { key: 'date', label: 'Date Added', type: 'date', w: 130, min: 72, max: 150 },
+  { key: 'sku', label: 'SKU', type: 'text', w: 120, min: 76, max: 160, emphasis: 'muted' },
+  { key: 'manufacturerBarcode', label: 'Barcode', type: 'text', w: 160, min: 88, max: 220 },
+  { key: 'item', label: 'Item Name', type: 'text', w: 220, min: 110, max: 400, flex: true, emphasis: 'strong' },
+  { key: 'category', label: 'Category', type: 'text', w: 130, min: 72, max: 160 },
+  { key: 'quantity', label: 'Quantity', type: 'number', w: 96, min: 56, max: 130, align: 'right' },
+  { key: 'costPerUnit', label: 'Cost/Unit', type: 'number', w: 100, min: 60, max: 140, align: 'right' },
+  { key: 'sellingPrice', label: 'Selling Price', type: 'number', w: 110, min: 64, max: 140, align: 'right' },
+  { key: 'lowStockThreshold', label: 'Low Stock', type: 'number', w: 100, min: 60, max: 140, align: 'right' },
+  { key: 'notes', label: 'Notes', type: 'text', w: 220, min: 60, max: 300, flex: true, emphasis: 'muted' },
 ];
 
 // Bumped to v2 so existing users pick up the new default layout (Brand, Model,
@@ -141,7 +146,7 @@ const LS_VIEWS = 'inv_saved_views_v1';
 // and per column key. Empty = use the column's default width.
 const LS_COLW = 'inv_col_widths_v1';
 type ColWidths = Record<'device' | 'accessory', Record<string, number>>;
-const MIN_COL_W = 56; // smallest a column can be dragged to
+const MIN_COL_W = 40; // absolute floor for a stored width (per-column mins clamp further)
 const loadLS = <T,>(k: string, fb: T): T => { try { const r = localStorage.getItem(k); return r ? JSON.parse(r) : fb; } catch { return fb; } };
 
 // --- CSV helpers ---
@@ -643,89 +648,86 @@ const Sheet: React.FC<{
     return { x: Math.min(r.left, window.innerWidth - width - 12), y: r.bottom + 4 };
   };
 
-  // Horizontal scrolling stays inside the table container (the page never gains a
-  // scrollbar). The native scrollbar is hidden; horizontal movement is via
-  // trackpad, Shift+wheel and grab-to-pan. Left/right edge fades hint when more
-  // columns are off-screen.
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const [edges, setEdges] = useState({ left: false, right: false });
-  const updateEdges = () => {
-    const el = scrollRef.current; if (!el) return;
-    const max = el.scrollWidth - el.clientWidth;
-    setEdges({ left: el.scrollLeft > 1, right: el.scrollLeft < max - 1 });
-  };
+  // Full note viewer: clicking a Notes cell opens the note in a side drawer
+  // (truncated in the grid, full text here) instead of an inline input.
+  const [notesItem, setNotesItem] = useState<InventoryItem | null>(null);
+
+  // The table is fitted INSIDE this container — it never scrolls horizontally and
+  // no column is pushed off-screen. We measure the container so the fit knows how
+  // much width is available (and re-fit when the viewport changes).
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [containerW, setContainerW] = useState(0);
   useLayoutEffect(() => {
-    const el = scrollRef.current; if (!el) return;
-    updateEdges();
-    const ro = new ResizeObserver(updateEdges); ro.observe(el);
-    // Shift+wheel → horizontal scroll (trackpad deltaX already scrolls natively).
-    const onWheel = (e: WheelEvent) => {
-      if (el.scrollWidth <= el.clientWidth) return;
-      if (e.shiftKey && e.deltaY !== 0) { el.scrollLeft += e.deltaY; e.preventDefault(); }
-    };
-    el.addEventListener('wheel', onWheel, { passive: false });
-    return () => { ro.disconnect(); el.removeEventListener('wheel', onWheel); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const el = containerRef.current; if (!el) return;
+    const measure = () => setContainerW(el.clientWidth);
+    measure();
+    const ro = new ResizeObserver(measure); ro.observe(el);
+    return () => ro.disconnect();
   }, []);
 
   const ACTIONS_W = 100;
-  // Independent column widths: each column keeps its own width — resizing changes
-  // only that column and the table simply grows (scrolling inside its container).
-  // Widths and the frozen columns' sticky-left offsets are pushed through CSS
-  // custom properties on the <table> (via a <colgroup>), so a drag updates them
-  // imperatively — no per-row re-render — committing the override on release.
-  const totalW = tableWidth(cols, ACTIONS_W, widths ?? {});
+  // Bounded independent widths: each column keeps its own width, but the whole
+  // table is fitted within the container. Any width the columns don't use becomes
+  // a trailing spacer a column can grow INTO — once that unused width is consumed
+  // the column stops growing, so the table never exceeds the container and no
+  // neighbour is shrunk. Widths + the frozen columns' sticky-left offsets ride on
+  // CSS vars (via a <colgroup>) so a drag updates them imperatively — no per-row
+  // re-render — committing the override on release.
+  const fit = fitWidths(cols, ACTIONS_W, containerW, widths ?? {});
   const buildVars = (overrideKey?: string, overrideVal?: number): Record<string, string> => {
     const vars: Record<string, string> = { '--w-actions': `${ACTIONS_W}px` };
-    let total = ACTIONS_W, accL = ACTIONS_W;
+    let used = ACTIONS_W, accL = ACTIONS_W;
     for (const c of cols) {
-      const w = overrideKey === c.key ? overrideVal! : columnWidth(c, widths ?? {});
+      const w = overrideKey === c.key ? overrideVal! : fit.widths[c.key];
       vars[`--w-${c.key}`] = `${w}px`;
       if (c.frozen) { vars[`--l-${c.key}`] = `${accL}px`; accL += w; }
-      total += w;
+      used += w;
     }
-    vars['--tw'] = `${total}px`;
+    // The spacer soaks up any unused container width so the table fills the box.
+    vars['--w-spacer'] = `${Math.max(0, containerW - used)}px`;
     return vars;
   };
-  const cssVars = buildVars();
+  // The width CSS vars are owned entirely by this effect (not React's style prop)
+  // so React never diffs them away: every render writes the full committed set,
+  // overwriting any imperative values left on the table by an in-progress drag.
+  const tableRef = useRef<HTMLTableElement>(null);
+  useLayoutEffect(() => {
+    const t = tableRef.current; if (!t) return;
+    const vars = buildVars();
+    for (const k in vars) t.style.setProperty(k, vars[k]);
+  });
 
-  // Live drag-resize: only the dragged column changes width; the recomputed
-  // frozen offsets + total are written straight to the table's CSS vars, and the
-  // override is committed to state (and localStorage) on release.
+  // Live drag-resize: only the dragged column changes. Growth is capped to the
+  // currently-unused width (`fit.spacer`) so the table can never overflow the
+  // container and neighbours are never shrunk; shrinking is bounded only by the
+  // column's own min. The override is committed to state (+localStorage) on
+  // release. Once no unused width remains, a column simply can't grow further.
   const startResize = (e: React.MouseEvent, c: Col) => {
     e.preventDefault(); e.stopPropagation();
-    const table = (e.currentTarget as HTMLElement).closest('table') as HTMLTableElement | null;
+    const table = tableRef.current;
     const startX = e.clientX;
-    const startW = columnWidth(c, widths ?? {});
+    const startW = fit.widths[c.key];
+    const slack = fit.spacer; // unused container width available to grow into
     let latest = startW;
     const apply = () => {
       if (!table) return;
       const vars = buildVars(c.key, latest);
       for (const k in vars) table.style.setProperty(k, vars[k]);
     };
-    const onMove = (ev: MouseEvent) => { latest = clampWidth(c, startW + (ev.clientX - startX)); apply(); };
+    const onMove = (ev: MouseEvent) => {
+      const proposed = startW + (ev.clientX - startX);
+      latest = Math.min(clampWidth(c, proposed), startW + slack);
+      apply();
+    };
     const onUp = () => {
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
       document.body.style.cursor = ''; document.body.style.userSelect = '';
       onResize?.(c.key, latest);
-      updateEdges();
     };
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
     document.body.style.cursor = 'col-resize'; document.body.style.userSelect = 'none';
-  };
-
-  // Grab-to-pan: click-drag on non-interactive areas scrolls the table sideways.
-  const startPan = (e: React.MouseEvent) => {
-    const el = scrollRef.current; if (!el || el.scrollWidth <= el.clientWidth) return;
-    const t = e.target as HTMLElement;
-    if (t.closest('input,button,select,textarea,a,th,[role="menuitem"]')) return;
-    const startX = e.clientX; const startLeft = el.scrollLeft;
-    const onMove = (ev: MouseEvent) => { el.scrollLeft = startLeft - (ev.clientX - startX); };
-    const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); el.style.cursor = ''; document.body.style.userSelect = ''; };
-    document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
-    el.style.cursor = 'grabbing'; document.body.style.userSelect = 'none';
   };
   const emph = (c: Col) =>
     c.emphasis === 'strong' ? 'font-semibold text-slate-900 dark:text-slate-100'
@@ -739,16 +741,15 @@ const Sheet: React.FC<{
       <div className="px-4 py-2.5 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40">
         <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200">{title} <span className="text-xs font-normal text-slate-400">({total ?? rows.length})</span></h3>
       </div>
-      <div className="relative">
-        {/* Edge fades: hint that more columns exist off-screen. */}
-        <div className={`pointer-events-none absolute inset-y-0 left-0 w-8 z-40 bg-gradient-to-r from-black/10 dark:from-black/40 to-transparent transition-opacity ${edges.left ? 'opacity-100' : 'opacity-0'}`} />
-        <div className={`pointer-events-none absolute inset-y-0 right-0 w-8 z-40 bg-gradient-to-l from-black/10 dark:from-black/40 to-transparent transition-opacity ${edges.right ? 'opacity-100' : 'opacity-0'}`} />
-        <div ref={scrollRef} onScroll={updateEdges} onMouseDown={startPan}
-          className={`overflow-auto no-scrollbar max-h-[60vh] ${edges.left || edges.right ? 'cursor-grab' : ''}`}>
-        <table className="border-collapse" style={{ tableLayout: 'fixed', width: 'var(--tw)', minWidth: 'var(--tw)', ...cssVars }}>
+      {/* Fitted table: vertical scroll only — never horizontal (the fit keeps
+          every column inside this box). */}
+      <div ref={containerRef} className="overflow-x-hidden overflow-y-auto max-h-[60vh]">
+        <table ref={tableRef} className="border-collapse w-full" style={{ tableLayout: 'fixed', width: '100%' }}>
           <colgroup>
             <col style={{ width: 'var(--w-actions)' }} />
             {cols.map(c => <col key={c.key} style={{ width: `var(--w-${c.key})` }} />)}
+            {/* Trailing spacer soaks up any unused container width. */}
+            <col style={{ width: 'var(--w-spacer)' }} />
           </colgroup>
           <thead className="sticky top-0 z-20 bg-slate-50 dark:bg-slate-800">
             <tr className="text-[10px] uppercase tracking-wider text-slate-500 dark:text-slate-400 font-semibold">
@@ -773,10 +774,11 @@ const Sheet: React.FC<{
                   )}
                 </th>
               ))}
+              <th aria-hidden className="border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800" />
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-            {rows.length === 0 && <tr><td colSpan={cols.length + 1} className="text-center text-slate-400 text-sm py-8">No items.</td></tr>}
+            {rows.length === 0 && <tr><td colSpan={cols.length + 2} className="text-center text-slate-400 text-sm py-8">No items.</td></tr>}
             {rows.map(i => {
               const low = lowFlag && isLow(i);
               const sel = selected.has(i.id);
@@ -795,7 +797,13 @@ const Sheet: React.FC<{
                     <td key={c.key}
                       style={{ overflow: 'hidden', ...(c.frozen ? { left: `var(--l-${c.key})`, position: 'sticky' as const } : {}) }}
                       className={`p-0 align-top ${c.frozen ? `sticky z-10 ${frozenBg}` : ''}`}>
-                      {c.type === 'computed' ? (
+                      {c.key === 'notes' ? (
+                        // Notes: truncated in the grid; click opens the full note in a drawer.
+                        <button onClick={() => setNotesItem(i)} title={String((i.notes as any) ?? '')}
+                          className={`w-full text-left px-2 py-1.5 text-sm truncate rounded hover:bg-indigo-50 dark:hover:bg-indigo-900/20 ${emph(c)}`}>
+                          {i.notes ? String(i.notes) : <span className="text-slate-300 dark:text-slate-600 italic">Add note…</span>}
+                        </button>
+                      ) : c.type === 'computed' ? (
                         c.key === '__item' ? (
                           <button onClick={e => setItemPop({ i, ...openAt(e, 240) })} title={c.compute!(i)}
                             className={`w-full text-left px-2 py-1.5 text-sm truncate rounded hover:bg-indigo-50 dark:hover:bg-indigo-900/20 ${emph(c)}`}>
@@ -833,19 +841,19 @@ const Sheet: React.FC<{
                       )}
                     </td>
                   ))}
+                  <td aria-hidden />
                 </tr>
               );
             })}
             {onAddRow && (
               <tr>
-                <td colSpan={cols.length + 1} className="px-2 py-2">
+                <td colSpan={cols.length + 2} className="px-2 py-2">
                   <button onClick={onAddRow} className="w-full py-2.5 flex items-center justify-center gap-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 border-2 border-dashed border-slate-200 dark:border-slate-700 hover:border-indigo-300 rounded-lg text-sm font-medium"><Plus className="w-4 h-4" /> {addLabel}</button>
                 </td>
               </tr>
             )}
           </tbody>
         </table>
-        </div>
       </div>
 
       {/* Row overflow menu (rendered outside the table so it never clips) */}
@@ -876,6 +884,45 @@ const Sheet: React.FC<{
       {itemPop && (
         <BrandModelPopover item={itemPop.i} x={itemPop.x} y={itemPop.y} onUpdate={onUpdate} onClose={() => setItemPop(null)} />
       )}
+
+      {/* Full-note side drawer (opened from a Notes cell) */}
+      {notesItem && (
+        <NotesDrawer item={notesItem} onUpdate={onUpdate} onClose={() => setNotesItem(null)} />
+      )}
+    </div>
+  );
+};
+
+/* Full note viewer/editor — a responsive right-side drawer. Notes are truncated
+   in the grid (capped ~300px); the full text is read and edited here. */
+const NotesDrawer: React.FC<{ item: InventoryItem; onUpdate: (id: string, f: keyof InventoryItem, v: any) => void; onClose: () => void }> = ({ item, onUpdate, onClose }) => {
+  const [text, setText] = useState(String((item.notes as any) ?? ''));
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  const title = nameOf(item);
+  return (
+    <div className="fixed inset-0 z-[60] flex justify-end animate-fadeIn" role="dialog" aria-modal="true" aria-label="Note">
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative h-full w-full max-w-md bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-700 shadow-2xl flex flex-col animate-slideInRight">
+        <div className="px-5 py-3.5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Note</p>
+            <h2 className="font-bold text-slate-800 dark:text-slate-100 truncate">{title}</h2>
+          </div>
+          <button onClick={onClose} className="shrink-0 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200" aria-label="Close"><X className="w-5 h-5" /></button>
+        </div>
+        <div className="p-5 flex-1 overflow-y-auto">
+          <textarea autoFocus value={text} onChange={e => { setText(e.target.value); onUpdate(item.id, 'notes', e.target.value); }}
+            placeholder="Write a note for this item…"
+            className="w-full h-full min-h-[240px] resize-none rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 p-3 text-sm text-slate-800 dark:text-slate-100 outline-none focus:ring-2 focus:ring-indigo-500" />
+        </div>
+        <div className="px-5 py-3 border-t border-slate-100 dark:border-slate-800 flex justify-end">
+          <button onClick={onClose} className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium">Done</button>
+        </div>
+      </div>
     </div>
   );
 };
