@@ -27,7 +27,7 @@ export interface LabelContent {
 }
 
 export interface LabelImages { qr?: string; barcode?: string; }
-export interface LabelOpts { showBarcode: boolean; showStatus: boolean; }
+export interface LabelOpts { showBarcode: boolean; showStatus: boolean; barcodeOnly?: boolean }
 
 const IN = 25.4; // mm per inch
 export const mmOf = (m: LabelMedia) => ({ w: +(m.w * IN).toFixed(2), h: +(m.h * IN).toFixed(2) });
@@ -48,6 +48,19 @@ const mkU = (unit: 'px' | 'mm', pxPerMm: number): U =>
 function labelBody(u: U, m: LabelMedia, c: LabelContent, img: LabelImages, o: LabelOpts): string {
   const dymo = !!m.dymo;
   const pad = dymo ? 1.3 : 1.6; // minimal margins, mm
+
+  // Barcode-only label (accessories): the UPC barcode fills the whole label,
+  // centered, with its human-readable digits (baked into the image). No QR,
+  // name, SKU or status — just a clean, scannable barcode.
+  if (o.barcodeOnly) {
+    return `
+      <div style="box-sizing:border-box;width:100%;height:100%;padding:${u(pad)};background:#fff;color:#000;
+        display:flex;align-items:center;justify-content:center;overflow:hidden;">
+        ${img.barcode
+          ? `<img src="${img.barcode}" style="max-width:100%;max-height:100%;object-fit:contain;image-rendering:pixelated;" />`
+          : `<div style="font-family:'Courier New',monospace;font-weight:800;font-size:${u(4)};">${esc(c.code)}</div>`}
+      </div>`;
+  }
   const showStatus = o.showStatus && !!c.status;
   const showBarcode = o.showBarcode && !!img.barcode;
 
