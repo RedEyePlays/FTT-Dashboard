@@ -76,7 +76,7 @@ type ColType = 'text' | 'number' | 'date' | 'select' | 'computed';
 // weight; `readOnly` shows the value as plain text (edited in the form instead);
 // `hideCol` keeps the column out of the table + Columns menu but still exports it
 // (so removing a display column never drops the underlying data from CSV).
-interface Col { key: string; label: string; type: ColType; w: number; min?: number; max?: number; flex?: boolean; align?: 'right'; frozen?: boolean; emphasis?: 'strong' | 'muted'; readOnly?: boolean; hideCol?: boolean; options?: { value: string; label: string }[]; compute?: (i: InventoryItem) => string; sortVal?: (i: InventoryItem) => number | string; }
+interface Col { key: string; label: string; type: ColType; w: number; min?: number; max?: number; flex?: boolean; locked?: boolean; align?: 'right'; frozen?: boolean; emphasis?: 'strong' | 'muted'; readOnly?: boolean; hideCol?: boolean; options?: { value: string; label: string }[]; compute?: (i: InventoryItem) => string; sortVal?: (i: InventoryItem) => number | string; }
 const opt = (arr: string[]) => arr.map(v => ({ value: v, label: v }));
 
 // The Item column / card title use the shared getDeviceDisplayName helper so the
@@ -122,7 +122,8 @@ const DEVICE_COLS: Col[] = [
   // bulk actions, sold detection and analytics.)
   { key: 'soldDate', label: 'Date Sold', type: 'date', w: 96, min: 50, max: 150 },
   { key: 'soldTo', label: 'Customer', type: 'text', w: 104, min: 46, max: 220 },
-  { key: 'notes', label: 'Notes', type: 'text', w: 140, min: 54, max: 300, flex: true, emphasis: 'muted' },
+  // Notes is a fixed, non-resizable column (locked width) — min == max == w.
+  { key: 'notes', label: 'Notes', type: 'text', w: 240, min: 240, max: 240, locked: true, emphasis: 'muted' },
 ];
 const ACCESSORY_COLS: Col[] = [
   { key: 'date', label: 'Date Added', type: 'date', w: 130, min: 72, max: 150 },
@@ -134,7 +135,8 @@ const ACCESSORY_COLS: Col[] = [
   { key: 'costPerUnit', label: 'Cost/Unit', type: 'number', w: 100, min: 60, max: 140, align: 'right' },
   { key: 'sellingPrice', label: 'Selling Price', type: 'number', w: 110, min: 64, max: 140, align: 'right' },
   { key: 'lowStockThreshold', label: 'Low Stock', type: 'number', w: 100, min: 60, max: 140, align: 'right' },
-  { key: 'notes', label: 'Notes', type: 'text', w: 220, min: 60, max: 300, flex: true, emphasis: 'muted' },
+  // Notes is a fixed, non-resizable column (locked width) — min == max == w.
+  { key: 'notes', label: 'Notes', type: 'text', w: 240, min: 240, max: 240, locked: true, emphasis: 'muted' },
 ];
 
 // Bumped to v2 so existing users pick up the new default layout (Brand, Model,
@@ -648,10 +650,6 @@ const Sheet: React.FC<{
     return { x: Math.min(r.left, window.innerWidth - width - 12), y: r.bottom + 4 };
   };
 
-  // Full note viewer: clicking a Notes cell opens the note in a side drawer
-  // (truncated in the grid, full text here) instead of an inline input.
-  const [notesItem, setNotesItem] = useState<InventoryItem | null>(null);
-
   // The table is fitted INSIDE this container — it never scrolls horizontally and
   // no column is pushed off-screen. We measure the container so the fit knows how
   // much width is available (and re-fit when the viewport changes).
@@ -765,7 +763,7 @@ const Sheet: React.FC<{
                   onClick={() => onSort(c.key)}
                   className={`relative px-2 py-2 border-b border-slate-200 dark:border-slate-700 cursor-pointer select-none hover:text-indigo-600 ${c.align === 'right' ? 'text-right' : 'text-left'} ${c.frozen ? 'z-30 bg-slate-50 dark:bg-slate-800' : ''}`}>
                   <span className="inline-flex items-center gap-1">{c.label}{sort?.key === c.key && (sort.dir === 'asc' ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />)}</span>
-                  {onResize && (
+                  {onResize && !c.locked && (
                     <span onMouseDown={e => startResize(e, c)} onClick={e => e.stopPropagation()} onDoubleClick={e => { e.stopPropagation(); onResetWidth?.(c.key); }}
                       title="Drag to resize · double-click to reset"
                       className="group/rz absolute top-0 right-0 h-full w-2.5 flex justify-center cursor-col-resize z-10">
@@ -797,13 +795,7 @@ const Sheet: React.FC<{
                     <td key={c.key}
                       style={{ overflow: 'hidden', ...(c.frozen ? { left: `var(--l-${c.key})`, position: 'sticky' as const } : {}) }}
                       className={`p-0 align-top ${c.frozen ? `sticky z-10 ${frozenBg}` : ''}`}>
-                      {c.key === 'notes' ? (
-                        // Notes: truncated in the grid; click opens the full note in a drawer.
-                        <button onClick={() => setNotesItem(i)} title={String((i.notes as any) ?? '')}
-                          className={`w-full text-left px-2 py-1.5 text-sm truncate rounded hover:bg-indigo-50 dark:hover:bg-indigo-900/20 ${emph(c)}`}>
-                          {i.notes ? String(i.notes) : <span className="text-slate-300 dark:text-slate-600 italic">Add note…</span>}
-                        </button>
-                      ) : c.type === 'computed' ? (
+                      {c.type === 'computed' ? (
                         c.key === '__item' ? (
                           <button onClick={e => setItemPop({ i, ...openAt(e, 240) })} title={c.compute!(i)}
                             className={`w-full text-left px-2 py-1.5 text-sm truncate rounded hover:bg-indigo-50 dark:hover:bg-indigo-900/20 ${emph(c)}`}>
@@ -884,45 +876,6 @@ const Sheet: React.FC<{
       {itemPop && (
         <BrandModelPopover item={itemPop.i} x={itemPop.x} y={itemPop.y} onUpdate={onUpdate} onClose={() => setItemPop(null)} />
       )}
-
-      {/* Full-note side drawer (opened from a Notes cell) */}
-      {notesItem && (
-        <NotesDrawer item={notesItem} onUpdate={onUpdate} onClose={() => setNotesItem(null)} />
-      )}
-    </div>
-  );
-};
-
-/* Full note viewer/editor — a responsive right-side drawer. Notes are truncated
-   in the grid (capped ~300px); the full text is read and edited here. */
-const NotesDrawer: React.FC<{ item: InventoryItem; onUpdate: (id: string, f: keyof InventoryItem, v: any) => void; onClose: () => void }> = ({ item, onUpdate, onClose }) => {
-  const [text, setText] = useState(String((item.notes as any) ?? ''));
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [onClose]);
-  const title = nameOf(item);
-  return (
-    <div className="fixed inset-0 z-[60] flex justify-end animate-fadeIn" role="dialog" aria-modal="true" aria-label="Note">
-      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative h-full w-full max-w-md bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-700 shadow-2xl flex flex-col animate-slideInRight">
-        <div className="px-5 py-3.5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Note</p>
-            <h2 className="font-bold text-slate-800 dark:text-slate-100 truncate">{title}</h2>
-          </div>
-          <button onClick={onClose} className="shrink-0 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200" aria-label="Close"><X className="w-5 h-5" /></button>
-        </div>
-        <div className="p-5 flex-1 overflow-y-auto">
-          <textarea autoFocus value={text} onChange={e => { setText(e.target.value); onUpdate(item.id, 'notes', e.target.value); }}
-            placeholder="Write a note for this item…"
-            className="w-full h-full min-h-[240px] resize-none rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 p-3 text-sm text-slate-800 dark:text-slate-100 outline-none focus:ring-2 focus:ring-indigo-500" />
-        </div>
-        <div className="px-5 py-3 border-t border-slate-100 dark:border-slate-800 flex justify-end">
-          <button onClick={onClose} className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium">Done</button>
-        </div>
-      </div>
     </div>
   );
 };

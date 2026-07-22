@@ -70,10 +70,29 @@ describe('fitWidths — bounded to the container', () => {
     expect(r.widths.item).toBeLessThanOrEqual(400); // own max first
     expect(r.widths.notes).toBeLessThanOrEqual(300);
   });
-  it('falls back to mins when even those overflow (no negative spacer)', () => {
-    const r = fitWidths(cols, ACT, 300, {}); // impossibly narrow
-    expect(r.spacer).toBe(0);
-    for (const c of cols) expect(r.widths[c.key]).toBe(c.min);
+  it('force-fits even when the mins alone overflow — never scrolls', () => {
+    const r = fitWidths(cols, ACT, 300, {}); // impossibly narrow: mins+ACT = 512 > 300
+    expect(r.total).toBeLessThanOrEqual(300); // scaled below mins so it still fits
+    expect(r.spacer).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe('fitWidths — locked columns (min == max)', () => {
+  const locked: ColSpec[] = [
+    { key: 'a', w: 200, min: 100, max: 400 },
+    { key: 'b', w: 200, min: 100, max: 400 },
+    { key: 'notes', w: 240, min: 240, max: 240 }, // locked
+  ];
+  it('holds the locked width while flexible columns absorb the overflow', () => {
+    // sum = 640; + ACT 100 = 740; container 700 → shrink 40 from a & b only.
+    const r = fitWidths(locked, ACT, 700, {});
+    expect(r.widths.notes).toBe(240);      // locked width preserved
+    expect(r.total).toBeLessThanOrEqual(700);
+    expect(r.widths.a).toBeLessThan(200);  // flexible ones gave the room
+  });
+  it('a locked width can never be grown or shrunk by a stored override', () => {
+    const r = fitWidths(locked, ACT, 900, { notes: 999 });
+    expect(r.widths.notes).toBe(240);
   });
 });
 

@@ -82,7 +82,8 @@ export function fitWidths(
   }
 
   // Overflow: shrink columns that are above their min, proportionally to how much
-  // room each can give, until the total fits (or all are at their minimum).
+  // room each can give, until the total fits (or all are at their minimum). Locked
+  // columns (min == max) have no room to give, so they hold their width here.
   const overflow = sum - avail;
   const room = cols.reduce((s, c) => s + (widths[c.key] - minOf(c)), 0);
   if (room > 0) {
@@ -102,6 +103,23 @@ export function fitWidths(
       rem -= 1;
     }
   }
-  const total = actionsW + cols.reduce((s, c) => s + widths[c.key], 0);
+
+  // Last-resort: if the table STILL overflows once every flexible column is at its
+  // minimum (an extremely narrow viewport with many columns, or wide locked
+  // columns), scale everything down proportionally — below mins if we must — so
+  // the table always fits and never scrolls horizontally. Rare in practice.
+  let total = actionsW + cols.reduce((s, c) => s + widths[c.key], 0);
+  if (total > containerW) {
+    const scale = avail / (total - actionsW);
+    for (const c of cols) widths[c.key] = Math.max(1, Math.floor(widths[c.key] * scale));
+    let rem = actionsW + cols.reduce((s, c) => s + widths[c.key], 0) - containerW;
+    while (rem > 0) {
+      const c = cols.filter(x => widths[x.key] > 1).sort((a, b) => widths[b.key] - widths[a.key])[0];
+      if (!c) break;
+      widths[c.key] -= 1;
+      rem -= 1;
+    }
+    total = actionsW + cols.reduce((s, c) => s + widths[c.key], 0);
+  }
   return { widths, spacer: Math.max(0, Math.round(containerW - total)), total };
 }
