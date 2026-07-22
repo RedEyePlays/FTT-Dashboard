@@ -668,6 +668,10 @@ const Sheet: React.FC<{
   const ACTIONS_W = 108;
   const frozenLeft: Record<string, number> = {};
   { let acc = ACTIONS_W; for (const c of cols) { if (c.frozen) { frozenLeft[c.key] = acc; acc += wOf(c); } else break; } }
+  // Total table width. With table-layout:fixed the column widths are honoured
+  // exactly (content clips/truncates instead of stretching a column), so the
+  // tuned defaults and drag-resizes are deterministic — like a spreadsheet.
+  const totalW = ACTIONS_W + cols.reduce((s, c) => s + wOf(c), 0);
   const emph = (c: Col) =>
     c.emphasis === 'strong' ? 'font-semibold text-slate-900 dark:text-slate-100'
       : c.emphasis === 'muted' ? 'text-slate-500 dark:text-slate-400'
@@ -681,7 +685,7 @@ const Sheet: React.FC<{
         <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200">{title} <span className="text-xs font-normal text-slate-400">({total ?? rows.length})</span></h3>
       </div>
       <div className="overflow-auto custom-scrollbar max-h-[60vh]">
-        <table className="border-collapse" style={{ minWidth: '100%' }}>
+        <table className="border-collapse" style={{ tableLayout: 'fixed', width: totalW, minWidth: totalW }}>
           <thead className="sticky top-0 z-20 bg-slate-50 dark:bg-slate-800">
             <tr className="text-[10px] uppercase tracking-wider text-slate-500 dark:text-slate-400 font-semibold">
               <th style={{ width: ACTIONS_W, minWidth: ACTIONS_W, left: 0 }} className="px-2 py-2 text-center border-b border-slate-200 dark:border-slate-700 sticky !z-30 bg-slate-50 dark:bg-slate-800">
