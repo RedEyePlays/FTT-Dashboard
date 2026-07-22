@@ -645,29 +645,47 @@ const Sheet: React.FC<{
   // Effective width = the user's drag-resized override, else the column default.
   const wOf = (c: Col) => widths?.[c.key] ?? c.w;
 
-  // Begin a drag-resize on a column's right-edge handle. Tracks the mouse on the
-  // document so the drag continues even when the pointer leaves the header cell.
+  // Column widths and the frozen columns' sticky-left offsets are driven by CSS
+  // custom properties on the <table> (consumed by a <colgroup>). That lets a drag
+  // update them imperatively — a single style write, no React re-render — so
+  // resizing stays smooth with hundreds of rows. The final width is committed to
+  // state (and localStorage) once, on mouse-up.
+  const ACTIONS_W = 108;
+  const totalW = ACTIONS_W + cols.reduce((s, c) => s + wOf(c), 0);
+  const cssVars = { '--w-actions': `${ACTIONS_W}px`, '--tw': `${totalW}px` } as Record<string, string>;
+  cols.forEach(c => { cssVars[`--w-${c.key}`] = `${wOf(c)}px`; });
+  { let acc = ACTIONS_W; for (const c of cols) { if (c.frozen) { cssVars[`--l-${c.key}`] = `${acc}px`; acc += wOf(c); } else break; } }
+
+  // Live drag-resize: write widths straight to the table's CSS vars during the
+  // drag, then commit the final value to React state on release.
   const startResize = (e: React.MouseEvent, c: Col) => {
     e.preventDefault(); e.stopPropagation();
+    const table = (e.currentTarget as HTMLElement).closest('table') as HTMLTableElement | null;
     const startX = e.clientX;
     const startW = wOf(c);
-    const onMove = (ev: MouseEvent) => onResize?.(c.key, startW + (ev.clientX - startX));
+    let latest = startW;
+    const apply = () => {
+      if (!table) return;
+      let total = ACTIONS_W, accL = ACTIONS_W;
+      for (const cc of cols) {
+        const w = cc.key === c.key ? latest : wOf(cc);
+        if (cc.frozen) { table.style.setProperty(`--l-${cc.key}`, `${accL}px`); accL += w; }
+        total += w;
+      }
+      table.style.setProperty(`--w-${c.key}`, `${latest}px`);
+      table.style.setProperty('--tw', `${total}px`);
+    };
+    const onMove = (ev: MouseEvent) => { latest = Math.max(MIN_COL_W, startW + (ev.clientX - startX)); apply(); };
     const onUp = () => {
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
       document.body.style.cursor = ''; document.body.style.userSelect = '';
+      onResize?.(c.key, latest);
     };
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
     document.body.style.cursor = 'col-resize'; document.body.style.userSelect = 'none';
   };
-
-  // Frozen identity columns stay pinned to the left while the rest scrolls.
-  // Left offsets are the running width of the Actions column + preceding frozen
-  // columns, so they use the effective (possibly resized) widths.
-  const ACTIONS_W = 108;
-  const frozenLeft: Record<string, number> = {};
-  { let acc = ACTIONS_W; for (const c of cols) { if (c.frozen) { frozenLeft[c.key] = acc; acc += wOf(c); } else break; } }
   const emph = (c: Col) =>
     c.emphasis === 'strong' ? 'font-semibold text-slate-900 dark:text-slate-100'
       : c.emphasis === 'muted' ? 'text-slate-500 dark:text-slate-400'
@@ -681,10 +699,14 @@ const Sheet: React.FC<{
         <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200">{title} <span className="text-xs font-normal text-slate-400">({total ?? rows.length})</span></h3>
       </div>
       <div className="overflow-auto custom-scrollbar max-h-[60vh]">
-        <table className="border-collapse" style={{ minWidth: '100%' }}>
+        <table className="border-collapse" style={{ tableLayout: 'fixed', width: 'var(--tw)', minWidth: 'var(--tw)', ...cssVars }}>
+          <colgroup>
+            <col style={{ width: 'var(--w-actions)' }} />
+            {cols.map(c => <col key={c.key} style={{ width: `var(--w-${c.key})` }} />)}
+          </colgroup>
           <thead className="sticky top-0 z-20 bg-slate-50 dark:bg-slate-800">
             <tr className="text-[10px] uppercase tracking-wider text-slate-500 dark:text-slate-400 font-semibold">
-              <th style={{ width: ACTIONS_W, minWidth: ACTIONS_W, left: 0 }} className="px-2 py-2 text-center border-b border-slate-200 dark:border-slate-700 sticky !z-30 bg-slate-50 dark:bg-slate-800">
+              <th style={{ left: 0 }} className="px-2 py-2 text-center border-b border-slate-200 dark:border-slate-700 sticky !z-30 bg-slate-50 dark:bg-slate-800">
                 <div className="flex items-center gap-1 justify-center">
                   <button onClick={() => onToggleAll(rows)}>{allSel ? <CheckSquare className="w-4 h-4 text-indigo-500" /> : <Square className="w-4 h-4 text-slate-400" />}</button>
                   <span>Actions</span>
@@ -692,7 +714,7 @@ const Sheet: React.FC<{
               </th>
               {cols.map(c => (
                 <th key={c.key}
-                  style={{ width: wOf(c), minWidth: wOf(c), maxWidth: wOf(c), ...(c.frozen ? { left: frozenLeft[c.key], position: 'sticky' as const } : {}) }}
+                  style={c.frozen ? { left: `var(--l-${c.key})`, position: 'sticky' as const } : undefined}
                   onClick={() => onSort(c.key)}
                   className={`relative px-2 py-2 border-b border-slate-200 dark:border-slate-700 cursor-pointer select-none hover:text-indigo-600 ${c.align === 'right' ? 'text-right' : 'text-left'} ${c.frozen ? 'z-30 bg-slate-50 dark:bg-slate-800' : ''}`}>
                   <span className="inline-flex items-center gap-1">{c.label}{sort?.key === c.key && (sort.dir === 'asc' ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />)}</span>
@@ -716,7 +738,7 @@ const Sheet: React.FC<{
               const frozenBg = sel ? 'bg-indigo-50 dark:bg-slate-800' : 'bg-white dark:bg-slate-900';
               return (
                 <tr key={i.id} className={`hover:bg-slate-50 dark:hover:bg-slate-800/40 ${sel ? 'bg-indigo-50/50 dark:bg-indigo-900/10' : low ? 'bg-rose-50/40 dark:bg-rose-900/10' : ''}`}>
-                  <td style={{ width: ACTIONS_W, minWidth: ACTIONS_W, left: 0 }} className={`px-2 py-1.5 whitespace-nowrap sticky z-10 ${frozenBg}`}>
+                  <td style={{ left: 0 }} className={`px-2 py-1.5 whitespace-nowrap sticky z-10 ${frozenBg}`}>
                     <div className="flex items-center gap-1">
                       <button onClick={() => onToggleSel(i.id)} className="p-1" title="Select">{sel ? <CheckSquare className="w-4 h-4 text-indigo-500" /> : <Square className="w-4 h-4 text-slate-300" />}</button>
                       <button onClick={() => onExpand(i)} className="p-1 text-slate-400 hover:text-indigo-600" title="Edit"><Pencil className="w-4 h-4" /></button>
@@ -725,7 +747,7 @@ const Sheet: React.FC<{
                   </td>
                   {cols.map(c => (
                     <td key={c.key}
-                      style={{ width: wOf(c), minWidth: wOf(c), maxWidth: wOf(c), ...(c.frozen ? { left: frozenLeft[c.key], position: 'sticky' as const } : {}) }}
+                      style={{ overflow: 'hidden', ...(c.frozen ? { left: `var(--l-${c.key})`, position: 'sticky' as const } : {}) }}
                       className={`p-0 align-top ${c.frozen ? `sticky z-10 ${frozenBg}` : ''}`}>
                       {c.type === 'computed' ? (
                         c.key === '__item' ? (
