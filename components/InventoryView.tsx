@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef, useEffect } from 'react';
+import React, { useState, useMemo, useRef, useEffect, useLayoutEffect } from 'react';
 import {
   Search, Smartphone, Package, QrCode, Trash2, X, Plus, ScanLine, AlertTriangle,
   Columns3, SlidersHorizontal, Bookmark, Download, Upload, Copy, ChevronUp, ChevronDown,
@@ -12,6 +12,7 @@ import { useIsMobile } from '../hooks/useMediaQuery';
 import { ResponsiveDialog, EmptyState } from './responsive';
 import { InvSection, INV_SECTIONS } from '../domain/inventoryNav';
 import { getDeviceDisplayName } from '../domain/inventory';
+import { columnWidth, clampWidth, tableWidth } from '../domain/columnLayout';
 
 interface Props {
   inventory: InventoryItem[];
@@ -75,7 +76,7 @@ type ColType = 'text' | 'number' | 'date' | 'select' | 'computed';
 // weight; `readOnly` shows the value as plain text (edited in the form instead);
 // `hideCol` keeps the column out of the table + Columns menu but still exports it
 // (so removing a display column never drops the underlying data from CSV).
-interface Col { key: string; label: string; type: ColType; w: number; align?: 'right'; frozen?: boolean; emphasis?: 'strong' | 'muted'; readOnly?: boolean; hideCol?: boolean; options?: { value: string; label: string }[]; compute?: (i: InventoryItem) => string; sortVal?: (i: InventoryItem) => number | string; }
+interface Col { key: string; label: string; type: ColType; w: number; min?: number; max?: number; flex?: boolean; align?: 'right'; frozen?: boolean; emphasis?: 'strong' | 'muted'; readOnly?: boolean; hideCol?: boolean; options?: { value: string; label: string }[]; compute?: (i: InventoryItem) => string; sortVal?: (i: InventoryItem) => number | string; }
 const opt = (arr: string[]) => arr.map(v => ({ value: v, label: v }));
 
 // The Item column / card title use the shared getDeviceDisplayName helper so the
@@ -84,51 +85,51 @@ const itemLabel = getDeviceDisplayName;
 
 const DEVICE_COLS: Col[] = [
   // Frozen identity block — stays visible while the row scrolls horizontally.
-  { key: 'date', label: 'Date In', type: 'date', w: 116, frozen: true },
-  { key: 'sku', label: 'SKU', type: 'text', w: 104, frozen: true, emphasis: 'muted' },
-  { key: 'imei', label: 'IMEI/Serial', type: 'text', w: 156, frozen: true, emphasis: 'muted' },
-  { key: '__item', label: 'Item', type: 'computed', w: 190, frozen: true, emphasis: 'strong', compute: itemLabel, sortVal: i => itemLabel(i).toLowerCase() },
+  { key: 'date', label: 'Date In', type: 'date', w: 116, min: 92, max: 140, frozen: true },
+  { key: 'sku', label: 'SKU', type: 'text', w: 116, min: 100, max: 160, frozen: true, emphasis: 'muted' },
+  { key: 'imei', label: 'IMEI/Serial', type: 'text', w: 160, min: 130, max: 240, frozen: true, emphasis: 'muted' },
+  { key: '__item', label: 'Item', type: 'computed', w: 200, min: 160, flex: true, frozen: true, emphasis: 'strong', compute: itemLabel, sortVal: i => itemLabel(i).toLowerCase() },
   // Type/Brand/Model are not shown in the table (Brand+Model live in the Item
   // column and its inline editor; Type is edited in the form). Kept here with
   // hideCol so CSV export still round-trips them.
   { key: 'deviceType', label: 'Type', type: 'text', w: 76, hideCol: true },
   { key: 'brand', label: 'Brand', type: 'text', w: 100, hideCol: true },
   { key: 'model', label: 'Model', type: 'text', w: 140, hideCol: true },
-  { key: 'storage', label: 'Storage', type: 'text', w: 78 },
-  { key: 'color', label: 'Color', type: 'text', w: 88 },
-  { key: 'batteryHealth', label: 'Battery', type: 'text', w: 62 },
-  { key: 'condition', label: 'Condition', type: 'select', w: 108, options: opt(CONDITIONS) },
+  { key: 'storage', label: 'Storage', type: 'text', w: 90, min: 72, max: 120 },
+  { key: 'color', label: 'Color', type: 'text', w: 100, min: 80, max: 150 },
+  { key: 'batteryHealth', label: 'Battery', type: 'text', w: 72, min: 56, max: 110 },
+  { key: 'condition', label: 'Condition', type: 'select', w: 108, min: 88, max: 150, options: opt(CONDITIONS) },
   // 'Bought From' is no longer shown in the grid (or Columns menu). Kept here
   // with hideCol so the value still round-trips through CSV export and stays in
   // Firestore; it remains editable in the expand form.
   { key: 'boughtFrom', label: 'Bought From', type: 'text', w: 130, emphasis: 'muted', hideCol: true },
-  { key: 'purchaseSource', label: 'Source', type: 'text', w: 92, emphasis: 'muted' },
-  // Financial group — kept contiguous. Widths tuned for typical currency values.
-  { key: 'purchaseCost', label: 'Purchase', type: 'number', w: 82, align: 'right' },
-  { key: 'repairCost', label: 'Repair', type: 'number', w: 72, align: 'right' },
-  { key: '__total', label: 'Total Cost', type: 'computed', w: 96, align: 'right', compute: i => money(totalCost(i)), sortVal: totalCost },
-  { key: 'targetSalePrice', label: 'Target', type: 'number', w: 76, align: 'right' },
+  { key: 'purchaseSource', label: 'Source', type: 'text', w: 100, min: 80, max: 140, emphasis: 'muted' },
+  // Financial group — kept contiguous.
+  { key: 'purchaseCost', label: 'Purchase', type: 'number', w: 96, min: 80, max: 130, align: 'right' },
+  { key: 'repairCost', label: 'Repair', type: 'number', w: 92, min: 78, max: 130, align: 'right' },
+  { key: '__total', label: 'Total Cost', type: 'computed', w: 100, min: 82, max: 130, align: 'right', compute: i => money(totalCost(i)), sortVal: totalCost },
+  { key: 'targetSalePrice', label: 'Target', type: 'number', w: 92, min: 78, max: 130, align: 'right' },
   // Actual = the real sale price the device sold for; drives the Profit column.
-  { key: 'salePrice', label: 'Actual', type: 'number', w: 76, align: 'right' },
-  { key: '__profit', label: 'Profit', type: 'computed', w: 96, align: 'right', compute: i => i.salePrice ? money(profitOf(i)) : '—', sortVal: profitOf },
+  { key: 'salePrice', label: 'Actual', type: 'number', w: 92, min: 78, max: 130, align: 'right' },
+  { key: '__profit', label: 'Profit', type: 'computed', w: 100, min: 82, max: 130, align: 'right', compute: i => i.salePrice ? money(profitOf(i)) : '—', sortVal: profitOf },
   // Sale group. (The device Status column is intentionally not shown in the
   // grid — status is still stored and driven via the Filters, the item form,
   // bulk actions, sold detection and analytics.)
-  { key: 'soldDate', label: 'Date Sold', type: 'date', w: 116 },
-  { key: 'soldTo', label: 'Customer', type: 'text', w: 120 },
-  { key: 'notes', label: 'Notes', type: 'text', w: 200, emphasis: 'muted' },
+  { key: 'soldDate', label: 'Date Sold', type: 'date', w: 116, min: 92, max: 150 },
+  { key: 'soldTo', label: 'Customer', type: 'text', w: 130, min: 100, max: 220 },
+  { key: 'notes', label: 'Notes', type: 'text', w: 200, min: 150, flex: true, emphasis: 'muted' },
 ];
 const ACCESSORY_COLS: Col[] = [
-  { key: 'date', label: 'Date Added', type: 'date', w: 130 },
-  { key: 'sku', label: 'SKU', type: 'text', w: 120 },
-  { key: 'manufacturerBarcode', label: 'Barcode', type: 'text', w: 150 },
-  { key: 'item', label: 'Item Name', type: 'text', w: 200 },
-  { key: 'category', label: 'Category', type: 'text', w: 130 },
-  { key: 'quantity', label: 'Quantity', type: 'number', w: 90, align: 'right' },
-  { key: 'costPerUnit', label: 'Cost/Unit', type: 'number', w: 100, align: 'right' },
-  { key: 'sellingPrice', label: 'Selling Price', type: 'number', w: 110, align: 'right' },
-  { key: 'lowStockThreshold', label: 'Low Stock', type: 'number', w: 100, align: 'right' },
-  { key: 'notes', label: 'Notes', type: 'text', w: 220 },
+  { key: 'date', label: 'Date Added', type: 'date', w: 130, min: 100, max: 150 },
+  { key: 'sku', label: 'SKU', type: 'text', w: 120, min: 110, max: 160, emphasis: 'muted' },
+  { key: 'manufacturerBarcode', label: 'Barcode', type: 'text', w: 160, min: 130, max: 220 },
+  { key: 'item', label: 'Item Name', type: 'text', w: 220, min: 160, flex: true, emphasis: 'strong' },
+  { key: 'category', label: 'Category', type: 'text', w: 130, min: 100, max: 160 },
+  { key: 'quantity', label: 'Quantity', type: 'number', w: 96, min: 84, max: 130, align: 'right' },
+  { key: 'costPerUnit', label: 'Cost/Unit', type: 'number', w: 100, min: 90, max: 140, align: 'right' },
+  { key: 'sellingPrice', label: 'Selling Price', type: 'number', w: 110, min: 90, max: 140, align: 'right' },
+  { key: 'lowStockThreshold', label: 'Low Stock', type: 'number', w: 100, min: 90, max: 140, align: 'right' },
+  { key: 'notes', label: 'Notes', type: 'text', w: 220, min: 160, flex: true, emphasis: 'muted' },
 ];
 
 // Bumped to v2 so existing users pick up the new default layout (Brand, Model,
@@ -642,49 +643,89 @@ const Sheet: React.FC<{
     return { x: Math.min(r.left, window.innerWidth - width - 12), y: r.bottom + 4 };
   };
 
-  // Effective width = the user's drag-resized override, else the column default.
-  const wOf = (c: Col) => widths?.[c.key] ?? c.w;
+  // Horizontal scrolling stays inside the table container (the page never gains a
+  // scrollbar). The native scrollbar is hidden; horizontal movement is via
+  // trackpad, Shift+wheel and grab-to-pan. Left/right edge fades hint when more
+  // columns are off-screen.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [edges, setEdges] = useState({ left: false, right: false });
+  const updateEdges = () => {
+    const el = scrollRef.current; if (!el) return;
+    const max = el.scrollWidth - el.clientWidth;
+    setEdges({ left: el.scrollLeft > 1, right: el.scrollLeft < max - 1 });
+  };
+  useLayoutEffect(() => {
+    const el = scrollRef.current; if (!el) return;
+    updateEdges();
+    const ro = new ResizeObserver(updateEdges); ro.observe(el);
+    // Shift+wheel → horizontal scroll (trackpad deltaX already scrolls natively).
+    const onWheel = (e: WheelEvent) => {
+      if (el.scrollWidth <= el.clientWidth) return;
+      if (e.shiftKey && e.deltaY !== 0) { el.scrollLeft += e.deltaY; e.preventDefault(); }
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => { ro.disconnect(); el.removeEventListener('wheel', onWheel); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  // Column widths and the frozen columns' sticky-left offsets are driven by CSS
-  // custom properties on the <table> (consumed by a <colgroup>). That lets a drag
-  // update them imperatively — a single style write, no React re-render — so
-  // resizing stays smooth with hundreds of rows. The final width is committed to
-  // state (and localStorage) once, on mouse-up.
-  const ACTIONS_W = 108;
-  const totalW = ACTIONS_W + cols.reduce((s, c) => s + wOf(c), 0);
-  const cssVars = { '--w-actions': `${ACTIONS_W}px`, '--tw': `${totalW}px` } as Record<string, string>;
-  cols.forEach(c => { cssVars[`--w-${c.key}`] = `${wOf(c)}px`; });
-  { let acc = ACTIONS_W; for (const c of cols) { if (c.frozen) { cssVars[`--l-${c.key}`] = `${acc}px`; acc += wOf(c); } else break; } }
+  const ACTIONS_W = 100;
+  // Independent column widths: each column keeps its own width — resizing changes
+  // only that column and the table simply grows (scrolling inside its container).
+  // Widths and the frozen columns' sticky-left offsets are pushed through CSS
+  // custom properties on the <table> (via a <colgroup>), so a drag updates them
+  // imperatively — no per-row re-render — committing the override on release.
+  const totalW = tableWidth(cols, ACTIONS_W, widths ?? {});
+  const buildVars = (overrideKey?: string, overrideVal?: number): Record<string, string> => {
+    const vars: Record<string, string> = { '--w-actions': `${ACTIONS_W}px` };
+    let total = ACTIONS_W, accL = ACTIONS_W;
+    for (const c of cols) {
+      const w = overrideKey === c.key ? overrideVal! : columnWidth(c, widths ?? {});
+      vars[`--w-${c.key}`] = `${w}px`;
+      if (c.frozen) { vars[`--l-${c.key}`] = `${accL}px`; accL += w; }
+      total += w;
+    }
+    vars['--tw'] = `${total}px`;
+    return vars;
+  };
+  const cssVars = buildVars();
 
-  // Live drag-resize: write widths straight to the table's CSS vars during the
-  // drag, then commit the final value to React state on release.
+  // Live drag-resize: only the dragged column changes width; the recomputed
+  // frozen offsets + total are written straight to the table's CSS vars, and the
+  // override is committed to state (and localStorage) on release.
   const startResize = (e: React.MouseEvent, c: Col) => {
     e.preventDefault(); e.stopPropagation();
     const table = (e.currentTarget as HTMLElement).closest('table') as HTMLTableElement | null;
     const startX = e.clientX;
-    const startW = wOf(c);
+    const startW = columnWidth(c, widths ?? {});
     let latest = startW;
     const apply = () => {
       if (!table) return;
-      let total = ACTIONS_W, accL = ACTIONS_W;
-      for (const cc of cols) {
-        const w = cc.key === c.key ? latest : wOf(cc);
-        if (cc.frozen) { table.style.setProperty(`--l-${cc.key}`, `${accL}px`); accL += w; }
-        total += w;
-      }
-      table.style.setProperty(`--w-${c.key}`, `${latest}px`);
-      table.style.setProperty('--tw', `${total}px`);
+      const vars = buildVars(c.key, latest);
+      for (const k in vars) table.style.setProperty(k, vars[k]);
     };
-    const onMove = (ev: MouseEvent) => { latest = Math.max(MIN_COL_W, startW + (ev.clientX - startX)); apply(); };
+    const onMove = (ev: MouseEvent) => { latest = clampWidth(c, startW + (ev.clientX - startX)); apply(); };
     const onUp = () => {
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
       document.body.style.cursor = ''; document.body.style.userSelect = '';
       onResize?.(c.key, latest);
+      updateEdges();
     };
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
     document.body.style.cursor = 'col-resize'; document.body.style.userSelect = 'none';
+  };
+
+  // Grab-to-pan: click-drag on non-interactive areas scrolls the table sideways.
+  const startPan = (e: React.MouseEvent) => {
+    const el = scrollRef.current; if (!el || el.scrollWidth <= el.clientWidth) return;
+    const t = e.target as HTMLElement;
+    if (t.closest('input,button,select,textarea,a,th,[role="menuitem"]')) return;
+    const startX = e.clientX; const startLeft = el.scrollLeft;
+    const onMove = (ev: MouseEvent) => { el.scrollLeft = startLeft - (ev.clientX - startX); };
+    const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); el.style.cursor = ''; document.body.style.userSelect = ''; };
+    document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
+    el.style.cursor = 'grabbing'; document.body.style.userSelect = 'none';
   };
   const emph = (c: Col) =>
     c.emphasis === 'strong' ? 'font-semibold text-slate-900 dark:text-slate-100'
@@ -698,7 +739,12 @@ const Sheet: React.FC<{
       <div className="px-4 py-2.5 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40">
         <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200">{title} <span className="text-xs font-normal text-slate-400">({total ?? rows.length})</span></h3>
       </div>
-      <div className="overflow-auto custom-scrollbar max-h-[60vh]">
+      <div className="relative">
+        {/* Edge fades: hint that more columns exist off-screen. */}
+        <div className={`pointer-events-none absolute inset-y-0 left-0 w-8 z-40 bg-gradient-to-r from-black/10 dark:from-black/40 to-transparent transition-opacity ${edges.left ? 'opacity-100' : 'opacity-0'}`} />
+        <div className={`pointer-events-none absolute inset-y-0 right-0 w-8 z-40 bg-gradient-to-l from-black/10 dark:from-black/40 to-transparent transition-opacity ${edges.right ? 'opacity-100' : 'opacity-0'}`} />
+        <div ref={scrollRef} onScroll={updateEdges} onMouseDown={startPan}
+          className={`overflow-auto no-scrollbar max-h-[60vh] ${edges.left || edges.right ? 'cursor-grab' : ''}`}>
         <table className="border-collapse" style={{ tableLayout: 'fixed', width: 'var(--tw)', minWidth: 'var(--tw)', ...cssVars }}>
           <colgroup>
             <col style={{ width: 'var(--w-actions)' }} />
@@ -751,17 +797,17 @@ const Sheet: React.FC<{
                       className={`p-0 align-top ${c.frozen ? `sticky z-10 ${frozenBg}` : ''}`}>
                       {c.type === 'computed' ? (
                         c.key === '__item' ? (
-                          <button onClick={e => setItemPop({ i, ...openAt(e, 240) })} title="Edit brand & model"
+                          <button onClick={e => setItemPop({ i, ...openAt(e, 240) })} title={c.compute!(i)}
                             className={`w-full text-left px-2 py-1.5 text-sm truncate rounded hover:bg-indigo-50 dark:hover:bg-indigo-900/20 ${emph(c)}`}>
                             {c.compute!(i)}
                           </button>
                         ) : (
-                          <div className={`px-2 py-1.5 text-sm ${c.align === 'right' ? 'text-right font-mono' : ''} ${emph(c)}`}>
+                          <div title={c.compute!(i)} className={`px-2 py-1.5 text-sm truncate ${c.align === 'right' ? 'text-right font-mono' : ''} ${emph(c)}`}>
                             {c.key === '__profit' && i.salePrice ? <span className={profitOf(i) >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}>{c.compute!(i)}</span> : c.compute!(i)}
                           </div>
                         )
                       ) : c.readOnly ? (
-                        <div className={`px-2 py-1.5 text-sm truncate ${emph(c)}`}>{((i[c.key as keyof InventoryItem] as any) ?? '') || '—'}</div>
+                        <div title={String((i[c.key as keyof InventoryItem] as any) ?? '')} className={`px-2 py-1.5 text-sm truncate ${emph(c)}`}>{((i[c.key as keyof InventoryItem] as any) ?? '') || '—'}</div>
                       ) : c.type === 'select' ? (
                         c.key === 'deviceStatus' ? (
                           <div className="px-2 py-1 flex items-center">
@@ -780,6 +826,7 @@ const Sheet: React.FC<{
                           {low && c.key === 'quantity' && <AlertTriangle className="w-3 h-3 text-rose-500 absolute right-1 top-1/2 -translate-y-1/2 pointer-events-none" />}
                           <input type={c.type === 'number' ? 'number' : c.type === 'date' ? 'date' : 'text'}
                             value={(i[c.key as keyof InventoryItem] as any) ?? (c.type === 'number' ? 0 : '')}
+                            title={c.type === 'text' ? String((i[c.key as keyof InventoryItem] as any) ?? '') : undefined}
                             onChange={e => onUpdate(i.id, c.key as keyof InventoryItem, c.type === 'number' ? (parseFloat(e.target.value) || 0) : e.target.value)}
                             className={`${cellBase} ${emph(c)} ${c.align === 'right' ? 'text-right font-mono' : ''} ${c.key === 'sku' ? 'font-mono text-xs' : ''} dark:[color-scheme:dark]`} />
                         </div>
@@ -798,6 +845,7 @@ const Sheet: React.FC<{
             )}
           </tbody>
         </table>
+        </div>
       </div>
 
       {/* Row overflow menu (rendered outside the table so it never clips) */}

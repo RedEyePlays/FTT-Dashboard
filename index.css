@@ -38,6 +38,11 @@ html, body {
 /* Comfortable minimum tap target on touch devices. */
 .tap-target { min-width: 44px; min-height: 44px; }
 
+/* Hide the native horizontal scrollbar while keeping the element scrollable
+   (inventory table pans via trackpad / Shift+wheel / grab-to-pan instead). */
+.no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
+
 /* Respect reduced-motion preferences. */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
