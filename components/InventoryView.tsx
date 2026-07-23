@@ -665,7 +665,7 @@ const Sheet: React.FC<{
     return () => ro.disconnect();
   }, []);
 
-  const ACTIONS_W = 100;
+  const ACTIONS_W = 124; // fits select + edit + print-label + more icons
   // Bounded independent widths: each column keeps its own width, but the whole
   // table is fitted within the container. Any width the columns don't use becomes
   // a trailing spacer a column can grow INTO — once that unused width is consumed
@@ -790,6 +790,7 @@ const Sheet: React.FC<{
                     <div className="flex items-center gap-1">
                       <button onClick={() => onToggleSel(i.id)} className="p-1" title="Select">{sel ? <CheckSquare className="w-4 h-4 text-indigo-500" /> : <Square className="w-4 h-4 text-slate-300" />}</button>
                       <button onClick={() => onExpand(i)} className="p-1 text-slate-400 hover:text-indigo-600" title="Edit"><Pencil className="w-4 h-4" /></button>
+                      <button onClick={() => onLabel(i)} className="p-1 text-slate-400 hover:text-indigo-600" title="Print label"><Printer className="w-4 h-4" /></button>
                       <button onClick={e => setMenu({ i, ...openAt(e, 180) })} className="p-1 text-slate-400 hover:text-indigo-600" title="More actions"><MoreVertical className="w-4 h-4" /></button>
                     </div>
                   </td>
@@ -862,7 +863,6 @@ const Sheet: React.FC<{
           <div className="fixed inset-0 z-40" onClick={() => setMenu(null)} />
           <div className="fixed z-50 w-44 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shadow-2xl py-1 text-sm" style={{ left: menu.x, top: menu.y }}>
             {[
-              { icon: <Printer className="w-4 h-4" />, label: 'Print Label', run: () => onLabel(menu.i) },
               { icon: <QrCode className="w-4 h-4" />, label: 'QR Code', run: () => onLabel(menu.i) },
               { icon: <Copy className="w-4 h-4" />, label: 'Duplicate', run: () => onDuplicate(menu.i) },
               { icon: <History className="w-4 h-4" />, label: 'View History', run: () => onHistory(menu.i, 'history') },

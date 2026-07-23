@@ -1,26 +1,21 @@
 // Pure ZPL II generation for repair labels. No DOM / network here so it can be
 // unit-tested; the Browser Print transport lives in services/zebra.ts.
+//
+// Label sizes now come from the single shared definition in domain/settings.ts
+// (built-in presets + user custom sizes), so a size added in Settings is usable
+// for both the browser/HTML label path and this Zebra ZPL path. The built-ins are
+// re-exported here as LABEL_SIZES; custom sizes reach buildZpl via the caller,
+// which passes the chosen dims (from the merged list) — buildZpl takes any
+// LabelDims, so no change is needed for a custom size to print.
 
-export type LabelSizeId = 'dymo-36x89' | '2x1' | '2x2' | '2x3' | '4x6';
+import { BUILT_IN_LABEL_SIZES, LabelSize } from '../domain/settings';
 
-export interface LabelDims {
-  id: LabelSizeId;
-  w: number; // inches
-  h: number; // inches
-  label: string;
-  dymo?: boolean; // Dymo LabelWriter address stock (printed landscape)
-}
+export type LabelDims = LabelSize;
+export type LabelSizeId = string; // kept for back-compat; ids are now open strings
 
-const mm = (v: number) => v / 25.4; // millimetres → inches
-
-// Dymo 36 × 89 mm (LabelWriter large address, landscape) is the primary size.
-export const LABEL_SIZES: LabelDims[] = [
-  { id: 'dymo-36x89', w: mm(89), h: mm(36), label: 'Dymo 36 × 89 mm', dymo: true },
-  { id: '2x1', w: 2, h: 1, label: '2 × 1"' },
-  { id: '2x2', w: 2, h: 2, label: '2 × 2"' },
-  { id: '2x3', w: 2, h: 3, label: '2 × 3"' },
-  { id: '4x6', w: 4, h: 6, label: '4 × 6"' },
-];
+// The built-in presets (Dymo 36 × 89 mm is primary). Callers with settings should
+// use the merged list (built-ins + custom) instead of this static array.
+export const LABEL_SIZES: LabelDims[] = BUILT_IN_LABEL_SIZES;
 
 export type Dpi = 203 | 300;
 

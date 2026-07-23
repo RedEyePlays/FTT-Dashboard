@@ -1,12 +1,12 @@
 import React, { useMemo, useState } from 'react';
 import {
   Store, Building2, Wrench, ShoppingCart, Percent, Tag, Contact, LayoutDashboard,
-  Palette, ShieldCheck, DatabaseBackup, Info, Save, RotateCcw, Check, Lock,
+  Palette, ShieldCheck, DatabaseBackup, Info, Save, RotateCcw, Check, Lock, Plus, Trash2,
 } from 'lucide-react';
 import { Role, Permission } from '../types';
 import {
   AppSettings, ThemeMode, PaymentMethodKey, CURRENCIES, TIME_ZONES,
-  DASHBOARD_WIDGETS, STATUS_COLOR_OPTIONS,
+  DASHBOARD_WIDGETS, STATUS_COLOR_OPTIONS, LabelSize, mergeLabelSizes,
 } from '../domain/settings';
 import { ROLE_PERMISSIONS, ROLE_LABEL } from '../services/rbac';
 import { REPAIR_STATUS_LABEL } from '../domain/repairs';
@@ -271,24 +271,83 @@ const TaxesSection: React.FC<{ draft: AppSettings; patch: PatchFn }> = ({ draft,
   </SettingsSection>
 );
 
-const LabelsSection: React.FC<{ draft: AppSettings; patch: PatchFn }> = ({ draft, patch }) => (
-  <SettingsSection title="Labels & Printing" description="Defaults for the inventory and repair label printer.">
-    <SettingsCard>
-      <SettingsSelect label="Default label size" value={draft.labels.defaultSize} onChange={v => patch('labels', { defaultSize: v as any })}
-        options={[
-          { value: 'dymo-36x89', label: 'DYMO 36×89mm (primary)' },
-          { value: '2x1', label: '2×1 in' }, { value: '2x2', label: '2×2 in' },
-          { value: '2x3', label: '2×3 in' }, { value: '4x6', label: '4×6 in' },
-        ]} />
-      <SettingsSelect label="Barcode format" value={draft.labels.barcodeFormat} onChange={v => patch('labels', { barcodeFormat: v as any })}
-        options={[{ value: 'CODE128', label: 'CODE128' }, { value: 'EAN13', label: 'EAN-13' }]} />
-      <SettingsSelect label="QR encodes" value={draft.labels.qrContent} onChange={v => patch('labels', { qrContent: v as any })}
-        options={[{ value: 'sku', label: 'SKU' }, { value: 'id', label: 'Item ID' }, { value: 'url', label: 'Lookup URL' }]} />
-      <SettingsTextField label="Margin (mm)" type="number" min={0} max={10} step={0.5} value={draft.labels.marginMm} onChange={v => patch('labels', { marginMm: parseFloat(v) || 0 })} />
-      <SettingsTextField label="Print density (Zebra ^MD)" type="number" min={-30} max={30} step={1} value={draft.labels.density} onChange={v => patch('labels', { density: Math.round(parseFloat(v) || 0) })} hint="-30 (light) to 30 (dark)." />
-    </SettingsCard>
-  </SettingsSection>
-);
+const LabelsSection: React.FC<{ draft: AppSettings; patch: PatchFn }> = ({ draft, patch }) => {
+  const sizes = mergeLabelSizes(draft.labels.customSizes);
+  const customSizes = sizes.filter(s => s.custom);
+  const [form, setForm] = useState({ name: '', w: '', h: '', dymo: false });
+
+  const dims = (s: LabelSize) => s.dymo
+    ? `${(s.w * 25.4).toFixed(0)} × ${(s.h * 25.4).toFixed(0)} mm`
+    : `${+s.w.toFixed(2)} × ${+s.h.toFixed(2)} in`;
+
+  const addSize = () => {
+    const w = parseFloat(form.w), h = parseFloat(form.h);
+    const name = form.name.trim();
+    if (!name || !(w > 0) || !(h > 0)) return;
+    const base = 'custom-' + (name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'size');
+    let id = base, n = 2;
+    while (sizes.some(s => s.id === id)) id = `${base}-${n++}`;
+    patch('labels', { customSizes: [...draft.labels.customSizes, { id, label: name, w, h, dymo: form.dymo, custom: true }] });
+    setForm({ name: '', w: '', h: '', dymo: false });
+  };
+  const removeSize = (id: string) =>
+    patch('labels', { customSizes: draft.labels.customSizes.filter(s => s.id !== id) });
+
+  const fieldCls = 'w-full px-2.5 py-1.5 text-sm bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md outline-none focus:ring-2 focus:ring-indigo-500 text-slate-900 dark:text-slate-100';
+
+  return (
+    <SettingsSection title="Labels & Printing" description="Defaults for the inventory and repair label printer.">
+      <SettingsCard>
+        <SettingsSelect label="Default label size" value={draft.labels.defaultSize} onChange={v => patch('labels', { defaultSize: v })}
+          options={sizes.map(s => ({ value: s.id, label: `${s.label}${s.custom ? ' (custom)' : ''}` }))} />
+        <SettingsSelect label="Barcode format" value={draft.labels.barcodeFormat} onChange={v => patch('labels', { barcodeFormat: v as any })}
+          options={[{ value: 'CODE128', label: 'CODE128' }, { value: 'EAN13', label: 'EAN-13' }]} />
+        <SettingsSelect label="QR encodes" value={draft.labels.qrContent} onChange={v => patch('labels', { qrContent: v as any })}
+          options={[{ value: 'sku', label: 'SKU' }, { value: 'id', label: 'Item ID' }, { value: 'url', label: 'Lookup URL' }]} />
+        <SettingsTextField label="Margin (mm)" type="number" min={0} max={10} step={0.5} value={draft.labels.marginMm} onChange={v => patch('labels', { marginMm: parseFloat(v) || 0 })} />
+        <SettingsTextField label="Print density (Zebra ^MD)" type="number" min={-30} max={30} step={1} value={draft.labels.density} onChange={v => patch('labels', { density: Math.round(parseFloat(v) || 0) })} hint="-30 (light) to 30 (dark)." />
+      </SettingsCard>
+
+      <SettingsCard>
+        <div className="py-2">
+          <p className="text-sm font-medium text-slate-700 dark:text-slate-200">Label sizes</p>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Built-in presets always available; add your own for a DYMO or Zebra printer. Dimensions are in inches (the DYMO toggle rotates content to fit portrait-fed address stock).</p>
+        </div>
+        <ul className="divide-y divide-slate-100 dark:divide-slate-800">
+          {sizes.map(s => (
+            <li key={s.id} className="flex items-center justify-between gap-3 py-2">
+              <div className="min-w-0">
+                <span className="text-sm text-slate-700 dark:text-slate-200">{s.label}</span>
+                <span className="ml-2 text-xs text-slate-400">{dims(s)}{s.dymo ? ' · DYMO' : ''}</span>
+              </div>
+              {s.custom
+                ? <button onClick={() => removeSize(s.id)} aria-label={`Remove ${s.label}`} title="Remove custom size" className="shrink-0 text-slate-400 hover:text-rose-500"><Trash2 className="w-4 h-4" /></button>
+                : <span className="shrink-0 text-[10px] uppercase tracking-wide text-slate-400">Built-in</span>}
+            </li>
+          ))}
+        </ul>
+        <div className="mt-2 pt-3 border-t border-slate-100 dark:border-slate-800">
+          <p className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-2">Add a custom size</p>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 items-end">
+            <label className="col-span-2 sm:col-span-1 text-xs text-slate-500 dark:text-slate-400">Name
+              <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. 3 × 2 thermal" className={`${fieldCls} mt-0.5`} /></label>
+            <label className="text-xs text-slate-500 dark:text-slate-400">Width (in)
+              <input type="number" min={0} step={0.1} value={form.w} onChange={e => setForm(f => ({ ...f, w: e.target.value }))} placeholder="3" className={`${fieldCls} mt-0.5`} /></label>
+            <label className="text-xs text-slate-500 dark:text-slate-400">Height (in)
+              <input type="number" min={0} step={0.1} value={form.h} onChange={e => setForm(f => ({ ...f, h: e.target.value }))} placeholder="2" className={`${fieldCls} mt-0.5`} /></label>
+            <label className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300 cursor-pointer h-9">
+              <input type="checkbox" checked={form.dymo} onChange={e => setForm(f => ({ ...f, dymo: e.target.checked }))} className="rounded" /> DYMO-style
+            </label>
+          </div>
+          <button onClick={addSize} disabled={!form.name.trim() || !(parseFloat(form.w) > 0) || !(parseFloat(form.h) > 0)}
+            className="mt-3 inline-flex items-center gap-2 px-3 py-1.5 text-sm rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white font-medium">
+            <Plus className="w-4 h-4" /> Add size
+          </button>
+        </div>
+      </SettingsCard>
+    </SettingsSection>
+  );
+};
 
 const CustomersSection: React.FC<{ draft: AppSettings; patch: PatchFn }> = ({ draft, patch }) => (
   <SettingsSection title="Customers" description="Required fields and CRM behavior.">

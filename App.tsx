@@ -7,7 +7,7 @@ import { DataGrid } from './components/DataGrid';
 import { BulkEntryModal } from './components/BulkEntryModal';
 import { AuthScreen } from './components/AuthScreen';
 import { NotesBoard } from './components/NotesBoard';
-import { SettingsModal } from './components/SettingsModal';
+import { SettingsModal, cacheLabelSizes } from './components/SettingsModal';
 import { SettingsView } from './components/SettingsView';
 import { BackupPanel } from './components/BackupPanel';
 import { CalculatorTool } from './components/CalculatorTool';
@@ -225,6 +225,10 @@ const App: React.FC = () => {
     setDarkMode(t === 'dark');
   }, [settings.appearance.theme]);
 
+  // Mirror the workspace's custom label sizes into the local cache so the label
+  // modals (which don't receive settings as props) can read the merged list.
+  useEffect(() => { cacheLabelSizes(settings.labels.customSizes); }, [settings.labels.customSizes]);
+
   // Apply the configured default landing page once, on first load.
   const landingAppliedRef = useRef(false);
   useEffect(() => {
@@ -281,6 +285,7 @@ const App: React.FC = () => {
       localStorage.setItem('posSettings', JSON.stringify({ taxRate: next.tax.percent }));
       const prevTpl = JSON.parse(localStorage.getItem('ftt_label_tpl_v1') || '{}');
       localStorage.setItem('ftt_label_tpl_v1', JSON.stringify({ ...prevTpl, template: next.labels.defaultSize }));
+      cacheLabelSizes(next.labels.customSizes);
     } catch { /* ignore */ }
   };
 
