@@ -2,7 +2,7 @@ import React from 'react';
 import {
   ShoppingCart, Trash2, X, Search, User, Phone, FileText, Mail,
   Banknote, CreditCard, Blend, CheckCircle, Package, Smartphone, ScanLine, History,
-  Printer, Eye, RotateCcw, QrCode, Sparkles,
+  Printer, Eye, RotateCcw, QrCode, Sparkles, AlertTriangle,
 } from 'lucide-react';
 import { InventoryItem, Customer } from '../types';
 import { getDeviceDisplayName } from '../domain/inventory';
@@ -19,12 +19,14 @@ interface Props {
   initialCustomer?: Customer;   // pre-seed the sale customer (CRM quick action)
   onConsumeInitial?: () => void;
   onComplete: (payload: import('../hooks/useCheckout').CartCheckout) => void;
+  canViewProfit?: boolean;      // gate cost/profit figures (same pattern as Dashboard)
 }
 
 // Desktop split-screen Quick Sale. All state / pricing / checkout logic lives in
 // useCheckout (shared with the mobile step flow) — this file is presentation.
 export const CartSaleView: React.FC<Props> = (props) => {
   const cx = useCheckout(props);
+  const canViewProfit = props.canViewProfit ?? true;
   const {
     customers, cart, picker, setPicker, search, setSearch, confirmed,
     platformName, setPlatformName, platformFeePercent, setPlatformFeePercent, soldDate, setSoldDate,
@@ -36,6 +38,7 @@ export const CartSaleView: React.FC<Props> = (props) => {
     emptyCustom, showCustom, setShowCustom, custom, setCustom,
     taxRate, feePercent, previousPurchases, availableDevices, availableAccessories,
     lineSubtotal, subtotal, purchaseCostTotal, repairCostTotal, totalCost, taxApplies, tax, platformFee, totalPaid, netProfit,
+    isZeroPricedDevice, hasZeroPricedDevice, allowZeroPrice, setAllowZeroPrice, blockedByZeroPrice,
     addDevice, addAccessory, updateLine, removeLine, num, addCustomItem, handleScan, handleCheckout, reset, printReceipt, soldDeviceRows,
   } = cx;
 
@@ -54,7 +57,7 @@ export const CartSaleView: React.FC<Props> = (props) => {
         </div>
         <div className="flex gap-6 text-sm">
           <div className="text-center"><p className="text-slate-400 text-xs">Total Paid</p><p className="font-bold text-slate-800 dark:text-slate-100">${lastTx.totalPaid.toFixed(2)}</p></div>
-          <div className="text-center"><p className="text-slate-400 text-xs">Net Profit</p><p className={`font-bold ${lastTx.netProfit >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>${lastTx.netProfit.toFixed(2)}</p></div>
+          {canViewProfit && <div className="text-center"><p className="text-slate-400 text-xs">Net Profit</p><p className={`font-bold ${lastTx.netProfit >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>${lastTx.netProfit.toFixed(2)}</p></div>}
         </div>
 
         <div className="grid grid-cols-2 gap-2 w-full max-w-sm mt-2">
@@ -88,7 +91,7 @@ export const CartSaleView: React.FC<Props> = (props) => {
                   <Row label="Tax" value={lastTx.tax} muted />
                   <Row label="Platform fee" value={-lastTx.platformFee} muted />
                   <Row label="Total Paid" value={lastTx.totalPaid} bold />
-                  <Row label="Net Profit" value={lastTx.netProfit} />
+                  {canViewProfit && <Row label="Net Profit" value={lastTx.netProfit} />}
                 </div>
                 <p className="text-xs text-slate-500 dark:text-slate-400">Payment: {lastTx.paymentMethod}{lastTx.paymentMethod === 'mixed' ? ` — cash $${(lastTx.cashAmount || 0).toFixed(2)}, card $${(lastTx.cardAmount || 0).toFixed(2)}, e-transfer $${(lastTx.etransferAmount || 0).toFixed(2)}` : ''}</p>
                 {lastTx.notes && <p className="text-xs text-slate-500 dark:text-slate-400 italic">{lastTx.notes}</p>}
@@ -136,13 +139,16 @@ export const CartSaleView: React.FC<Props> = (props) => {
         )}
 
         <div className="flex flex-col gap-3">
-          {cart.map(l => (
-            <div key={l.key} className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-4">
+          {cart.map(l => {
+            const zeroPrice = isZeroPricedDevice(l);
+            return (
+            <div key={l.key} className={`bg-white dark:bg-slate-900 border rounded-xl p-4 ${zeroPrice ? 'border-amber-400 dark:border-amber-500/60 ring-1 ring-amber-300/60 dark:ring-amber-500/30' : 'border-slate-200 dark:border-slate-700'}`}>
               <div className="flex items-start gap-3">
                 <div className={`mt-1 ${l.isCustom ? 'text-amber-500' : l.kind === 'device' ? 'text-indigo-500' : 'text-violet-500'}`}>{l.isCustom ? <Sparkles className="w-4 h-4" /> : l.kind === 'device' ? <Smartphone className="w-4 h-4" /> : <Package className="w-4 h-4" />}</div>
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-semibold text-slate-800 dark:text-slate-100 truncate flex items-center gap-2">{l.name}
                     {l.isCustom && <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold uppercase bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">Custom · {l.category}</span>}
+                    {zeroPrice && <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold uppercase bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> No price</span>}
                   </p>
                   {(l.code || l.notes) && <p className="text-xs text-slate-400 font-mono truncate">{l.code}{l.notes ? `  ${l.notes}` : ''}</p>}
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-2">
@@ -168,7 +174,7 @@ export const CartSaleView: React.FC<Props> = (props) => {
                 </div>
               </div>
             </div>
-          ))}
+          );})}
         </div>
       </div>
 
@@ -180,13 +186,17 @@ export const CartSaleView: React.FC<Props> = (props) => {
           <Row label={`Platform fee${feePercent ? ` (${feePercent}%)` : ''}`} value={-platformFee} muted />
           <div className="border-t border-slate-100 dark:border-slate-800 my-1" />
           <Row label="Total Paid" value={totalPaid} bold />
-          <Row label="Purchase Cost" value={purchaseCostTotal} muted />
-          <Row label="Repair Cost" value={repairCostTotal} muted />
-          <Row label="Total Cost" value={totalCost} muted />
-          <div className="flex items-center justify-between pt-1">
-            <span className="font-semibold text-slate-700 dark:text-slate-200">Net Profit</span>
-            <span className={`text-lg font-bold ${netProfit >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>${netProfit.toFixed(2)}</span>
-          </div>
+          {canViewProfit && (
+            <>
+              <Row label="Purchase Cost" value={purchaseCostTotal} muted />
+              <Row label="Repair Cost" value={repairCostTotal} muted />
+              <Row label="Total Cost" value={totalCost} muted />
+              <div className="flex items-center justify-between pt-1">
+                <span className="font-semibold text-slate-700 dark:text-slate-200">Net Profit</span>
+                <span className={`text-lg font-bold ${netProfit >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>${netProfit.toFixed(2)}</span>
+              </div>
+            </>
+          )}
         </div>
 
         {/* Customer */}
@@ -253,7 +263,18 @@ export const CartSaleView: React.FC<Props> = (props) => {
           </div>
         </div>
 
-        <button onClick={handleCheckout} disabled={cart.length === 0 || !customerName}
+        {hasZeroPricedDevice && (
+          <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-500/40 rounded-xl p-3 text-sm">
+            <p className="flex items-center gap-2 font-semibold text-amber-800 dark:text-amber-300"><AlertTriangle className="w-4 h-4" /> A device has no sale price ($0.00)</p>
+            <p className="text-xs text-amber-700/80 dark:text-amber-300/80 mt-1">Set a price on the flagged line, or confirm you meant to sell it for $0.</p>
+            <label className="flex items-center gap-2 mt-2 text-amber-800 dark:text-amber-300 cursor-pointer">
+              <input type="checkbox" checked={allowZeroPrice} onChange={e => setAllowZeroPrice(e.target.checked)} className="rounded" />
+              Sell the $0 device anyway
+            </label>
+          </div>
+        )}
+
+        <button onClick={handleCheckout} disabled={cart.length === 0 || !customerName || blockedByZeroPrice}
           className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold rounded-xl text-sm transition-colors flex items-center justify-center gap-2">
           <ShoppingCart className="w-4 h-4" /> Complete Sale · ${totalPaid.toFixed(2)}
         </button>

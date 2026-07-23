@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import {
   ScanLine, Search, Plus, Minus, Trash2, Smartphone, Package, Sparkles, ShoppingCart,
   User, Phone, Mail, ChevronLeft, CheckCircle, Banknote, CreditCard, Blend, Send,
-  Printer, RotateCcw, Eye, X,
+  Printer, RotateCcw, Eye, X, AlertTriangle,
 } from 'lucide-react';
 import { InventoryItem, Customer } from '../types';
 import { getDeviceDisplayName } from '../domain/inventory';
@@ -17,6 +17,9 @@ interface Props {
   initialCustomer?: Customer;
   onConsumeInitial?: () => void;
   onComplete: (payload: CartCheckout) => void;
+  // Accepted for a uniform QuickSaleView call; the mobile flow shows no
+  // cost/profit figures, so there is nothing to mask here.
+  canViewProfit?: boolean;
 }
 
 const STEPS = ['Items', 'Cart', 'Customer', 'Payment', 'Done'];
@@ -158,11 +161,15 @@ export const MobileCheckout: React.FC<Props> = (props) => {
       {/* STEP 2: cart */}
       {step === 1 && (
         <div className="space-y-3">
-          {cx.cart.length === 0 ? <EmptyState icon={<ShoppingCart className="w-6 h-6" />} title="Cart is empty" hint="Go back to add items." /> : cx.cart.map(l => (
-            <div key={l.key} className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-3">
+          {cx.cart.length === 0 ? <EmptyState icon={<ShoppingCart className="w-6 h-6" />} title="Cart is empty" hint="Go back to add items." /> : cx.cart.map(l => {
+            const zeroPrice = cx.isZeroPricedDevice(l);
+            return (
+            <div key={l.key} className={`bg-white dark:bg-slate-900 border rounded-xl p-3 ${zeroPrice ? 'border-amber-400 dark:border-amber-500/60 ring-1 ring-amber-300/60 dark:ring-amber-500/30' : 'border-slate-200 dark:border-slate-700'}`}>
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
-                  <p className="font-semibold text-slate-800 dark:text-slate-100 truncate">{l.name}</p>
+                  <p className="font-semibold text-slate-800 dark:text-slate-100 truncate flex items-center gap-2">{l.name}
+                    {zeroPrice && <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold uppercase bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 flex items-center gap-1 shrink-0"><AlertTriangle className="w-3 h-3" /> No price</span>}
+                  </p>
                   {l.code && <p className="text-xs font-mono text-slate-400 truncate">{l.code}</p>}
                 </div>
                 <button onClick={() => cx.removeLine(l.key)} aria-label="Remove" className="tap-target flex items-center justify-center text-slate-400 hover:text-rose-500 -mt-1 -mr-1"><Trash2 className="w-4 h-4" /></button>
@@ -180,7 +187,7 @@ export const MobileCheckout: React.FC<Props> = (props) => {
                 <label className="text-xs text-slate-400">Discount<input type="number" step="0.01" inputMode="decimal" value={l.discount} onChange={e => cx.updateLine(l.key, { discount: cx.num(e.target.value) })} className={input} /></label>
               </div>
             </div>
-          ))}
+          );})}
           {cx.cart.length > 0 && (
             <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-4 space-y-1.5 text-sm">
               <div className="flex justify-between"><span className="text-slate-500 dark:text-slate-400">Subtotal</span><span className="text-slate-800 dark:text-slate-100">{money(cx.subtotal)}</span></div>
@@ -233,6 +240,13 @@ export const MobileCheckout: React.FC<Props> = (props) => {
             </div>
           )}
           <input value={cx.paymentNotes} onChange={e => cx.setPaymentNotes(e.target.value)} placeholder="Payment notes (optional)" className={input} />
+          {cx.hasZeroPricedDevice && (
+            <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-500/40 rounded-xl p-3 text-sm">
+              <p className="flex items-center gap-2 font-semibold text-amber-800 dark:text-amber-300"><AlertTriangle className="w-4 h-4" /> A device has no sale price ($0.00)</p>
+              <p className="text-xs text-amber-700/80 dark:text-amber-300/80 mt-1">Set a price in the cart, or confirm you meant to sell it for $0.</p>
+              <label className="flex items-center gap-2 mt-2 text-amber-800 dark:text-amber-300"><input type="checkbox" checked={cx.allowZeroPrice} onChange={e => cx.setAllowZeroPrice(e.target.checked)} className="rounded" /> Sell the $0 device anyway</label>
+            </div>
+          )}
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-4 space-y-1.5 text-sm">
             <div className="flex justify-between"><span className="text-slate-500 dark:text-slate-400">Subtotal</span><span className="text-slate-800 dark:text-slate-100">{money(cx.subtotal)}</span></div>
             <div className="flex justify-between"><span className="text-slate-500 dark:text-slate-400">Tax</span><span className="text-slate-600 dark:text-slate-300">{money(cx.tax)}</span></div>
@@ -250,7 +264,7 @@ export const MobileCheckout: React.FC<Props> = (props) => {
         {step < 3 ? (
           <button onClick={next} disabled={!canNext} className="ml-auto px-6 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white rounded-xl text-sm font-semibold">Next</button>
         ) : (
-          <button onClick={cx.handleCheckout} disabled={cx.cart.length === 0 || !cx.customerName} className="ml-auto px-6 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white rounded-xl text-sm font-semibold flex items-center gap-2"><CheckCircle className="w-4 h-4" /> Complete Sale</button>
+          <button onClick={cx.handleCheckout} disabled={cx.cart.length === 0 || !cx.customerName || cx.blockedByZeroPrice} className="ml-auto px-6 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white rounded-xl text-sm font-semibold flex items-center gap-2"><CheckCircle className="w-4 h-4" /> Complete Sale</button>
         )}
       </div>
 

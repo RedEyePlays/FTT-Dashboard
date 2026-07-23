@@ -104,9 +104,23 @@ describe('getDeviceDisplayName', () => {
     expect(getDeviceDisplayName({ brand: 'Sony', model: 'PS5', item: 'Legacy' })).toBe('Sony PS5');
   });
 
+  it('falls back to device type, then SKU, when no name is set', () => {
+    // No name at all → lead with the device type so it's identifiable.
+    expect(getDeviceDisplayName({ deviceType: 'Phone' } as any)).toBe('Phone');
+    // Type wins over SKU when both are present.
+    expect(getDeviceDisplayName({ deviceType: 'Laptop', sku: 'FTT-000123' } as any)).toBe('Laptop');
+    // SKU is the last resort when there's no type either.
+    expect(getDeviceDisplayName({ sku: 'FTT-000123' } as any)).toBe('FTT-000123');
+    // A real name still wins over the type/SKU fallback.
+    expect(getDeviceDisplayName({ item: 'Pixel 7', deviceType: 'Phone', sku: 'FTT-1' } as any)).toBe('Pixel 7');
+    expect(getDeviceDisplayName({ brand: 'Apple', model: 'iPhone 15', deviceType: 'Phone', sku: 'FTT-1' })).toBe('Apple iPhone 15');
+  });
+
   it('returns an em dash for an empty record', () => {
     expect(getDeviceDisplayName({})).toBe('—');
     expect(getDeviceDisplayName({ brand: '', model: '', item: '' })).toBe('—');
+    // Still an em dash when even the fallback fields are blank.
+    expect(getDeviceDisplayName({ deviceType: '', sku: '' } as any)).toBe('—');
     expect(getDeviceDisplayName(null)).toBe('—');
     expect(getDeviceDisplayName(undefined)).toBe('—');
   });

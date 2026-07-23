@@ -56,6 +56,10 @@ export interface DeviceNameFields {
   deviceName?: string;
   name?: string;
   modelName?: string;
+  // Last-resort identity when no name field is set — so a nameless device still
+  // reads as e.g. "Phone" or its SKU in a picker instead of a bare em dash.
+  deviceType?: string;
+  sku?: string;
 }
 
 const clean = (v: unknown): string => (typeof v === 'string' ? v.replace(/\s+/g, ' ').trim() : '');
@@ -64,8 +68,11 @@ const clean = (v: unknown): string => (typeof v === 'string' ? v.replace(/\s+/g,
  * Combined device display name.
  *
  * Priority: brand + model (de-duplicated) → item → deviceName → name →
- * modelName → '—'. The brand is not repeated when the model already begins with
- * it (brand "Apple" + model "Apple iPhone 14 Pro" → "Apple iPhone 14 Pro").
+ * modelName → deviceType → SKU → '—'. The brand is not repeated when the model
+ * already begins with it (brand "Apple" + model "Apple iPhone 14 Pro" →
+ * "Apple iPhone 14 Pro"). A record with no name at all but a device type or SKU
+ * falls back to those (leading with the type) so it's still identifiable at a
+ * glance rather than rendering as a bare "—".
  */
 export const getDeviceDisplayName = (d: DeviceNameFields | null | undefined): string => {
   if (!d) return '—';
@@ -83,5 +90,6 @@ export const getDeviceDisplayName = (d: DeviceNameFields | null | undefined): st
     const v = clean(legacy);
     if (v) return v;
   }
-  return '—';
+  // No name set — lead with device type, then SKU, so it's still identifiable.
+  return clean(d.deviceType) || clean(d.sku) || '—';
 };
