@@ -5,9 +5,10 @@ import JsBarcode from 'jsbarcode';
 import { jsPDF } from 'jspdf';
 import { Repair } from '../types';
 import { REPAIR_STATUS_LABEL } from '../domain/repairs';
-import { LABEL_SIZES, LabelSizeId, Dpi, buildZpl } from '../services/zpl';
+import { Dpi, buildZpl } from '../services/zpl';
 import { detectZebra, sendZpl, ZebraDetect } from '../services/zebra';
 import { LabelContent, labelPreview, labelPrintDoc, mmOf } from '../services/labelLayout';
+import { getLabelSizes } from './SettingsModal';
 
 interface Props {
   repair: Repair;
@@ -17,8 +18,7 @@ interface Props {
   onPrinted?: () => void;
 }
 
-type Size = LabelSizeId;
-const SIZES = LABEL_SIZES;
+type Size = string;
 
 const genBarcode = (value: string): string => {
   try {
@@ -38,7 +38,7 @@ const loadSettings = (): LabelSettings => {
     return {
       dpi: s.dpi === 300 ? 300 : 203,
       density: typeof s.density === 'number' ? s.density : '',
-      defaultSize: SIZES.some(z => z.id === s.defaultSize) ? s.defaultSize : 'dymo-36x89',
+      defaultSize: getLabelSizes().some(z => z.id === s.defaultSize) ? s.defaultSize : 'dymo-36x89',
       deviceUid: s.deviceUid,
       showBarcode: s.showBarcode !== false, // default on
       showStatus: s.showStatus !== false,   // default on
@@ -49,6 +49,7 @@ const loadSettings = (): LabelSettings => {
 };
 
 export const RepairLabelModal: React.FC<Props> = ({ repair: r, context, onClose, onPrinted }) => {
+  const SIZES = useMemo(() => getLabelSizes(), []);
   const [settings, setSettings] = useState<LabelSettings>(loadSettings);
   const [size, setSize] = useState<Size>(settings.defaultSize);
   const [qr, setQr] = useState('');
@@ -66,7 +67,7 @@ export const RepairLabelModal: React.FC<Props> = ({ repair: r, context, onClose,
   const device = [r.brand, r.model].filter(Boolean).join(' ') || r.deviceType || 'Device';
   const repairType = r.type ? `${r.type[0].toUpperCase()}${r.type.slice(1)} repair` : '';
   const statusLabel = r.status ? REPAIR_STATUS_LABEL[r.status] : '';
-  const media = SIZES.find(s => s.id === size)!;
+  const media = SIZES.find(s => s.id === size) || SIZES[0];
 
   useEffect(() => {
     // QR encodes the Repair ID (with a quiet zone); barcode encodes it too.

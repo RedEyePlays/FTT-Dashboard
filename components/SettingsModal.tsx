@@ -3,6 +3,7 @@ import { Download, Upload, X, ShieldCheck, AlertTriangle, FileJson, Percent } fr
 import { AppData } from '../types';
 import { BackupPanel } from './BackupPanel';
 import { normalizeRestore, isRestorableBackup } from '../domain/restore';
+import { mergeLabelSizes, LabelSize } from '../domain/settings';
 
 export const getPOSSettings = () => {
   try {
@@ -14,6 +15,19 @@ export const getPOSSettings = () => {
 
 const savePOSSettings = (s: { taxRate: number }) =>
   localStorage.setItem('posSettings', JSON.stringify(s));
+
+// Client-side cache of the workspace's custom label sizes (mirrors the Firestore
+// source of truth in AppSettings.labels.customSizes). Kept in localStorage — the
+// same pattern as getPOSSettings — so the label modals can read the merged
+// built-in + custom list without threading settings through every parent.
+const LABEL_SIZES_KEY = 'ftt_label_sizes_v1';
+export const cacheLabelSizes = (custom: LabelSize[]) => {
+  try { localStorage.setItem(LABEL_SIZES_KEY, JSON.stringify(custom || [])); } catch {}
+};
+export const getLabelSizes = (): LabelSize[] => {
+  try { return mergeLabelSizes(JSON.parse(localStorage.getItem(LABEL_SIZES_KEY) || 'null')); }
+  catch { return mergeLabelSizes(); }
+};
 
 interface SettingsModalProps {
   onClose: () => void;

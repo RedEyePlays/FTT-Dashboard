@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { labelDots, buildZpl, LABEL_SIZES, ZplLabelData } from './zpl';
+import { mergeLabelSizes } from '../domain/settings';
 
 const dims = (id: string) => LABEL_SIZES.find(s => s.id === id)!;
 const data: ZplLabelData = {
@@ -60,5 +61,22 @@ describe('buildZpl', () => {
     expect(z).toContain('WB-45 - #3');
     expect(z).not.toMatch(/\^A0N,[0-9]+,[0-9]+\^FB[0-9]+,1,0,L,0\^FDA\^B/); // ^/~ stripped from data
     expect(z).toContain('A B C');
+  });
+
+  it('prints a user-added custom size the same way (sourced from the merged list)', () => {
+    // A size someone adds in Settings must work on the Zebra path with no extra
+    // wiring — buildZpl just takes the chosen dims from the merged list.
+    const merged = mergeLabelSizes([{ id: 'custom-3x2', label: '3 × 2', w: 3, h: 2 }]);
+    const custom = merged.find(s => s.id === 'custom-3x2')!;
+    const z = buildZpl(data, custom, 203);
+    expect(z).toContain('^PW609'); // 3in * 203
+    expect(z).toContain('^LL406'); // 2in * 203
+    expect(z).toContain('RPR-000123');
+  });
+});
+
+describe('LABEL_SIZES (built-ins)', () => {
+  it('exposes the 5 shared built-in presets', () => {
+    expect(LABEL_SIZES.map(s => s.id)).toEqual(['dymo-36x89', '2x1', '2x2', '2x3', '4x6']);
   });
 });

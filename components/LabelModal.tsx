@@ -1,28 +1,21 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Printer, X, QrCode, FileDown } from 'lucide-react';
 import QRCode from 'qrcode';
 import JsBarcode from 'jsbarcode';
 import { jsPDF } from 'jspdf';
 import { InventoryItem, DeviceStatus } from '../types';
 import { getDeviceDisplayName, kindOf } from '../domain/inventory';
-import { LabelMedia, LabelContent, labelPreview, labelPrintDoc, mmOf } from '../services/labelLayout';
+import { LabelContent, labelPreview, labelPrintDoc, mmOf } from '../services/labelLayout';
+import { getLabelSizes } from './SettingsModal';
 
 interface Props {
   item: InventoryItem;
   onClose: () => void;
 }
 
-// Label templates. Dymo 36 × 89 mm (LabelWriter large address, landscape) is the
-// primary/default; the inch sizes cover thermal roll stock.
-type TemplateId = 'dymo-36x89' | '2x1' | '2x2' | '2x3' | '4x6';
-const mm = (v: number) => v / 25.4;
-const TEMPLATES: LabelMedia[] = [
-  { id: 'dymo-36x89', w: mm(89), h: mm(36), label: 'Dymo 36 × 89 mm', dymo: true },
-  { id: '2x1', w: 2, h: 1, label: '2 × 1"' },
-  { id: '2x2', w: 2, h: 2, label: '2 × 2"' },
-  { id: '2x3', w: 2, h: 3, label: '2 × 3"' },
-  { id: '4x6', w: 4, h: 6, label: '4 × 6"' },
-];
+// Label templates come from the shared, user-editable list (built-in presets +
+// custom sizes added in Settings). Dymo 36 × 89 mm is the primary/default.
+type TemplateId = string;
 
 const STATUS_LABEL: Record<DeviceStatus, string> = {
   pending_purchase: 'Pending Purchase',
@@ -39,8 +32,9 @@ const PREFS_KEY = 'ftt_label_tpl_v1';
 const loadPrefs = (): LabelPrefs => {
   try {
     const s = JSON.parse(localStorage.getItem(PREFS_KEY) || '{}');
+    const sizes = getLabelSizes();
     return {
-      template: TEMPLATES.some(t => t.id === s.template) ? s.template : 'dymo-36x89',
+      template: sizes.some(t => t.id === s.template) ? s.template : (sizes[0]?.id || 'dymo-36x89'),
       showBarcode: s.showBarcode !== false, // default on
       showStatus: s.showStatus !== false,   // default on
     };
@@ -66,6 +60,7 @@ const genBarcode = (value: string, opts?: { format?: string; displayValue?: bool
 };
 
 export const LabelModal: React.FC<Props> = ({ item, onClose }) => {
+  const templates = useMemo(() => getLabelSizes(), []);
   const [prefs, setPrefs] = useState<LabelPrefs>(loadPrefs);
   const [qr, setQr] = useState('');
   const [barcode, setBarcode] = useState('');
@@ -76,7 +71,7 @@ export const LabelModal: React.FC<Props> = ({ item, onClose }) => {
   const upc = (item.manufacturerBarcode || item.sku || '').trim();
   const dn = getDeviceDisplayName(item);
   const name = dn === '—' ? 'Item' : dn;
-  const media = TEMPLATES.find(t => t.id === prefs.template)!;
+  const media = templates.find(t => t.id === prefs.template) || templates[0];
   const status = item.deviceStatus ? STATUS_LABEL[item.deviceStatus] : '';
 
   useEffect(() => {
@@ -164,7 +159,7 @@ export const LabelModal: React.FC<Props> = ({ item, onClose }) => {
           <div>
             <p className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Label Template</p>
             <div className="flex gap-2 flex-wrap">
-              {TEMPLATES.map(t => (
+              {templates.map(t => (
                 <button key={t.id} onClick={() => update({ template: t.id as TemplateId })}
                   className={`px-3 py-1.5 rounded-lg text-sm font-medium border ${prefs.template === t.id ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:border-indigo-400'}`}>
                   {t.label}
