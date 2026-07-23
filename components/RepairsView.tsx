@@ -19,8 +19,8 @@ interface Props {
   customers: Customer[];
   auditLogs: AuditEntry[];
   canDelete: boolean;
-  onGenerateRepairNumber: () => string;
-  onGenerateBatchNumber: () => string;
+  onGenerateRepairNumber: () => Promise<string>;
+  onGenerateBatchNumber: () => Promise<string>;
   onSaveRepair: (r: Repair, prev?: Repair) => void;
   onDeleteRepair: (id: string) => void;
   onSaveBatch: (b: RepairBatch, prev?: RepairBatch) => void;
@@ -149,15 +149,15 @@ export const RepairsView: React.FC<Props> = (props) => {
   const newDevice = (batchId: string): Repair => ({ id: newId(), repairNumber: '', type: 'wholesale', batchId, createdAt: Date.now(), date: today(), issue: '', repairPrice: 0, status: 'received' });
   const newBatch = (): RepairBatch => ({ id: newId(), batchNumber: '', createdAt: Date.now(), dateReceived: today(), companyName: '', status: 'active', amountPaid: 0 });
 
-  const saveDrawer = (form: Repair) => {
+  const saveDrawer = async (form: Repair) => {
     let next = form;
-    if (drawer?.isNew && !next.repairNumber) next = { ...next, repairNumber: props.onGenerateRepairNumber() };
+    if (drawer?.isNew && !next.repairNumber) next = { ...next, repairNumber: await props.onGenerateRepairNumber() };
     onSaveRepair(next, drawer?.isNew ? undefined : drawer?.repair);
     setDrawer(null);
   };
-  const saveBatch = (form: RepairBatch, isNew: boolean, prev?: RepairBatch) => {
+  const saveBatch = async (form: RepairBatch, isNew: boolean, prev?: RepairBatch) => {
     let next = form;
-    if (isNew && !next.batchNumber) next = { ...next, batchNumber: props.onGenerateBatchNumber() };
+    if (isNew && !next.batchNumber) next = { ...next, batchNumber: await props.onGenerateBatchNumber() };
     onSaveBatch(next, isNew ? undefined : prev);
     setBatchForm(null);
     if (isNew) setOpenBatchId(next.id);

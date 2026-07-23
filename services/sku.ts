@@ -33,3 +33,30 @@ export const nextSku = (
   }
   return { sku, counters: { ...counters, [prefix]: n } };
 };
+
+/**
+ * The atomic allocation seam. `nextSku` above is pure but only safe if the
+ * read-increment-write around it is atomic — otherwise two staff generating a
+ * number at the same time both read the same counter and get the same SKU.
+ *
+ * This runs the (unchanged) `nextSku` logic INSIDE a transaction: it reads the
+ * live counters, allocates, and stages the incremented counters back — all as
+ * one atomic unit. The `CounterTxn` is a tiny abstraction over the slice of a
+ * Firestore transaction we use, so the concurrency behaviour is unit-testable
+ * without a live Firestore (the production wrapper lives in firestoreDb.ts).
+ */
+export interface CounterTxn {
+  read(): Promise<Record<string, number>>;      // read the current counters map
+  write(counters: Record<string, number>): void; // stage the incremented counters
+}
+
+export async function allocateSkuInTxn(
+  txn: CounterTxn,
+  prefix: string,
+  existing: InventoryItem[] = []
+): Promise<{ sku: string; counters: Record<string, number> }> {
+  const counters = await txn.read();
+  const res = nextSku(prefix, counters, existing);
+  txn.write(res.counters);
+  return res;
+}
