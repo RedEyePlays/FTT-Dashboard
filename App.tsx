@@ -42,6 +42,7 @@ import { AppSettings } from './domain/settings';
 import { useWorkspaceData } from './hooks/useWorkspaceData';
 import { newId, mkActivity } from './domain/ids';
 import { collectionFor, stockChange } from './domain/inventory';
+import { dropOffPurchaseCost } from './domain/dropoffs';
 import { InvSection, DEFAULT_INV_SECTION, invPath, parseInvPath } from './domain/inventoryNav';
 import { AppHeader } from './components/AppHeader';
 import { MobileNav } from './components/MobileNav';
@@ -394,12 +395,14 @@ const App: React.FC = () => {
 
   // Add an accepted drop-off into inventory, carrying runner + cost across
   const handleAddDropOffToInventory = (d: DropOff) => {
-    if (!uid) return;
+    if (!uid || !allow('dropoffs.manage')) return;
     const runner = runnersRef.current.find(r => r.id === d.runnerId);
     const newItem: InventoryItem = {
       id: newId(), kind: 'device', date: d.dateDropped || new Date().toISOString().split('T')[0],
       item: d.item, imei: d.imei, boughtFrom: d.sellerName || 'Marketplace (drop-off)',
-      purchaseCost: d.purchasePrice, repairCost: 0, soldDate: '', soldTo: '', salePrice: 0,
+      // Acquisition cost = price paid to the seller + the runner's fee (both are
+      // real costs and both are what the settlement pays the runner).
+      purchaseCost: dropOffPurchaseCost(d), repairCost: 0, soldDate: '', soldTo: '', salePrice: 0,
       deviceStatus: 'ready', runnerId: d.runnerId, runnerName: runner?.name, dropOffId: d.id,
       notes: d.notes ? `Drop-off: ${d.notes}` : 'Added from drop-off',
     };

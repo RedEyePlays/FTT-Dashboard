@@ -4,6 +4,7 @@ import {
   CheckCircle, XCircle, DollarSign, ArrowRight, Wallet, ClipboardList,
 } from 'lucide-react';
 import { Runner, DropOff, DropOffStatus, PaidBy, Settlement, InventoryItem } from '../types';
+import { runnerBalance, settleableDropOffs, settlementTotals } from '../domain/dropoffs';
 
 interface Props {
   runners: Runner[];
@@ -24,20 +25,6 @@ const STATUS_META: Record<DropOffStatus, { label: string; cls: string }> = {
   rejected: { label: 'Rejected',       cls: 'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400' },
   paidout:  { label: 'Paid out',       cls: 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400' },
   settled:  { label: 'Settled',        cls: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' },
-};
-
-// Runner balance: cash the runner fronted (paidBy runner) + fees owed, minus
-// anything already settled. Positive = we owe the runner; negative = runner owes store.
-export const runnerBalance = (runnerId: string, dropOffs: DropOff[]) => {
-  const active = dropOffs.filter(d =>
-    d.runnerId === runnerId && d.status !== 'rejected' && d.status !== 'settled'
-  );
-  const cashFronted = active.filter(d => d.paidBy === 'runner').reduce((s, d) => s + d.purchasePrice, 0);
-  const feesOwed = active.reduce((s, d) => s + d.dropOffFee, 0);
-  // Devices where the store paid but runner holds cash/owes back would be negative;
-  // here store-paid devices simply don't add to what we owe. Net owed to runner:
-  const net = cashFronted + feesOwed;
-  return { cashFronted, feesOwed, net, count: active.length };
 };
 
 export const DropOffView: React.FC<Props> = ({
@@ -362,12 +349,8 @@ const SettlementTab: React.FC<{
   const [notes, setNotes] = useState('');
 
   // Settle everything accepted/paid-out & not yet settled/rejected for this runner
-  const pending = dropOffs.filter(d =>
-    d.runnerId === runnerId && (d.status === 'accepted' || d.status === 'paidout')
-  );
-  const cashFronted = pending.filter(d => d.paidBy === 'runner').reduce((s, d) => s + d.purchasePrice, 0);
-  const totalFees = pending.reduce((s, d) => s + d.dropOffFee, 0);
-  const amountToPay = cashFronted + totalFees;
+  const pending = settleableDropOffs(runnerId, dropOffs);
+  const { cashFronted, totalFees, amountToPay } = settlementTotals(pending);
 
   const settle = () => {
     if (pending.length === 0) return;
