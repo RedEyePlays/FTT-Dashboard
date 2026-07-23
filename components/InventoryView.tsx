@@ -215,7 +215,9 @@ export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, a
 
   const counts = useMemo(() => ({
     all: inventory.length,
-    devices: inventory.filter(i => kindOf(i) === 'device').length,
+    // Devices tab = current stock only: a sold device is counted under Sold, not
+    // here (otherwise it would be double-counted).
+    devices: inventory.filter(i => kindOf(i) === 'device' && !isSold(i)).length,
     accessories: inventory.filter(i => kindOf(i) === 'accessory').length,
     sold: inventory.filter(isSold).length,
     lowstock: inventory.filter(isLow).length,
@@ -241,18 +243,23 @@ export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, a
     });
   };
 
-  const devices = useMemo(() => {
+  // All devices matching the query + status filter — the shared base for both the
+  // Devices ("in stock") view and the Sold view.
+  const deviceRows = useMemo(() => {
     let r = inventory.filter(i => kindOf(i) === 'device' && matchesQuery(i));
     if (statusFilter !== 'all') r = r.filter(i => i.deviceStatus === statusFilter);
     r = r.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
     return applySort(r, DEVICE_COLS);
   }, [inventory, query, statusFilter, sort]);
+  // Devices tab = current stock only: once a device is sold it drops out of here
+  // and lives only under the Sold tab.
+  const devices = useMemo(() => deviceRows.filter(i => !isSold(i)), [deviceRows]);
   const accessories = useMemo(() => {
     let r = inventory.filter(i => kindOf(i) === 'accessory' && matchesQuery(i)).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
     return applySort(r, ACCESSORY_COLS);
   }, [inventory, query, sort]);
 
-  const soldDevices = devices.filter(isSold);
+  const soldDevices = deviceRows.filter(isSold);
   const lowAccessories = accessories.filter(isLow);
 
   // Rows/columns/kind for the currently open sub-page (a single table per page).
