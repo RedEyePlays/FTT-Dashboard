@@ -65,17 +65,24 @@ export interface DeviceNameFields {
 const clean = (v: unknown): string => (typeof v === 'string' ? v.replace(/\s+/g, ' ').trim() : '');
 
 /**
- * Combined device display name.
+ * Device display name.
  *
- * Priority: brand + model (de-duplicated) → item → deviceName → name →
- * modelName → deviceType → SKU → '—'. The brand is not repeated when the model
- * already begins with it (brand "Apple" + model "Apple iPhone 14 Pro" →
- * "Apple iPhone 14 Pro"). A record with no name at all but a device type or SKU
- * falls back to those (leading with the type) so it's still identifiable at a
- * glance rather than rendering as a bare "—".
+ * Priority: item → brand + model (de-duplicated) → deviceName → name →
+ * modelName → deviceType → SKU → '—'.
+ *
+ * `item` is now the single, directly-edited name field (typed straight into the
+ * Item cell), so it wins when set. Existing rows that only have brand/model keep
+ * displaying their combined name (brand not repeated when the model already
+ * begins with it — "Apple" + "Apple iPhone 14 Pro" → "Apple iPhone 14 Pro"). A
+ * record with no name at all but a device type or SKU falls back to those so it's
+ * still identifiable rather than rendering as a bare "—".
  */
 export const getDeviceDisplayName = (d: DeviceNameFields | null | undefined): string => {
   if (!d) return '—';
+  // The primary, user-edited name.
+  const item = clean(d.item);
+  if (item) return item;
+  // Legacy rows without an `item`: keep showing their brand+model combination.
   const brand = clean(d.brand);
   const model = clean(d.model);
   if (brand || model) {
@@ -85,8 +92,8 @@ export const getDeviceDisplayName = (d: DeviceNameFields | null | undefined): st
     }
     return brand || model;
   }
-  // Legacy fallbacks, in order of preference.
-  for (const legacy of [d.item, d.deviceName, d.name, d.modelName]) {
+  // Older legacy name fields, in order of preference.
+  for (const legacy of [d.deviceName, d.name, d.modelName]) {
     const v = clean(legacy);
     if (v) return v;
   }

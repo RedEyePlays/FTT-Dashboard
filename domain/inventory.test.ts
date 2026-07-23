@@ -93,15 +93,28 @@ describe('getDeviceDisplayName', () => {
     expect(getDeviceDisplayName({ model: 'iPhone 14 Pro' })).toBe('iPhone 14 Pro');
   });
 
-  it('falls back through legacy fields in priority order', () => {
-    expect(getDeviceDisplayName({ item: 'Pixel 7' })).toBe('Pixel 7');
+  it('prefers the item field — the single, directly-edited name', () => {
+    // `item` is what the user types straight into the Item cell, so it wins.
+    expect(getDeviceDisplayName({ item: 'Apple iPhone 12' })).toBe('Apple iPhone 12');
+    // item beats brand+model (a row edited via the new single field, whose old
+    // brand/model still linger, shows the typed item value).
+    expect(getDeviceDisplayName({ brand: 'Sony', model: 'PS5', item: 'Legacy' })).toBe('Legacy');
+    // item beats every other legacy field too.
+    expect(getDeviceDisplayName({ item: 'From Item', name: 'From Name', modelName: 'From ModelName' } as any)).toBe('From Item');
+  });
+
+  it('keeps showing brand+model for existing rows that have no item set', () => {
+    // Don't break legacy rows: an empty/whitespace item falls through to the
+    // brand+model combination they displayed before.
+    expect(getDeviceDisplayName({ brand: 'Apple', model: 'iPhone 12' })).toBe('Apple iPhone 12');
+    expect(getDeviceDisplayName({ brand: 'Apple', model: 'iPhone 12', item: '' })).toBe('Apple iPhone 12');
+    expect(getDeviceDisplayName({ brand: 'Apple', model: 'iPhone 12', item: '   ' })).toBe('Apple iPhone 12');
+  });
+
+  it('falls back through the older legacy name fields when there is no item/brand/model', () => {
     expect(getDeviceDisplayName({ deviceName: 'Pixel 7' } as any)).toBe('Pixel 7');
     expect(getDeviceDisplayName({ name: 'Pixel 7' } as any)).toBe('Pixel 7');
     expect(getDeviceDisplayName({ modelName: 'Pixel 7' } as any)).toBe('Pixel 7');
-    // item wins over other legacy fields
-    expect(getDeviceDisplayName({ item: 'From Item', name: 'From Name', modelName: 'From ModelName' } as any)).toBe('From Item');
-    // brand/model still win over any legacy field
-    expect(getDeviceDisplayName({ brand: 'Sony', model: 'PS5', item: 'Legacy' })).toBe('Sony PS5');
   });
 
   it('falls back to device type, then SKU, when no name is set', () => {
