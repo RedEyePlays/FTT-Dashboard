@@ -785,6 +785,7 @@ const App: React.FC = () => {
               initialCustomer={prefillCustomer}
               onConsumeInitial={() => setPrefillCustomer(undefined)}
               onSellCart={handleSellCart}
+              canViewProfit={allow('reports.profit')}
             />
           )}
           {view === 'dropoff' && (

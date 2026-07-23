@@ -2,7 +2,8 @@ import { useState, useMemo, useRef, useEffect } from 'react';
 import { InventoryItem, ItemKind, SalesTransaction, Customer } from '../types';
 import { getPOSSettings } from '../components/SettingsModal';
 import { newId } from '../domain/ids';
-import { kindOf } from '../domain/inventory';
+import { kindOf, getDeviceDisplayName } from '../domain/inventory';
+import { isZeroPricedDevice as isZeroPricedLine, cartHasZeroPricedDevice } from '../domain/pos';
 
 // All Quick Sale / checkout state, pricing math and the commit-payload builder
 // live here so the desktop CartSaleView and the mobile step flow share ONE
@@ -53,6 +54,8 @@ export function useCheckout({ inventory, customers = [], initialCustomer, onCons
   const [picker, setPicker] = useState<null | ItemKind>(null);
   const [search, setSearch] = useState('');
   const [confirmed, setConfirmed] = useState(false);
+  // Explicit override to allow completing a sale that has a $0 device line.
+  const [allowZeroPrice, setAllowZeroPrice] = useState(false);
 
   const [platformName, setPlatformName] = useState('None / In-Store');
   const [platformFeePercent, setPlatformFeePercent] = useState('0');
@@ -146,10 +149,17 @@ export function useCheckout({ inventory, customers = [], initialCustomer, onCons
   const totalPaid = subtotal + tax;
   const netProfit = subtotal - totalCost - platformFee;
 
+  // $0 device safeguard: flag device lines priced at $0 and block checkout until
+  // the seller ticks the override (guards against selling a device whose sale
+  // price was never set).
+  const isZeroPricedDevice = (l: CartLine) => isZeroPricedLine(l);
+  const hasZeroPricedDevice = cartHasZeroPricedDevice(cart);
+  const blockedByZeroPrice = hasZeroPricedDevice && !allowZeroPrice;
+
   // ---- mutations ----
   const addDevice = (i: InventoryItem) => {
     setCart(c => [...c, {
-      key: uid(), inventoryId: i.id, kind: 'device', name: i.item || [i.brand, i.model].filter(Boolean).join(' '),
+      key: uid(), inventoryId: i.id, kind: 'device', name: getDeviceDisplayName(i),
       code: i.sku || i.imei, quantity: 1, maxQty: 1,
       unitPrice: i.targetSalePrice || 0, purchaseCost: i.purchaseCost, repairCost: i.repairCost || 0,
       taxable: true, discount: 0,
@@ -207,7 +217,7 @@ export function useCheckout({ inventory, customers = [], initialCustomer, onCons
 
   // ---- checkout ----
   const handleCheckout = () => {
-    if (cart.length === 0 || !customerName) return;
+    if (cart.length === 0 || !customerName || blockedByZeroPrice) return;
     const transactionId = uid();
     const soldRows: InventoryItem[] = [];
     const accessoryQtys: Record<string, number> = {};
@@ -284,7 +294,7 @@ export function useCheckout({ inventory, customers = [], initialCustomer, onCons
     setCashAmount(''); setCardAmount(''); setEtransferAmount(''); setTaxCollected('');
     setPlatformName('None / In-Store'); setPlatformFeePercent('0');
     setLastTx(null); setShowTx(false); setConfirmed(false);
-    setCustom(emptyCustom()); setShowCustom(false);
+    setCustom(emptyCustom()); setShowCustom(false); setAllowZeroPrice(false);
     setTimeout(() => scanRef.current?.focus(), 0);
   };
 
@@ -330,6 +340,7 @@ export function useCheckout({ inventory, customers = [], initialCustomer, onCons
     emptyCustom, showCustom, setShowCustom, custom, setCustom,
     taxRate, feePercent, previousPurchases, availableDevices, availableAccessories,
     lineSubtotal, subtotal, discountTotal, purchaseCostTotal, repairCostTotal, totalCost, taxableBase, taxApplies, tax, platformFee, totalPaid, netProfit,
+    isZeroPricedDevice, hasZeroPricedDevice, allowZeroPrice, setAllowZeroPrice, blockedByZeroPrice,
     addDevice, addAccessory, updateLine, removeLine, num, addCustomItem, handleScan, handleCheckout, reset, printReceipt, soldDeviceRows,
   };
 }
