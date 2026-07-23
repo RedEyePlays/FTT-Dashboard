@@ -77,6 +77,37 @@ describe('computeAnalytics overview + payments', () => {
   });
 });
 
+describe('device category from the sales line (custom device sales)', () => {
+  it('buckets a device line by its own deviceType when it has no inventory match', () => {
+    // A custom device sale: no inventoryId, no resolvable sku — analytics must use
+    // the deviceType recorded on the line (not fall through to "Other Devices").
+    const a = computeAnalytics(presetRange('today', NOW), {
+      ...base,
+      salesTransactions: [
+        tx({ id: 'c1', date: '2026-07-20', subtotal: 800, totalPaid: 800, netProfit: 200,
+          lines: [{ kind: 'device', name: 'Custom Laptop', quantity: 1, unitPrice: 800, inventoryId: '', deviceType: 'Laptop' } as any] }),
+        tx({ id: 'c2', date: '2026-07-20', subtotal: 500, totalPaid: 500, netProfit: 100,
+          lines: [{ kind: 'device', name: 'Custom Phone', quantity: 1, unitPrice: 500, inventoryId: '', deviceType: 'Phone' } as any] }),
+      ],
+    }, NOW);
+    expect(a.categories.find(c => c.name === 'Laptops')?.revenue).toBe(800);
+    expect(a.categories.find(c => c.name === 'Phones')?.revenue).toBe(500);
+    // nothing leaked into the catch-all bucket
+    expect(a.categories.find(c => c.name === 'Other Devices')).toBeUndefined();
+  });
+
+  it('still falls back to "Other Devices" when no type is known', () => {
+    const a = computeAnalytics(presetRange('today', NOW), {
+      ...base,
+      salesTransactions: [
+        tx({ id: 'c3', date: '2026-07-20', subtotal: 300, totalPaid: 300, netProfit: 50,
+          lines: [{ kind: 'device', name: 'Mystery', quantity: 1, unitPrice: 300, inventoryId: '' } as any] }),
+      ],
+    }, NOW);
+    expect(a.categories.find(c => c.name === 'Other Devices')?.revenue).toBe(300);
+  });
+});
+
 describe('inventory snapshot', () => {
   it('values cost/retail, low + out of stock', () => {
     const input: AnalyticsInput = {

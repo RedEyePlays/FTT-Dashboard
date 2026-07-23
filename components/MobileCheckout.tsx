@@ -4,9 +4,9 @@ import {
   User, Phone, Mail, ChevronLeft, CheckCircle, Banknote, CreditCard, Blend, Send,
   Printer, RotateCcw, Eye, X, AlertTriangle,
 } from 'lucide-react';
-import { InventoryItem, Customer } from '../types';
+import { InventoryItem, Customer, DeviceType } from '../types';
 import { getDeviceDisplayName } from '../domain/inventory';
-import { useCheckout, CartCheckout } from '../hooks/useCheckout';
+import { useCheckout, CartCheckout, CustomCategory, CUSTOM_DEVICE_TYPES } from '../hooks/useCheckout';
 import { CustomerSearchInput } from './CustomerSearchInput';
 import { LabelModal } from './LabelModal';
 import { ResponsiveDialog, EmptyState } from './responsive';
@@ -20,6 +20,7 @@ interface Props {
   // Accepted for a uniform QuickSaleView call; the mobile flow shows no
   // cost/profit figures, so there is nothing to mask here.
   canViewProfit?: boolean;
+  onGenerateSku?: (deviceType?: DeviceType) => Promise<string>;
 }
 
 const STEPS = ['Items', 'Cart', 'Customer', 'Payment', 'Done'];
@@ -291,10 +292,28 @@ export const MobileCheckout: React.FC<Props> = (props) => {
         <div className="space-y-3">
           <input autoFocus value={cx.custom.name} onChange={e => cx.setCustom(c => ({ ...c, name: e.target.value }))} placeholder="Item name *" className={input} />
           <div className="grid grid-cols-2 gap-2">
+            <label className="text-xs text-slate-400">Category
+              <select value={cx.custom.category} onChange={e => cx.setCustom(c => ({ ...c, category: e.target.value as CustomCategory }))} className={input}>
+                <option value="device">Device</option>
+                <option value="accessory">Accessory</option>
+                <option value="service">Service</option>
+                <option value="other">Other</option>
+              </select></label>
+            {cx.custom.category === 'device' && (
+              <label className="text-xs text-slate-400">Device type
+                <select value={cx.custom.deviceType} onChange={e => cx.setCustom(c => ({ ...c, deviceType: e.target.value as DeviceType }))} className={input}>
+                  {CUSTOM_DEVICE_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                </select></label>
+            )}
+          </div>
+          <div className="grid grid-cols-2 gap-2">
             <input type="number" inputMode="decimal" value={cx.custom.unitPrice} onChange={e => cx.setCustom(c => ({ ...c, unitPrice: e.target.value }))} placeholder="Unit price" className={input} />
             <input type="number" inputMode="numeric" value={cx.custom.quantity} onChange={e => cx.setCustom(c => ({ ...c, quantity: e.target.value }))} placeholder="Qty" className={input} />
           </div>
           <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300"><input type="checkbox" checked={cx.custom.taxable} onChange={e => cx.setCustom(c => ({ ...c, taxable: e.target.checked }))} className="rounded" /> Taxable</label>
+          {(cx.custom.category === 'device' || cx.custom.category === 'accessory') && (
+            <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300"><input type="checkbox" checked={cx.custom.addToInventory} onChange={e => cx.setCustom(c => ({ ...c, addToInventory: e.target.checked }))} className="rounded" /> Add to inventory after sale</label>
+          )}
         </div>
       </ResponsiveDialog>
     </div>

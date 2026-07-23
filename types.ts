@@ -226,6 +226,9 @@ export interface SalesLine {
   sku?: string;
   quantity: number;
   unitPrice: number;
+  deviceType?: DeviceType; // for device lines — used by analytics categorization
+                           // when the line can't be resolved to an inventory item
+                           // (e.g. a custom device sale)
 }
 
 export interface SalesTransaction {

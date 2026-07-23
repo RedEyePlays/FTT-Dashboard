@@ -102,10 +102,12 @@ export function computeAnalytics(range: DateRange, input: AnalyticsInput, now: n
     const it = (l.inventoryId && invById.get(l.inventoryId)) || (l.sku && invBySku.get(l.sku)) || undefined;
     return it ? (it.purchaseCost || 0) + (it.repairCost || 0) : 0;
   };
-  const lineCategory = (l: { inventoryId?: string; sku?: string; kind: string; name: string }) => {
+  const lineCategory = (l: { inventoryId?: string; sku?: string; kind: string; name: string; deviceType?: DeviceType }) => {
     if (l.kind === 'accessory') return 'Accessories';
     const it = (l.inventoryId && invById.get(l.inventoryId)) || (l.sku && invBySku.get(l.sku)) || undefined;
-    return DEVICE_CATEGORY(it?.deviceType);
+    // Prefer the resolved inventory item's type; fall back to the type recorded on
+    // the line itself (custom device sales have no inventory item to resolve to).
+    return DEVICE_CATEGORY(it?.deviceType ?? l.deviceType);
   };
 
   // --- Sales: POS transactions in range ---
