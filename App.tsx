@@ -791,6 +791,7 @@ const App: React.FC = () => {
               onConsumeInitial={() => setPrefillCustomer(undefined)}
               onSellCart={handleSellCart}
               canViewProfit={allow('reports.profit')}
+              onGenerateSku={(deviceType) => handleGenerateSku('device', deviceType)}
             />
           )}
           {view === 'dropoff' && (

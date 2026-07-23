@@ -4,12 +4,12 @@ import {
   Banknote, CreditCard, Blend, CheckCircle, Package, Smartphone, ScanLine, History,
   Printer, Eye, RotateCcw, QrCode, Sparkles, AlertTriangle,
 } from 'lucide-react';
-import { InventoryItem, Customer } from '../types';
+import { InventoryItem, Customer, DeviceType } from '../types';
 import { getDeviceDisplayName } from '../domain/inventory';
 import { LabelModal } from './LabelModal';
 import { PLATFORMS } from '../domain/pos';
 import { CustomerSearchInput } from './CustomerSearchInput';
-import { useCheckout, CustomCategory } from '../hooks/useCheckout';
+import { useCheckout, CustomCategory, CUSTOM_DEVICE_TYPES } from '../hooks/useCheckout';
 
 export type { CartCheckout } from '../hooks/useCheckout';
 
@@ -20,6 +20,7 @@ interface Props {
   onConsumeInitial?: () => void;
   onComplete: (payload: import('../hooks/useCheckout').CartCheckout) => void;
   canViewProfit?: boolean;      // gate cost/profit figures (same pattern as Dashboard)
+  onGenerateSku?: (deviceType?: DeviceType) => Promise<string>;
 }
 
 // Desktop split-screen Quick Sale. All state / pricing / checkout logic lives in
@@ -328,6 +329,12 @@ export const CartSaleView: React.FC<Props> = (props) => {
                   <option value="service">Service</option>
                   <option value="other">Other</option>
                 </select></div>
+              {custom.category === 'device' && (
+                <div><label className={labelCls}>Device Type</label>
+                  <select className={inputCls} value={custom.deviceType} onChange={e => setCustom(c => ({ ...c, deviceType: e.target.value as DeviceType }))}>
+                    {CUSTOM_DEVICE_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                  </select></div>
+              )}
               <div><label className={labelCls}>Quantity</label>
                 <input type="number" min="1" className={inputCls} value={custom.quantity} onChange={e => setCustom(c => ({ ...c, quantity: e.target.value }))} /></div>
               <div><label className={labelCls}>Unit Price</label>

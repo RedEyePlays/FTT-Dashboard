@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
-import { InventoryItem, ItemKind, SalesTransaction, Customer } from '../types';
+import { InventoryItem, ItemKind, DeviceType, SalesTransaction, Customer } from '../types';
 import { getPOSSettings } from '../components/SettingsModal';
 import { newId } from '../domain/ids';
 import { kindOf, getDeviceDisplayName } from '../domain/inventory';
@@ -19,6 +19,10 @@ export interface CartCheckout {
 
 export type CustomCategory = 'device' | 'accessory' | 'service' | 'other';
 
+// Device-type options for a custom device line — the analytics-meaningful set
+// (Phone/Tablet/Laptop/Watch each map to a named category; Other → Other Devices).
+export const CUSTOM_DEVICE_TYPES: DeviceType[] = ['Phone', 'Tablet', 'Laptop', 'Watch', 'Other'];
+
 export interface CartLine {
   key: string;
   inventoryId: string;   // '' for custom items not tied to inventory
@@ -34,6 +38,7 @@ export interface CartLine {
   discount: number;
   isCustom?: boolean;
   category?: CustomCategory;
+  deviceType?: DeviceType; // device lines: real item's type, or a custom device's chosen type
   imei?: string;
   notes?: string;
   addToInventory?: boolean;
@@ -45,11 +50,15 @@ interface Args {
   initialCustomer?: Customer;
   onConsumeInitial?: () => void;
   onComplete: (payload: CartCheckout) => void;
+  // Allocate a real SKU the same way normal device intake does (App's atomic
+  // generator). Used to give a custom device opted into inventory a proper SKU
+  // instead of a blank one.
+  onGenerateSku?: (deviceType?: DeviceType) => Promise<string>;
 }
 
 const uid = newId;
 
-export function useCheckout({ inventory, customers = [], initialCustomer, onConsumeInitial, onComplete }: Args) {
+export function useCheckout({ inventory, customers = [], initialCustomer, onConsumeInitial, onComplete, onGenerateSku }: Args) {
   const [cart, setCart] = useState<CartLine[]>([]);
   const [picker, setPicker] = useState<null | ItemKind>(null);
   const [search, setSearch] = useState('');
@@ -93,7 +102,7 @@ export function useCheckout({ inventory, customers = [], initialCustomer, onCons
   const [showTx, setShowTx] = useState(false);
   const [labelItem, setLabelItem] = useState<InventoryItem | null>(null);
 
-  const emptyCustom = () => ({ name: '', category: 'accessory' as CustomCategory, quantity: '1', unitPrice: '', costEstimate: '', taxable: true, notes: '', imei: '', addToInventory: false });
+  const emptyCustom = () => ({ name: '', category: 'accessory' as CustomCategory, deviceType: 'Phone' as DeviceType, quantity: '1', unitPrice: '', costEstimate: '', taxable: true, notes: '', imei: '', addToInventory: false });
   const [showCustom, setShowCustom] = useState(false);
   const [custom, setCustom] = useState(emptyCustom());
 
@@ -160,7 +169,7 @@ export function useCheckout({ inventory, customers = [], initialCustomer, onCons
   const addDevice = (i: InventoryItem) => {
     setCart(c => [...c, {
       key: uid(), inventoryId: i.id, kind: 'device', name: getDeviceDisplayName(i),
-      code: i.sku || i.imei, quantity: 1, maxQty: 1,
+      code: i.sku || i.imei, quantity: 1, maxQty: 1, deviceType: i.deviceType,
       unitPrice: i.targetSalePrice || 0, purchaseCost: i.purchaseCost, repairCost: i.repairCost || 0,
       taxable: true, discount: 0,
     }]);
@@ -188,7 +197,9 @@ export function useCheckout({ inventory, customers = [], initialCustomer, onCons
       quantity: Math.max(1, Math.round(num(custom.quantity)) || 1), maxQty: 9999,
       unitPrice: num(custom.unitPrice), purchaseCost: num(custom.costEstimate), repairCost: 0,
       taxable: custom.taxable, discount: 0,
-      isCustom: true, category: custom.category, imei: custom.imei.trim() || undefined,
+      isCustom: true, category: custom.category,
+      deviceType: custom.category === 'device' ? custom.deviceType : undefined,
+      imei: custom.imei.trim() || undefined,
       notes: custom.notes.trim() || undefined, addToInventory: custom.addToInventory,
     }]);
     setCustom(emptyCustom());
@@ -216,14 +227,14 @@ export function useCheckout({ inventory, customers = [], initialCustomer, onCons
   };
 
   // ---- checkout ----
-  const handleCheckout = () => {
+  const handleCheckout = async () => {
     if (cart.length === 0 || !customerName || blockedByZeroPrice) return;
     const transactionId = uid();
     const soldRows: InventoryItem[] = [];
     const accessoryQtys: Record<string, number> = {};
     const newInventoryItems: InventoryItem[] = [];
 
-    cart.forEach(l => {
+    for (const l of cart) {
       const saleShare = lineSubtotal(l);
       const feeShare = subtotal > 0 ? platformFee * (saleShare / subtotal) : 0;
       const taxShare = l.taxable && taxableBase > 0 ? tax * (saleShare / taxableBase) : 0;
@@ -239,10 +250,15 @@ export function useCheckout({ inventory, customers = [], initialCustomer, onCons
       if (l.isCustom) {
         if (l.addToInventory && (l.category === 'device' || l.category === 'accessory')) {
           if (l.category === 'device') {
+            const deviceType = l.deviceType || 'Other';
+            // Give it a real SKU via the same allocator normal device intake uses
+            // (not a blank one). Falls back to '' only if no generator is wired,
+            // in which case the app fills it in on save.
+            const sku = onGenerateSku ? await onGenerateSku(deviceType) : '';
             newInventoryItems.push({
-              id: uid(), kind: 'device', sku: '', date: soldDate, item: l.name, imei: l.imei || '',
+              id: uid(), kind: 'device', sku, date: soldDate, item: l.name, imei: l.imei || '',
               boughtFrom: 'Custom sale', purchaseCost: l.purchaseCost, repairCost: 0,
-              deviceType: 'Other', condition: 'Good', deviceStatus: 'sold',
+              deviceType, condition: 'Good', deviceStatus: 'sold',
               salePrice: saleShare, notes: l.notes || 'Added from custom sale', ...common,
             } as InventoryItem);
           } else {
@@ -254,7 +270,7 @@ export function useCheckout({ inventory, customers = [], initialCustomer, onCons
             } as InventoryItem);
           }
         }
-        return;
+        continue;
       }
 
       if (l.kind === 'accessory') {
@@ -263,7 +279,7 @@ export function useCheckout({ inventory, customers = [], initialCustomer, onCons
         const existing = inventory.find(i => i.id === l.inventoryId);
         if (existing) soldRows.push({ ...existing, ...common, salePrice: saleShare, deviceStatus: 'sold' });
       }
-    });
+    }
 
     const customer: Customer | undefined = customerName.trim()
       ? { id: (selectedCustomerId || customerPhone.trim() || customerName.trim().toLowerCase().replace(/\s+/g, '-')), name: customerName.trim(), phone: customerPhone.trim(), email: customerEmail.trim() || undefined, notes: customerNotes.trim() || undefined }
@@ -279,7 +295,7 @@ export function useCheckout({ inventory, customers = [], initialCustomer, onCons
       platformName,
       subtotal, tax, platformFee, purchaseCost: purchaseCostTotal, repairCost: repairCostTotal,
       totalCost, totalPaid, netProfit,
-      lines: cart.map(l => ({ inventoryId: l.inventoryId, kind: l.kind, name: l.name, sku: l.code, quantity: l.quantity, unitPrice: l.unitPrice })),
+      lines: cart.map(l => ({ inventoryId: l.inventoryId, kind: l.kind, name: l.name, sku: l.code, quantity: l.quantity, unitPrice: l.unitPrice, deviceType: l.kind === 'device' ? l.deviceType : undefined })),
       notes: paymentNotes || undefined,
     };
 
