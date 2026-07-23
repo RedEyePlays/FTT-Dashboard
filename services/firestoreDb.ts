@@ -1,5 +1,5 @@
 import {
-  collection, doc, onSnapshot, setDoc, deleteDoc, getDoc, getDocs, writeBatch, query, where,
+  collection, doc, onSnapshot, setDoc, deleteDoc, getDoc, getDocs, writeBatch, query, where, runTransaction,
 } from 'firebase/firestore';
 import { db } from './firebase';
 import {
@@ -8,6 +8,7 @@ import {
 } from '../types';
 import { collectionFor } from '../domain/inventory';
 import { AppSettings } from '../domain/settings';
+import { allocateSkuInTxn } from './sku';
 
 // Shared shop data lives under user_data/{workspaceId}/<collection>, where
 // workspaceId is the owning account's uid. The `wsId` arg below is that id.
@@ -46,6 +47,24 @@ export function subscribeMeta(uid: string, cb: (m: AppMeta) => void, onError: (e
   return onSnapshot(metaRef(uid), snap => cb((snap.data() as AppMeta) || {}), onError);
 }
 export const saveMeta = (uid: string, meta: Partial<AppMeta>) => setDoc(metaRef(uid), clean(meta), { merge: true });
+
+/**
+ * Atomically allocate the next SKU / repair number / batch number for a prefix.
+ *
+ * The counter lives in `skuCounters` on the workspace meta doc. A Firestore
+ * transaction makes the read-increment-write atomic: if two clients allocate for
+ * the same prefix at once, the transaction retries on conflict so each caller
+ * gets a distinct number — no Cloud Function required. `existing` is an optional
+ * belt-and-suspenders list of items whose SKUs must be skipped (e.g. after a
+ * restore that outpaced the counter). Returns the new SKU and the persisted
+ * counters (so callers can refresh their local mirror immediately).
+ */
+export function allocateSku(uid: string, prefix: string, existing: { sku?: string }[] = []) {
+  return runTransaction(db, tx => allocateSkuInTxn({
+    read: async () => ((await tx.get(metaRef(uid))).data() as AppMeta | undefined)?.skuCounters || {},
+    write: counters => { tx.set(metaRef(uid), { skuCounters: counters }, { merge: true }); },
+  }, prefix, existing as InventoryItem[]));
+}
 
 // Owner-configurable business settings, stored on the workspace meta doc. Written
 // whole (not merged field-by-field) so removing a list entry actually deletes it.

@@ -7,7 +7,7 @@ interface Props {
   initialKind?: ItemKind;
   runners: Runner[];
   onSave: (item: InventoryItem) => void;
-  onGenerateSku: (kind: ItemKind, deviceType?: DeviceType) => string;
+  onGenerateSku: (kind: ItemKind, deviceType?: DeviceType) => Promise<string>;
   onClose: () => void;
 }
 
@@ -37,7 +37,7 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, runners, 
 
   const set = <K extends keyof InventoryItem>(k: K, v: InventoryItem[K]) => setF(p => ({ ...p, [k]: v }));
 
-  const genSku = () => set('sku', onGenerateSku(kind, f.deviceType));
+  const genSku = async () => set('sku', await onGenerateSku(kind, f.deviceType));
 
   const save = () => {
     const item: InventoryItem = { ...f, kind };

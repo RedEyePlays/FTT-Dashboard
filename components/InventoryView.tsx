@@ -25,7 +25,7 @@ interface Props {
   onSave: (item: InventoryItem) => void;
   onUpdate: (id: string, field: keyof InventoryItem, value: any) => void;
   onDelete: (id: string) => void;
-  onGenerateSku: (kind: ItemKind, deviceType?: DeviceType) => string;
+  onGenerateSku: (kind: ItemKind, deviceType?: DeviceType) => Promise<string>;
   onSeed?: () => void;
 }
 
@@ -267,19 +267,19 @@ export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, a
   const pageRows = activeRows.slice((clampedPage - 1) * PAGE_SIZE, clampedPage * PAGE_SIZE);
 
   // --- actions ---
-  const addDeviceRow = () => {
-    const sku = onGenerateSku('device', 'Phone');
+  const addDeviceRow = async () => {
+    const sku = await onGenerateSku('device', 'Phone');
     onSave({ id: uid(), kind: 'device', sku, date: today(), item: '', imei: '', boughtFrom: '', purchaseCost: 0, repairCost: 0, soldDate: '', soldTo: '', salePrice: 0, deviceType: 'Phone', brand: '', model: '', storage: '', color: '', carrier: '', batteryHealth: '', condition: 'Good', purchaseSource: '', targetSalePrice: 0, deviceStatus: 'ready', notes: '' });
     setPage('devices');
   };
-  const addAccessoryRow = () => {
-    const sku = onGenerateSku('accessory');
+  const addAccessoryRow = async () => {
+    const sku = await onGenerateSku('accessory');
     onSave({ id: uid(), kind: 'accessory', sku, date: today(), item: '', imei: '', boughtFrom: '', purchaseCost: 0, repairCost: 0, soldDate: '', soldTo: '', salePrice: 0, manufacturerBarcode: '', category: '', quantity: 1, costPerUnit: 0, sellingPrice: 0, lowStockThreshold: 3, notes: '' });
     setPage('accessories');
   };
-  const duplicate = (i: InventoryItem) => {
+  const duplicate = async (i: InventoryItem) => {
     const k = kindOf(i);
-    const sku = onGenerateSku(k, i.deviceType);
+    const sku = await onGenerateSku(k, i.deviceType);
     onSave({ ...i, id: uid(), sku, soldDate: '', soldTo: '', salePrice: 0, deviceStatus: k === 'device' ? 'ready' : i.deviceStatus });
   };
   const toggleSel = (id: string) => setSelected(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
@@ -297,13 +297,13 @@ export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, a
   const exportAll = () => exportCSV(inventory, [...DEVICE_COLS, ...ACCESSORY_COLS], 'inventory');
   const importCSV = (file: File) => {
     const reader = new FileReader();
-    reader.onload = e => {
+    reader.onload = async e => {
       const rows = parseCSV(String(e.target?.result || ''));
-      rows.forEach(r => {
+      for (const r of rows) {
         const k: ItemKind = (r.kind === 'accessory') ? 'accessory' : 'device';
         const num = (v: string) => parseFloat(v) || 0;
         const base: InventoryItem = {
-          id: uid(), kind: k, sku: r.sku || onGenerateSku(k, (r.deviceType as DeviceType) || undefined),
+          id: uid(), kind: k, sku: r.sku || await onGenerateSku(k, (r.deviceType as DeviceType) || undefined),
           date: r.date || today(), item: r.item || '', imei: r.imei || '', boughtFrom: r.boughtFrom || '',
           purchaseCost: num(r.purchaseCost), repairCost: num(r.repairCost), soldDate: r.soldDate || '',
           soldTo: r.soldTo || '', salePrice: num(r.salePrice), notes: r.notes || '',
@@ -317,7 +317,7 @@ export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, a
           }),
         };
         onSave(base);
-      });
+      }
     };
     reader.readAsText(file);
   };

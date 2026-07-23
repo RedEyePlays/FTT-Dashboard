@@ -33,7 +33,7 @@ import { INITIAL_DATA } from './constants';
 import { auth } from './services/firebase';
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import {
-  saveMeta, saveItem, deleteItem, syncArray,
+  saveMeta, saveItem, deleteItem, syncArray, allocateSku,
   logActivityDoc, commitSale, seedSampleData,
   updateUserDoc, setInvite, deleteInvite,
   logAudit, exportWorkspaceData, recordBackup, saveSettings,
@@ -318,13 +318,15 @@ const App: React.FC = () => {
   // Update an entire row
   const handleUpdateRow = (updatedItem: InventoryItem) => { if (uid && allow('inventory.edit')) saveItem(uid, collectionFor(updatedItem), updatedItem); };
 
-  // Generate the next unique internal SKU for a kind/device type (never reused)
-  const handleGenerateSku = (kind: ItemKind, deviceType?: DeviceType): string => {
+  // Generate the next unique internal SKU for a kind/device type (never reused).
+  // Allocation is atomic: the counter is read-incremented-written inside a
+  // Firestore transaction, so two staff generating a SKU at once can't collide.
+  const handleGenerateSku = async (kind: ItemKind, deviceType?: DeviceType): Promise<string> => {
     const prefix = skuPrefix(kind, deviceType);
-    const { sku, counters } = nextSku(prefix, skuRef.current, dataRef.current);
+    if (!uid) return nextSku(prefix, skuRef.current, dataRef.current).sku; // no workspace yet (unauthenticated preview)
+    const { sku, counters } = await allocateSku(uid, prefix, dataRef.current);
     skuRef.current = counters;
     setSkuCounters(counters);
-    if (uid) saveMeta(uid, { skuCounters: counters });
     return sku;
   };
 
@@ -356,9 +358,9 @@ const App: React.FC = () => {
     commitSale(uid, { soldRows: payload.soldRows, accessoryUpdates, transaction: payload.transaction, customer: payload.customer, activity }).catch(e => console.error('Sale commit failed', e));
 
     // Custom items opted into inventory: fill a real SKU and persist to the right collection
-    (payload.newInventoryItems || []).forEach(item => {
+    (payload.newInventoryItems || []).forEach(async item => {
       const kind: ItemKind = (item.kind ?? 'device');
-      const withSku = item.sku ? item : { ...item, sku: handleGenerateSku(kind, item.deviceType) };
+      const withSku = item.sku ? item : { ...item, sku: await handleGenerateSku(kind, item.deviceType) };
       saveItem(uid, collectionFor(withSku), withSku);
       logActivity(`${withSku.sku || withSku.item} added from custom sale`);
     });
@@ -462,11 +464,12 @@ const App: React.FC = () => {
   };
 
   // --- Repairs (retail tickets + wholesale batches) ---
-  const genNumber = (prefix: string, used: string[]): string => {
-    const existing = used.map(sku => ({ sku })) as any;
-    const { sku, counters } = nextSku(prefix, skuRef.current, existing);
+  // Same atomic allocation as SKUs, for repair/batch numbers (own prefixes).
+  const genNumber = async (prefix: string, used: string[]): Promise<string> => {
+    const existing = used.map(sku => ({ sku }));
+    if (!uid) return nextSku(prefix, skuRef.current, existing as any).sku;
+    const { sku, counters } = await allocateSku(uid, prefix, existing);
     skuRef.current = counters; setSkuCounters(counters);
-    if (uid) saveMeta(uid, { skuCounters: counters });
     return sku;
   };
   const handleGenRepairNumber = () => genNumber(REPAIR_PREFIX, repairsRef.current.map(r => r.repairNumber));
