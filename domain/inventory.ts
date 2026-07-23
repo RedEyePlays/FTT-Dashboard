@@ -24,10 +24,21 @@ export type InventoryCollection = 'inventory' | 'accessories';
 export const collectionFor = (i: InventoryItem): InventoryCollection =>
   isAccessory(i) ? 'accessories' : 'inventory';
 
-// Pure stock math. Interim guard against negative stock under concurrent sales;
-// true atomicity arrives with the server-side stockMovements ledger in Phase 1.
-export const decrementStock = (current: number | undefined, sold: number | undefined): number =>
-  Math.max(0, (current ?? 0) - (sold ?? 0));
+// The signed change to an accessory's on-hand quantity when `sold` units leave
+// stock — always a decrement (you can't sell a negative quantity). This delta is
+// applied atomically server-side via Firestore's increment(), so concurrent sales
+// of the same accessory sum correctly regardless of write order (no lost update
+// from two clients writing a precomputed absolute quantity).
+//
+// The resulting on-hand value is intentionally NOT clamped: if more units are
+// sold than are in stock it goes negative, and that negative is a real oversell
+// signal we surface rather than hide. `isOversold` names that check for callers
+// that want to flag it. (The previous `decrementStock` helper clamped to 0 at
+// write time, which is exactly what masked oversells — it is removed.)
+export const stockChange = (sold: number | undefined): number => -Math.max(0, sold ?? 0) || 0;
+
+// True when an on-hand quantity has gone below zero — i.e. the item was oversold.
+export const isOversold = (onHand: number | undefined): boolean => (onHand ?? 0) < 0;
 
 // --- Device display name --------------------------------------------------
 //

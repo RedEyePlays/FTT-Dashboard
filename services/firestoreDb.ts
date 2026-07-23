@@ -1,5 +1,5 @@
 import {
-  collection, doc, onSnapshot, setDoc, deleteDoc, getDoc, getDocs, writeBatch, query, where, runTransaction,
+  collection, doc, onSnapshot, setDoc, deleteDoc, getDoc, getDocs, writeBatch, query, where, runTransaction, increment,
 } from 'firebase/firestore';
 import { db } from './firebase';
 import {
@@ -91,14 +91,18 @@ export const logActivityDoc = (uid: string, entry: ActivityEntry) =>
 // sales transaction + customer, and log activity — all atomically.
 export async function commitSale(uid: string, payload: {
   soldRows: InventoryItem[];
-  accessoryUpdates: { id: string; quantity: number }[];
+  // A signed quantity delta per accessory (negative = units sold). Applied with
+  // Firestore's atomic increment() so concurrent sales of the same accessory sum
+  // correctly regardless of write order — no lost update from writing absolute
+  // quantities computed off a stale local snapshot.
+  accessoryUpdates: { id: string; delta: number }[];
   transaction: SalesTransaction;
   customer?: Customer;
   activity: ActivityEntry[];
 }) {
   const batch = writeBatch(db);
   payload.soldRows.forEach(d => batch.set(docRef(uid, 'inventory', d.id), clean(d)));
-  payload.accessoryUpdates.forEach(a => batch.set(docRef(uid, 'accessories', a.id), { quantity: a.quantity }, { merge: true } as any));
+  payload.accessoryUpdates.forEach(a => batch.set(docRef(uid, 'accessories', a.id), { quantity: increment(a.delta) }, { merge: true } as any));
   batch.set(docRef(uid, 'salesTransactions', payload.transaction.id), clean(payload.transaction));
   if (payload.customer) batch.set(docRef(uid, 'customers', payload.customer.id), clean(payload.customer), { merge: true } as any);
   payload.activity.forEach(a => batch.set(docRef(uid, 'activityLog', a.id), clean(a)));

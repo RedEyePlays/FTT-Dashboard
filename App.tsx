@@ -41,7 +41,7 @@ import {
 import { AppSettings } from './domain/settings';
 import { useWorkspaceData } from './hooks/useWorkspaceData';
 import { newId, mkActivity } from './domain/ids';
-import { collectionFor, decrementStock } from './domain/inventory';
+import { collectionFor, stockChange } from './domain/inventory';
 import { InvSection, DEFAULT_INV_SECTION, invPath, parseInvPath } from './domain/inventoryNav';
 import { AppHeader } from './components/AppHeader';
 import { MobileNav } from './components/MobileNav';
@@ -345,10 +345,11 @@ const App: React.FC = () => {
   const handleSellCart = (payload: CartCheckout) => {
     if (!uid || !allow('sales.complete')) return;
     audit('sale.complete', 'sale', payload.transaction.id, undefined, { totalPaid: payload.transaction.totalPaid, lines: payload.transaction.lines.length });
-    const accessoryUpdates = Object.entries(payload.accessoryQtys).map(([id, soldQty]) => {
-      const acc = dataRef.current.find(i => i.id === id);
-      return { id, quantity: decrementStock(acc?.quantity, soldQty) };
-    });
+    // Pass a signed delta (not an absolute quantity): commitSale applies it with
+    // Firestore's atomic increment(), so two concurrent sales of the same
+    // accessory both subtract correctly instead of one silently overwriting the
+    // other off a shared stale snapshot.
+    const accessoryUpdates = Object.entries(payload.accessoryQtys).map(([id, soldQty]) => ({ id, delta: stockChange(soldQty) }));
     const activity: ActivityEntry[] = [
       ...payload.soldRows.map(d => mkActivity(`${d.sku || d.item} sold to ${d.customerName || d.soldTo || 'customer'}`)),
       ...Object.keys(payload.accessoryQtys).map(id => {
@@ -381,6 +382,8 @@ const App: React.FC = () => {
     await syncArray(uid, 'settlements', restoredData.settlements || [], settlementsRef.current);
     await syncArray(uid, 'customers', restoredData.customers || [], customersRef.current);
     await syncArray(uid, 'salesTransactions', restoredData.salesTransactions || [], salesTransactionsRef.current);
+    await syncArray(uid, 'repairs', restoredData.repairs || [], repairsRef.current);
+    await syncArray(uid, 'repairBatches', restoredData.repairBatches || [], repairBatchesRef.current);
     await saveMeta(uid, { notes: restoredData.notes || [], tasks: restoredData.tasks || [], skuCounters: restoredData.skuCounters || {} });
   };
 

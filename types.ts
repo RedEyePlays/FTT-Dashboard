@@ -261,6 +261,8 @@ export interface AppData {
   settlements?: Settlement[];
   customers?: Customer[];
   salesTransactions?: SalesTransaction[];
+  repairs?: Repair[];
+  repairBatches?: RepairBatch[];
   skuCounters?: Record<string, number>; // monotonic per-prefix SKU counters
   activityLog?: ActivityEntry[];
 }
