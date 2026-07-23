@@ -93,10 +93,16 @@ const DEVICE_COLS: Col[] = [
   { key: 'date', label: 'Date In', type: 'date', w: 96, min: 54, max: 140, frozen: true },
   { key: 'sku', label: 'SKU', type: 'text', w: 100, min: 68, max: 160, frozen: true, emphasis: 'muted' },
   { key: 'imei', label: 'IMEI/Serial', type: 'text', w: 140, min: 68, max: 240, frozen: true, emphasis: 'muted' },
+  // The Item cell is a plain text field written straight to `item` (typed as one
+  // string, e.g. "Apple iPhone 12"). Kept as a computed column so it shows the
+  // display name (item, or a brand+model fallback for legacy rows) and sorts by
+  // it; the underlying `item` field round-trips via the hidden column below.
   { key: '__item', label: 'Item', type: 'computed', w: 170, min: 80, max: 400, flex: true, frozen: true, emphasis: 'strong', compute: itemLabel, sortVal: i => itemLabel(i).toLowerCase() },
-  // Type/Brand/Model are not shown in the table (Brand+Model live in the Item
-  // column and its inline editor; Type is edited in the form). Kept here with
-  // hideCol so CSV export still round-trips them.
+  // Not shown in the table. Type is edited in the form; Brand/Model remain as
+  // underlying fields (search/labels/legacy display) but are no longer edited via
+  // the Item cell. All kept with hideCol so CSV export still round-trips them —
+  // including `item`, which is now the primary name field.
+  { key: 'item', label: 'Item Name', type: 'text', w: 170, hideCol: true },
   { key: 'deviceType', label: 'Type', type: 'text', w: 76, hideCol: true },
   { key: 'brand', label: 'Brand', type: 'text', w: 100, hideCol: true },
   { key: 'model', label: 'Model', type: 'text', w: 140, hideCol: true },
@@ -638,11 +644,10 @@ const Sheet: React.FC<{
   widths?: Record<string, number>; onResize?: (key: string, w: number) => void; onResetWidth?: (key: string) => void;
   onAddRow?: () => void; addLabel: string; lowFlag?: boolean;
 }> = ({ title, total, cols, rows, sort, onSort, selected, onToggleSel, onToggleAll, onUpdate, onDelete, onDuplicate, onExpand, onLabel, onHistory, widths, onResize, onResetWidth, onAddRow, addLabel, lowFlag }) => {
-  // Row overflow menu + inline Brand/Model editor. State lives at the Sheet root
-  // and the popovers render outside the sticky table subtree (fixed-positioned)
-  // so they aren't clipped or trapped under the sticky columns' stacking context.
+  // Row overflow menu. State lives at the Sheet root and the menu renders outside
+  // the sticky table subtree (fixed-positioned) so it isn't clipped or trapped
+  // under the sticky columns' stacking context.
   const [menu, setMenu] = useState<{ i: InventoryItem; x: number; y: number } | null>(null);
-  const [itemPop, setItemPop] = useState<{ i: InventoryItem; x: number; y: number } | null>(null);
   const openAt = (e: React.MouseEvent, width: number) => {
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
     return { x: Math.min(r.left, window.innerWidth - width - 12), y: r.bottom + 4 };
@@ -804,17 +809,18 @@ const Sheet: React.FC<{
                           className={`w-full text-left px-2 py-1.5 text-sm truncate rounded hover:bg-indigo-50 dark:hover:bg-indigo-900/20 ${emph(c)}`}>
                           {i.notes ? String(i.notes) : <span className="text-slate-300 dark:text-slate-600 italic">Add note…</span>}
                         </button>
+                      ) : c.key === '__item' ? (
+                        // Item: a single plain text field typed straight into `item`.
+                        // Empty legacy rows show their brand+model name as a
+                        // placeholder (still displayed everywhere via the helper).
+                        <input type="text" value={(i.item as any) ?? ''} title={c.compute!(i)}
+                          placeholder={c.compute!(i) === '—' ? 'Item name' : c.compute!(i)}
+                          onChange={e => onUpdate(i.id, 'item', e.target.value)}
+                          className={`${cellBase} ${emph(c)}`} />
                       ) : c.type === 'computed' ? (
-                        c.key === '__item' ? (
-                          <button onClick={e => setItemPop({ i, ...openAt(e, 240) })} title={c.compute!(i)}
-                            className={`w-full text-left px-2 py-1.5 text-sm truncate rounded hover:bg-indigo-50 dark:hover:bg-indigo-900/20 ${emph(c)}`}>
-                            {c.compute!(i)}
-                          </button>
-                        ) : (
-                          <div title={c.compute!(i)} className={`px-2 py-1.5 text-sm truncate ${c.align === 'right' ? 'text-right font-mono' : ''} ${emph(c)}`}>
-                            {c.key === '__profit' && i.salePrice ? <span className={profitOf(i) >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}>{c.compute!(i)}</span> : c.compute!(i)}
-                          </div>
-                        )
+                        <div title={c.compute!(i)} className={`px-2 py-1.5 text-sm truncate ${c.align === 'right' ? 'text-right font-mono' : ''} ${emph(c)}`}>
+                          {c.key === '__profit' && i.salePrice ? <span className={profitOf(i) >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}>{c.compute!(i)}</span> : c.compute!(i)}
+                        </div>
                       ) : c.readOnly ? (
                         <div title={String((i[c.key as keyof InventoryItem] as any) ?? '')} className={`px-2 py-1.5 text-sm truncate ${emph(c)}`}>{((i[c.key as keyof InventoryItem] as any) ?? '') || '—'}</div>
                       ) : c.type === 'select' ? (
@@ -880,11 +886,6 @@ const Sheet: React.FC<{
         </>
       )}
 
-      {/* Inline Brand/Model editor for the Item cell */}
-      {itemPop && (
-        <BrandModelPopover item={itemPop.i} x={itemPop.x} y={itemPop.y} onUpdate={onUpdate} onClose={() => setItemPop(null)} />
-      )}
-
       {/* Full-note side drawer (opened from a Notes cell) */}
       {notesItem && (
         <NotesDrawer item={notesItem} onUpdate={onUpdate} onClose={() => setNotesItem(null)} />
@@ -924,35 +925,6 @@ const NotesDrawer: React.FC<{ item: InventoryItem; onUpdate: (id: string, f: key
         </div>
       </div>
     </div>
-  );
-};
-
-/* Inline Brand + Model editor (keeps the underlying fields; writes through live) */
-const BrandModelPopover: React.FC<{ item: InventoryItem; x: number; y: number; onUpdate: (id: string, f: keyof InventoryItem, v: any) => void; onClose: () => void }> = ({ item, x, y, onUpdate, onClose }) => {
-  const [brand, setBrand] = useState(item.brand || '');
-  const [model, setModel] = useState(item.model || '');
-  const inputCls = 'mt-0.5 w-full px-2 py-1.5 text-sm bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md outline-none focus:ring-2 focus:ring-indigo-500 text-slate-900 dark:text-slate-100';
-  // Keep the legacy `item` field in step with the combined name so every
-  // consumer that reads `item` matches the Item column exactly.
-  const syncItem = (b: string, m: string) => {
-    const combined = getDeviceDisplayName({ brand: b, model: m });
-    onUpdate(item.id, 'item', combined === '—' ? '' : combined);
-  };
-  return (
-    <>
-      <div className="fixed inset-0 z-40" onClick={onClose} />
-      <div className="fixed z-50 w-60 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shadow-2xl p-3 space-y-2" style={{ left: x, top: y }}
-        onKeyDown={e => { if (e.key === 'Escape' || (e.key === 'Enter' && (e.target as HTMLElement).tagName === 'INPUT')) onClose(); }}>
-        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Edit Item</p>
-        <label className="block text-xs text-slate-500 dark:text-slate-400">Brand
-          <input autoFocus value={brand} onChange={e => { const v = e.target.value; setBrand(v); onUpdate(item.id, 'brand', v); syncItem(v, model); }} placeholder="e.g. Apple" className={inputCls} />
-        </label>
-        <label className="block text-xs text-slate-500 dark:text-slate-400">Model
-          <input value={model} onChange={e => { const v = e.target.value; setModel(v); onUpdate(item.id, 'model', v); syncItem(brand, v); }} placeholder="e.g. iPhone 14 Pro" className={inputCls} />
-        </label>
-        <div className="flex justify-end"><button onClick={onClose} className="text-xs px-3 py-1 rounded-md bg-indigo-600 hover:bg-indigo-700 text-white font-medium">Done</button></div>
-      </div>
-    </>
   );
 };
 
