@@ -379,6 +379,8 @@ const App: React.FC = () => {
     await syncArray(uid, 'settlements', restoredData.settlements || [], settlementsRef.current);
     await syncArray(uid, 'customers', restoredData.customers || [], customersRef.current);
     await syncArray(uid, 'salesTransactions', restoredData.salesTransactions || [], salesTransactionsRef.current);
+    await syncArray(uid, 'repairs', restoredData.repairs || [], repairsRef.current);
+    await syncArray(uid, 'repairBatches', restoredData.repairBatches || [], repairBatchesRef.current);
     await saveMeta(uid, { notes: restoredData.notes || [], tasks: restoredData.tasks || [], skuCounters: restoredData.skuCounters || {} });
   };
 

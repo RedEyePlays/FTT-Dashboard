@@ -1,5 +1,6 @@
 import {
   AppData, InventoryItem, Note, Task, Runner, DropOff, Settlement, Customer, SalesTransaction, ActivityEntry,
+  Repair, RepairBatch,
 } from '../types';
 
 // Normalizes a parsed backup file into a full AppData for restore.
@@ -45,6 +46,8 @@ export function normalizeRestore(parsed: any): AppData {
     settlements: arr<Settlement>(src.settlements),
     customers: arr<Customer>(src.customers),
     salesTransactions: arr<SalesTransaction>(src.salesTransactions),
+    repairs: arr<Repair>(src.repairs),
+    repairBatches: arr<RepairBatch>(src.repairBatches),
     skuCounters: src.skuCounters || meta.skuCounters || {},
     activityLog: arr<ActivityEntry>(src.activityLog),
   };
@@ -61,6 +64,8 @@ export function isRestorableBackup(parsed: any): boolean {
     (d.dropOffs?.length ?? 0) > 0 ||
     (d.settlements?.length ?? 0) > 0 ||
     (d.customers?.length ?? 0) > 0 ||
-    (d.salesTransactions?.length ?? 0) > 0
+    (d.salesTransactions?.length ?? 0) > 0 ||
+    (d.repairs?.length ?? 0) > 0 ||
+    (d.repairBatches?.length ?? 0) > 0
   );
 }
