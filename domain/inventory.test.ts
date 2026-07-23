@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { kindOf, isDevice, isAccessory, collectionFor, decrementStock, getDeviceDisplayName } from './inventory';
+import { kindOf, isDevice, isAccessory, collectionFor, stockChange, isOversold, getDeviceDisplayName } from './inventory';
 import { InventoryItem } from '../types';
 
 const base: InventoryItem =
@@ -28,16 +28,42 @@ describe('collectionFor', () => {
   });
 });
 
-describe('decrementStock', () => {
-  it('subtracts sold quantity', () => {
-    expect(decrementStock(10, 3)).toBe(7);
+describe('stockChange', () => {
+  it('is a signed decrement of the sold quantity', () => {
+    expect(stockChange(3)).toBe(-3);
+    expect(stockChange(1)).toBe(-1);
   });
-  it('never returns negative', () => {
-    expect(decrementStock(2, 5)).toBe(0);
+  it('treats undefined/zero as no change', () => {
+    expect(stockChange(undefined)).toBe(0);
+    expect(stockChange(0)).toBe(0);
   });
-  it('treats undefined as zero', () => {
-    expect(decrementStock(undefined, 3)).toBe(0);
-    expect(decrementStock(5, undefined)).toBe(5);
+  it('never sells a negative quantity (guarded to a non-positive delta)', () => {
+    expect(stockChange(-5)).toBe(0);
+  });
+
+  it('concurrent decrements sum correctly regardless of write order', () => {
+    // Model Firestore increment(): each concurrent sale contributes a delta to the
+    // same server value; the final is start + Σdeltas whatever order they land in.
+    // (The old absolute-write path returned 9 here — one write clobbered the other.)
+    const start = 10;
+    const deltas = [stockChange(1), stockChange(1)]; // two concurrent single-unit sales
+    const apply = (order: number[]) => order.reduce((q, i) => q + deltas[i], start);
+    expect(apply([0, 1])).toBe(8);
+    expect(apply([1, 0])).toBe(8);
+  });
+});
+
+describe('isOversold', () => {
+  it('on-hand goes negative as a real oversell signal (not clamped away)', () => {
+    // One in stock, two sold concurrently → -1 on hand: a genuine oversell.
+    const onHand = [stockChange(1), stockChange(1)].reduce((q, d) => q + d, 1);
+    expect(onHand).toBe(-1);
+    expect(isOversold(onHand)).toBe(true);
+  });
+  it('is false for non-negative stock', () => {
+    expect(isOversold(0)).toBe(false);
+    expect(isOversold(5)).toBe(false);
+    expect(isOversold(undefined)).toBe(false);
   });
 });
 
