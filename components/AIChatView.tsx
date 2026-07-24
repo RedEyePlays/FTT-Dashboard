@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { InventoryItem, ChatMessage } from '../types';
-import { GoogleGenAI } from "@google/genai";
+import { generateChatResponse } from '../services/geminiService';
 import { Send, Bot, User, Loader2, Sparkles, Trash2, X, Maximize2 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 
@@ -54,54 +54,9 @@ export const AIChatView: React.FC<AIChatViewProps> = ({
     }
 
     try {
-      // Use optional chaining for environment variables to prevent crashes
-      const apiKey = import.meta.env?.VITE_API_KEY;
-      if (!apiKey) throw new Error("API Key is missing. Check your .env file.");
-
-      const ai = new GoogleGenAI({ apiKey });
-      
-      const soldItems = inventory.filter(i => i.soldDate);
-      const stockItems = inventory.filter(i => !i.soldDate);
-      const totalProfit = soldItems.reduce((acc, i) => acc + (i.salePrice - i.purchaseCost - i.repairCost), 0);
-      
-      const systemInstruction = `
-        You are an expert business analyst and assistant for a reselling business called "FlipThatTech".
-        
-        CURRENT BUSINESS CONTEXT:
-        - Total Items Tracked: ${inventory.length}
-        - Items In Stock: ${stockItems.length}
-        - Items Sold: ${soldItems.length}
-        - Total All-Time Profit: $${totalProfit.toFixed(2)}
-        
-        FULL INVENTORY DATA (JSON):
-        ${JSON.stringify(inventory)}
-        
-        INSTRUCTIONS:
-        1. Answer questions based specifically on the inventory data provided above.
-        2. If asked to write a listing, use the details from the inventory item (Model, Specs, Condition Notes) to write a compelling sales description.
-        3. If asked about financial performance, calculate metrics dynamically from the JSON data.
-        4. Keep answers professional but conversational. Use Markdown for formatting tables or lists.
-        5. If the user asks about an item not in the list, politely inform them you don't see it in the database.
-      `;
-
-      // Filter out UI-only messages if needed, currently 'welcome' is handled but passed to keep context if desired
-      // We skip the welcome message for the API context to save tokens
-      const history = newHistory
-        .filter(m => m.id !== 'welcome')
-        .map(m => ({
-          role: m.role,
-          parts: [{ text: m.text }]
-        }));
-
-      const response = await ai.models.generateContent({
-        model: 'gemini-3-pro-preview',
-        contents: history,
-        config: {
-          systemInstruction: systemInstruction,
-        }
-      });
-
-      const aiText = response.text || "I'm having trouble analyzing that right now.";
+      // The inventory context, system instruction, and Gemini call all live
+      // server-side in the `aiGenerate` callable now — no API key on the client.
+      const aiText = await generateChatResponse(inventory, newHistory);
 
       const aiMsg: ChatMessage = {
         id: (Date.now() + 1).toString(),
