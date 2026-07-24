@@ -1,0 +1,11 @@
+## Compiled JavaScript output
+lib/
+
+## Dependencies
+node_modules/
+
+## Firebase / runtime config
+.runtimeconfig.json
+.env
+.env.local
+*.log
