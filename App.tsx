@@ -46,6 +46,7 @@ import { newId, mkActivity } from './domain/ids';
 import { collectionFor, stockChange } from './domain/inventory';
 import { openEntryFor, isOnBreak, periodPayFor, paidKey, toISODate, PayPeriod } from './domain/timeclock';
 import { buildAlerts } from './domain/alerts';
+import { changedSettingsSections } from './domain/audit';
 import { dropOffPurchaseCost } from './domain/dropoffs';
 import { InvSection, DEFAULT_INV_SECTION, invPath, parseInvPath } from './domain/inventoryNav';
 import { AppHeader } from './components/AppHeader';
@@ -295,9 +296,12 @@ const App: React.FC = () => {
   // components read from localStorage (POS tax rate, default label template).
   const handleSaveSettings = async (next: AppSettings) => {
     if (!uid || !allow('settings.manage')) return;
+    // Record which sections actually changed (e.g. ['tax','labels']) rather than a
+    // generic "Settings updated" with no detail.
+    const changed = changedSettingsSections(settings, next);
     await saveSettings(uid, next);
-    audit('settings.update', 'settings', 'app');
-    logActivity('Settings updated');
+    audit('settings.update', 'settings', 'app', undefined, { changed });
+    logActivity(changed.length ? `Settings updated: ${changed.join(', ')}` : 'Settings updated');
     try {
       localStorage.setItem('posSettings', JSON.stringify({ taxRate: next.tax.percent }));
       const prevTpl = JSON.parse(localStorage.getItem('ftt_label_tpl_v1') || '{}');
@@ -446,14 +450,16 @@ const App: React.FC = () => {
   const handleSetRole = (targetUid: string, role: Role) => {
     // Role changes are owner-only (managers can invite/disable techs, not re-role).
     if (!allow('users.manage') || targetUid === appUser?.id) return;
-    const before = targetRoleOf(targetUid);
+    const target = workspaceUsers.find(u => u.id === targetUid);
     updateUserDoc(targetUid, { role }).catch(() => {});
-    audit('user.role_change', 'user', targetUid, { role: before }, { role });
+    audit('user.role_change', 'user', targetUid, { email: target?.email, role: target?.role }, { role });
   };
   const handleSetDisabled = (targetUid: string, disabled: boolean) => {
     if (targetUid === appUser?.id || !canActOnUser(targetRoleOf(targetUid))) return;
+    const target = workspaceUsers.find(u => u.id === targetUid);
     updateUserDoc(targetUid, { disabled }).catch(() => {});
-    audit(disabled ? 'user.disable' : 'user.enable', 'user', targetUid);
+    audit(disabled ? 'user.disable' : 'user.enable', 'user', targetUid,
+      { email: target?.email, disabled: !disabled }, { disabled });
   };
   const handleSetAllowProfit = (targetUid: string, allowProfit: boolean) => {
     if (!allow('users.manage')) return;
@@ -472,6 +478,8 @@ const App: React.FC = () => {
     const inv = invites.find(i => i.email === email.toLowerCase());
     if (!(allow('users.manage') || (allow('users.tech') && inv?.role === 'technician'))) return;
     deleteInvite(email).catch(() => {});
+    // Record the revocation with the invited email/role — the invite doc is gone after this.
+    audit('user.invite_revoke', 'user', email, { email, role: inv?.role }, undefined);
   };
 
   // Owner-only hourly-rate edit (rate lives on the user doc). Managers/employees
@@ -658,7 +666,10 @@ const App: React.FC = () => {
 
   const handleDeleteBatch = (id: string) => {
     if (!uid || appUser?.role !== 'owner') return;
-    audit('batch.delete', 'repairBatch', id);
+    // Capture the batch before it's gone from live data — the audit log is the
+    // only place its details will still exist afterward.
+    const t = repairBatchesRef.current.find(b => b.id === id);
+    audit('batch.delete', 'repairBatch', id, t);
     repairsRef.current.filter(r => r.batchId === id).forEach(r => deleteItem(uid, 'repairs', r.id));
     deleteItem(uid, 'repairBatches', id);
   };
@@ -691,8 +702,14 @@ const App: React.FC = () => {
     plan.reassignSales.forEach(id => { const t = salesTransactions.find(x => x.id === id); if (t) saveItem(uid, 'salesTransactions', { ...t, customerId: pid, customerPhone: plan.customer.phone, customerEmail: plan.customer.email }); });
     plan.reassignRepairs.forEach(id => { const r = repairs.find(x => x.id === id); if (r) saveItem(uid, 'repairs', { ...r, customerId: pid, customerPhone: plan.customer.phone, customerEmail: plan.customer.email }); });
     plan.reassignBatches.forEach(id => { const b = repairBatches.find(x => x.id === id); if (b) saveItem(uid, 'repairBatches', { ...b, businessId: pid }); });
+    // Capture the deleted duplicates' identifying fields before removal — once
+    // deleted they're gone from live data, so the audit log is the only record.
+    const removed = plan.removeIds.map(id => {
+      const c = customers.find(x => x.id === id);
+      return { id, name: c?.name, phone: c?.phone };
+    });
     plan.removeIds.forEach(id => deleteItem(uid, 'customers', id));
-    audit('customer.merge', 'customer', pid, { removed: plan.removeIds }, { linked: plan.reassignSales.length + plan.reassignRepairs.length + plan.reassignBatches.length });
+    audit('customer.merge', 'customer', pid, { removed }, { keptId: pid, linked: plan.reassignSales.length + plan.reassignRepairs.length + plan.reassignBatches.length });
   };
 
   // Quick actions from a customer profile: seed the target view with the customer.
