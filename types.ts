@@ -199,6 +199,7 @@ export interface AppUser {
   disabled?: boolean;
   allowProfit?: boolean; // employee override to view profit-sensitive figures
   hourlyRate?: number;   // flat pay rate for the time clock; editable by owner only
+  notifSeenTs?: number;  // newest activity ts this user has seen (per-user read state)
   lastLogin?: number;    // epoch ms (best-effort, updated client-side)
   createdAt?: number;
 }

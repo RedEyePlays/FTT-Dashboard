@@ -45,6 +45,7 @@ import { useWorkspaceData } from './hooks/useWorkspaceData';
 import { newId, mkActivity } from './domain/ids';
 import { collectionFor, stockChange } from './domain/inventory';
 import { openEntryFor, isOnBreak, periodPayFor, paidKey, toISODate, PayPeriod } from './domain/timeclock';
+import { buildAlerts } from './domain/alerts';
 import { changedSettingsSections } from './domain/audit';
 import { dropOffPurchaseCost } from './domain/dropoffs';
 import { InvSection, DEFAULT_INV_SECTION, invPath, parseInvPath } from './domain/inventoryNav';
@@ -175,6 +176,16 @@ const App: React.FC = () => {
     pages: searchPages,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }), [data, repairs, customers, salesTransactions, workspaceUsers, searchPages, appUser?.role, appUser?.allowProfit]);
+
+  // Standing, actionable alerts for the notifications menu (low stock, overdue /
+  // unclaimed repairs). Derived from live data already in memory.
+  const alerts = useMemo(() => buildAlerts({ inventory: data, repairs, now: Date.now() }), [data, repairs]);
+
+  // Per-user notification read state persists on the user doc, so it follows the
+  // staff member across devices instead of living in this browser's localStorage.
+  const handleMarkNotificationsSeen = (ts: number) => {
+    if (appUser) updateUserDoc(appUser.id, { notifSeenTs: ts }).catch(() => {});
+  };
 
   const handleSearchSelect = (r: SearchResult) => {
     setShowFinder(false);
@@ -787,6 +798,9 @@ const App: React.FC = () => {
         onStartAdd={handleStartAdd}
         onLock={handleLock}
         activity={activityLog}
+        alerts={alerts}
+        notifSeenTs={appUser.notifSeenTs ?? 0}
+        onMarkNotificationsSeen={handleMarkNotificationsSeen}
       />
 
       {/* Mobile slide-out nav (all destinations + actions) */}
