@@ -3,7 +3,6 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Dashboard } from './components/Dashboard';
 import { OwnerAnalytics } from './components/OwnerAnalytics';
 import { DataEntryForm } from './components/DataEntryForm';
-import { DataGrid } from './components/DataGrid';
 import { BulkEntryModal } from './components/BulkEntryModal';
 import { AuthScreen } from './components/AuthScreen';
 import { NotesBoard } from './components/NotesBoard';

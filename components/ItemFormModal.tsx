@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { X, Wand2, Smartphone, Package, Barcode } from 'lucide-react';
+import { X, Wand2, Smartphone, Package, Barcode, Camera } from 'lucide-react';
 import { InventoryItem, ItemKind, DeviceType, DeviceStatus, Runner } from '../types';
+import { ImeiScanner } from './ImeiScanner';
 
 interface Props {
   initial?: InventoryItem;
@@ -36,6 +37,7 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, runners, 
   });
 
   const set = <K extends keyof InventoryItem>(k: K, v: InventoryItem[K]) => setF(p => ({ ...p, [k]: v }));
+  const [showImeiScanner, setShowImeiScanner] = useState(false);
 
   const genSku = async () => set('sku', await onGenerateSku(kind, f.deviceType));
 
@@ -99,12 +101,23 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, runners, 
             </div>
             <div>
               <label className={lbl}>{kind === 'device' ? 'IMEI / Serial' : 'Manufacturer Barcode (optional)'}</label>
-              <div className="relative">
-                <Barcode className="w-4 h-4 text-slate-400 absolute left-2 top-1/2 -translate-y-1/2" />
-                {kind === 'device'
-                  ? <input className={`${inp} pl-8`} value={f.imei} onChange={e => set('imei', e.target.value)} />
-                  : <input className={`${inp} pl-8`} value={f.manufacturerBarcode ?? ''} onChange={e => set('manufacturerBarcode', e.target.value)} />}
-              </div>
+              {kind === 'device' ? (
+                <div className="flex gap-2">
+                  <div className="relative flex-1 min-w-0">
+                    <Barcode className="w-4 h-4 text-slate-400 absolute left-2 top-1/2 -translate-y-1/2" />
+                    <input className={`${inp} pl-8`} value={f.imei} onChange={e => set('imei', e.target.value)} />
+                  </div>
+                  <button type="button" onClick={() => setShowImeiScanner(true)} title="Scan IMEI / serial with camera"
+                    className="shrink-0 px-3 rounded-md bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 text-slate-500 hover:text-indigo-600 hover:border-indigo-400 transition-colors">
+                    <Camera className="w-4 h-4" />
+                  </button>
+                </div>
+              ) : (
+                <div className="relative">
+                  <Barcode className="w-4 h-4 text-slate-400 absolute left-2 top-1/2 -translate-y-1/2" />
+                  <input className={`${inp} pl-8`} value={f.manufacturerBarcode ?? ''} onChange={e => set('manufacturerBarcode', e.target.value)} />
+                </div>
+              )}
             </div>
           </div>
 
@@ -180,6 +193,13 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, runners, 
           <button onClick={save} disabled={!canSave} className="px-5 py-2 text-sm rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white font-medium">Save</button>
         </div>
       </div>
+
+      {showImeiScanner && (
+        <ImeiScanner
+          onScan={(imei) => { set('imei', imei); setShowImeiScanner(false); }}
+          onClose={() => setShowImeiScanner(false)}
+        />
+      )}
     </div>
   );
 };

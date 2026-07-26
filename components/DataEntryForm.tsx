@@ -1,9 +1,10 @@
 
 import React, { useState, useEffect } from 'react';
-import { QrCode, Printer } from 'lucide-react';
+import { QrCode, Printer, Camera } from 'lucide-react';
 import { InventoryItem } from '../types';
 import { QRScanner } from './QRScanner';
 import { QRLabel } from './QRLabel';
+import { ImeiScanner } from './ImeiScanner';
 
 interface DataEntryFormProps {
   initialData?: InventoryItem;
@@ -29,6 +30,7 @@ export const DataEntryForm: React.FC<DataEntryFormProps> = ({ initialData, onSav
   });
 
   const [showScanner, setShowScanner] = useState(false);
+  const [showImeiScanner, setShowImeiScanner] = useState(false);
   const [showLabel, setShowLabel] = useState(false);
 
   useEffect(() => {
@@ -111,6 +113,10 @@ export const DataEntryForm: React.FC<DataEntryFormProps> = ({ initialData, onSav
                     className="shrink-0 px-3 rounded-md bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 text-slate-500 hover:text-indigo-600 hover:border-indigo-400 transition-colors">
                     <QrCode className="w-4 h-4" />
                   </button>
+                  <button type="button" onClick={() => setShowImeiScanner(true)} title="Scan IMEI / serial with camera"
+                    className="shrink-0 px-3 rounded-md bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 text-slate-500 hover:text-indigo-600 hover:border-indigo-400 transition-colors">
+                    <Camera className="w-4 h-4" />
+                  </button>
                   <button type="button" onClick={() => setShowLabel(true)} disabled={!formData.imei} title="Print IMEI QR label"
                     className="shrink-0 px-3 rounded-md bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 text-slate-500 hover:text-indigo-600 hover:border-indigo-400 transition-colors disabled:opacity-40 disabled:hover:text-slate-500 disabled:hover:border-slate-300">
                     <Printer className="w-4 h-4" />
@@ -182,6 +188,12 @@ export const DataEntryForm: React.FC<DataEntryFormProps> = ({ initialData, onSav
       </form>
 
       {showScanner && <QRScanner onScan={handleScan} onClose={() => setShowScanner(false)} />}
+      {showImeiScanner && (
+        <ImeiScanner
+          onScan={(imei) => { setFormData(prev => ({ ...prev, imei })); setShowImeiScanner(false); }}
+          onClose={() => setShowImeiScanner(false)}
+        />
+      )}
       {showLabel && <QRLabel imei={formData.imei} itemName={formData.item} onClose={() => setShowLabel(false)} />}
     </div>
   );
