@@ -16,13 +16,32 @@ describe('can()', () => {
     expect(can('manager', 'settings.manage')).toBe(false);
   });
 
-  it('financials are owner-default; manager/employee need the allowProfit override', () => {
-    expect(can('owner', 'reports.profit')).toBe(true);
-    expect(can('manager', 'reports.profit')).toBe(false);
-    expect(can('manager', 'reports.profit', { allowProfit: true })).toBe(true);
-    expect(can('employee', 'reports.profit')).toBe(false);
-    expect(can('employee', 'reports.profit', { allowProfit: true })).toBe(true);
-    expect(can('technician', 'reports.profit', { allowProfit: true })).toBe(false);
+  it('profit summary (period totals) is an owner + manager default; employees need the override', () => {
+    expect(can('owner', 'reports.profit.summary')).toBe(true);
+    // Managers now see the daily/weekly Dashboard totals by default.
+    expect(can('manager', 'reports.profit.summary')).toBe(true);
+    expect(can('manager', 'reports.profit.summary', { allowProfit: false })).toBe(true);
+    // Employees only via the per-user allowProfit override.
+    expect(can('employee', 'reports.profit.summary')).toBe(false);
+    expect(can('employee', 'reports.profit.summary', { allowProfit: true })).toBe(true);
+    // Technicians never.
+    expect(can('technician', 'reports.profit.summary', { allowProfit: true })).toBe(false);
+  });
+
+  it('detailed profit (full history & costs) is owner-default; manager/employee need the override', () => {
+    expect(can('owner', 'reports.profit.detailed')).toBe(true);
+    expect(can('manager', 'reports.profit.detailed')).toBe(false);
+    expect(can('manager', 'reports.profit.detailed', { allowProfit: true })).toBe(true);
+    expect(can('employee', 'reports.profit.detailed')).toBe(false);
+    expect(can('employee', 'reports.profit.detailed', { allowProfit: true })).toBe(true);
+    expect(can('technician', 'reports.profit.detailed', { allowProfit: true })).toBe(false);
+  });
+
+  it('the two profit tiers are independent — summary access does not imply detailed', () => {
+    // A manager (summary by default, no override) sees period totals but not
+    // the deep historical/cost breakdowns.
+    expect(can('manager', 'reports.profit.summary')).toBe(true);
+    expect(can('manager', 'reports.profit.detailed')).toBe(false);
   });
 
   it('employee has the minimal set', () => {
@@ -33,10 +52,13 @@ describe('can()', () => {
     expect(can('employee', 'dropoffs.manage')).toBe(false);
   });
 
-  it('employee profit visibility requires the allowProfit override', () => {
-    expect(can('employee', 'reports.profit')).toBe(false);
-    expect(can('employee', 'reports.profit', { allowProfit: false })).toBe(false);
-    expect(can('employee', 'reports.profit', { allowProfit: true })).toBe(true);
+  it('employee profit visibility (both tiers) requires the allowProfit override', () => {
+    expect(can('employee', 'reports.profit.summary')).toBe(false);
+    expect(can('employee', 'reports.profit.summary', { allowProfit: false })).toBe(false);
+    expect(can('employee', 'reports.profit.summary', { allowProfit: true })).toBe(true);
+    expect(can('employee', 'reports.profit.detailed')).toBe(false);
+    expect(can('employee', 'reports.profit.detailed', { allowProfit: false })).toBe(false);
+    expect(can('employee', 'reports.profit.detailed', { allowProfit: true })).toBe(true);
   });
 
   it('the allowProfit override does not grant unrelated permissions', () => {
@@ -48,7 +70,8 @@ describe('can()', () => {
     expect(can('technician', 'repairs.tech')).toBe(true);
     // …but not full repair management, financials, inventory, users, or settings.
     expect(can('technician', 'repairs.manage')).toBe(false);
-    expect(can('technician', 'reports.profit')).toBe(false);
+    expect(can('technician', 'reports.profit.summary')).toBe(false);
+    expect(can('technician', 'reports.profit.detailed')).toBe(false);
     expect(can('technician', 'reports.view')).toBe(false);
     expect(can('technician', 'inventory.add')).toBe(false);
     expect(can('technician', 'inventory.delete')).toBe(false);

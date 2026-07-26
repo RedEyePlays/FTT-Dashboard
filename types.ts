@@ -182,7 +182,9 @@ export type Permission =
   | 'sales.complete' | 'dropoffs.manage'
   | 'repairs.manage'  // full repair management: create/delete, price, batches, customer
   | 'repairs.tech'    // technician-scoped: view + update repair work fields & status
-  | 'reports.view' | 'reports.profit'
+  | 'reports.view'
+  | 'reports.profit.summary'    // period totals (Dashboard revenue/profit cards) — manager default
+  | 'reports.profit.detailed'   // full historical breakdowns + per-record cost/profit — owner default
   | 'users.manage'    // full user/role management (owner)
   | 'users.tech'      // manage technician accounts only (owner + manager)
   | 'audit.view' | 'backup.export' | 'settings.manage';

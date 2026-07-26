@@ -44,7 +44,7 @@ export const MobileDrawer: React.FC<Props> = ({
   type Item = { label: string; icon: React.ReactNode; on: () => void; active?: boolean; show: boolean };
   const nav: Item[] = [
     { label: 'Dashboard', icon: <LayoutDashboard className="w-5 h-5" />, on: () => go('dashboard'), active: view === 'dashboard', show: true },
-    { label: 'Analytics', icon: <BarChart3 className="w-5 h-5" />, on: () => go('analytics'), active: view === 'analytics', show: (userRole === 'owner' || userRole === 'manager') && allow('reports.profit') },
+    { label: 'Analytics', icon: <BarChart3 className="w-5 h-5" />, on: () => go('analytics'), active: view === 'analytics', show: (userRole === 'owner' || userRole === 'manager') && allow('reports.profit.detailed') },
     { label: 'Inventory', icon: <Table className="w-5 h-5" />, on: () => go('grid'), active: view === 'grid', show: true },
     { label: 'Quick Sale', icon: <ShoppingCart className="w-5 h-5" />, on: () => go('pos'), active: view === 'pos', show: true },
     { label: 'Repairs', icon: <Wrench className="w-5 h-5" />, on: () => go('repairs'), active: view === 'repairs', show: allow('repairs.tech') },

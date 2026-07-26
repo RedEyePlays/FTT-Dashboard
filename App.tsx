@@ -140,7 +140,7 @@ const App: React.FC = () => {
   };
 
   // --- Global Search: permission-scoped data (empty categories = no results) ---
-  const canAnalytics = (appUser?.role === 'owner' || appUser?.role === 'manager') && allow('reports.profit');
+  const canAnalytics = (appUser?.role === 'owner' || appUser?.role === 'manager') && allow('reports.profit.detailed');
   const searchPages: SearchPage[] = useMemo(() => {
     const p: SearchPage[] = [{ id: 'dashboard', label: 'Dashboard', keywords: 'home overview', view: 'dashboard' }];
     if (canAnalytics) p.push({ id: 'analytics', label: 'Analytics', keywords: 'reports owner profit', view: 'analytics' });
@@ -717,11 +717,11 @@ const App: React.FC = () => {
         <div className="animate-fadeIn flex-1 flex flex-col">
           {view === 'dashboard' && (
             allow('reports.view')
-              ? <Dashboard data={data} salesTransactions={salesTransactions} activity={activityLog} repairs={repairs} repairBatches={repairBatches} canViewProfit={allow('reports.profit')} onViewAnalytics={() => setView('analytics')} onViewRepairs={allow('repairs.manage') ? () => setView('repairs') : undefined} />
+              ? <Dashboard data={data} salesTransactions={salesTransactions} activity={activityLog} repairs={repairs} repairBatches={repairBatches} canViewProfit={allow('reports.profit.summary')} onViewAnalytics={() => setView('analytics')} onViewRepairs={allow('repairs.manage') ? () => setView('repairs') : undefined} />
               : <div className="text-center text-slate-400 py-20">You don't have access to reports.</div>
           )}
           {view === 'analytics' && (
-            (appUser.role === 'owner' || appUser.role === 'manager') && allow('reports.profit')
+            (appUser.role === 'owner' || appUser.role === 'manager') && allow('reports.profit.detailed')
               ? <OwnerAnalytics salesTransactions={salesTransactions} repairs={repairs} inventory={data} customers={customers} auditLogs={auditLogs} activity={activityLog} darkMode={darkMode} />
               : <div className="text-center text-slate-400 py-20">Owner analytics are restricted to owners (and managers granted financial access).</div>
           )}
@@ -733,7 +733,7 @@ const App: React.FC = () => {
               batches={repairBatches}
               inventory={data}
               auditLogs={auditLogs}
-              canViewProfit={allow('reports.profit')}
+              canViewProfit={allow('reports.profit.detailed')}
               canEdit={allow('sales.complete') || allow('repairs.manage')}
               initialCustomerId={focusCustomerId}
               onConsumeInitial={() => setFocusCustomerId(undefined)}
@@ -776,7 +776,7 @@ const App: React.FC = () => {
               runners={runners}
               activity={activityLog}
               auditLogs={auditLogs}
-              canViewCost={allow('reports.profit')}
+              canViewCost={allow('reports.profit.detailed')}
               section={invSection}
               onSelectSection={goInventory}
               onSave={handleSaveInventoryItem}
@@ -793,7 +793,7 @@ const App: React.FC = () => {
               initialCustomer={prefillCustomer}
               onConsumeInitial={() => setPrefillCustomer(undefined)}
               onSellCart={handleSellCart}
-              canViewProfit={allow('reports.profit')}
+              canViewProfit={allow('reports.profit.detailed')}
               onGenerateSku={(deviceType) => handleGenerateSku('device', deviceType)}
             />
           )}
@@ -908,7 +908,7 @@ const App: React.FC = () => {
         open={showFinder}
         onClose={() => setShowFinder(false)}
         data={searchData}
-        canViewCost={allow('reports.profit')}
+        canViewCost={allow('reports.profit.detailed')}
         onSelect={handleSearchSelect}
       />
     </div>
