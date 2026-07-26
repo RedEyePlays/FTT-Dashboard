@@ -57,7 +57,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   ] as NavItem[]).filter(i => i.show);
 
   const more: NavItem[] = ([
-    { key: 'analytics', label: 'Analytics', icon: <BarChart3 className="w-4 h-4" />, view: 'analytics', show: (userRole === 'owner' || userRole === 'manager') && allow('reports.profit') },
+    { key: 'analytics', label: 'Analytics', icon: <BarChart3 className="w-4 h-4" />, view: 'analytics', show: (userRole === 'owner' || userRole === 'manager') && allow('reports.profit.detailed') },
     { key: 'notes', label: 'Notes', icon: <StickyNote className="w-4 h-4" />, view: 'notes', show: true },
     { key: 'dropoff', label: 'Drop-Offs', icon: <Truck className="w-4 h-4" />, view: 'dropoff', show: allow('dropoffs.manage') },
     { key: 'audit', label: 'Audit', icon: <ScrollText className="w-4 h-4" />, view: 'audit', show: allow('audit.view') },

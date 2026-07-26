@@ -408,7 +408,8 @@ const PERM_ROWS: { perm: Permission; label: string }[] = [
   { perm: 'repairs.tech', label: 'Work on repairs' },
   { perm: 'repairs.manage', label: 'Manage repairs' },
   { perm: 'reports.view', label: 'View reports' },
-  { perm: 'reports.profit', label: 'See profit / margins' },
+  { perm: 'reports.profit.summary', label: 'See profit summary (period totals)' },
+  { perm: 'reports.profit.detailed', label: 'See detailed profit (full history & costs)' },
   { perm: 'users.tech', label: 'Manage technicians' },
   { perm: 'users.manage', label: 'Manage all users' },
   { perm: 'audit.view', label: 'View audit log' },
@@ -418,7 +419,12 @@ const PERM_ROWS: { perm: Permission; label: string }[] = [
 
 const RolesSection: React.FC = () => {
   const has = (role: Role, perm: Permission) => {
-    if (perm === 'reports.profit') return role === 'owner'; // owner-default; others via per-user override
+    // Profit tiers aren't stored in ROLE_PERMISSIONS — mirror can()'s defaults.
+    // Summary (period totals) is an owner + manager default; detailed (full
+    // history & costs) is owner-only by default. Managers/employees get the
+    // rest via the per-user "allow profit" override.
+    if (perm === 'reports.profit.summary') return role === 'owner' || role === 'manager';
+    if (perm === 'reports.profit.detailed') return role === 'owner';
     return ROLE_PERMISSIONS[role].includes(perm);
   };
   return (
@@ -448,7 +454,7 @@ const RolesSection: React.FC = () => {
             </tbody>
           </table>
         </div>
-        <p className="text-xs text-slate-400 dark:text-slate-500 mt-3">Profit visibility for managers/employees can be granted per user via the "allow profit" override in the Users area.</p>
+        <p className="text-xs text-slate-400 dark:text-slate-500 mt-3">Detailed profit visibility (and the summary for employees) can be granted per user via the "allow profit" override in the Users area.</p>
       </SettingsCard>
     </SettingsSection>
   );
