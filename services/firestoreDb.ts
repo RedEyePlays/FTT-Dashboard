@@ -4,7 +4,7 @@ import {
 import { db } from './firebase';
 import {
   InventoryItem, Runner, DropOff, Settlement, Customer, SalesTransaction, ActivityEntry, Note, Task,
-  AppUser, WorkspaceInvite, AuditEntry,
+  AppUser, WorkspaceInvite, AuditEntry, TimeEntry, PayPeriodPaid,
 } from '../types';
 import { collectionFor } from '../domain/inventory';
 import { AppSettings } from '../domain/settings';
@@ -15,7 +15,7 @@ import { allocateSkuInTxn } from './sku';
 export const COLLECTIONS = [
   'inventory', 'accessories', 'salesTransactions', 'customers',
   'dropOffs', 'runners', 'settlements', 'activityLog', 'auditLogs',
-  'repairs', 'repairBatches',
+  'repairs', 'repairBatches', 'timeEntries', 'payPeriods',
 ] as const;
 export type CollName = typeof COLLECTIONS[number];
 
@@ -139,6 +139,16 @@ export async function migrateLegacyIfNeeded(uid: string, legacy: {
   await batch.commit();
   return true;
 }
+
+/* ------------------------------- Time clock ------------------------------- */
+
+// Shifts and pay-period sign-offs live under the workspace like any other shop
+// data (generic saveItem/deleteItem). Thin named wrappers keep the App handlers
+// readable and the collection names in one place.
+export const saveTimeEntry = (uid: string, e: TimeEntry) => saveItem(uid, 'timeEntries', e);
+export const deleteTimeEntry = (uid: string, id: string) => deleteItem(uid, 'timeEntries', id);
+export const savePayPeriodPaid = (uid: string, p: PayPeriodPaid) => saveItem(uid, 'payPeriods', p);
+export const deletePayPeriodPaid = (uid: string, id: string) => deleteItem(uid, 'payPeriods', id);
 
 /* ------------------------- Users / roles (top-level) ------------------------- */
 

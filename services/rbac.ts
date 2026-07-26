@@ -5,7 +5,8 @@ const ALL: Permission[] = [
   'inventory.add', 'inventory.edit', 'inventory.delete',
   'sales.complete', 'dropoffs.manage', 'repairs.manage', 'repairs.tech',
   'reports.view', 'reports.profit.summary', 'reports.profit.detailed',
-  'users.manage', 'users.tech', 'audit.view', 'backup.export', 'settings.manage',
+  'users.manage', 'users.tech', 'timeclock.use', 'payroll.manage',
+  'audit.view', 'backup.export', 'settings.manage',
 ];
 
 export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
@@ -14,6 +15,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     'inventory.add', 'inventory.edit',
     'sales.complete', 'dropoffs.manage', 'repairs.manage', 'repairs.tech',
     'reports.view', 'audit.view', 'users.tech',
+    'timeclock.use', 'payroll.manage',
     // NOTE: the profit permissions are handled specially in can() below, not
     // listed here. Managers get 'reports.profit.summary' by default (daily/weekly
     // totals), but 'reports.profit.detailed' (full history + per-record cost/
@@ -21,10 +23,11 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   ],
   employee: [
     'inventory.add', 'sales.complete', 'repairs.manage', 'repairs.tech', 'reports.view',
+    'timeclock.use',
   ],
-  // Technicians get a repair-only, profit-free experience.
+  // Technicians get a repair-only, profit-free experience — but still clock in.
   technician: [
-    'repairs.tech',
+    'repairs.tech', 'timeclock.use',
   ],
 };
 
