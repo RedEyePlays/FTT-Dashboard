@@ -20,7 +20,8 @@ import { DropOffView } from './components/DropOffView';
 import { InventoryView } from './components/InventoryView';
 import { UsersView } from './components/UsersView';
 import { AuditLogView } from './components/AuditLogView';
-import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, Runner, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission, Repair, RepairBatch } from './types';
+import { TimeClockView } from './components/TimeClockView';
+import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, Runner, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission, Repair, RepairBatch, TimeEntry, PayPeriodPaid, BreakReason } from './types';
 import { skuPrefix, nextSku } from './services/sku';
 import { REPAIR_PREFIX, BATCH_PREFIX, computeWarrantyUntil, applyTechEdit, TECH_EDITABLE_FIELDS } from './domain/repairs';
 import { RepairsView } from './components/RepairsView';
@@ -37,11 +38,13 @@ import {
   logActivityDoc, commitSale, seedSampleData,
   updateUserDoc, setInvite, deleteInvite,
   logAudit, exportWorkspaceData, recordBackup, saveSettings,
+  saveTimeEntry, savePayPeriodPaid, deletePayPeriodPaid,
 } from './services/firestoreDb';
 import { AppSettings } from './domain/settings';
 import { useWorkspaceData } from './hooks/useWorkspaceData';
 import { newId, mkActivity } from './domain/ids';
 import { collectionFor, stockChange } from './domain/inventory';
+import { openEntryFor, isOnBreak, periodPayFor, paidKey, toISODate, PayPeriod } from './domain/timeclock';
 import { dropOffPurchaseCost } from './domain/dropoffs';
 import { InvSection, DEFAULT_INV_SECTION, invPath, parseInvPath } from './domain/inventoryNav';
 import { AppHeader } from './components/AppHeader';
@@ -53,7 +56,7 @@ const PAGE_TITLES: Record<ViewState, string> = {
   dashboard: 'Dashboard', analytics: 'Analytics', entry: 'Add Item', edit: 'Edit Item',
   grid: 'Inventory', notes: 'Notes', ai: 'AI Assistant', pos: 'Checkout', dropoff: 'Drop-Offs',
   repairs: 'Repairs', customers: 'Customers', users: 'Users', audit: 'Audit Log',
-  settings: 'Settings',
+  settings: 'Settings', timeclock: 'Time Clock',
 };
 import { LoadingScreen, DbErrorScreen } from './components/StatusScreens';
 
@@ -64,6 +67,7 @@ const App: React.FC = () => {
     appUser, roleLoading, workspaceId, workspaceUsers, invites, auditLogs,
     data, notes, setNotes, tasks, setTasks,
     runners, dropOffs, settlements, salesTransactions, customers, repairs, repairBatches,
+    timeEntries, payPeriods,
     skuCounters, setSkuCounters, activityLog, lastBackup, settings,
     dbLoading, dbError, reconnect,
     runnersRef, dropOffsRef, settlementsRef, customersRef, salesTransactionsRef,
@@ -147,6 +151,7 @@ const App: React.FC = () => {
     p.push({ id: 'grid', label: 'Inventory', keywords: 'stock devices accessories', view: 'grid' });
     p.push({ id: 'pos', label: 'Checkout', keywords: 'sell quick sale pos sales', view: 'pos' });
     if (allow('repairs.tech')) p.push({ id: 'repairs', label: 'Repairs', keywords: 'tickets', view: 'repairs' });
+    if (allow('timeclock.use')) p.push({ id: 'timeclock', label: 'Time Clock', keywords: 'clock in out hours shift break payroll pay', view: 'timeclock' });
     if (allow('reports.view')) p.push({ id: 'customers', label: 'Customers', keywords: 'crm clients', view: 'customers' });
     if (allow('dropoffs.manage')) p.push({ id: 'dropoff', label: 'Drop-Offs', view: 'dropoff' });
     if (allow('audit.view')) p.push({ id: 'audit', label: 'Audit Log', view: 'audit' });
@@ -456,6 +461,81 @@ const App: React.FC = () => {
     const inv = invites.find(i => i.email === email.toLowerCase());
     if (!(allow('users.manage') || (allow('users.tech') && inv?.role === 'technician'))) return;
     deleteInvite(email).catch(() => {});
+  };
+
+  // Owner-only hourly-rate edit (rate lives on the user doc). Managers/employees
+  // can't change pay — enforced here and in firestore.rules.
+  const handleSetHourlyRate = (targetUid: string, hourlyRate: number) => {
+    if (!allow('users.manage')) return;
+    const rate = Math.max(0, Number.isFinite(hourlyRate) ? hourlyRate : 0);
+    const before = workspaceUsers.find(u => u.id === targetUid)?.hourlyRate;
+    updateUserDoc(targetUid, { hourlyRate: rate }).catch(() => {});
+    audit('user.set_rate', 'user', targetUid, { hourlyRate: before }, { hourlyRate: rate });
+  };
+
+  // --- Time clock ---
+  // Every active staff member may clock in/out & take breaks (timeclock.use).
+  // Each action mutates the caller's own open shift only.
+  const handleClockIn = () => {
+    if (!uid || !appUser || !allow('timeclock.use')) return;
+    if (openEntryFor(timeEntries, appUser.id)) return; // already clocked in
+    const entry: TimeEntry = {
+      id: newId(), userId: appUser.id, userEmail: appUser.email,
+      clockIn: Date.now(), breaks: [], createdAt: Date.now(),
+    };
+    saveTimeEntry(uid, entry).catch(() => {});
+    audit('timeclock.clock_in', 'timeEntry', entry.id);
+  };
+  const handleClockOut = () => {
+    if (!uid || !appUser || !allow('timeclock.use')) return;
+    const open = openEntryFor(timeEntries, appUser.id);
+    if (!open) return;
+    const now = Date.now();
+    // Close any still-running break at clock-out so it can't run forever.
+    const breaks = (open.breaks || []).map(b => (b.end == null ? { ...b, end: now } : b));
+    saveTimeEntry(uid, { ...open, breaks, clockOut: now }).catch(() => {});
+    audit('timeclock.clock_out', 'timeEntry', open.id);
+  };
+  const handleStartBreak = (reason: BreakReason, note?: string) => {
+    if (!uid || !appUser || !allow('timeclock.use')) return;
+    const open = openEntryFor(timeEntries, appUser.id);
+    if (!open || isOnBreak(open)) return;
+    const brk = { id: newId(), start: Date.now(), reason, note };
+    saveTimeEntry(uid, { ...open, breaks: [...(open.breaks || []), brk] }).catch(() => {});
+    audit('timeclock.break_start', 'timeEntry', open.id, undefined, { reason });
+  };
+  const handleEndBreak = () => {
+    if (!uid || !appUser || !allow('timeclock.use')) return;
+    const open = openEntryFor(timeEntries, appUser.id);
+    if (!open) return;
+    const now = Date.now();
+    const breaks = (open.breaks || []).map(b => (b.end == null ? { ...b, end: now } : b));
+    saveTimeEntry(uid, { ...open, breaks }).catch(() => {});
+    audit('timeclock.break_end', 'timeEntry', open.id);
+  };
+  // Owner-only pay-period sign-off. Records that a period was reviewed/paid — it
+  // moves no money. Snapshots the numbers so the acknowledgment stays accurate.
+  const handleMarkPaid = (targetUid: string, period: PayPeriod) => {
+    if (!uid || !appUser || appUser.role !== 'owner') return;
+    const target = workspaceUsers.find(u => u.id === targetUid);
+    const pay = periodPayFor(timeEntries, targetUid, target?.hourlyRate, period, Date.now());
+    const startISO = toISODate(period.start);
+    const rec: PayPeriodPaid = {
+      id: paidKey(targetUid, startISO),
+      userId: targetUid,
+      periodStart: startISO,
+      periodEnd: toISODate(period.end - 1), // inclusive last calendar day
+      markedBy: appUser.id, markedByEmail: appUser.email, markedAt: Date.now(),
+      hours: pay.hours, gross: pay.gross, rate: pay.rate,
+    };
+    savePayPeriodPaid(uid, rec).catch(() => {});
+    audit('timeclock.mark_paid', 'payPeriod', rec.id, undefined, { hours: pay.hours, gross: pay.gross });
+  };
+  const handleUnmarkPaid = (targetUid: string, period: PayPeriod) => {
+    if (!uid || !appUser || appUser.role !== 'owner') return;
+    const id = paidKey(targetUid, toISODate(period.start));
+    deletePayPeriodPaid(uid, id).catch(() => {});
+    audit('timeclock.unmark_paid', 'payPeriod', id);
   };
 
   // --- Backups (Owner only) ---
@@ -832,8 +912,25 @@ const App: React.FC = () => {
               onSetRole={handleSetRole}
               onSetDisabled={handleSetDisabled}
               onSetAllowProfit={handleSetAllowProfit}
+              onSetHourlyRate={allow('users.manage') ? handleSetHourlyRate : undefined}
               onInvite={handleInvite}
               onDeleteInvite={handleDeleteInvite}
+            />
+          )}
+          {view === 'timeclock' && allow('timeclock.use') && (
+            <TimeClockView
+              me={appUser}
+              users={workspaceUsers}
+              entries={timeEntries}
+              payPeriods={payPeriods}
+              canManagePayroll={allow('payroll.manage')}
+              canMarkPaid={appUser.role === 'owner'}
+              onClockIn={handleClockIn}
+              onClockOut={handleClockOut}
+              onStartBreak={handleStartBreak}
+              onEndBreak={handleEndBreak}
+              onMarkPaid={handleMarkPaid}
+              onUnmarkPaid={handleUnmarkPaid}
             />
           )}
           {view === 'audit' && allow('audit.view') && (

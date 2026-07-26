@@ -83,8 +83,18 @@ service cloud.firestore {
         allow delete: if isOwnerOf(ws);
       }
 
-      // Everything else in the workspace (customers, sales, settings, dropoffs…):
-      // active staff read/write; technicians read-only.
+      // Time clock: staff manage any shift; a technician may create/update only
+      // their OWN shifts (userId == their uid) so they can clock in without the
+      // broader write access technicians are otherwise denied. Owner-only delete.
+      match /timeEntries/{id} {
+        allow read: if activeMemberOf(ws);
+        allow create, update: if isStaffOf(ws)
+          || (isTechOf(ws) && request.resource.data.userId == request.auth.uid);
+        allow delete: if isOwnerOf(ws);
+      }
+
+      // Everything else in the workspace (customers, sales, settings, dropoffs,
+      // payPeriods…): active staff read/write; technicians read-only.
       match /{document=**} {
         allow read: if activeMemberOf(ws);
         allow write: if isStaffOf(ws);
@@ -111,14 +121,16 @@ service cloud.firestore {
           )
         );
 
-      // Self may only update lastLogin; an owner may change role/disabled/allowProfit
-      // for members of their workspace; a manager may only toggle `disabled` on a
-      // technician account (no role or workspace changes).
+      // Self may only update lastLogin; an owner may change role/disabled/
+      // allowProfit/hourlyRate for members of their workspace; a manager may only
+      // toggle `disabled` on a technician account (no role or workspace changes).
+      // hourlyRate is owner-set pay, so a user may never change their own.
       allow update: if signedIn() && (
         (request.auth.uid == uid
           && request.resource.data.role == resource.data.role
           && request.resource.data.workspaceId == resource.data.workspaceId
-          && request.resource.data.get('disabled', false) == resource.data.get('disabled', false))
+          && request.resource.data.get('disabled', false) == resource.data.get('disabled', false)
+          && request.resource.data.get('hourlyRate', 0) == resource.data.get('hourlyRate', 0))
         || (hasProfile() && myRole() == 'owner' && resource.data.workspaceId == myWorkspace())
         || (hasProfile() && myRole() == 'manager'
             && resource.data.workspaceId == myWorkspace()

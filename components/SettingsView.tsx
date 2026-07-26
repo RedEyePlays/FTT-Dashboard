@@ -410,6 +410,8 @@ const PERM_ROWS: { perm: Permission; label: string }[] = [
   { perm: 'reports.view', label: 'View reports' },
   { perm: 'reports.profit.summary', label: 'See profit summary (period totals)' },
   { perm: 'reports.profit.detailed', label: 'See detailed profit (full history & costs)' },
+  { perm: 'timeclock.use', label: 'Use the time clock' },
+  { perm: 'payroll.manage', label: 'View payroll summary' },
   { perm: 'users.tech', label: 'Manage technicians' },
   { perm: 'users.manage', label: 'Manage all users' },
   { perm: 'audit.view', label: 'View audit log' },

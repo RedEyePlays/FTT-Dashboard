@@ -3,7 +3,7 @@ import { User, signOut } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
 import {
   InventoryItem, Note, Task, Runner, DropOff, Settlement, Customer, SalesTransaction,
-  ActivityEntry, AppUser, WorkspaceInvite, AuditEntry, Repair, RepairBatch,
+  ActivityEntry, AppUser, WorkspaceInvite, AuditEntry, Repair, RepairBatch, TimeEntry, PayPeriodPaid,
 } from '../types';
 import { decryptData } from '../services/security';
 import { AppSettings, mergeSettings } from '../domain/settings';
@@ -46,6 +46,8 @@ export function useWorkspaceData() {
   const [salesTransactions, setSalesTransactions] = useState<SalesTransaction[]>([]);
   const [repairs, setRepairs] = useState<Repair[]>([]);
   const [repairBatches, setRepairBatches] = useState<RepairBatch[]>([]);
+  const [timeEntries, setTimeEntries] = useState<TimeEntry[]>([]);
+  const [payPeriods, setPayPeriods] = useState<PayPeriodPaid[]>([]);
   const [skuCounters, setSkuCounters] = useState<Record<string, number>>({});
   const [activityLog, setActivityLog] = useState<ActivityEntry[]>([]);
   const [lastBackup, setLastBackup] = useState<number | undefined>(undefined);
@@ -91,7 +93,7 @@ export function useWorkspaceData() {
       if (!u) {
         setDevices([]); setAccessories([]); setNotes([]); setTasks([]);
         setRunners([]); setDropOffs([]); setSettlements([]); setCustomers([]);
-        setSalesTransactions([]); setRepairs([]); setRepairBatches([]); setActivityLog([]); setSkuCounters({});
+        setSalesTransactions([]); setRepairs([]); setRepairBatches([]); setTimeEntries([]); setPayPeriods([]); setActivityLog([]); setSkuCounters({});
         setAppUser(null); setWorkspaceUsers([]); setInvites([]); setAuditLogs([]);
         setDbLoading(false); setRoleLoading(false);
       }
@@ -166,12 +168,15 @@ export function useWorkspaceData() {
       subscribeCollection<SalesTransaction>(wsId, 'salesTransactions', setSalesTransactions, onErr),
       subscribeCollection<Repair>(wsId, 'repairs', setRepairs, onErr),
       subscribeCollection<RepairBatch>(wsId, 'repairBatches', setRepairBatches, onErr),
+      subscribeCollection<TimeEntry>(wsId, 'timeEntries', setTimeEntries, onErr),
+      subscribeCollection<PayPeriodPaid>(wsId, 'payPeriods', setPayPeriods, onErr),
       subscribeCollection<ActivityEntry>(wsId, 'activityLog', rows => setActivityLog(rows.sort((a, b) => b.ts - a.ts).slice(0, 60)), onErr),
       subscribeCollection<AuditEntry>(wsId, 'auditLogs', rows => setAuditLogs(rows.sort((a, b) => b.ts - a.ts).slice(0, 1000)), onErr),
       subscribeMeta(wsId, m => { setNotes(m.notes || []); setTasks(m.tasks || []); setSkuCounters(m.skuCounters || {}); setLastBackup(m.lastBackup); setSettings(mergeSettings(m.settings)); }, onErr),
     ];
-    // Owner-only: workspace members + pending invites
-    if (appUser.role === 'owner') {
+    // Owners and managers read the full member roster (managers need it for the
+    // payroll summary and technician management); everyone else sees only self.
+    if (appUser.role === 'owner' || appUser.role === 'manager') {
       subs.push(subscribeWorkspaceUsers(wsId, setWorkspaceUsers, onErr));
       subs.push(subscribeInvites(wsId, setInvites, onErr));
     } else {
@@ -191,7 +196,7 @@ export function useWorkspaceData() {
     // collections
     devices, accessories, data, notes, setNotes, tasks, setTasks,
     runners, dropOffs, settlements, customers, salesTransactions,
-    repairs, repairBatches,
+    repairs, repairBatches, timeEntries, payPeriods,
     skuCounters, setSkuCounters, activityLog, lastBackup, settings,
     // connection status
     dbLoading, dbError, setDbError, reconnect,

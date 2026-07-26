@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Users, UserPlus, ShieldCheck, Ban, CheckCircle2, Trash2, Mail, Eye } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Users, UserPlus, ShieldCheck, Ban, CheckCircle2, Trash2, Mail, Eye, DollarSign } from 'lucide-react';
 import { AppUser, WorkspaceInvite, Role } from '../types';
 import { ROLE_LABEL } from '../services/rbac';
 
@@ -11,13 +11,42 @@ interface Props {
   onSetRole: (uid: string, role: Role) => void;
   onSetDisabled: (uid: string, disabled: boolean) => void;
   onSetAllowProfit: (uid: string, allow: boolean) => void;
+  onSetHourlyRate?: (uid: string, rate: number) => void; // owner only
   onInvite: (email: string, role: Role) => void;
   onDeleteInvite: (email: string) => void;
 }
 
 const ROLES: Role[] = ['owner', 'manager', 'employee', 'technician'];
 
-export const UsersView: React.FC<Props> = ({ me, users, invites, canManageAll = true, onSetRole, onSetDisabled, onSetAllowProfit, onInvite, onDeleteInvite }) => {
+// Owner-only hourly-rate editor. Commits on blur / Enter so typing doesn't fire
+// a write per keystroke. Seeded from the stored value and re-seeds when it changes.
+const RateInput: React.FC<{ rate?: number; onCommit: (rate: number) => void }> = ({ rate, onCommit }) => {
+  const [val, setVal] = useState(rate != null ? String(rate) : '');
+  useEffect(() => { setVal(rate != null ? String(rate) : ''); }, [rate]);
+  const commit = () => {
+    const n = parseFloat(val);
+    const next = Number.isFinite(n) && n >= 0 ? Math.round(n * 100) / 100 : 0;
+    if (next !== (rate ?? 0)) onCommit(next);
+    setVal(next ? String(next) : '');
+  };
+  return (
+    <label className="flex items-center gap-1 text-xs text-slate-600 dark:text-slate-300" title="Hourly pay rate (owner only)">
+      <DollarSign className="w-3.5 h-3.5 text-slate-400" />
+      <input
+        type="number" min={0} step="0.25" inputMode="decimal"
+        value={val}
+        onChange={e => setVal(e.target.value)}
+        onBlur={commit}
+        onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+        placeholder="0.00"
+        className="w-20 p-1.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md text-sm"
+      />
+      <span className="text-slate-400">/hr</span>
+    </label>
+  );
+};
+
+export const UsersView: React.FC<Props> = ({ me, users, invites, canManageAll = true, onSetRole, onSetDisabled, onSetAllowProfit, onSetHourlyRate, onInvite, onDeleteInvite }) => {
   const [email, setEmail] = useState('');
   const [role, setRole] = useState<Role>(canManageAll ? 'employee' : 'technician');
 
@@ -100,6 +129,9 @@ export const UsersView: React.FC<Props> = ({ me, users, invites, canManageAll = 
                   <label className="flex items-center gap-1 text-xs text-slate-600 dark:text-slate-300 cursor-pointer" title="Allow this user to see profit, margins & the analytics dashboard">
                     <input type="checkbox" checked={!!u.allowProfit} onChange={e => onSetAllowProfit(u.id, e.target.checked)} className="rounded" /> <Eye className="w-3.5 h-3.5" /> Financials
                   </label>
+                )}
+                {canManageAll && onSetHourlyRate && (
+                  <RateInput rate={u.hourlyRate} onCommit={r => onSetHourlyRate(u.id, r)} />
                 )}
                 <button onClick={() => onSetDisabled(u.id, !u.disabled)} disabled={isMe}
                   className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium disabled:opacity-40 ${u.disabled ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300' : 'bg-rose-50 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300'}`}>

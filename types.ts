@@ -187,6 +187,8 @@ export type Permission =
   | 'reports.profit.detailed'   // full historical breakdowns + per-record cost/profit — owner default
   | 'users.manage'    // full user/role management (owner)
   | 'users.tech'      // manage technician accounts only (owner + manager)
+  | 'timeclock.use'   // clock in/out & take breaks (every active staff member)
+  | 'payroll.manage'  // view the biweekly pay-period summary (owner + manager)
   | 'audit.view' | 'backup.export' | 'settings.manage';
 
 export interface AppUser {
@@ -196,6 +198,7 @@ export interface AppUser {
   workspaceId: string;   // the owning account's uid; all shop data lives under user_data/{workspaceId}
   disabled?: boolean;
   allowProfit?: boolean; // employee override to view profit-sensitive figures
+  hourlyRate?: number;   // flat pay rate for the time clock; editable by owner only
   lastLogin?: number;    // epoch ms (best-effort, updated client-side)
   createdAt?: number;
 }
@@ -272,7 +275,48 @@ export interface AppData {
   activityLog?: ActivityEntry[];
 }
 
-export type ViewState = 'dashboard' | 'analytics' | 'entry' | 'edit' | 'grid' | 'notes' | 'ai' | 'pos' | 'dropoff' | 'repairs' | 'customers' | 'users' | 'audit' | 'settings';
+export type ViewState = 'dashboard' | 'analytics' | 'entry' | 'edit' | 'grid' | 'notes' | 'ai' | 'pos' | 'dropoff' | 'repairs' | 'customers' | 'users' | 'audit' | 'settings' | 'timeclock';
+
+// --- Time clock / payroll ---
+// Simple shift + break tracking used by the Time Clock tab. All timestamps are
+// epoch ms. Pure hours/pay math lives in domain/timeclock.ts; Firestore I/O in
+// services/firestoreDb.ts.
+export type BreakReason = 'lunch' | 'personal' | 'bank' | 'other';
+
+export interface TimeBreak {
+  id: string;
+  start: number;          // epoch ms
+  end?: number;           // epoch ms; undefined while the break is ongoing
+  reason: BreakReason;
+  note?: string;          // optional free text — only offered for the 'other' reason
+}
+
+export interface TimeEntry {
+  id: string;
+  userId: string;         // the staff member's uid (owner of this shift)
+  userEmail?: string;     // denormalized for the payroll summary display
+  clockIn: number;        // epoch ms
+  clockOut?: number;      // epoch ms; undefined while the user is still clocked in
+  breaks: TimeBreak[];
+  note?: string;
+  createdAt?: number;
+}
+
+// A record-keeping acknowledgment that an owner reviewed/paid an employee for a
+// pay period. This moves no money — it just marks the period as signed off so it
+// isn't re-reviewed or double-counted. Snapshots the numbers at sign-off time.
+export interface PayPeriodPaid {
+  id: string;             // `${userId}__${periodStart}` — idempotent per user + period
+  userId: string;
+  periodStart: string;    // YYYY-MM-DD (inclusive)
+  periodEnd: string;      // YYYY-MM-DD (inclusive)
+  markedBy: string;       // owner uid who signed off
+  markedByEmail?: string;
+  markedAt: number;       // epoch ms
+  hours: number;          // hours snapshot at sign-off
+  gross: number;          // gross pay snapshot at sign-off
+  rate: number;           // hourly rate snapshot at sign-off
+}
 
 // --- Repairs ---
 export type RepairType = 'retail' | 'wholesale';

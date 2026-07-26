@@ -95,6 +95,22 @@ describe('can()', () => {
     }
   });
 
+  it('every active role can use the time clock', () => {
+    for (const role of ['owner', 'manager', 'employee', 'technician'] as const) {
+      expect(can(role, 'timeclock.use')).toBe(true);
+    }
+    expect(can(undefined, 'timeclock.use')).toBe(false);
+  });
+
+  it('payroll summary is owner + manager only', () => {
+    expect(can('owner', 'payroll.manage')).toBe(true);
+    expect(can('manager', 'payroll.manage')).toBe(true);
+    expect(can('employee', 'payroll.manage')).toBe(false);
+    expect(can('technician', 'payroll.manage')).toBe(false);
+    // The override for financials does not unlock payroll.
+    expect(can('employee', 'payroll.manage', { allowProfit: true })).toBe(false);
+  });
+
   it('an undefined role has no permissions', () => {
     expect(can(undefined, 'reports.view')).toBe(false);
   });
