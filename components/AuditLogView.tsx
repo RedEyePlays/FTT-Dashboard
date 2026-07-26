@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { ScrollText, Search, X } from 'lucide-react';
 import { AuditEntry, AppUser } from '../types';
+import { auditActionLabel } from '../domain/audit';
 
 interface Props {
   logs: AuditEntry[];
@@ -27,7 +28,7 @@ export const AuditLogView: React.FC<Props> = ({ logs, users }) => {
       .filter(l => action === 'all' || l.action === action)
       .filter(l => entity === 'all' || l.entityType === entity)
       .filter(l => l.ts >= fromTs && l.ts <= toTs)
-      .filter(l => !term || [l.userEmail, l.action, l.entityType, l.entityId].some(v => (v || '').toLowerCase().includes(term)))
+      .filter(l => !term || [l.userEmail, l.action, auditActionLabel(l.action), l.entityType, l.entityId].some(v => (v || '').toLowerCase().includes(term)))
       .sort((a, b) => b.ts - a.ts);
   }, [logs, q, userId, action, entity, from, to]);
 
@@ -53,7 +54,7 @@ export const AuditLogView: React.FC<Props> = ({ logs, users }) => {
         </select>
         <select value={action} onChange={e => setAction(e.target.value)} className={sel}>
           <option value="all">All actions</option>
-          {actions.map(a => <option key={a} value={a}>{a}</option>)}
+          {actions.map(a => <option key={a} value={a}>{auditActionLabel(a)}</option>)}
         </select>
         <select value={entity} onChange={e => setEntity(e.target.value)} className={sel}>
           <option value="all">All entities</option>
@@ -86,7 +87,7 @@ export const AuditLogView: React.FC<Props> = ({ logs, users }) => {
                 <tr key={l.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
                   <td className="px-3 py-2 whitespace-nowrap text-slate-500 dark:text-slate-400">{fmt(l.ts)}</td>
                   <td className="px-3 py-2 whitespace-nowrap text-slate-700 dark:text-slate-200">{l.userEmail}</td>
-                  <td className="px-3 py-2 whitespace-nowrap"><span className="px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300">{l.action}</span></td>
+                  <td className="px-3 py-2 whitespace-nowrap"><span title={l.action} className="px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300">{auditActionLabel(l.action)}</span></td>
                   <td className="px-3 py-2 whitespace-nowrap text-slate-600 dark:text-slate-300">{l.entityType}</td>
                   <td className="px-3 py-2 whitespace-nowrap font-mono text-xs text-slate-400">{l.entityId || '—'}</td>
                   <td className="px-3 py-2 text-xs text-slate-400 max-w-xs truncate" title={[l.before && `before: ${JSON.stringify(l.before)}`, l.after && `after: ${JSON.stringify(l.after)}`].filter(Boolean).join('  ')}>
