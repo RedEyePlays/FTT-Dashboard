@@ -912,9 +912,9 @@ const NotesDrawer: React.FC<{ item: InventoryItem; onUpdate: (id: string, f: key
   }, [onClose]);
   const title = nameOf(item);
   return (
-    <div className="fixed inset-0 z-[60] flex justify-end animate-fadeIn" role="dialog" aria-modal="true" aria-label="Note">
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 animate-fadeIn" role="dialog" aria-modal="true" aria-label="Note">
       <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative h-full w-full max-w-md bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-700 shadow-2xl flex flex-col animate-slideInRight">
+      <div className="relative w-full max-w-md max-h-[85vh] bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-2xl flex flex-col">
         <div className="px-5 py-3.5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between gap-3">
           <div className="min-w-0">
             <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Note</p>

@@ -39,6 +39,12 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, runners, 
   const set = <K extends keyof InventoryItem>(k: K, v: InventoryItem[K]) => setF(p => ({ ...p, [k]: v }));
   const [showImeiScanner, setShowImeiScanner] = useState(false);
 
+  // Snapshot the form at mount for a dirty check, so a stray backdrop/X/Cancel
+  // click doesn't silently discard typed changes.
+  const [snapshot] = useState(() => JSON.stringify({ kind, f }));
+  const dirty = JSON.stringify({ kind, f }) !== snapshot;
+  const requestClose = () => { if (!dirty || window.confirm('Discard unsaved changes to this item?')) onClose(); };
+
   const genSku = async () => set('sku', await onGenerateSku(kind, f.deviceType));
 
   const save = () => {
@@ -70,11 +76,11 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, runners, 
   );
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={requestClose}>
       <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-2xl border border-slate-200 dark:border-slate-700 max-h-[92vh] overflow-y-auto custom-scrollbar" onClick={e => e.stopPropagation()}>
         <div className="px-5 py-3 border-b border-slate-100 dark:border-slate-800 flex justify-between items-center sticky top-0 bg-white dark:bg-slate-900 z-10">
           <h2 className="font-bold text-slate-800 dark:text-slate-100">{initial ? 'Edit Item' : 'Add Item'}</h2>
-          <button onClick={onClose}><X className="w-5 h-5 text-slate-400" /></button>
+          <button onClick={requestClose}><X className="w-5 h-5 text-slate-400" /></button>
         </div>
 
         <div className="p-5 space-y-4">
@@ -189,7 +195,7 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, runners, 
         </div>
 
         <div className="px-5 py-3 border-t border-slate-100 dark:border-slate-800 flex justify-end gap-2 sticky bottom-0 bg-white dark:bg-slate-900">
-          <button onClick={onClose} className="px-4 py-2 text-sm rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">Cancel</button>
+          <button onClick={requestClose} className="px-4 py-2 text-sm rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">Cancel</button>
           <button onClick={save} disabled={!canSave} className="px-5 py-2 text-sm rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white font-medium">Save</button>
         </div>
       </div>

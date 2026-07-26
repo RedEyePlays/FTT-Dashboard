@@ -413,20 +413,25 @@ const RepairDrawer: React.FC<{
   onClose: () => void; onSave: (r: Repair) => void; onDelete: () => void; onPrint: (doc: 'intake' | 'repair' | 'pickup') => void; onPrintSheet: () => void; onPrintLabel: () => void;
 }> = ({ initial, isNew, canDelete, auditLogs, customers, onClose, onSave, onDelete, onPrint, onPrintSheet, onPrintLabel }) => {
   const [f, setF] = useState<Repair>(initial);
+  // Snapshot the form state at mount for a dirty check, so a stray backdrop/X
+  // click doesn't silently discard typed changes.
+  const [snapshot] = useState(() => JSON.stringify(initial));
   const set = (patch: Partial<Repair>) => setF(prev => ({ ...prev, ...patch }));
   const isRetail = f.type === 'retail';
   const history = auditLogs.filter(a => a.entityId === f.id).slice(0, 20);
   const num = (v: string) => parseFloat(v) || 0;
+  const dirty = JSON.stringify(f) !== snapshot;
+  const requestClose = () => { if (!dirty || window.confirm('Discard unsaved changes to this repair?')) onClose(); };
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end bg-slate-900/40 backdrop-blur-sm" onClick={onClose}>
-      <div className="w-full max-w-xl h-full bg-white dark:bg-slate-900 shadow-2xl flex flex-col" onClick={e => e.stopPropagation()}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4" onClick={requestClose}>
+      <div className="w-full max-w-xl max-h-[90vh] bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-2xl flex flex-col" onClick={e => e.stopPropagation()}>
         <div className="px-5 py-3.5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <h2 className="text-sm font-bold text-slate-800 dark:text-slate-100">{isNew ? (isRetail ? 'New Repair Ticket' : 'Add Device') : (isRetail ? 'Repair Ticket' : 'Device')}{f.repairNumber && <span className="font-mono text-xs text-slate-400 ml-2">{f.repairNumber}</span>}</h2>
             <StatusPill value={f.status} onChange={s => set({ status: s })} />
           </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"><X className="w-4 h-4" /></button>
+          <button onClick={requestClose} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"><X className="w-4 h-4" /></button>
         </div>
 
         <div className="flex-1 overflow-y-auto custom-scrollbar p-5 space-y-5">
@@ -520,13 +525,16 @@ const RepairDrawer: React.FC<{
 /* ---------------- Batch create/edit form ---------------- */
 const BatchForm: React.FC<{ initial: RepairBatch; isNew: boolean; onClose: () => void; onSave: (b: RepairBatch) => void }> = ({ initial, isNew, onClose, onSave }) => {
   const [f, setF] = useState<RepairBatch>(initial);
+  const [snapshot] = useState(() => JSON.stringify(initial));
   const set = (patch: Partial<RepairBatch>) => setF(prev => ({ ...prev, ...patch }));
+  const dirty = JSON.stringify(f) !== snapshot;
+  const requestClose = () => { if (!dirty || window.confirm('Discard unsaved changes to this batch?')) onClose(); };
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4" onClick={requestClose}>
       <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-700" onClick={e => e.stopPropagation()}>
         <div className="px-5 py-3.5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
           <h2 className="text-sm font-bold text-slate-800 dark:text-slate-100">{isNew ? 'New Wholesale Batch' : 'Edit Batch'}</h2>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X className="w-4 h-4" /></button>
+          <button onClick={requestClose} className="text-slate-400 hover:text-slate-600"><X className="w-4 h-4" /></button>
         </div>
         <div className="p-5 space-y-3">
           <Field label="Company Name"><input className={inputCls} value={f.companyName} onChange={e => set({ companyName: e.target.value })} /></Field>
@@ -540,7 +548,7 @@ const BatchForm: React.FC<{ initial: RepairBatch; isNew: boolean; onClose: () =>
           <Field label="Notes"><textarea rows={2} className={inputCls} value={f.notes || ''} onChange={e => set({ notes: e.target.value })} /></Field>
         </div>
         <div className="px-5 py-3 border-t border-slate-100 dark:border-slate-800 flex justify-end gap-2">
-          <button onClick={onClose} className="px-4 py-2 text-sm text-slate-500">Cancel</button>
+          <button onClick={requestClose} className="px-4 py-2 text-sm text-slate-500">Cancel</button>
           <button onClick={() => f.companyName.trim() && onSave(f)} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium">Save Batch</button>
         </div>
       </div>
