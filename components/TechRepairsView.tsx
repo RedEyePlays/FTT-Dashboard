@@ -172,6 +172,18 @@ const TechRepairDrawer: React.FC<{
   const [testChecks, setTestChecks] = useState<string[]>(r.testChecks || []);
   const [label, setLabel] = useState(false);
 
+  // Dirty check against the ticket's stored values, so a stray backdrop/X click
+  // doesn't silently discard the technician's typed work log.
+  const dirty =
+    status !== r.status ||
+    techNotes !== (r.techNotes || '') ||
+    diagnostics !== (r.diagnostics || '') ||
+    workPerformed !== (r.workPerformed || '') ||
+    partsUsed !== (r.partsUsed || '') ||
+    testingResults !== (r.testingResults || '') ||
+    JSON.stringify(testChecks) !== JSON.stringify(r.testChecks || []);
+  const requestClose = () => { if (!dirty || window.confirm('Discard unsaved changes to this repair?')) onClose(); };
+
   const history = auditLogs
     .filter(a => a.entityId === r.id)
     .sort((a, b) => b.ts - a.ts)
@@ -190,8 +202,8 @@ const TechRepairDrawer: React.FC<{
   const ta = 'w-full text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-slate-800 dark:text-slate-100';
 
   return (
-    <div className="fixed inset-0 z-[60] flex justify-end bg-black/40 backdrop-blur-sm animate-fadeIn" onClick={onClose}>
-      <div className="bg-slate-50 dark:bg-slate-900 w-full max-w-xl h-full overflow-y-auto shadow-2xl" onClick={e => e.stopPropagation()}>
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fadeIn" onClick={requestClose}>
+      <div className="bg-slate-50 dark:bg-slate-900 w-full max-w-xl max-h-[90vh] overflow-y-auto rounded-2xl border border-slate-200 dark:border-slate-700 shadow-2xl" onClick={e => e.stopPropagation()}>
         <div className="px-5 py-3 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between sticky top-0 bg-slate-50 dark:bg-slate-900 z-10">
           <div className="flex items-center gap-2">
             <span className="font-mono font-bold text-slate-800 dark:text-slate-100">{r.repairNumber}</span>
@@ -199,7 +211,7 @@ const TechRepairDrawer: React.FC<{
           </div>
           <div className="flex items-center gap-1">
             <button onClick={() => setLabel(true)} title="Print / reprint label" className="p-1.5 rounded-lg text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400"><Printer className="w-5 h-5" /></button>
-            <button onClick={onClose} className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"><X className="w-5 h-5" /></button>
+            <button onClick={requestClose} className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"><X className="w-5 h-5" /></button>
           </div>
         </div>
 

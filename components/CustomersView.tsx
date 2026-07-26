@@ -573,16 +573,19 @@ const EditModal: React.FC<{ customer: Customer; onClose: () => void; onSave: (c:
   const [f, setF] = useState<Customer>(customer);
   const set = (patch: Partial<Customer>) => setF(prev => ({ ...prev, ...patch }));
   const [tagInput, setTagInput] = useState('');
+  const [snapshot] = useState(() => JSON.stringify(customer));
+  const dirty = JSON.stringify(f) !== snapshot;
+  const requestClose = () => { if (!dirty || window.confirm('Discard unsaved changes to this customer?')) onClose(); };
   const inputCls = 'w-full px-2.5 py-1.5 text-sm bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md outline-none focus:ring-2 focus:ring-indigo-500 text-slate-900 dark:text-slate-100';
   const tags = f.tags || [];
   const addTag = (t: string) => { const v = t.trim(); if (v && !tags.includes(v)) set({ tags: [...tags, v] }); setTagInput(''); };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4" onClick={requestClose}>
       <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-700 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
         <div className="px-5 py-3.5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
           <h2 className="text-sm font-bold text-slate-800 dark:text-slate-100">Edit Customer</h2>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X className="w-4 h-4" /></button>
+          <button onClick={requestClose} className="text-slate-400 hover:text-slate-600"><X className="w-4 h-4" /></button>
         </div>
         <div className="p-5 space-y-3">
           <div className="grid grid-cols-2 gap-3">
@@ -608,7 +611,7 @@ const EditModal: React.FC<{ customer: Customer; onClose: () => void; onSave: (c:
           <label className="block"><span className="text-[11px] font-medium text-slate-500 dark:text-slate-400">Internal Notes</span><textarea rows={3} className={inputCls} value={f.notes || ''} onChange={e => set({ notes: e.target.value })} placeholder="Prefers text · Usually picks up same day · Wants OEM parts only" /></label>
         </div>
         <div className="px-5 py-3 border-t border-slate-100 dark:border-slate-800 flex justify-end gap-2">
-          <button onClick={onClose} className="px-4 py-2 text-sm text-slate-500">Cancel</button>
+          <button onClick={requestClose} className="px-4 py-2 text-sm text-slate-500">Cancel</button>
           <button onClick={() => onSave(f)} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium">Save</button>
         </div>
       </div>
