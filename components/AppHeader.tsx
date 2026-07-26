@@ -5,6 +5,7 @@ import {
   Search, PlusCircle, Moon, Sun, Menu, MoreHorizontal, ChevronDown, LogOut, Clock,
 } from 'lucide-react';
 import { ViewState, Permission, ActivityEntry } from '../types';
+import { Alert } from '../domain/alerts';
 import { NavButton } from './NavButton';
 import { HeaderMenu, MenuItem } from './HeaderMenu';
 import { NotificationsMenu } from './NotificationsMenu';
@@ -33,6 +34,9 @@ interface AppHeaderProps {
   onStartAdd: () => void;
   onLock: () => void;
   activity?: ActivityEntry[];
+  alerts?: Alert[];
+  notifSeenTs?: number;
+  onMarkNotificationsSeen?: (ts: number) => void;
 }
 
 type NavItem = { key: string; label: string; icon: React.ReactNode; view: ViewState; show: boolean };
@@ -47,6 +51,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   view, onNavigate, allow, isTech, pageTitle, onOpenDrawer, userEmail, userRole,
   darkMode, onToggleTheme, onToggleAiSidebar, onToggleCalculator, onOpenFinder,
   onOpenSettings, onOpenBulk, onStartAdd, onLock, activity = [],
+  alerts = [], notifSeenTs = 0, onMarkNotificationsSeen = () => {},
 }) => {
   const primary: NavItem[] = ([
     { key: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard className="w-4 h-4" />, view: 'dashboard', show: true },
@@ -211,7 +216,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
 
               {/* Notifications + profile (desktop/tablet). */}
               <div className="hidden md:flex items-center gap-1">
-                <NotificationsMenu activity={activity} iconClass={iconBtn} />
+                <NotificationsMenu activity={activity} alerts={alerts} seenTs={notifSeenTs} onMarkSeen={onMarkNotificationsSeen} onNavigate={onNavigate} iconClass={iconBtn} />
                 {ProfileMenu}
               </div>
 
