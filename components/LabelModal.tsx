@@ -27,8 +27,12 @@ const STATUS_LABEL: Record<DeviceStatus, string> = {
 
 // Owner label preferences, persisted locally (not in Firestore). Remembers the
 // last selected template plus the optional-element toggles.
-interface LabelPrefs { template: TemplateId; showBarcode: boolean; showStatus: boolean; }
+// `qrContent` mirrors the owner's Settings → Labels "QR encodes" choice into this
+// blob (written by App.tsx), so the device QR encodes the configured field.
+type QrContent = 'sku' | 'id' | 'url' | 'imei';
+interface LabelPrefs { template: TemplateId; showBarcode: boolean; showQR: boolean; showStatus: boolean; qrContent: QrContent; }
 const PREFS_KEY = 'ftt_label_tpl_v1';
+const QR_CONTENTS: QrContent[] = ['sku', 'id', 'url', 'imei'];
 const loadPrefs = (): LabelPrefs => {
   try {
     const s = JSON.parse(localStorage.getItem(PREFS_KEY) || '{}');
@@ -36,10 +40,12 @@ const loadPrefs = (): LabelPrefs => {
     return {
       template: sizes.some(t => t.id === s.template) ? s.template : (sizes[0]?.id || 'dymo-36x89'),
       showBarcode: s.showBarcode !== false, // default on
+      showQR: s.showQR !== false,           // default on
       showStatus: s.showStatus !== false,   // default on
+      qrContent: QR_CONTENTS.includes(s.qrContent) ? s.qrContent : 'sku',
     };
   } catch {
-    return { template: 'dymo-36x89', showBarcode: true, showStatus: true };
+    return { template: 'dymo-36x89', showBarcode: true, showQR: true, showStatus: true, qrContent: 'sku' };
   }
 };
 
@@ -81,10 +87,18 @@ export const LabelModal: React.FC<Props> = ({ item, onClose }) => {
       setBarcode(genBarcode(upc || sku, { format: barcodeFormat(upc || sku), displayValue: true }));
       return;
     }
-    // Devices: QR + optional CODE128 barcode, both encoding the SKU.
-    QRCode.toDataURL(sku || 'N/A', { margin: 2, width: 320, errorCorrectionLevel: 'M' }).then(setQr).catch(() => setQr(''));
+    // Devices: QR encodes the configured field; barcode stays CODE128(SKU).
+    // Anything without a value (e.g. IMEI on a device that's missing one) falls
+    // back to the SKU rather than encoding an empty string.
+    const fallback = sku || 'N/A';
+    const qrData =
+      prefs.qrContent === 'id' ? (item.id || fallback)
+      : prefs.qrContent === 'imei' ? ((item.imei || '').trim() || fallback)
+      : prefs.qrContent === 'url' ? `${window.location.origin}/?sku=${encodeURIComponent(item.sku || item.id || '')}`
+      : (sku || fallback); // 'sku'
+    QRCode.toDataURL(qrData, { margin: 2, width: 320, errorCorrectionLevel: 'M' }).then(setQr).catch(() => setQr(''));
     setBarcode(genBarcode(sku));
-  }, [sku, upc, isAccessory]);
+  }, [sku, upc, isAccessory, prefs.qrContent, item.id, item.imei]);
 
   const update = (next: Partial<LabelPrefs>) => {
     setPrefs(prev => {
@@ -102,7 +116,8 @@ export const LabelModal: React.FC<Props> = ({ item, onClose }) => {
     serial: item.imei || undefined,
     status: status || undefined,
   };
-  const images = { qr: isAccessory ? '' : qr, barcode };
+  // Devices may hide the QR (or barcode) independently; accessories never show QR.
+  const images = { qr: (isAccessory || !prefs.showQR) ? '' : qr, barcode };
   // Accessories: barcode-only label (no QR / text / status).
   const opts = isAccessory
     ? { showBarcode: true, showStatus: false, barcodeOnly: true }
@@ -142,7 +157,7 @@ export const LabelModal: React.FC<Props> = ({ item, onClose }) => {
     if (content.sub) { pdf.text(content.sub, pad, y); y += 4.5; }
     if (item.imei) { pdf.setFont('courier', 'bold'); pdf.setFontSize(11); pdf.text(item.imei, pad, y); pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8); y += 5; }
     if (prefs.showStatus && status) { pdf.setFont('helvetica', 'bold'); pdf.text(status.toUpperCase(), pad, y); pdf.setFont('helvetica', 'normal'); }
-    if (qr) pdf.addImage(qr, 'PNG', w - pad - qrS, pad, qrS, qrS);
+    if (prefs.showQR && qr) pdf.addImage(qr, 'PNG', w - pad - qrS, pad, qrS, qrS);
     if (prefs.showBarcode && barcode) pdf.addImage(barcode, 'PNG', pad, h - pad - 5.5, w - pad * 2, 5.5);
     pdf.save(`${sku || 'label'}.pdf`);
   };
@@ -174,6 +189,10 @@ export const LabelModal: React.FC<Props> = ({ item, onClose }) => {
             </div>
           ) : (
             <div className="flex flex-col gap-2">
+              <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300 cursor-pointer">
+                <input type="checkbox" checked={prefs.showQR} onChange={e => update({ showQR: e.target.checked })} className="rounded" />
+                Show QR code
+              </label>
               <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300 cursor-pointer">
                 <input type="checkbox" checked={prefs.showBarcode} onChange={e => update({ showBarcode: e.target.checked })} className="rounded" />
                 Show barcode

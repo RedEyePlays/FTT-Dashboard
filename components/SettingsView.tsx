@@ -303,7 +303,7 @@ const LabelsSection: React.FC<{ draft: AppSettings; patch: PatchFn }> = ({ draft
         <SettingsSelect label="Barcode format" value={draft.labels.barcodeFormat} onChange={v => patch('labels', { barcodeFormat: v as any })}
           options={[{ value: 'CODE128', label: 'CODE128' }, { value: 'EAN13', label: 'EAN-13' }]} />
         <SettingsSelect label="QR encodes" value={draft.labels.qrContent} onChange={v => patch('labels', { qrContent: v as any })}
-          options={[{ value: 'sku', label: 'SKU' }, { value: 'id', label: 'Item ID' }, { value: 'url', label: 'Lookup URL' }]} />
+          options={[{ value: 'sku', label: 'SKU' }, { value: 'id', label: 'Item ID' }, { value: 'imei', label: 'IMEI / Serial' }, { value: 'url', label: 'Lookup URL' }]} />
         <SettingsTextField label="Margin (mm)" type="number" min={0} max={10} step={0.5} value={draft.labels.marginMm} onChange={v => patch('labels', { marginMm: parseFloat(v) || 0 })} />
         <SettingsTextField label="Print density (Zebra ^MD)" type="number" min={-30} max={30} step={1} value={draft.labels.density} onChange={v => patch('labels', { density: Math.round(parseFloat(v) || 0) })} hint="-30 (light) to 30 (dark)." />
       </SettingsCard>

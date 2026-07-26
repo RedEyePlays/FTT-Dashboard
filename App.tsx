@@ -246,6 +246,16 @@ const App: React.FC = () => {
   // modals (which don't receive settings as props) can read the merged list.
   useEffect(() => { cacheLabelSizes(settings.labels.customSizes); }, [settings.labels.customSizes]);
 
+  // Mirror the owner's "QR encodes" choice into the same local label-prefs blob
+  // the label modal reads (it doesn't receive settings as props), so a device's
+  // QR encodes the configured field (SKU / ID / IMEI / URL).
+  useEffect(() => {
+    try {
+      const prev = JSON.parse(localStorage.getItem('ftt_label_tpl_v1') || '{}');
+      localStorage.setItem('ftt_label_tpl_v1', JSON.stringify({ ...prev, qrContent: settings.labels.qrContent }));
+    } catch { /* ignore */ }
+  }, [settings.labels.qrContent]);
+
   // Apply the configured default landing page once, on first load.
   const landingAppliedRef = useRef(false);
   useEffect(() => {
