@@ -85,7 +85,7 @@ export interface AppSettings {
     defaultSize: string;         // id of a built-in preset or a custom size
     customSizes: LabelSize[];    // user-added sizes, merged with the built-ins
     barcodeFormat: 'CODE128' | 'EAN13';
-    qrContent: 'sku' | 'id' | 'url';
+    qrContent: 'sku' | 'id' | 'url' | 'imei';
     marginMm: number;
     density: number;       // Zebra ^MD darkness (-30..30)
   };

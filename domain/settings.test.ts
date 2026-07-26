@@ -56,6 +56,17 @@ describe('mergeSettings', () => {
     // other label fields still fall back to defaults
     expect(m.labels.barcodeFormat).toBe(DEFAULT_SETTINGS.labels.barcodeFormat);
   });
+
+  it('defaults qrContent to SKU', () => {
+    expect(mergeSettings().labels.qrContent).toBe('sku');
+  });
+
+  it('preserves each supported qrContent option, including the new imei', () => {
+    for (const qr of ['sku', 'id', 'url', 'imei'] as const) {
+      const m = mergeSettings({ labels: { qrContent: qr } as any });
+      expect(m.labels.qrContent).toBe(qr);
+    }
+  });
 });
 
 describe('label sizes', () => {
