@@ -320,7 +320,9 @@ export interface PayPeriodPaid {
 }
 
 // --- Repairs ---
-export type RepairType = 'retail' | 'wholesale';
+// 'internal' = a device the shop owns and is refurbishing before resale (no
+// customer involved); links back to the InventoryItem via `inventoryId`.
+export type RepairType = 'retail' | 'wholesale' | 'internal';
 
 // Status set. `completed` is retained for backward compatibility with existing
 // records; `picked_up` is the technician-workflow terminal (device returned).
@@ -338,6 +340,7 @@ export interface Repair {
   repairNumber: string;         // e.g. RPR-000123
   type: RepairType;
   batchId?: string;             // set for wholesale devices → repairBatches/{id}
+  inventoryId?: string;         // set for internal repairs → inventory/{id} (the device being refurbished)
   createdAt: number;            // epoch ms
   date: string;                 // YYYY-MM-DD (date created)
 

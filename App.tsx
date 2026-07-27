@@ -83,6 +83,9 @@ const App: React.FC = () => {
   const [invSection, setInvSection] = useState<InvSection>(DEFAULT_INV_SECTION);
   // A customer to pre-seed the POS / Repairs view with (from a CRM quick action).
   const [prefillCustomer, setPrefillCustomer] = useState<Customer | undefined>(undefined);
+  // A new, prefilled repair to open in the Repairs view (e.g. an internal repair
+  // started from an inventory device row).
+  const [prefillRepair, setPrefillRepair] = useState<Repair | undefined>(undefined);
   const [drawerOpen, setDrawerOpen] = useState(false);
   // Deep-link targets from Global Search (open a specific record on the target view).
   const [focusRepairId, setFocusRepairId] = useState<string | undefined>(undefined);
@@ -733,6 +736,25 @@ const App: React.FC = () => {
   const startSaleFor = (c: Customer) => { setPrefillCustomer(c); navigate('pos'); };
   const createRepairFor = (c: Customer) => { setPrefillCustomer(c); navigate('repairs'); };
 
+  // Start an internal repair ticket for a shop-owned device, prefilled from the
+  // inventory row and linked via inventoryId. Cost/price is NOT synced back to
+  // the item — the link is for visibility only; the owner sets the item's repair
+  // cost manually later after reviewing the technician's notes.
+  const handleCreateInternalRepair = (item: InventoryItem) => {
+    if (!allow('repairs.manage')) return;
+    const repair: Repair = {
+      id: newId(), repairNumber: '', type: 'internal', inventoryId: item.id,
+      createdAt: Date.now(), date: new Date().toISOString().split('T')[0],
+      deviceType: item.deviceType, brand: item.brand || '', model: item.model || item.item || '',
+      storage: item.storage, color: item.color, imei: item.imei || '',
+      issue: '', repairPrice: 0, status: 'received',
+    };
+    setPrefillRepair(repair);
+    navigate('repairs');
+  };
+  // Open an existing repair ticket in the Repairs view (e.g. the one linked to a device).
+  const handleOpenRepair = (repairId: string) => { setFocusRepairId(repairId); navigate('repairs'); };
+
   const handleStartAdd = () => {
     setEditingItem(undefined);
     setView('entry');
@@ -880,7 +902,8 @@ const App: React.FC = () => {
               canDelete={appUser.role === 'owner'}
               initialCustomer={prefillCustomer}
               initialRepairId={focusRepairId}
-              onConsumeInitial={() => { setPrefillCustomer(undefined); setFocusRepairId(undefined); }}
+              initialNewRepair={prefillRepair}
+              onConsumeInitial={() => { setPrefillCustomer(undefined); setFocusRepairId(undefined); setPrefillRepair(undefined); }}
               onGenerateRepairNumber={handleGenRepairNumber}
               onGenerateBatchNumber={handleGenBatchNumber}
               onSaveRepair={handleSaveRepair}
@@ -912,6 +935,9 @@ const App: React.FC = () => {
               onDelete={handleDeleteItem}
               onGenerateSku={handleGenerateSku}
               onSeed={handleSeedSampleData}
+              repairs={repairs}
+              onCreateRepair={allow('repairs.manage') ? handleCreateInternalRepair : undefined}
+              onOpenRepair={allow('repairs.tech') ? handleOpenRepair : undefined}
             />
           )}
           {view === 'pos' && (

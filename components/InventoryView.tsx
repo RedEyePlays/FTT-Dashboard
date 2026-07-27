@@ -3,9 +3,10 @@ import {
   Search, Smartphone, Package, QrCode, Trash2, X, Plus, ScanLine, AlertTriangle,
   Columns3, SlidersHorizontal, Bookmark, Download, Upload, Copy, ChevronUp, ChevronDown,
   ChevronLeft, ChevronRight, CheckSquare, Square, Boxes,
-  Pencil, MoreVertical, Printer, History, ScrollText,
+  Pencil, MoreVertical, Printer, History, ScrollText, Wrench,
 } from 'lucide-react';
-import { InventoryItem, Runner, ItemKind, DeviceType, DeviceStatus, ActivityEntry, AuditEntry } from '../types';
+import { InventoryItem, Runner, ItemKind, DeviceType, DeviceStatus, ActivityEntry, AuditEntry, Repair } from '../types';
+import { linkedRepairFor, REPAIR_STATUS_LABEL } from '../domain/repairs';
 import { ItemFormModal } from './ItemFormModal';
 import { LabelModal } from './LabelModal';
 import { useIsMobile } from '../hooks/useMediaQuery';
@@ -27,6 +28,11 @@ interface Props {
   onDelete: (id: string) => void;
   onGenerateSku: (kind: ItemKind, deviceType?: DeviceType) => Promise<string>;
   onSeed?: () => void;
+  // Internal repair linking (owner/manager): start a repair ticket for a device,
+  // and open the ticket already linked to one.
+  repairs?: Repair[];
+  onCreateRepair?: (item: InventoryItem) => void;
+  onOpenRepair?: (repairId: string) => void;
 }
 
 // Each section is an independent view with its own table, controls, pagination,
@@ -178,7 +184,8 @@ const parseCSV = (text: string): Record<string, string>[] => {
   return rows.filter(r => r.some(x => x !== '')).map(r => Object.fromEntries(header.map((h, i) => [h.trim(), r[i] ?? ''])));
 };
 
-export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, auditLogs = [], canViewCost = false, section, onSelectSection, onSave, onUpdate, onDelete, onGenerateSku, onSeed }) => {
+export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, auditLogs = [], canViewCost = false, section, onSelectSection, onSave, onUpdate, onDelete, onGenerateSku, onSeed, repairs = [], onCreateRepair, onOpenRepair }) => {
+  const linkedRepairOf = (id: string): Repair | undefined => linkedRepairFor(id, repairs);
   const isMobile = useIsMobile();
   const [selectMode, setSelectMode] = useState(false); // mobile multi-select
   const [mobileFilter, setMobileFilter] = useState(false);
@@ -504,7 +511,8 @@ export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, a
                 : pageRows.map(i => (
                   <InvCard key={i.id} item={i} canViewCost={canViewCost} selectMode={selectMode} selected={selected.has(i.id)}
                     onToggleSel={() => toggleSel(i.id)} onOpen={() => setExpandItem(i)} onLabel={() => setLabelItem(i)}
-                    onUpdate={onUpdate} onDelete={onDelete} onDuplicate={duplicate} onHistory={mode => setHistoryItem({ item: i, mode })} />
+                    onUpdate={onUpdate} onDelete={onDelete} onDuplicate={duplicate} onHistory={mode => setHistoryItem({ item: i, mode })}
+                    linkedRepair={linkedRepairOf(i.id)} onCreateRepair={onCreateRepair} onOpenRepair={onOpenRepair} />
                 ))}
             </div>
           )}
@@ -516,6 +524,7 @@ export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, a
                 sort={sort} onSort={onSortToggle} selected={selected} onToggleSel={toggleSel} onToggleAll={toggleSelAll}
                 onUpdate={onUpdate} onDelete={onDelete} onDuplicate={duplicate} onExpand={setExpandItem} onLabel={setLabelItem}
                 onHistory={(it, mode) => setHistoryItem({ item: it, mode })}
+                linkedRepairOf={linkedRepairOf} onCreateRepair={onCreateRepair} onOpenRepair={onOpenRepair}
                 widths={colW[activeKind]} onResize={(key, w) => setColumnWidth(activeKind, key, w)} onResetWidth={(key) => resetColumnWidth(activeKind, key)}
                 onAddRow={(page === 'devices' || page === 'accessories') ? (activeKind === 'device' ? addDeviceRow : addAccessoryRow) : undefined}
                 addLabel={activeKind === 'device' ? 'Add Device row' : 'Add Accessory row'} lowFlag={page === 'lowstock'} />
@@ -584,7 +593,10 @@ export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, a
         </div>
       </ResponsiveDialog>
 
-      {expandItem && <ItemFormModal initial={expandItem} runners={runners} onSave={onSave} onGenerateSku={onGenerateSku} onClose={() => setExpandItem(null)} />}
+      {expandItem && <ItemFormModal initial={expandItem} runners={runners} onSave={onSave} onGenerateSku={onGenerateSku} onClose={() => setExpandItem(null)}
+        linkedRepair={linkedRepairOf(expandItem.id)}
+        onCreateRepair={onCreateRepair ? () => { onCreateRepair(expandItem); setExpandItem(null); } : undefined}
+        onOpenRepair={onOpenRepair ? (id: string) => { onOpenRepair(id); setExpandItem(null); } : undefined} />}
       {labelItem && <LabelModal item={labelItem} onClose={() => setLabelItem(null)} />}
       {historyItem && <HistoryModal item={historyItem.item} mode={historyItem.mode} activity={activity} auditLogs={auditLogs} onClose={() => setHistoryItem(null)} />}
     </div>
@@ -641,6 +653,27 @@ const HistoryModal: React.FC<{ item: InventoryItem; mode: 'history' | 'audit'; a
   );
 };
 
+// Device-only repair row actions, shared by the desktop and mobile menus: open
+// the linked internal repair (with its status) if one exists, else offer to
+// create one. No-op (empty) for accessories or when the callbacks are absent.
+type RowMenuItem = { icon: React.ReactNode; label: string; run: () => void };
+const repairMenuItems = (
+  item: InventoryItem,
+  linkedRepairOf?: (id: string) => Repair | undefined,
+  onCreateRepair?: (i: InventoryItem) => void,
+  onOpenRepair?: (repairId: string) => void,
+): RowMenuItem[] => {
+  if (kindOf(item) !== 'device') return [];
+  const linked = linkedRepairOf?.(item.id);
+  if (linked && onOpenRepair) {
+    return [{ icon: <Wrench className="w-4 h-4" />, label: `Repair · ${REPAIR_STATUS_LABEL[linked.status]}`, run: () => onOpenRepair(linked.id) }];
+  }
+  if (onCreateRepair) {
+    return [{ icon: <Wrench className="w-4 h-4" />, label: 'Create repair ticket', run: () => onCreateRepair(item) }];
+  }
+  return [];
+};
+
 /* ---------------- Sheet ---------------- */
 const Sheet: React.FC<{
   title: string; total?: number; cols: Col[]; rows: InventoryItem[]; sort: Sort | null; onSort: (k: string) => void;
@@ -648,9 +681,12 @@ const Sheet: React.FC<{
   onUpdate: (id: string, f: keyof InventoryItem, v: any) => void; onDelete: (id: string) => void;
   onDuplicate: (i: InventoryItem) => void; onExpand: (i: InventoryItem) => void; onLabel: (i: InventoryItem) => void;
   onHistory: (i: InventoryItem, mode: 'history' | 'audit') => void;
+  linkedRepairOf?: (id: string) => Repair | undefined;
+  onCreateRepair?: (i: InventoryItem) => void;
+  onOpenRepair?: (repairId: string) => void;
   widths?: Record<string, number>; onResize?: (key: string, w: number) => void; onResetWidth?: (key: string) => void;
   onAddRow?: () => void; addLabel: string; lowFlag?: boolean;
-}> = ({ title, total, cols, rows, sort, onSort, selected, onToggleSel, onToggleAll, onUpdate, onDelete, onDuplicate, onExpand, onLabel, onHistory, widths, onResize, onResetWidth, onAddRow, addLabel, lowFlag }) => {
+}> = ({ title, total, cols, rows, sort, onSort, selected, onToggleSel, onToggleAll, onUpdate, onDelete, onDuplicate, onExpand, onLabel, onHistory, linkedRepairOf, onCreateRepair, onOpenRepair, widths, onResize, onResetWidth, onAddRow, addLabel, lowFlag }) => {
   // Row overflow menu. State lives at the Sheet root and the menu renders outside
   // the sticky table subtree (fixed-positioned) so it isn't clipped or trapped
   // under the sticky columns' stacking context.
@@ -878,6 +914,7 @@ const Sheet: React.FC<{
             {[
               { icon: <QrCode className="w-4 h-4" />, label: 'QR Code', run: () => onLabel(menu.i) },
               { icon: <Copy className="w-4 h-4" />, label: 'Duplicate', run: () => onDuplicate(menu.i) },
+              ...repairMenuItems(menu.i, linkedRepairOf, onCreateRepair, onOpenRepair),
               { icon: <History className="w-4 h-4" />, label: 'View History', run: () => onHistory(menu.i, 'history') },
               { icon: <ScrollText className="w-4 h-4" />, label: 'Audit Log', run: () => onHistory(menu.i, 'audit') },
             ].map(m => (
@@ -956,7 +993,10 @@ const InvCard: React.FC<{
   onDelete: (id: string) => void;
   onDuplicate: (i: InventoryItem) => void;
   onHistory: (mode: 'history' | 'audit') => void;
-}> = ({ item: i, canViewCost, selectMode, selected, onToggleSel, onOpen, onLabel, onDelete, onDuplicate, onHistory }) => {
+  linkedRepair?: Repair;
+  onCreateRepair?: (i: InventoryItem) => void;
+  onOpenRepair?: (repairId: string) => void;
+}> = ({ item: i, canViewCost, selectMode, selected, onToggleSel, onOpen, onLabel, onDelete, onDuplicate, onHistory, linkedRepair, onCreateRepair, onOpenRepair }) => {
   const [menu, setMenu] = useState(false);
   const isDevice = kindOf(i) === 'device';
   const copy = (v?: string) => v && navigator.clipboard?.writeText(v).catch(() => {});
@@ -980,6 +1020,12 @@ const InvCard: React.FC<{
             {/* Devices no longer show a status badge here (status removed from the
                 device view); accessories still flag low stock. */}
             {!isDevice && (i.quantity ?? 0) <= (i.lowStockThreshold ?? 0) && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300">Low · {i.quantity ?? 0}</span>}
+            {isDevice && linkedRepair && (
+              <span onClick={e => { e.stopPropagation(); onOpenRepair?.(linkedRepair.id); }}
+                className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300">
+                <Wrench className="w-3 h-3" /> {REPAIR_STATUS_LABEL[linkedRepair.status]}
+              </span>
+            )}
           </div>
         </button>
         <div className="flex items-center gap-0.5 shrink-0">
@@ -1007,6 +1053,7 @@ const InvCard: React.FC<{
               { icon: <Copy className="w-4 h-4" />, label: 'Copy SKU', run: () => copy(i.sku) },
               ...(isDevice && i.imei ? [{ icon: <Copy className="w-4 h-4" />, label: 'Copy IMEI/Serial', run: () => copy(i.imei) }] : []),
               { icon: <Copy className="w-4 h-4" />, label: 'Duplicate', run: () => onDuplicate(i) },
+              ...repairMenuItems(i, () => linkedRepair, onCreateRepair, onOpenRepair),
               { icon: <History className="w-4 h-4" />, label: 'View History', run: () => onHistory('history') },
               { icon: <ScrollText className="w-4 h-4" />, label: 'Audit Log', run: () => onHistory('audit') },
               { icon: <Trash2 className="w-4 h-4" />, label: 'Delete', run: () => onDelete(i.id), danger: true },

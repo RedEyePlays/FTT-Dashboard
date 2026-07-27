@@ -220,7 +220,7 @@ const TechRepairDrawer: React.FC<{
           <section className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4 grid grid-cols-2 gap-3">
             <Field label="Device" value={deviceName(r)} />
             <Field label="IMEI / Serial" value={r.imei ? <span className="font-mono">{r.imei}</span> : '—'} />
-            <Field label="Type" value={r.type === 'wholesale' ? 'Wholesale' : 'Retail'} />
+            <Field label="Type" value={r.type === 'wholesale' ? 'Wholesale' : r.type === 'internal' ? 'Internal' : 'Retail'} />
             <Field label="Received" value={dateReceived(r)} />
             <div className="col-span-2"><Field label="Reported issue" value={r.issue} /></div>
           </section>

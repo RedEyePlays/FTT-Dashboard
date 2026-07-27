@@ -1,4 +1,4 @@
-import { Repair, RepairBatch, RepairStatus } from '../types';
+import { Repair, RepairBatch, RepairStatus, RepairType } from '../types';
 
 // --- Numbering prefixes (reuse the meta.skuCounters mechanism) ---
 export const REPAIR_PREFIX = 'RPR';
@@ -74,6 +74,26 @@ export function applyTechEdit(stored: Repair, draft: Partial<Repair>): Repair {
   }
   return next;
 }
+
+// --- Repair type semantics ---
+// Only retail tickets involve an external customer. Wholesale devices belong to
+// a business batch; internal tickets are shop-owned devices being refurbished
+// before resale — neither needs (or shows) a customer.
+export const repairNeedsCustomer = (type: RepairType): boolean => type === 'retail';
+export const isInternalRepair = (r: Pick<Repair, 'type'>): boolean => r.type === 'internal';
+
+// Form-save validity: a retail ticket requires a customer name; internal and
+// wholesale do not. (The customer field is optional on the type either way — this
+// is the UI-level requirement the New/Edit form enforces.)
+export const canSaveRepair = (r: Pick<Repair, 'type' | 'customerName'>): boolean =>
+  !repairNeedsCustomer(r.type) || !!(r.customerName && r.customerName.trim());
+
+// The internal repair (if any) linked to an inventory item — most recent first.
+// Cost/price is intentionally NOT synced back to the item; this is link-only.
+export const linkedRepairFor = (inventoryId: string, repairs: Repair[]): Repair | undefined =>
+  repairs
+    .filter(r => r.inventoryId === inventoryId)
+    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))[0];
 
 // Whole days a repair has been open (received → now).
 export const repairAgeDays = (r: Repair, now: number = Date.now()): number =>
