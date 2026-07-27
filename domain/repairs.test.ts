@@ -3,6 +3,7 @@ import {
   balanceOwing, batchTotals, batchDevicesComplete, addDays, computeWarrantyUntil,
   matchesRepair, matchesBatch, isInProgress, isRepairOpen,
   applyTechEdit, repairAgeDays, TECH_STATUSES,
+  repairNeedsCustomer, isInternalRepair, canSaveRepair, linkedRepairFor,
 } from './repairs';
 import { Repair, RepairBatch } from '../types';
 
@@ -97,6 +98,48 @@ describe('global search', () => {
     expect(matchesBatch(b, '555-9999')).toBe(true);
     expect(matchesBatch(b, 'mia@fixit')).toBe(true);
     expect(matchesBatch(b, 'nope')).toBe(false);
+  });
+});
+
+describe('repair type semantics (internal / customer requirement)', () => {
+  it('only retail involves a customer', () => {
+    expect(repairNeedsCustomer('retail')).toBe(true);
+    expect(repairNeedsCustomer('wholesale')).toBe(false);
+    expect(repairNeedsCustomer('internal')).toBe(false);
+  });
+
+  it('isInternalRepair flags internal tickets', () => {
+    expect(isInternalRepair(repair({ type: 'internal' }))).toBe(true);
+    expect(isInternalRepair(repair({ type: 'retail' }))).toBe(false);
+  });
+
+  it('canSaveRepair requires a customer name only for retail', () => {
+    // Retail: needs a non-blank customer name.
+    expect(canSaveRepair(repair({ type: 'retail', customerName: '' }))).toBe(false);
+    expect(canSaveRepair(repair({ type: 'retail', customerName: '   ' }))).toBe(false);
+    expect(canSaveRepair(repair({ type: 'retail', customerName: 'Jane' }))).toBe(true);
+    // Internal & wholesale: saveable with no customer at all.
+    expect(canSaveRepair(repair({ type: 'internal' }))).toBe(true);
+    expect(canSaveRepair(repair({ type: 'internal', customerName: '' }))).toBe(true);
+    expect(canSaveRepair(repair({ type: 'wholesale' }))).toBe(true);
+  });
+});
+
+describe('linkedRepairFor', () => {
+  it('finds the repair linked to an inventory item, most recent first', () => {
+    const repairs = [
+      repair({ id: 'a', type: 'internal', inventoryId: 'dev1', createdAt: 100 }),
+      repair({ id: 'b', type: 'internal', inventoryId: 'dev1', createdAt: 300 }),
+      repair({ id: 'c', type: 'retail', inventoryId: 'dev2', createdAt: 200 }),
+      repair({ id: 'd', type: 'retail', createdAt: 400 }), // no link
+    ];
+    expect(linkedRepairFor('dev1', repairs)?.id).toBe('b'); // newest for dev1
+    expect(linkedRepairFor('dev2', repairs)?.id).toBe('c');
+    expect(linkedRepairFor('nope', repairs)).toBeUndefined();
+  });
+
+  it('returns undefined when nothing is linked', () => {
+    expect(linkedRepairFor('x', [])).toBeUndefined();
   });
 });
 

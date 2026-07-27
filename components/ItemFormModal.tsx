@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
 import { X, Wand2, Smartphone, Package, Barcode, Camera } from 'lucide-react';
-import { InventoryItem, ItemKind, DeviceType, DeviceStatus, Runner } from '../types';
+import { InventoryItem, ItemKind, DeviceType, DeviceStatus, Runner, Repair } from '../types';
+import { REPAIR_STATUS_LABEL } from '../domain/repairs';
 import { ImeiScanner } from './ImeiScanner';
+import { Wrench } from 'lucide-react';
 
 interface Props {
   initial?: InventoryItem;
@@ -10,6 +12,12 @@ interface Props {
   onSave: (item: InventoryItem) => void;
   onGenerateSku: (kind: ItemKind, deviceType?: DeviceType) => Promise<string>;
   onClose: () => void;
+  // Internal repair linking (owner/manager). The linked ticket (if any) is shown
+  // read-only for review; the item's own repair cost is set manually, never
+  // synced from the ticket.
+  linkedRepair?: Repair;
+  onCreateRepair?: () => void;
+  onOpenRepair?: (repairId: string) => void;
 }
 
 const DEVICE_TYPES: DeviceType[] = ['Phone', 'Tablet', 'Laptop', 'Console', 'Watch', 'Other'];
@@ -25,7 +33,7 @@ const CONDITIONS = ['New', 'Like New', 'Excellent', 'Good', 'Fair', 'For Parts']
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 const today = () => new Date().toISOString().split('T')[0];
 
-export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, runners, onSave, onGenerateSku, onClose }) => {
+export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, runners, onSave, onGenerateSku, onClose, linkedRepair, onCreateRepair, onOpenRepair }) => {
   const [kind, setKind] = useState<ItemKind>(initial?.kind ?? initialKind ?? 'device');
   const [f, setF] = useState<InventoryItem>(() => initial ?? {
     id: uid(), kind: initialKind ?? 'device', sku: '', manufacturerBarcode: '',
@@ -192,6 +200,45 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, runners, 
             <label className={lbl}>Notes</label>
             <textarea className={inp} rows={2} value={f.notes} onChange={e => set('notes', e.target.value)} />
           </div>
+
+          {/* Internal repair link (devices only). Read-only review of the linked
+              ticket's work — the item's own Repair cost is set manually, never
+              synced from here. */}
+          {kind === 'device' && initial && (onCreateRepair || linkedRepair) && (
+            <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3">
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <span className={`${lbl} flex items-center gap-1.5`}><Wrench className="w-3.5 h-3.5 text-indigo-500" /> Repair ticket</span>
+                {linkedRepair
+                  ? <span className="text-[11px] font-semibold px-2 py-0.5 rounded bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300">{REPAIR_STATUS_LABEL[linkedRepair.status]}</span>
+                  : onCreateRepair && <button type="button" onClick={onCreateRepair} className="text-xs font-medium px-2.5 py-1 rounded-md bg-indigo-600 hover:bg-indigo-700 text-white">Create repair ticket</button>}
+              </div>
+              {linkedRepair ? (
+                <div className="space-y-1.5">
+                  <p className="text-xs text-slate-400">{linkedRepair.repairNumber || 'Ticket'} · review the technician's work before setting this device's repair cost.</p>
+                  {([
+                    ['Diagnostics', linkedRepair.diagnostics],
+                    ['Work performed', linkedRepair.workPerformed],
+                    ['Parts used', linkedRepair.partsUsed],
+                    ['Testing', linkedRepair.testingResults],
+                    ['Tech notes', linkedRepair.techNotes],
+                  ] as const).filter(([, v]) => v && String(v).trim()).map(([label, v]) => (
+                    <div key={label}>
+                      <p className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">{label}</p>
+                      <p className="text-sm text-slate-700 dark:text-slate-200 whitespace-pre-wrap">{v}</p>
+                    </div>
+                  ))}
+                  {!linkedRepair.diagnostics && !linkedRepair.workPerformed && !linkedRepair.partsUsed && !linkedRepair.testingResults && !linkedRepair.techNotes && (
+                    <p className="text-xs text-slate-400">No technician notes recorded yet.</p>
+                  )}
+                  {onOpenRepair && (
+                    <button type="button" onClick={() => onOpenRepair(linkedRepair.id)} className="mt-1 text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:underline">Open full ticket →</button>
+                  )}
+                </div>
+              ) : (
+                <p className="text-xs text-slate-400">No repair ticket linked. Create one to track internal refurb work by a technician.</p>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="px-5 py-3 border-t border-slate-100 dark:border-slate-800 flex justify-end gap-2 sticky bottom-0 bg-white dark:bg-slate-900">

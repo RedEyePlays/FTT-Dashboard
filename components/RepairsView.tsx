@@ -6,7 +6,7 @@ import {
 import { Repair, RepairBatch, Customer, AuditEntry, RepairStatus, RepairType, DeviceType } from '../types';
 import {
   REPAIR_STATUSES, REPAIR_STATUS_CELL,
-  balanceOwing, batchTotals, matchesRepair, matchesBatch,
+  balanceOwing, batchTotals, matchesRepair, matchesBatch, canSaveRepair,
 } from '../domain/repairs';
 import { newId } from '../domain/ids';
 import { printRetailReceipt, printBatchIntake, printBatchInvoice, printBatchSummary, printDeviceSheet } from '../services/repairPrint';
@@ -29,6 +29,7 @@ interface Props {
   onPrintAudit: (entityType: string, id: string, doc: string) => void;
   initialCustomer?: Customer;      // open a new prefilled ticket (CRM quick action)
   initialRepairId?: string;        // open an existing ticket (global search)
+  initialNewRepair?: Repair;       // open a new prefilled ticket (e.g. internal repair from Inventory)
   onConsumeInitial?: () => void;
 }
 
@@ -89,7 +90,9 @@ export const RepairsView: React.FC<Props> = (props) => {
     return r.status === statusFilter;
   };
 
-  const retail = useMemo(() => repairs.filter(r => r.type === 'retail')
+  // "Tickets" = standalone repairs (retail + internal). Wholesale devices live
+  // under their batches, not in this list.
+  const retail = useMemo(() => repairs.filter(r => r.type !== 'wholesale')
     .filter(r => matchFilter(r) && (!query || matchesRepair(r, query)))
     .sort((a, b) => b.createdAt - a.createdAt), [repairs, statusFilter, query]);
 
@@ -146,6 +149,17 @@ export const RepairsView: React.FC<Props> = (props) => {
     props.onConsumeInitial?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.initialRepairId]);
+
+  // Open a new prefilled ticket handed in from elsewhere (e.g. "Create repair
+  // ticket" on an inventory device → an internal repair prefilled + linked).
+  useEffect(() => {
+    const r = props.initialNewRepair;
+    if (!r) return;
+    setTab('tickets');
+    setDrawer({ repair: r, isNew: true });
+    props.onConsumeInitial?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.initialNewRepair?.id]);
   const newDevice = (batchId: string): Repair => ({ id: newId(), repairNumber: '', type: 'wholesale', batchId, createdAt: Date.now(), date: today(), issue: '', repairPrice: 0, status: 'received' });
   const newBatch = (): RepairBatch => ({ id: newId(), batchNumber: '', createdAt: Date.now(), dateReceived: today(), companyName: '', status: 'active', amountPaid: 0 });
 
@@ -226,7 +240,7 @@ export const RepairsView: React.FC<Props> = (props) => {
                 <div key={r.id} onClick={() => setDrawer({ repair: r, isNew: false })} className="flex flex-wrap sm:flex-nowrap items-center gap-x-3 gap-y-2 px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-800/50 cursor-pointer">
                   <div className="min-w-0 flex-1 basis-full sm:basis-0">
                     <p className="text-sm font-semibold text-slate-800 dark:text-slate-100 truncate">{deviceName(r)} <span className="font-mono text-xs text-slate-400 ml-1">{r.repairNumber}</span></p>
-                    <p className="text-xs text-slate-400 truncate">{r.customerName || 'Walk-in'}{r.customerPhone ? ` · ${r.customerPhone}` : ''}{r.imei ? ` · ${r.imei}` : ''} · {r.date}</p>
+                    <p className="text-xs text-slate-400 truncate">{r.type === 'internal' ? 'Internal · refurb' : (r.customerName || 'Walk-in')}{r.customerPhone ? ` · ${r.customerPhone}` : ''}{r.imei ? ` · ${r.imei}` : ''} · {r.date}</p>
                   </div>
                   {isOverdue(r) && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300 shrink-0">Overdue</span>}
                   <div className="text-right shrink-0 ml-auto sm:ml-0"><p className="text-sm font-semibold text-slate-900 dark:text-slate-100">{money(r.repairPrice)}</p>{balanceOwing(r) > 0 && <p className="text-[11px] text-rose-500">bal {money(balanceOwing(r))}</p>}</div>
@@ -418,8 +432,11 @@ const RepairDrawer: React.FC<{
   const [snapshot] = useState(() => JSON.stringify(initial));
   const set = (patch: Partial<Repair>) => setF(prev => ({ ...prev, ...patch }));
   const isRetail = f.type === 'retail';
+  const isInternal = f.type === 'internal';
+  const showDeviceDetail = isRetail || isInternal; // full device fields; wholesale keeps the minimal set
   const history = auditLogs.filter(a => a.entityId === f.id).slice(0, 20);
   const num = (v: string) => parseFloat(v) || 0;
+  const canSave = canSaveRepair(f);
   const dirty = JSON.stringify(f) !== snapshot;
   const requestClose = () => { if (!dirty || window.confirm('Discard unsaved changes to this repair?')) onClose(); };
 
@@ -428,13 +445,19 @@ const RepairDrawer: React.FC<{
       <div className="w-full max-w-xl max-h-[90vh] bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-2xl flex flex-col" onClick={e => e.stopPropagation()}>
         <div className="px-5 py-3.5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <h2 className="text-sm font-bold text-slate-800 dark:text-slate-100">{isNew ? (isRetail ? 'New Repair Ticket' : 'Add Device') : (isRetail ? 'Repair Ticket' : 'Device')}{f.repairNumber && <span className="font-mono text-xs text-slate-400 ml-2">{f.repairNumber}</span>}</h2>
+            <h2 className="text-sm font-bold text-slate-800 dark:text-slate-100">{isNew ? (isInternal ? 'New Internal Repair' : isRetail ? 'New Repair Ticket' : 'Add Device') : (isInternal ? 'Internal Repair' : isRetail ? 'Repair Ticket' : 'Device')}{f.repairNumber && <span className="font-mono text-xs text-slate-400 ml-2">{f.repairNumber}</span>}</h2>
             <StatusPill value={f.status} onChange={s => set({ status: s })} />
           </div>
           <button onClick={requestClose} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"><X className="w-4 h-4" /></button>
         </div>
 
         <div className="flex-1 overflow-y-auto custom-scrollbar p-5 space-y-5">
+          {isInternal && (
+            <div className="flex items-start gap-2 text-xs text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-100 dark:border-indigo-900/40 rounded-lg px-3 py-2">
+              <Wrench className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>Internal refurbishment of a shop-owned device — no customer. Linked to the inventory item; the repair cost stays separate and is set on the item manually after review.</span>
+            </div>
+          )}
           {isRetail && (
             <Section title="Customer">
               {customers.length > 0 && (
@@ -444,7 +467,7 @@ const RepairDrawer: React.FC<{
                 </div>
               )}
               <div className="grid grid-cols-2 gap-3">
-                <Field label="Customer"><input className={inputCls} value={f.customerName || ''} onChange={e => set({ customerName: e.target.value, customerId: undefined })} /></Field>
+                <Field label="Customer (required)"><input className={inputCls} value={f.customerName || ''} onChange={e => set({ customerName: e.target.value, customerId: undefined })} /></Field>
                 <Field label="Phone"><input className={inputCls} value={f.customerPhone || ''} onChange={e => set({ customerPhone: e.target.value })} /></Field>
                 <Field label="Email (optional)" className="col-span-2"><input className={inputCls} value={f.customerEmail || ''} onChange={e => set({ customerEmail: e.target.value })} /></Field>
               </div>
@@ -456,7 +479,7 @@ const RepairDrawer: React.FC<{
               <Field label="Device Type"><select className={inputCls} value={f.deviceType || ''} onChange={e => set({ deviceType: e.target.value as DeviceType })}><option value="">—</option>{DEVICE_TYPES.map(d => <option key={d} value={d}>{d}</option>)}</select></Field>
               <Field label="IMEI / Serial"><input className={inputCls} value={f.imei || ''} onChange={e => set({ imei: e.target.value })} /></Field>
               <Field label="Brand / Model" className="col-span-2"><input className={inputCls} placeholder="e.g. Apple iPhone 14 Pro" value={[f.brand, f.model].filter(Boolean).join(' ')} onChange={e => set({ brand: '', model: e.target.value })} /></Field>
-              {isRetail && <>
+              {showDeviceDetail && <>
                 <Field label="Storage"><input className={inputCls} value={f.storage || ''} onChange={e => set({ storage: e.target.value })} /></Field>
                 <Field label="Color"><input className={inputCls} value={f.color || ''} onChange={e => set({ color: e.target.value })} /></Field>
                 <Field label="Carrier (optional)"><input className={inputCls} value={f.carrier || ''} onChange={e => set({ carrier: e.target.value })} /></Field>
@@ -503,7 +526,8 @@ const RepairDrawer: React.FC<{
         </div>
 
         <div className="px-5 py-3 border-t border-slate-100 dark:border-slate-800 flex items-center gap-2 flex-wrap">
-          <button onClick={() => onSave(f)} className="flex-1 min-w-[120px] px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium">Save</button>
+          <button onClick={() => canSave && onSave(f)} disabled={!canSave} title={canSave ? undefined : 'Enter a customer name first'}
+            className="flex-1 min-w-[120px] px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg text-sm font-medium">Save</button>
           {!isNew && (
             <div className="flex items-center gap-1">
               <button onClick={onPrintLabel} title="Print QR label" className="p-2 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-500 hover:border-indigo-400"><QrCode className="w-4 h-4" /></button>
