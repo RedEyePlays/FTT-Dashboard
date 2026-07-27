@@ -1,0 +1,17 @@
+rules_version = '2';
+
+// Cloud Storage rules for FlipThatTech.
+//
+// Automated backups live at backups/{workspaceId}/{file}. A workspace is owned
+// by the user whose uid == workspaceId, so only that owner may read (download)
+// their backups. Clients never write or delete here — the scheduledBackups Cloud
+// Function does that with Admin credentials (which bypass these rules), including
+// retention deletes. Everything else is denied by default.
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /backups/{workspaceId}/{fileName} {
+      allow read: if request.auth != null && request.auth.uid == workspaceId;
+      allow write: if false;
+    }
+  }
+}

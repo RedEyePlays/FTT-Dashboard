@@ -40,6 +40,7 @@ import {
   saveTimeEntry, savePayPeriodPaid, deletePayPeriodPaid,
 } from './services/firestoreDb';
 import { AppSettings } from './domain/settings';
+import { listWorkspaceBackups, getBackupDownloadUrl } from './services/backupStorage';
 import { useWorkspaceData } from './hooks/useWorkspaceData';
 import { newId, mkActivity } from './domain/ids';
 import { collectionFor, stockChange } from './domain/inventory';
@@ -982,6 +983,8 @@ const App: React.FC = () => {
               onSave={handleSaveSettings}
               canManage={allow('settings.manage')}
               role={appUser.role}
+              loadBackupHistory={appUser.role === 'owner' && workspaceId ? () => listWorkspaceBackups(workspaceId) : undefined}
+              onDownloadBackup={(path) => { getBackupDownloadUrl(path).then(url => window.open(url, '_blank', 'noopener')).catch(() => {}); }}
               backupSlot={
                 <div className="space-y-3">
                   {allow('backup.export') && (
