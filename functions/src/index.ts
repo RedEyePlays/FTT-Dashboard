@@ -2,6 +2,9 @@ import { onCall, HttpsError, CallableRequest } from "firebase-functions/v2/https
 import { defineSecret } from "firebase-functions/params";
 import { GoogleGenAI, Type } from "@google/genai";
 
+// Scheduled automated Firestore→Storage backups (see backups.ts).
+export { scheduledBackups } from "./backups";
+
 // The Gemini API key lives in Firebase's server-side Secret Manager — it is
 // NEVER shipped to the client. Set it before deploy with:
 //   firebase functions:secrets:set GEMINI_API_KEY

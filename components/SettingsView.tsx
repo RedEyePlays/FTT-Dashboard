@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import {
   Store, Building2, Wrench, ShoppingCart, Percent, Tag, Contact, LayoutDashboard,
   Palette, ShieldCheck, DatabaseBackup, Info, Save, RotateCcw, Check, Lock, Plus, Trash2,
+  Download, RefreshCw, Loader2, CalendarClock,
 } from 'lucide-react';
 import { Role, Permission } from '../types';
 import {
@@ -12,6 +13,7 @@ import { ROLE_PERMISSIONS, ROLE_LABEL } from '../services/rbac';
 import { REPAIR_STATUS_LABEL } from '../domain/repairs';
 import { useIsMobile } from '../hooks/useMediaQuery';
 import { SettingsSection, SettingsCard, SettingsToggle, SettingsSelect, SettingsTextField } from './settingsPrimitives';
+import { BackupFileMeta } from '../services/backupStorage';
 
 // The centralized Settings module. Owners configure the whole business here —
 // store profile, repairs, checkout/payments, taxes, labels, customers,
@@ -57,9 +59,12 @@ interface Props {
   role: Role;
   appVersion?: string;
   backupSlot?: React.ReactNode;
+  // Automated-backup history (owner-only). Provided by App from Cloud Storage.
+  loadBackupHistory?: () => Promise<BackupFileMeta[]>;
+  onDownloadBackup?: (path: string) => void;
 }
 
-export const SettingsView: React.FC<Props> = ({ settings, onSave, canManage, role, appVersion = '1.0.0', backupSlot }) => {
+export const SettingsView: React.FC<Props> = ({ settings, onSave, canManage, role, appVersion = '1.0.0', backupSlot, loadBackupHistory, onDownloadBackup }) => {
   const isMobile = useIsMobile();
   const [active, setActive] = useState<SectionId>('general');
   const [draft, setDraft] = useState<AppSettings>(settings);
@@ -147,7 +152,7 @@ export const SettingsView: React.FC<Props> = ({ settings, onSave, canManage, rol
             {active === 'dashboard' && <DashboardSection draft={draft} patch={patch} />}
             {active === 'appearance' && <AppearanceSection draft={draft} patch={patch} />}
             {active === 'roles' && <RolesSection />}
-            {active === 'data' && <DataSection backupSlot={backupSlot} />}
+            {active === 'data' && <DataSection draft={draft} patch={patch} backupSlot={backupSlot} loadBackupHistory={loadBackupHistory} onDownloadBackup={onDownloadBackup} />}
             {active === 'about' && <AboutSection appVersion={appVersion} role={role} />}
           </fieldset>
 
@@ -462,13 +467,105 @@ const RolesSection: React.FC = () => {
   );
 };
 
-const DataSection: React.FC<{ backupSlot?: React.ReactNode }> = ({ backupSlot }) => (
-  <SettingsSection title="Data & Backups" description="Export your workspace data. Restores and imports are available from the backup dialog.">
+const fmtBytes = (n: number): string => {
+  if (!n) return '0 B';
+  const u = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.min(u.length - 1, Math.floor(Math.log(n) / Math.log(1024)));
+  return `${(n / Math.pow(1024, i)).toFixed(i ? 1 : 0)} ${u[i]}`;
+};
+
+const DataSection: React.FC<{
+  draft: AppSettings;
+  patch: <K extends keyof AppSettings>(section: K, value: Partial<AppSettings[K]>) => void;
+  backupSlot?: React.ReactNode;
+  loadBackupHistory?: () => Promise<BackupFileMeta[]>;
+  onDownloadBackup?: (path: string) => void;
+}> = ({ draft, patch, backupSlot, loadBackupHistory, onDownloadBackup }) => (
+  <SettingsSection title="Data & Backups" description="Export your workspace data, and schedule automated cloud backups.">
     <SettingsCard>
       {backupSlot || <p className="text-sm text-slate-500 dark:text-slate-400">Backup tools are unavailable.</p>}
     </SettingsCard>
+
+    <SettingsCard>
+      <div className="flex items-center gap-3 pb-1">
+        <div className="p-2 bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 rounded-lg"><CalendarClock className="w-5 h-5" /></div>
+        <div>
+          <h3 className="font-medium text-slate-900 dark:text-white">Automated Backups</h3>
+          <p className="text-xs text-slate-500 dark:text-slate-400">A scheduled server job snapshots your whole workspace to secure cloud storage and prunes old copies automatically.</p>
+        </div>
+      </div>
+      <SettingsToggle
+        label="Enable automated backups"
+        hint="Runs on the schedule below; requires the backup Cloud Function to be deployed."
+        checked={draft.backups.enabled}
+        onChange={v => patch('backups', { enabled: v })} />
+      <SettingsSelect
+        label="Frequency"
+        value={draft.backups.frequency}
+        onChange={v => patch('backups', { frequency: (v === 'weekly' ? 'weekly' : 'daily') })}
+        options={[{ value: 'daily', label: 'Daily' }, { value: 'weekly', label: 'Weekly' }]} />
+      <SettingsTextField
+        label="Keep last N backups"
+        type="number" min={1} max={365} step={1}
+        value={draft.backups.retention}
+        onChange={v => patch('backups', { retention: Math.max(1, Math.round(parseFloat(v) || 0)) })}
+        hint="Older automated backups beyond this count are deleted to cap storage growth." />
+    </SettingsCard>
+
+    {loadBackupHistory && <BackupHistory load={loadBackupHistory} onDownload={onDownloadBackup} />}
   </SettingsSection>
 );
+
+const BackupHistory: React.FC<{
+  load: () => Promise<BackupFileMeta[]>;
+  onDownload?: (path: string) => void;
+}> = ({ load, onDownload }) => {
+  const [items, setItems] = useState<BackupFileMeta[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const run = () => {
+    setBusy(true); setErr(null);
+    load()
+      .then(setItems)
+      .catch(() => { setItems([]); setErr('Could not load backup history. If automated backups were just enabled, none exist yet.'); })
+      .finally(() => setBusy(false));
+  };
+  // Load once on mount; the Refresh button re-runs.
+  React.useEffect(() => { run(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+
+  return (
+    <SettingsCard>
+      <div className="flex items-center justify-between pb-1">
+        <h3 className="font-medium text-slate-900 dark:text-white">Backup history</h3>
+        <button onClick={run} disabled={busy} className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400 hover:text-indigo-600 disabled:opacity-50">
+          {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />} Refresh
+        </button>
+      </div>
+      {err && <p className="text-xs text-slate-400 py-2">{err}</p>}
+      {!err && items && items.length === 0 && !busy && (
+        <p className="text-sm text-slate-500 dark:text-slate-400 py-2">No automated backups yet.</p>
+      )}
+      {items && items.length > 0 && (
+        <ul className="divide-y divide-slate-100 dark:divide-slate-800">
+          {items.map(b => (
+            <li key={b.path} className="flex items-center justify-between gap-3 py-2">
+              <div className="min-w-0">
+                <p className="text-sm text-slate-800 dark:text-slate-100">{new Date(b.created).toLocaleString()}</p>
+                <p className="text-xs text-slate-400">{fmtBytes(b.size)}</p>
+              </div>
+              <button
+                onClick={() => onDownload?.(b.path)}
+                className="flex items-center gap-1.5 shrink-0 px-3 py-1.5 text-xs font-medium border border-slate-200 dark:border-slate-700 rounded-lg text-slate-600 dark:text-slate-300 hover:border-indigo-400 hover:text-indigo-600">
+                <Download className="w-3.5 h-3.5" /> Download
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </SettingsCard>
+  );
+};
 
 const AboutSection: React.FC<{ appVersion: string; role: Role }> = ({ appVersion, role }) => (
   <SettingsSection title="About" description="FlipThatTech Dashboard.">

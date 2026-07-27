@@ -67,6 +67,18 @@ describe('mergeSettings', () => {
       expect(m.labels.qrContent).toBe(qr);
     }
   });
+
+  it('defaults automated backups to off, daily, keep-14', () => {
+    const b = mergeSettings().backups;
+    expect(b).toEqual({ enabled: false, frequency: 'daily', retention: 14 });
+  });
+
+  it('preserves stored backup config over the defaults', () => {
+    const b = mergeSettings({ backups: { enabled: true, frequency: 'weekly', retention: 30 } as any }).backups;
+    expect(b).toEqual({ enabled: true, frequency: 'weekly', retention: 30 });
+    // a partial patch still fills the rest from defaults
+    expect(mergeSettings({ backups: { enabled: true } as any }).backups).toEqual({ enabled: true, frequency: 'daily', retention: 14 });
+  });
 });
 
 describe('label sizes', () => {

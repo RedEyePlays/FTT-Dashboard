@@ -3,6 +3,7 @@ import { initializeApp, getApp, getApps } from "firebase/app";
 import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 import { getFunctions } from "firebase/functions";
+import { getStorage } from "firebase/storage";
 
 // Your web app's Firebase configuration
 const firebaseConfig = {
@@ -21,5 +22,8 @@ const db = getFirestore(app);
 // Cloud Functions client — the Gemini API key lives server-side in the
 // `aiGenerate` callable, so no key is ever shipped to the browser.
 const functions = getFunctions(app);
+// Cloud Storage — holds the automated backup snapshots written by the
+// scheduledBackups Cloud Function under backups/{workspaceId}/.
+const storage = getStorage(app);
 
-export { app, auth, db, functions };
+export { app, auth, db, functions, storage };

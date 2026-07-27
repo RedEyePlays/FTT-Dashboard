@@ -103,6 +103,11 @@ export interface AppSettings {
   appearance: {
     theme: ThemeMode;
   };
+  backups: {
+    enabled: boolean;                  // opt-in: run the scheduled Cloud Function for this workspace
+    frequency: 'daily' | 'weekly';     // how often the automated snapshot is taken
+    retention: number;                 // how many past automated backups to keep (older ones auto-deleted)
+  };
 }
 
 export const DASHBOARD_WIDGETS = ['periods', 'inventory', 'repairs', 'recentSales', 'lowStock', 'topPlatforms'] as const;
@@ -129,6 +134,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   customers: { requirePhone: false, requireEmail: false, duplicateDetection: true, defaultTags: ['VIP', 'Wholesale', 'Business'] },
   dashboard: { widgets: Object.fromEntries(DASHBOARD_WIDGETS.map(w => [w, true])), landingView: 'dashboard', analyticsRange: 'today' },
   appearance: { theme: 'system' },
+  backups: { enabled: false, frequency: 'daily', retention: 14 },
 };
 
 // Deep-merge a stored partial over the defaults (one level per section is enough).
@@ -145,6 +151,7 @@ export function mergeSettings(partial?: DeepPartial<AppSettings>): AppSettings {
     customers: { ...d.customers, ...partial.customers, defaultTags: partial.customers?.defaultTags ?? d.customers.defaultTags },
     dashboard: { ...d.dashboard, ...partial.dashboard, widgets: { ...d.dashboard.widgets, ...partial.dashboard?.widgets } },
     appearance: { ...d.appearance, ...partial.appearance },
+    backups: { ...d.backups, ...partial.backups },
   };
 }
 
