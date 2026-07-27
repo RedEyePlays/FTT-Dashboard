@@ -12,15 +12,27 @@ html, body {
   overflow-x: hidden;
   max-width: 100%;
 }
-/* Reserve the vertical scrollbar's gutter permanently. Views whose content
-   height changes (most visibly: switching Settings tabs) otherwise gain/lose the
-   document scrollbar between states; with a classic space-consuming scrollbar
-   that changes the viewport width, and because the app centers its content with
-   `mx-auto`, the whole column re-centers — shifting the fixed-width Settings
-   sidebar sideways. Reserving the gutter keeps the layout width constant so
-   nothing moves. No-op where the platform uses overlay scrollbars. */
+/* Keep the document's vertical scrollbar ALWAYS present so the usable viewport
+   width never changes between pages/tabs.
+
+   Why: views whose content height changes (most visibly, switching Settings
+   tabs — e.g. the short "About" tab vs the tall "Security & Roles" / "Data &
+   Backups" tabs) otherwise gain/lose the document scrollbar. With a classic
+   space-consuming scrollbar that changes the viewport width, and because the app
+   centers its content with `mx-auto`, the whole column re-centers — visibly
+   shifting the fixed-width Settings sidebar sideways. (It is NOT a section being
+   too wide: `overflow-x: hidden` + `min-w-0` + the `max-w-*` caps mean even a
+   grossly oversized child cannot move the centered column.)
+
+   `scrollbar-gutter: stable` reserves the gutter on browsers that support it, but
+   that's not universal (e.g. Safari only added it in 18.4), which is why an
+   earlier gutter-only fix didn't hold everywhere. `overflow-y: scroll` forces the
+   track to always render on every browser, so the width is constant regardless.
+   Both are harmless on platforms with overlay scrollbars (which never reserve
+   space and never shift). */
 html {
   scrollbar-gutter: stable;
+  overflow-y: scroll;
 }
 #root {
   overflow-x: hidden;
