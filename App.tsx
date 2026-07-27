@@ -49,6 +49,7 @@ import { buildAlerts } from './domain/alerts';
 import { changedSettingsSections } from './domain/audit';
 import { dropOffPurchaseCost } from './domain/dropoffs';
 import { InvSection, DEFAULT_INV_SECTION, invPath, parseInvPath } from './domain/inventoryNav';
+import { viewPath, parseViewPath, isRoutableView } from './domain/appNav';
 import { AppHeader } from './components/AppHeader';
 import { MobileNav } from './components/MobileNav';
 import { MobileDrawer } from './components/MobileDrawer';
@@ -192,10 +193,10 @@ const App: React.FC = () => {
     switch (r.type) {
       case 'page': if (r.action === 'settings') setShowSettingsModal(true); else if (r.view) navigate(r.view); break;
       case 'inventory': { const it = data.find(i => i.id === r.itemId); if (it) { setEditingItem(it); setView('edit'); } break; }
-      case 'repair': setFocusRepairId(r.itemId); setView('repairs'); break;
-      case 'customer': setFocusCustomerId(r.itemId); setView('customers'); break;
-      case 'sale': if (r.customerId) { setFocusCustomerId(r.customerId); setView('customers'); } break;
-      case 'user': setView('users'); break;
+      case 'repair': setFocusRepairId(r.itemId); navigate('repairs'); break;
+      case 'customer': setFocusCustomerId(r.itemId); navigate('customers'); break;
+      case 'sale': if (r.customerId) { setFocusCustomerId(r.customerId); navigate('customers'); } break;
+      case 'user': navigate('users'); break;
     }
   };
 
@@ -274,14 +275,15 @@ const App: React.FC = () => {
     const path = invPath(s);
     if (window.location.pathname !== path) window.history.pushState(null, '', path);
   };
-  // Navigation wrapper for the nav surfaces: clicking Inventory opens Devices;
-  // leaving Inventory clears the /inventory path back to root.
+  // Navigation wrapper for every nav surface: clicking Inventory opens Devices;
+  // every other page pushes its own path so a refresh / shared link restores it.
   const navigate = (v: ViewState) => {
     if (v === 'grid') { goInventory(DEFAULT_INV_SECTION); return; }
-    if (parseInvPath(window.location.pathname)) window.history.pushState(null, '', '/');
+    const path = viewPath(v);
+    if (isRoutableView(v) && window.location.pathname !== path) window.history.pushState(null, '', path);
     setView(v);
   };
-  // On first load, restore the section from the URL (/inventory → devices).
+  // On first load, restore the page (and inventory section) from the URL.
   useEffect(() => {
     const s = parseInvPath(window.location.pathname);
     if (s) {
@@ -290,12 +292,17 @@ const App: React.FC = () => {
       setView('grid');
       const path = invPath(s);
       if (window.location.pathname !== path) window.history.replaceState(null, '', path);
+    } else {
+      const v = parseViewPath(window.location.pathname);
+      // A real, non-dashboard page in the URL wins over the configured landing page.
+      if (v && v !== 'dashboard' && isRoutableView(v)) { landingAppliedRef.current = true; setView(v); }
     }
-    // Back/forward between inventory sections (and out to the app).
+    // Back/forward across the whole app (inventory sections included).
     const onPop = () => {
       const sec = parseInvPath(window.location.pathname);
-      if (sec) { setInvSection(sec); setView('grid'); }
-      else setView('dashboard');
+      if (sec) { setInvSection(sec); setView('grid'); return; }
+      const v = parseViewPath(window.location.pathname);
+      setView(v && isRoutableView(v) ? v : 'dashboard');
     };
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
@@ -723,8 +730,8 @@ const App: React.FC = () => {
   };
 
   // Quick actions from a customer profile: seed the target view with the customer.
-  const startSaleFor = (c: Customer) => { setPrefillCustomer(c); setView('pos'); };
-  const createRepairFor = (c: Customer) => { setPrefillCustomer(c); setView('repairs'); };
+  const startSaleFor = (c: Customer) => { setPrefillCustomer(c); navigate('pos'); };
+  const createRepairFor = (c: Customer) => { setPrefillCustomer(c); navigate('repairs'); };
 
   const handleStartAdd = () => {
     setEditingItem(undefined);
@@ -803,7 +810,7 @@ const App: React.FC = () => {
         onToggleAiSidebar={() => setIsAiSidebarOpen(!isAiSidebarOpen)}
         onToggleCalculator={() => setShowCalculator(!showCalculator)}
         onOpenFinder={() => setShowFinder(true)}
-        onOpenSettings={() => setView('settings')}
+        onOpenSettings={() => navigate('settings')}
         onOpenBulk={() => setShowBulkModal(true)}
         onStartAdd={handleStartAdd}
         onLock={handleLock}
@@ -825,7 +832,7 @@ const App: React.FC = () => {
         darkMode={darkMode}
         onToggleTheme={() => setDarkMode(!darkMode)}
         onOpenFinder={() => setShowFinder(true)}
-        onOpenSettings={() => setView('settings')}
+        onOpenSettings={() => navigate('settings')}
         onOpenBulk={() => setShowBulkModal(true)}
         onLock={handleLock}
       />
@@ -838,7 +845,7 @@ const App: React.FC = () => {
         <div className="animate-fadeIn flex-1 flex flex-col">
           {view === 'dashboard' && (
             allow('reports.view')
-              ? <Dashboard data={data} salesTransactions={salesTransactions} activity={activityLog} repairs={repairs} repairBatches={repairBatches} canViewProfit={allow('reports.profit.summary')} onViewAnalytics={() => setView('analytics')} onViewRepairs={allow('repairs.manage') ? () => setView('repairs') : undefined} />
+              ? <Dashboard data={data} salesTransactions={salesTransactions} activity={activityLog} repairs={repairs} repairBatches={repairBatches} canViewProfit={allow('reports.profit.summary')} onViewAnalytics={() => navigate('analytics')} onViewRepairs={allow('repairs.manage') ? () => navigate('repairs') : undefined} />
               : <div className="text-center text-slate-400 py-20">You don't have access to reports.</div>
           )}
           {view === 'analytics' && (
@@ -887,8 +894,8 @@ const App: React.FC = () => {
           {(view === 'entry' || view === 'edit') && (
             <DataEntryForm 
               initialData={editingItem} 
-              onSave={handleSaveItem} 
-              onCancel={() => setView('grid')} 
+              onSave={handleSaveItem}
+              onCancel={() => navigate('grid')}
             />
           )}
           {view === 'grid' && (
