@@ -12,6 +12,16 @@ html, body {
   overflow-x: hidden;
   max-width: 100%;
 }
+/* Reserve the vertical scrollbar's gutter permanently. Views whose content
+   height changes (most visibly: switching Settings tabs) otherwise gain/lose the
+   document scrollbar between states; with a classic space-consuming scrollbar
+   that changes the viewport width, and because the app centers its content with
+   `mx-auto`, the whole column re-centers — shifting the fixed-width Settings
+   sidebar sideways. Reserving the gutter keeps the layout width constant so
+   nothing moves. No-op where the platform uses overlay scrollbars. */
+html {
+  scrollbar-gutter: stable;
+}
 #root {
   overflow-x: hidden;
 }
