@@ -63,7 +63,7 @@ export const MobileCheckout: React.FC<Props> = (props) => {
       <div className="flex flex-col items-center text-center gap-4 py-6">
         <div className="w-20 h-20 rounded-full bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center"><CheckCircle className="w-10 h-10 text-emerald-500" /></div>
         <div>
-          <p className="text-xl font-bold text-slate-800 dark:text-slate-100">Sale Complete</p>
+          <p className="text-xl font-bold text-slate-800 dark:text-slate-100">{t.balanceOwing ? 'Deposit Taken — On Layaway' : 'Sale Complete'}</p>
           <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Receipt <span className="font-mono">{t.id.slice(0, 8)}</span></p>
         </div>
         <div className="w-full max-w-sm bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl p-4 text-left space-y-1.5 text-sm">
@@ -72,7 +72,13 @@ export const MobileCheckout: React.FC<Props> = (props) => {
           </div>
           <div className="flex justify-between"><span className="text-slate-400">Customer</span><span className="text-slate-700 dark:text-slate-200">{t.customerName || 'Walk-in'}</span></div>
           <div className="flex justify-between"><span className="text-slate-400">Payment</span><span className="text-slate-700 dark:text-slate-200 capitalize">{payChoice === 'etransfer' ? 'E-Transfer' : t.paymentMethod}</span></div>
-          <div className="flex justify-between text-base font-bold pt-1"><span>Total paid</span><span>{money(t.totalPaid)}</span></div>
+          <div className="flex justify-between text-base font-bold pt-1"><span>{t.balanceOwing ? 'Total due' : 'Total paid'}</span><span>{money(t.totalPaid)}</span></div>
+          {t.balanceOwing ? (
+            <>
+              <div className="flex justify-between"><span className="text-slate-400">Deposit paid</span><span className="text-slate-700 dark:text-slate-200">{money(t.deposit || 0)}</span></div>
+              <div className="flex justify-between font-bold text-sky-600 dark:text-sky-300"><span>Balance owing</span><span>{money(t.balanceOwing)}</span></div>
+            </>
+          ) : null}
         </div>
         <div className="grid grid-cols-1 gap-2 w-full max-w-sm">
           <button onClick={cx.printReceipt} className="flex items-center justify-center gap-2 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold"><Printer className="w-4 h-4" /> Print Receipt</button>
@@ -98,8 +104,7 @@ export const MobileCheckout: React.FC<Props> = (props) => {
   // ---- progress + step wrapper ----
   const canNext = step === 0 ? cx.cart.length > 0
     : step === 1 ? cx.cart.length > 0
-    : step === 2 ? !!cx.customerName.trim()
-    : true;
+    : true; // customer name is optional — a blank name checks out as "Walk-in"
 
   const next = () => setStep(s => Math.min(3, s + 1));
   const back = () => setStep(s => Math.max(0, s - 1));
@@ -222,7 +227,7 @@ export const MobileCheckout: React.FC<Props> = (props) => {
             <CustomerSearchInput customers={cx.customers} placeholder="Search existing customer…"
               onSelect={c => { cx.setCustomerName(c.name); cx.setCustomerPhone(c.phone || ''); cx.setCustomerEmail(c.email || ''); cx.setSelectedCustomerId(c.id); }} />
           )}
-          <div className="relative"><User className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" /><input value={cx.customerName} onChange={e => { cx.setCustomerName(e.target.value); cx.setSelectedCustomerId(undefined); }} placeholder="Customer name" className={`${input} pl-9`} /></div>
+          <div className="relative"><User className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" /><input value={cx.customerName} onChange={e => { cx.setCustomerName(e.target.value); cx.setSelectedCustomerId(undefined); }} placeholder="Customer name (optional)" className={`${input} pl-9`} /></div>
           <div className="relative"><Phone className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" /><input type="tel" inputMode="tel" value={cx.customerPhone} onChange={e => cx.setCustomerPhone(e.target.value)} placeholder="Phone" className={`${input} pl-9`} /></div>
           <div className="relative"><Mail className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" /><input type="email" inputMode="email" value={cx.customerEmail} onChange={e => cx.setCustomerEmail(e.target.value)} placeholder="Email (optional)" className={`${input} pl-9`} /></div>
           <button onClick={() => { cx.setCustomerName('Walk-in'); cx.setCustomerPhone(''); cx.setCustomerEmail(''); cx.setSelectedCustomerId(undefined); next(); }} className="w-full py-3 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-sm font-medium">Continue as Walk-in</button>
@@ -256,6 +261,9 @@ export const MobileCheckout: React.FC<Props> = (props) => {
             </div>
           )}
           <input value={cx.paymentNotes} onChange={e => cx.setPaymentNotes(e.target.value)} placeholder="Payment notes (optional)" className={input} />
+          <label className="block text-sm text-slate-500 dark:text-slate-400">Deposit / partial payment (optional)
+            <input type="number" inputMode="decimal" min="0" value={cx.deposit} onChange={e => cx.setDeposit(e.target.value)} placeholder={`Blank if paying in full (${money(cx.totalPaid)})`} className={input} />
+          </label>
           {cx.hasZeroPricedDevice && (
             <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-500/40 rounded-xl p-3 text-sm">
               <p className="flex items-center gap-2 font-semibold text-amber-800 dark:text-amber-300"><AlertTriangle className="w-4 h-4" /> A device has no sale price ($0.00)</p>
@@ -266,7 +274,13 @@ export const MobileCheckout: React.FC<Props> = (props) => {
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-4 space-y-1.5 text-sm">
             <div className="flex justify-between"><span className="text-slate-500 dark:text-slate-400">Subtotal</span><span className="text-slate-800 dark:text-slate-100">{money(cx.subtotal)}</span></div>
             <div className="flex justify-between"><span className="text-slate-500 dark:text-slate-400">Tax</span><span className="text-slate-600 dark:text-slate-300">{money(cx.tax)}</span></div>
-            <div className="flex justify-between text-base font-bold border-t border-slate-100 dark:border-slate-800 pt-1.5"><span>Total</span><span>{money(cx.totalPaid)}</span></div>
+            <div className="flex justify-between text-base font-bold border-t border-slate-100 dark:border-slate-800 pt-1.5"><span>{cx.isLayaway ? 'Total Due' : 'Total'}</span><span>{money(cx.totalPaid)}</span></div>
+            {cx.isLayaway && (
+              <>
+                <div className="flex justify-between"><span className="text-slate-500 dark:text-slate-400">Deposit</span><span className="text-slate-600 dark:text-slate-300">{money(cx.depositAmount)}</span></div>
+                <div className="flex justify-between font-bold text-sky-600 dark:text-sky-300"><span>Balance Owing</span><span>{money(cx.balanceOwing)}</span></div>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -280,7 +294,7 @@ export const MobileCheckout: React.FC<Props> = (props) => {
         {step < 3 ? (
           <button onClick={next} disabled={!canNext} className="ml-auto px-6 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white rounded-xl text-sm font-semibold">Next</button>
         ) : (
-          <button onClick={cx.handleCheckout} disabled={cx.cart.length === 0 || !cx.customerName || cx.blockedByZeroPrice} className="ml-auto px-6 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white rounded-xl text-sm font-semibold flex items-center gap-2"><CheckCircle className="w-4 h-4" /> Complete Sale</button>
+          <button onClick={cx.handleCheckout} disabled={cx.cart.length === 0 || cx.blockedByZeroPrice} className="ml-auto px-6 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white rounded-xl text-sm font-semibold flex items-center gap-2"><CheckCircle className="w-4 h-4" /> {cx.isLayaway ? 'Take Deposit' : 'Complete Sale'}</button>
         )}
       </div>
 

@@ -7,6 +7,7 @@ export type DeviceStatus =
   | 'pending_purchase'
   | 'pending_repair'
   | 'ready'
+  | 'reserved'   // spoken for on a layaway / deposit sale — held, not yet paid off
   | 'sold'
   | 'returned';
 
@@ -256,8 +257,13 @@ export interface SalesTransaction {
   purchaseCost: number;
   repairCost: number;
   totalCost: number;
-  totalPaid: number;
+  totalPaid: number;            // grand total due (subtotal + tax). NOT reduced by a deposit.
   netProfit: number;
+  // Layaway / deposit: when a customer pays part now and owes the rest later,
+  // `deposit` is what was actually collected and `balanceOwing` is what remains.
+  // Both are absent on a normal fully-paid sale (mirrors repairs' deposit pattern).
+  deposit?: number;
+  balanceOwing?: number;
   lines: SalesLine[];
   notes?: string;
   // Voiding keeps the record for audit history rather than deleting it. Absent

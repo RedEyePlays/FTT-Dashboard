@@ -21,6 +21,7 @@ const STATUS_LABEL: Record<DeviceStatus, string> = {
   pending_purchase: 'Pending Purchase',
   pending_repair: 'Pending Repair',
   ready: 'Ready for Sale',
+  reserved: 'Reserved',
   sold: 'Sold',
   returned: 'Returned',
 };

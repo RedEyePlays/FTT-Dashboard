@@ -391,14 +391,16 @@ const App: React.FC = () => {
   // create a sales transaction + customer, log activity — one atomic commit.
   const handleSellCart = (payload: CartCheckout) => {
     if (!uid || !allow('sales.complete')) return;
-    audit('sale.complete', 'sale', payload.transaction.id, undefined, { totalPaid: payload.transaction.totalPaid, lines: payload.transaction.lines.length });
+    const balanceOwing = payload.transaction.balanceOwing || 0;
+    const isLayaway = balanceOwing > 0;
+    audit('sale.complete', 'sale', payload.transaction.id, undefined, { totalPaid: payload.transaction.totalPaid, lines: payload.transaction.lines.length, deposit: payload.transaction.deposit, balanceOwing: balanceOwing || undefined });
     // Pass a signed delta (not an absolute quantity): commitSale applies it with
     // Firestore's atomic increment(), so two concurrent sales of the same
     // accessory both subtract correctly instead of one silently overwriting the
     // other off a shared stale snapshot.
     const accessoryUpdates = Object.entries(payload.accessoryQtys).map(([id, soldQty]) => ({ id, delta: stockChange(soldQty) }));
     const activity: ActivityEntry[] = [
-      ...payload.soldRows.map(d => mkActivity(`${d.sku || d.item} sold to ${d.customerName || d.soldTo || 'customer'}`)),
+      ...payload.soldRows.map(d => mkActivity(`${d.sku || d.item} ${isLayaway ? 'reserved (layaway) for' : 'sold to'} ${d.customerName || d.soldTo || 'customer'}`)),
       ...Object.keys(payload.accessoryQtys).map(id => {
         const a = dataRef.current.find(i => i.id === id); return mkActivity(`${a?.sku || 'Accessory'} quantity updated`);
       }),
