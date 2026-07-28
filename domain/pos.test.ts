@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { platformFeeAmount, isZeroPricedDevice, cartHasZeroPricedDevice, PricedLine } from './pos';
+import { platformFeeAmount, isZeroPricedDevice, cartHasZeroPricedDevice, PricedLine, searchCheckoutInventory, canVoidSale, isVoided } from './pos';
+import { InventoryItem, SalesTransaction } from '../types';
+
+const item = (p: Partial<InventoryItem>): InventoryItem => ({
+  id: 'x', kind: 'device', item: '', imei: '', boughtFrom: '', purchaseCost: 0, repairCost: 0,
+  soldDate: '', soldTo: '', salePrice: 0, date: '', notes: '', ...p,
+});
 
 describe('platformFeeAmount', () => {
   it('computes the dollar fee for a subtotal and percent', () => {
@@ -39,5 +45,55 @@ describe('cartHasZeroPricedDevice', () => {
   });
   it('is false for an empty cart', () => {
     expect(cartHasZeroPricedDevice([])).toBe(false);
+  });
+});
+
+describe('searchCheckoutInventory', () => {
+  const inv: InventoryItem[] = [
+    item({ id: 'd1', kind: 'device', item: 'Apple iPhone 14', brand: 'Apple', model: 'iPhone 14', sku: 'PHN-001', imei: '111' }),
+    item({ id: 'd2', kind: 'device', item: 'Samsung Galaxy S24', brand: 'Samsung', model: 'Galaxy S24', sku: 'PHN-002' }),
+    item({ id: 'sold', kind: 'device', item: 'Apple iPhone 13', sku: 'PHN-003', soldDate: '2026-01-01' }), // sold → excluded
+    item({ id: 'a1', kind: 'accessory', item: 'Apple USB-C Cable', sku: 'ACC-001', quantity: 5 }),
+    item({ id: 'a0', kind: 'accessory', item: 'Apple Case', sku: 'ACC-002', quantity: 0 }), // out of stock → excluded
+  ];
+
+  it('substring-matches name/brand/model across unsold devices + in-stock accessories', () => {
+    const ids = searchCheckoutInventory(inv, 'apple').map(i => i.id);
+    expect(ids).toEqual(expect.arrayContaining(['d1', 'a1']));
+    expect(ids).not.toContain('sold'); // sold device excluded
+    expect(ids).not.toContain('a0');   // out-of-stock accessory excluded
+  });
+
+  it('matches SKU and IMEI too', () => {
+    expect(searchCheckoutInventory(inv, 'phn-002').map(i => i.id)).toEqual(['d2']);
+    expect(searchCheckoutInventory(inv, '111').map(i => i.id)).toEqual(['d1']);
+  });
+
+  it('honours excludeIds (e.g. already in the cart) and the result limit', () => {
+    expect(searchCheckoutInventory(inv, 'apple', { excludeIds: new Set(['d1']) }).map(i => i.id)).not.toContain('d1');
+    expect(searchCheckoutInventory(inv, 'a', { limit: 1 })).toHaveLength(1);
+  });
+
+  it('returns nothing for a blank query', () => {
+    expect(searchCheckoutInventory(inv, '   ')).toEqual([]);
+  });
+});
+
+describe('void eligibility', () => {
+  const tx = (p: Partial<SalesTransaction>): SalesTransaction => ({
+    id: 't', date: '2026-07-28', customerName: '', subtotal: 0, tax: 0, platformFee: 0,
+    purchaseCost: 0, repairCost: 0, totalCost: 0, totalPaid: 0, netProfit: 0, lines: [], ...p,
+  });
+
+  it('allows voiding a same-day, not-yet-voided sale', () => {
+    expect(canVoidSale(tx({ date: '2026-07-28' }), '2026-07-28')).toBe(true);
+  });
+  it('blocks voiding once the day has passed', () => {
+    expect(canVoidSale(tx({ date: '2026-07-27' }), '2026-07-28')).toBe(false);
+  });
+  it('blocks voiding an already-voided sale', () => {
+    expect(canVoidSale(tx({ date: '2026-07-28', status: 'voided' }), '2026-07-28')).toBe(false);
+    expect(isVoided(tx({ status: 'voided' }))).toBe(true);
+    expect(isVoided(tx({}))).toBe(false);
   });
 });

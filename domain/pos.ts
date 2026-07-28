@@ -1,3 +1,6 @@
+import { InventoryItem, SalesTransaction } from '../types';
+import { kindOf } from './inventory';
+
 // Shared POS constants/helpers. Extracted from CartSaleView so the platform-fee
 // list has a single home and can be unit-tested and reused by future POS views.
 
@@ -34,3 +37,38 @@ export const isZeroPricedDevice = (l: PricedLine): boolean =>
 /** True if any device line in the cart is priced at $0. */
 export const cartHasZeroPricedDevice = (lines: PricedLine[]): boolean =>
   lines.some(isZeroPricedDevice);
+
+// --- Checkout typed-search fallback ----------------------------------------
+//
+// When a scan/typed value doesn't exactly match a SKU/IMEI/barcode, the checkout
+// falls back to a case-insensitive substring search across sellable inventory
+// (unsold devices + in-stock accessories) on name/brand/model/SKU/IMEI/barcode.
+// Returns a bounded list — a short pick-list, never the whole catalogue.
+export const searchCheckoutInventory = (
+  inventory: InventoryItem[],
+  query: string,
+  opts?: { excludeIds?: Set<string>; limit?: number },
+): InventoryItem[] => {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  const exclude = opts?.excludeIds ?? new Set<string>();
+  const limit = opts?.limit ?? 6;
+  const hit = (i: InventoryItem) =>
+    [i.item, i.brand, i.model, i.sku, i.imei, i.manufacturerBarcode]
+      .some(v => (v || '').toLowerCase().includes(q));
+  const sellable = (i: InventoryItem) =>
+    kindOf(i) === 'device'
+      ? !(i.soldDate || i.deviceStatus === 'sold')
+      : (i.quantity ?? 0) > 0;
+  return inventory.filter(i => !exclude.has(i.id) && sellable(i) && hit(i)).slice(0, limit);
+};
+
+// --- Voiding a completed sale ----------------------------------------------
+
+export const isVoided = (tx: Pick<SalesTransaction, 'status'>): boolean => tx.status === 'voided';
+
+// A sale may be voided only within the same calendar day it was recorded, and
+// only once. A SalesTransaction has no separate created-at timestamp, so the
+// window is measured against its `date` (YYYY-MM-DD) field.
+export const canVoidSale = (tx: Pick<SalesTransaction, 'status' | 'date'>, todayISO: string): boolean =>
+  !isVoided(tx) && !!tx.date && tx.date === todayISO;
