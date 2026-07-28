@@ -41,7 +41,8 @@ export const CartSaleView: React.FC<Props> = (props) => {
     taxRate, feePercent, previousPurchases, availableDevices, availableAccessories,
     lineSubtotal, subtotal, purchaseCostTotal, repairCostTotal, totalCost, taxApplies, tax, platformFee, totalPaid, netProfit,
     isZeroPricedDevice, hasZeroPricedDevice, allowZeroPrice, setAllowZeroPrice, blockedByZeroPrice,
-    addDevice, addAccessory, updateLine, removeLine, num, addCustomItem, handleScan, handleCheckout, reset, printReceipt, soldDeviceRows,
+    addDevice, addAccessory, updateLine, removeLine, num, addCustomItem, handleScan, handleCheckout, reset, printReceipt, emailReceipt, soldDeviceRows,
+    scanResults, addScanResult,
   } = cx;
 
   const inputCls = 'w-full px-2 py-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500';
@@ -71,6 +72,8 @@ export const CartSaleView: React.FC<Props> = (props) => {
 
         <div className="grid grid-cols-2 gap-2 w-full max-w-sm mt-2">
           <button onClick={printReceipt} className="flex items-center justify-center gap-2 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium"><Printer className="w-4 h-4" /> Print Receipt</button>
+          <button onClick={emailReceipt} title={lastTx.customerEmail ? `Email to ${lastTx.customerEmail}` : 'No email captured — opens a blank To: field'}
+            className="flex items-center justify-center gap-2 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-lg text-sm font-medium hover:border-indigo-400"><Mail className="w-4 h-4" /> Email Receipt</button>
           <button onClick={() => soldDeviceRows[0] && setLabelItem(soldDeviceRows[0])} disabled={soldDeviceRows.length === 0}
             className="flex items-center justify-center gap-2 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-lg text-sm font-medium hover:border-indigo-400 disabled:opacity-40"><QrCode className="w-4 h-4" /> Print Label</button>
           <button onClick={() => setShowTx(true)} className="flex items-center justify-center gap-2 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-lg text-sm font-medium hover:border-indigo-400"><Eye className="w-4 h-4" /> View Transaction</button>
@@ -128,9 +131,25 @@ export const CartSaleView: React.FC<Props> = (props) => {
             value={scan}
             onChange={e => { setScan(e.target.value); cx.setScanMsg(null); }}
             onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleScan(scan); } }}
-            placeholder="Scan SKU, IMEI, serial, or barcode to add item"
+            placeholder="Scan a SKU/IMEI/barcode, or type a name to search"
             className="w-full pl-9 pr-3 py-3 bg-white dark:bg-slate-900 border-2 border-indigo-200 dark:border-indigo-800 rounded-xl text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
           />
+          {/* Typed-search pick-list: substring matches to click-to-add (partial
+              matches never auto-add). Exact scans still add instantly on Enter. */}
+          {scan.trim() && scanResults.length > 0 && (
+            <div className="absolute left-0 right-0 top-full mt-1 z-20 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg shadow-xl overflow-hidden">
+              {scanResults.map(i => (
+                <button key={i.id} onClick={() => addScanResult(i)}
+                  className="w-full text-left px-3 py-2 flex items-center justify-between gap-2 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 border-b border-slate-50 dark:border-slate-800 last:border-0">
+                  <span className="min-w-0">
+                    <span className="block text-sm text-slate-800 dark:text-slate-100 truncate">{i.item || getDeviceDisplayName(i)}</span>
+                    <span className="block text-[11px] text-slate-400 font-mono truncate">{i.sku || i.imei || i.manufacturerBarcode || ''}{i.kind === 'accessory' ? ` · ${i.quantity ?? 0} in stock` : ''}</span>
+                  </span>
+                  <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded shrink-0 bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400">{(i.kind ?? 'device') === 'device' ? 'Device' : 'Accessory'}</span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
         {scanMsg && <p className="text-xs text-rose-500 -mt-1">{scanMsg}</p>}
 

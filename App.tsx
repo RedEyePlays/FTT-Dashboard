@@ -20,7 +20,7 @@ import { InventoryView } from './components/InventoryView';
 import { UsersView } from './components/UsersView';
 import { AuditLogView } from './components/AuditLogView';
 import { TimeClockView } from './components/TimeClockView';
-import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, Runner, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission, Repair, RepairBatch, TimeEntry, PayPeriodPaid, BreakReason } from './types';
+import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, Runner, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission, Repair, RepairBatch, TimeEntry, PayPeriodPaid, BreakReason, SalesTransaction } from './types';
 import { skuPrefix, nextSku } from './services/sku';
 import { REPAIR_PREFIX, BATCH_PREFIX, computeWarrantyUntil, applyTechEdit, TECH_EDITABLE_FIELDS } from './domain/repairs';
 import { RepairsView } from './components/RepairsView';
@@ -34,7 +34,7 @@ import { auth } from './services/firebase';
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import {
   saveMeta, saveItem, deleteItem, syncArray, allocateSku,
-  logActivityDoc, commitSale, seedSampleData,
+  logActivityDoc, commitSale, voidSale, seedSampleData,
   updateUserDoc, setInvite, deleteInvite,
   logAudit, exportWorkspaceData, recordBackup, saveSettings,
   saveTimeEntry, savePayPeriodPaid, deletePayPeriodPaid,
@@ -44,6 +44,7 @@ import { listWorkspaceBackups, getBackupDownloadUrl } from './services/backupSto
 import { useWorkspaceData } from './hooks/useWorkspaceData';
 import { newId, mkActivity } from './domain/ids';
 import { collectionFor, stockChange } from './domain/inventory';
+import { canVoidSale } from './domain/pos';
 import { openEntryFor, isOnBreak, periodPayFor, paidKey, toISODate, PayPeriod } from './domain/timeclock';
 import { buildAlerts } from './domain/alerts';
 import { changedSettingsSections } from './domain/audit';
@@ -413,6 +414,33 @@ const App: React.FC = () => {
       saveItem(uid, collectionFor(withSku), withSku);
       logActivity(`${withSku.sku || withSku.item} added from custom sale`);
     });
+  };
+
+  // Reverse a completed sale (owner/manager, same-day window). Returns sold
+  // devices to stock, restocks accessories atomically, and flags the transaction
+  // voided (kept for audit). Does NOT touch custom lines (no inventoryId).
+  const handleVoidSale = (tx: SalesTransaction) => {
+    if (!uid || !appUser || !allow('sales.void')) return;
+    if (!canVoidSale(tx, new Date().toISOString().split('T')[0])) return;
+
+    // Device lines are the actual sold inventory rows (still carrying this txn id).
+    const deviceIds = dataRef.current
+      .filter(i => (i.kind ?? 'device') === 'device' && i.transactionId === tx.id)
+      .map(i => i.id);
+    // Restock accessories by the quantity sold on each accessory line.
+    const accByLine = new Map<string, number>();
+    for (const l of tx.lines) {
+      if (l.kind === 'accessory' && l.inventoryId) accByLine.set(l.inventoryId, (accByLine.get(l.inventoryId) || 0) + (l.quantity || 0));
+    }
+    const accessoryUpdates = [...accByLine].map(([id, qty]) => ({ id, delta: qty }));
+
+    const activity: ActivityEntry[] = [mkActivity(`Sale ${tx.id.slice(0, 8)} voided (${tx.customerName || 'customer'})`)];
+    voidSale(uid, {
+      transactionId: tx.id, deviceIds, accessoryUpdates,
+      voided: { voidedAt: Date.now(), voidedBy: appUser.id, voidedByEmail: appUser.email },
+      activity,
+    }).catch(e => console.error('Void failed', e));
+    audit('sale.void', 'sale', tx.id, { totalPaid: tx.totalPaid }, { devices: deviceIds.length, accessories: accessoryUpdates.length });
   };
 
   const handleBulkImport = (items: InventoryItem[]) => {
@@ -893,6 +921,8 @@ const App: React.FC = () => {
               onMergeCustomers={handleMergeCustomers}
               onStartSale={allow('sales.complete') ? startSaleFor : undefined}
               onCreateRepair={allow('repairs.manage') ? createRepairFor : undefined}
+              onVoidSale={allow('sales.void') ? handleVoidSale : undefined}
+              canVoidSale={(tx) => allow('sales.void') && canVoidSale(tx, new Date().toISOString().split('T')[0])}
             />
           )}
           {view === 'repairs' && allow('repairs.manage') && (
