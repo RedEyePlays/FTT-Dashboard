@@ -3,7 +3,7 @@ import { InventoryItem, ItemKind, DeviceType, SalesTransaction, Customer } from 
 import { getPOSSettings } from '../components/SettingsModal';
 import { newId } from '../domain/ids';
 import { kindOf, getDeviceDisplayName } from '../domain/inventory';
-import { isZeroPricedDevice as isZeroPricedLine, cartHasZeroPricedDevice } from '../domain/pos';
+import { isZeroPricedDevice as isZeroPricedLine, cartHasZeroPricedDevice, searchCheckoutInventory } from '../domain/pos';
 
 // All Quick Sale / checkout state, pricing math and the commit-payload builder
 // live here so the desktop CartSaleView and the mobile step flow share ONE
@@ -206,12 +206,33 @@ export function useCheckout({ inventory, customers = [], initialCustomer, onCons
     setShowCustom(false);
   };
 
+  // Add an accessory (merging into an existing line) or a device from the typed
+  // pick-list. Clears the search box + any "not found" message.
+  const addScanResult = (i: InventoryItem) => {
+    if (kindOf(i) === 'accessory') {
+      const line = cart.find(l => l.inventoryId === i.id);
+      if (line) updateLine(line.key, { quantity: Math.min(line.maxQty, line.quantity + 1) });
+      else addAccessory(i);
+    } else {
+      addDevice(i);
+    }
+    setScan(''); setScanMsg(null);
+  };
+
+  // Typed-search fallback pick-list: substring matches when the value isn't an
+  // exact scan. Bounded and reactive to the current input.
+  const scanResults = searchCheckoutInventory(inventory, scan, {
+    excludeIds: new Set<string>([...soldIds, ...inCart]),
+    limit: 6,
+  });
+
   const handleScan = (raw: string) => {
     const v = raw.trim();
     if (!v) return;
     const q = v.toLowerCase();
     const eq = (a?: string) => (a || '').toLowerCase() === q;
 
+    // Fast path: an exact SKU/IMEI/barcode match adds instantly (real scans).
     const device = inventory.find(i => kindOf(i) === 'device' && !soldIds.has(i.id) && !inCart.has(i.id) && (eq(i.sku) || eq(i.imei)));
     if (device) { addDevice(device); setScan(''); setScanMsg(null); return; }
 
@@ -222,8 +243,11 @@ export function useCheckout({ inventory, customers = [], initialCustomer, onCons
       else addAccessory(acc);
       setScan(''); setScanMsg(null); return;
     }
-    setScanMsg(`No item found for "${v}"`);
-    setScan('');
+
+    // No exact match: leave the pick-list of substring matches visible (don't
+    // auto-add — several items may match). Only warn when there's nothing at all.
+    if (scanResults.length === 0) { setScanMsg(`No item found for "${v}"`); setScan(''); }
+    else setScanMsg(null);
   };
 
   // ---- checkout ----
@@ -342,6 +366,31 @@ export function useCheckout({ inventory, customers = [], initialCustomer, onCons
     win.document.close();
   };
 
+  // Email the receipt via a prefilled mailto: link — no backend required, opens
+  // the user's own mail client with the customer's captured email pre-addressed.
+  // (Limitation: it composes a draft in their client rather than sending
+  // server-side; a real transactional-email sender would be a follow-up.)
+  const emailReceipt = () => {
+    if (!lastTx) return;
+    const lines = lastTx.lines.map(l => `- ${l.quantity} x ${l.name} — $${(l.quantity * l.unitPrice).toFixed(2)}`).join('\n');
+    const body = [
+      `Receipt ${lastTx.id}`,
+      lastTx.date,
+      '',
+      lines,
+      '',
+      `Subtotal: $${lastTx.subtotal.toFixed(2)}`,
+      `Tax: $${lastTx.tax.toFixed(2)}`,
+      `Total: $${lastTx.totalPaid.toFixed(2)}`,
+      '',
+      'Thank you for your business!',
+      'FlipThatTech',
+    ].join('\n');
+    const subject = `Your FlipThatTech receipt (${lastTx.date})`;
+    const to = encodeURIComponent(lastTx.customerEmail || '');
+    window.location.href = `mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  };
+
   const soldDeviceRows = cart.filter(l => l.kind === 'device').map(l => inventory.find(i => i.id === l.inventoryId)).filter(Boolean) as InventoryItem[];
 
   return {
@@ -357,7 +406,8 @@ export function useCheckout({ inventory, customers = [], initialCustomer, onCons
     taxRate, feePercent, previousPurchases, availableDevices, availableAccessories,
     lineSubtotal, subtotal, discountTotal, purchaseCostTotal, repairCostTotal, totalCost, taxableBase, taxApplies, tax, platformFee, totalPaid, netProfit,
     isZeroPricedDevice, hasZeroPricedDevice, allowZeroPrice, setAllowZeroPrice, blockedByZeroPrice,
-    addDevice, addAccessory, updateLine, removeLine, num, addCustomItem, handleScan, handleCheckout, reset, printReceipt, soldDeviceRows,
+    addDevice, addAccessory, updateLine, removeLine, num, addCustomItem, handleScan, handleCheckout, reset, printReceipt, emailReceipt, soldDeviceRows,
+    scanResults, addScanResult,
   };
 }
 

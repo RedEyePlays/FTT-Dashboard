@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import {
   Users, Search, ArrowLeft, Phone, Mail, ShoppingCart, Wrench, DollarSign,
   ChevronRight, Receipt, Pencil, X, Clock, Smartphone, ShieldCheck, AlertTriangle,
-  Copy, PlusCircle, Printer, FileText, Merge, Hash, Check,
+  Copy, PlusCircle, Printer, FileText, Merge, Hash, Check, Ban,
 } from 'lucide-react';
 import { Customer, SalesTransaction, Repair, RepairBatch, InventoryItem, AuditEntry } from '../types';
 import {
@@ -30,6 +30,8 @@ interface Props {
   onMergeCustomers?: (plan: MergePlan) => void;
   onStartSale?: (c: Customer) => void;
   onCreateRepair?: (c: Customer) => void;
+  onVoidSale?: (tx: SalesTransaction) => void;         // owner/manager: reverse a sale
+  canVoidSale?: (tx: SalesTransaction) => boolean;     // within-window + permission check
 }
 
 const money = (n: number) => `$${(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -191,7 +193,7 @@ export const CustomersView: React.FC<Props> = (props) => {
 
 /* ---------------- Profile ---------------- */
 const CustomerProfile: React.FC<Props & { customer: Customer; data: CustomerData; onBack: () => void }> = (
-  { customer, data, canViewProfit, canEdit, auditLogs, inventory, onBack, onSaveCustomer, onStartSale, onCreateRepair },
+  { customer, data, canViewProfit, canEdit, auditLogs, inventory, onBack, onSaveCustomer, onStartSale, onCreateRepair, onVoidSale, canVoidSale },
 ) => {
   const s = useMemo(() => customerStats(customer, data), [customer, data]);
   const timeline = useMemo(() => customerTimeline(s), [s]);
@@ -325,8 +327,8 @@ const CustomerProfile: React.FC<Props & { customer: Customer; data: CustomerData
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                 {s.purchases.map(t => (
                   <tr key={t.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40 cursor-pointer" onClick={() => setInvoice(t)}>
-                    <td className="py-2 font-mono text-xs text-slate-500">{t.id.slice(0, 8)}</td>
-                    <td className="py-2 text-slate-600 dark:text-slate-300">{t.date}</td>
+                    <td className="py-2 font-mono text-xs text-slate-500">{t.id.slice(0, 8)}{t.status === 'voided' && <span className="ml-1 text-[9px] font-sans font-semibold px-1 py-0.5 rounded bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300 align-middle">VOID</span>}</td>
+                    <td className={`py-2 text-slate-600 dark:text-slate-300 ${t.status === 'voided' ? 'line-through opacity-60' : ''}`}>{t.date}</td>
                     <td className="py-2 text-slate-500 dark:text-slate-400 truncate max-w-[220px]">{t.lines.map(l => `${l.quantity}× ${l.name}`).join(', ')}</td>
                     <td className="py-2 text-slate-500 dark:text-slate-400">{PAYMENT_LABEL[t.paymentMethod || ''] || '—'}</td>
                     <td className="py-2">{warrantyBadge(t, s, inventory)}</td>
@@ -413,7 +415,8 @@ const CustomerProfile: React.FC<Props & { customer: Customer; data: CustomerData
       )}
 
       {editing && <EditModal customer={customer} onClose={() => setEditing(false)} onSave={c => { onSaveCustomer(c, customer); setEditing(false); }} />}
-      {invoice && <InvoiceModal tx={invoice} customer={customer} canViewProfit={canViewProfit} onClose={() => setInvoice(null)} />}
+      {invoice && <InvoiceModal tx={invoice} customer={customer} canViewProfit={canViewProfit} onClose={() => setInvoice(null)}
+        onVoid={onVoidSale && canVoidSale && canVoidSale(invoice) ? () => { onVoidSale(invoice); setInvoice(null); } : undefined} />}
       {ticket && <TicketModal repair={ticket} tech={techFor.get(ticket.id)} customer={customer} onClose={() => setTicket(null)} />}
     </div>
   );
@@ -442,9 +445,14 @@ const Row: React.FC<{ label: string; value: string }> = ({ label, value }) => (
 const Empty: React.FC<{ text: string }> = ({ text }) => <p className="text-sm text-slate-400 py-6 text-center">{text}</p>;
 
 /* ---------------- Invoice modal ---------------- */
-const InvoiceModal: React.FC<{ tx: SalesTransaction; customer: Customer; canViewProfit: boolean; onClose: () => void }> = ({ tx, customer, canViewProfit, onClose }) => (
+const InvoiceModal: React.FC<{ tx: SalesTransaction; customer: Customer; canViewProfit: boolean; onClose: () => void; onVoid?: () => void }> = ({ tx, customer, canViewProfit, onClose, onVoid }) => (
   <Modal title={`Invoice ${tx.id.slice(0, 8)}`} onClose={onClose} onPrint={() => printInvoice(tx, customer)}>
     <div className="space-y-2 text-sm">
+      {tx.status === 'voided' && (
+        <div className="flex items-center gap-2 text-xs font-semibold text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-900/20 border border-rose-200 dark:border-rose-900/40 rounded-lg px-3 py-2">
+          VOIDED{tx.voidedAt ? ` · ${new Date(tx.voidedAt).toLocaleString()}` : ''} — stock and devices were reversed; the record is kept for history.
+        </div>
+      )}
       <Row label="Date" value={tx.date} />
       <Row label="Customer" value={customer.name || customer.company || tx.customerName || '—'} />
       <Row label="Payment" value={PAYMENT_LABEL[tx.paymentMethod || ''] || '—'} />
@@ -463,6 +471,15 @@ const InvoiceModal: React.FC<{ tx: SalesTransaction; customer: Customer; canView
       {tx.tax ? <Row label="Tax" value={money(tx.tax)} /> : null}
       <div className="flex items-center justify-between py-1 text-base font-bold"><span>Total</span><span>{money(tx.totalPaid)}</span></div>
       {canViewProfit && <Row label="Profit" value={money(tx.netProfit)} />}
+      {onVoid && (
+        <div className="pt-2 mt-1 border-t border-slate-100 dark:border-slate-800">
+          <button
+            onClick={() => { if (window.confirm('Void this sale? Sold devices return to stock, accessory quantities are restored, and the sale is flagged voided (kept for history).')) onVoid(); }}
+            className="w-full flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium bg-rose-50 dark:bg-rose-900/20 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-900/40 hover:bg-rose-100 dark:hover:bg-rose-900/30">
+            <Ban className="w-4 h-4" /> Void Sale
+          </button>
+        </div>
+      )}
     </div>
   </Modal>
 );

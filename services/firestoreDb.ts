@@ -109,6 +109,28 @@ export async function commitSale(uid: string, payload: {
   await batch.commit();
 }
 
+// Reverse a completed sale in one atomic commit: return sold devices to unsold,
+// increment accessory stock back (via the same atomic increment() as commitSale —
+// never a raw absolute write), and flag the transaction as voided (kept for
+// audit history, not deleted). Activity is logged in the same batch.
+export async function voidSale(uid: string, payload: {
+  transactionId: string;
+  deviceIds: string[];                               // device inventory rows to return to unsold
+  accessoryUpdates: { id: string; delta: number }[]; // positive deltas to restock
+  voided: { voidedAt: number; voidedBy: string; voidedByEmail?: string };
+  activity: ActivityEntry[];
+}) {
+  const batch = writeBatch(db);
+  payload.deviceIds.forEach(id => batch.set(docRef(uid, 'inventory', id),
+    { soldDate: '', soldTo: '', salePrice: 0, deviceStatus: 'ready', transactionId: '' }, { merge: true } as any));
+  payload.accessoryUpdates.forEach(a => batch.set(docRef(uid, 'accessories', a.id),
+    { quantity: increment(a.delta) }, { merge: true } as any));
+  batch.set(docRef(uid, 'salesTransactions', payload.transactionId),
+    { status: 'voided', ...payload.voided }, { merge: true } as any);
+  payload.activity.forEach(a => batch.set(docRef(uid, 'activityLog', a.id), clean(a)));
+  await batch.commit();
+}
+
 // Seed sample devices/accessories into Firestore (demo option, not auto-loaded).
 export async function seedSampleData(uid: string, items: InventoryItem[]) {
   const batch = writeBatch(db);

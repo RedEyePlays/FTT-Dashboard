@@ -179,7 +179,8 @@ export type Role = 'owner' | 'manager' | 'employee' | 'technician';
 
 export type Permission =
   | 'inventory.add' | 'inventory.edit' | 'inventory.delete'
-  | 'sales.complete' | 'dropoffs.manage'
+  | 'sales.complete' | 'sales.void'   // sales.void = reverse a completed sale (owner + manager)
+  | 'dropoffs.manage'
   | 'repairs.manage'  // full repair management: create/delete, price, batches, customer
   | 'repairs.tech'    // technician-scoped: view + update repair work fields & status
   | 'reports.view'
@@ -259,6 +260,12 @@ export interface SalesTransaction {
   netProfit: number;
   lines: SalesLine[];
   notes?: string;
+  // Voiding keeps the record for audit history rather than deleting it. Absent
+  // status means a normal completed sale (legacy rows have no field).
+  status?: 'completed' | 'voided';
+  voidedAt?: number;       // epoch ms
+  voidedBy?: string;       // uid of the owner/manager who voided it
+  voidedByEmail?: string;
 }
 
 export interface AppData {
