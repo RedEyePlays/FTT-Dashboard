@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { platformFeeAmount, isZeroPricedDevice, cartHasZeroPricedDevice, PricedLine, salesBalanceOwing, isLayaway } from './pos';
 import { platformFeeAmount, isZeroPricedDevice, cartHasZeroPricedDevice, PricedLine, searchCheckoutInventory, canVoidSale, isVoided } from './pos';
+import { platformFeeAmount, isZeroPricedDevice, cartHasZeroPricedDevice, PricedLine, salesBalanceOwing, isLayaway, searchCheckoutInventory, canVoidSale, isVoided } from './pos';
 import { InventoryItem, SalesTransaction } from '../types';
 
 const item = (p: Partial<InventoryItem>): InventoryItem => ({
@@ -65,11 +66,15 @@ describe('salesBalanceOwing', () => {
   });
 });
 
+ts
 describe('isLayaway', () => {
   it('is true only when a balance is still owing', () => {
     expect(isLayaway({ balanceOwing: 300 })).toBe(true);
     expect(isLayaway({ balanceOwing: 0 })).toBe(false);
     expect(isLayaway({})).toBe(false);
+  });
+});
+
 describe('searchCheckoutInventory', () => {
   const inv: InventoryItem[] = [
     item({ id: 'd1', kind: 'device', item: 'Apple iPhone 14', brand: 'Apple', model: 'iPhone 14', sku: 'PHN-001', imei: '111' }),
