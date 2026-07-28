@@ -58,6 +58,7 @@ const STATUS_OPTS: { value: DeviceStatus; label: string }[] = [
   { value: 'pending_purchase', label: 'Pending Purchase' },
   { value: 'pending_repair', label: 'Pending Repair' },
   { value: 'ready', label: 'Ready for Sale' },
+  { value: 'reserved', label: 'Reserved (Layaway)' },
   { value: 'sold', label: 'Sold' },
   { value: 'returned', label: 'Returned' },
 ];
@@ -65,6 +66,7 @@ const STATUS_CELL: Record<DeviceStatus, string> = {
   pending_purchase: 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300',
   pending_repair: 'bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300',
   ready: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300',
+  reserved: 'bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300',
   sold: 'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200',
   returned: 'bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-300',
 };
@@ -73,6 +75,7 @@ const STATUS_SHORT: Record<DeviceStatus, string> = {
   pending_purchase: 'Purchase',
   pending_repair: 'Repair',
   ready: 'Ready',
+  reserved: 'Reserved',
   sold: 'Sold',
   returned: 'Returned',
 };

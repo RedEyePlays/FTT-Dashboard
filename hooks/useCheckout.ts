@@ -3,7 +3,7 @@ import { InventoryItem, ItemKind, DeviceType, SalesTransaction, Customer } from 
 import { getPOSSettings } from '../components/SettingsModal';
 import { newId } from '../domain/ids';
 import { kindOf, getDeviceDisplayName } from '../domain/inventory';
-import { isZeroPricedDevice as isZeroPricedLine, cartHasZeroPricedDevice } from '../domain/pos';
+import { isZeroPricedDevice as isZeroPricedLine, cartHasZeroPricedDevice, salesBalanceOwing } from '../domain/pos';
 
 // All Quick Sale / checkout state, pricing math and the commit-payload builder
 // live here so the desktop CartSaleView and the mobile step flow share ONE
@@ -94,6 +94,9 @@ export function useCheckout({ inventory, customers = [], initialCustomer, onCons
   const [cardAmount, setCardAmount] = useState('');
   const [etransferAmount, setEtransferAmount] = useState('');
   const [taxCollected, setTaxCollected] = useState('');
+  // Deposit / layaway: amount collected now when the customer isn't paying in
+  // full. Blank/0 = paid in full (unchanged behaviour).
+  const [deposit, setDeposit] = useState('');
 
   const [scan, setScan] = useState('');
   const [scanMsg, setScanMsg] = useState<string | null>(null);
@@ -109,7 +112,9 @@ export function useCheckout({ inventory, customers = [], initialCustomer, onCons
   const taxRate = getPOSSettings().taxRate;
   const feePercent = parseFloat(platformFeePercent) || 0;
 
-  const soldIds = new Set(inventory.filter(i => kindOf(i) === 'device' && (i.soldDate || i.deviceStatus === 'sold')).map(i => i.id));
+  // A reserved device is spoken for on an open layaway — treat it as unavailable
+  // for another sale, same as a fully sold one.
+  const soldIds = new Set(inventory.filter(i => kindOf(i) === 'device' && (i.soldDate || i.deviceStatus === 'sold' || i.deviceStatus === 'reserved')).map(i => i.id));
   const inCart = new Set(cart.map(l => l.inventoryId));
 
   const previousPurchases = useMemo(() => {
@@ -157,6 +162,17 @@ export function useCheckout({ inventory, customers = [], initialCustomer, onCons
   const platformFee = subtotal * feePercent / 100;
   const totalPaid = subtotal + tax;
   const netProfit = subtotal - totalCost - platformFee;
+
+  // ---- deposit / layaway ----
+  // If the customer leaves a deposit that's less than the grand total, the sale
+  // is a layaway: we record what's still owed rather than treating it as fully
+  // settled. Blank/0 (or a deposit >= total) means paid in full.
+  const depositAmount = parseFloat(deposit) || 0;
+  const balanceOwing = salesBalanceOwing(totalPaid, depositAmount);
+  const isLayaway = balanceOwing > 0;
+
+  // Customer name is optional — a blank name checks out as a "Walk-in".
+  const effectiveName = customerName.trim() || 'Walk-in';
 
   // $0 device safeguard: flag device lines priced at $0 and block checkout until
   // the seller ticks the override (guards against selling a device whose sale
@@ -228,7 +244,7 @@ export function useCheckout({ inventory, customers = [], initialCustomer, onCons
 
   // ---- checkout ----
   const handleCheckout = async () => {
-    if (cart.length === 0 || !customerName || blockedByZeroPrice) return;
+    if (cart.length === 0 || blockedByZeroPrice) return;
     const transactionId = uid();
     const soldRows: InventoryItem[] = [];
     const accessoryQtys: Record<string, number> = {};
@@ -239,8 +255,8 @@ export function useCheckout({ inventory, customers = [], initialCustomer, onCons
       const feeShare = subtotal > 0 ? platformFee * (saleShare / subtotal) : 0;
       const taxShare = l.taxable && taxableBase > 0 ? tax * (saleShare / taxableBase) : 0;
       const common = {
-        transactionId, soldDate, soldTo: customerName,
-        customerName, customerPhone, customerEmail, customerNotes,
+        transactionId, soldDate, soldTo: effectiveName,
+        customerName: effectiveName, customerPhone, customerEmail, customerNotes,
         paymentMethod, taxCollected: taxShare,
         cashTaxStatus: paymentMethod === 'cash' ? cashTaxStatus : undefined,
         paymentNotes: paymentNotes || undefined,
@@ -258,8 +274,11 @@ export function useCheckout({ inventory, customers = [], initialCustomer, onCons
             newInventoryItems.push({
               id: uid(), kind: 'device', sku, date: soldDate, item: l.name, imei: l.imei || '',
               boughtFrom: 'Custom sale', purchaseCost: l.purchaseCost, repairCost: 0,
-              deviceType, condition: 'Good', deviceStatus: 'sold',
+              deviceType, condition: 'Good',
               salePrice: saleShare, notes: l.notes || 'Added from custom sale', ...common,
+              // Layaway: hold the device (no sale date) until the balance is paid.
+              deviceStatus: isLayaway ? 'reserved' : 'sold',
+              soldDate: isLayaway ? '' : soldDate,
             } as InventoryItem);
           } else {
             newInventoryItems.push({
@@ -277,7 +296,13 @@ export function useCheckout({ inventory, customers = [], initialCustomer, onCons
         accessoryQtys[l.inventoryId] = (accessoryQtys[l.inventoryId] || 0) + l.quantity;
       } else {
         const existing = inventory.find(i => i.id === l.inventoryId);
-        if (existing) soldRows.push({ ...existing, ...common, salePrice: saleShare, deviceStatus: 'sold' });
+        // Layaway: mark the device reserved and leave its sale date empty so it
+        // isn't recognized as a completed sale until the balance is paid.
+        if (existing) soldRows.push({
+          ...existing, ...common, salePrice: saleShare,
+          deviceStatus: isLayaway ? 'reserved' : 'sold',
+          soldDate: isLayaway ? '' : soldDate,
+        });
       }
     }
 
@@ -287,7 +312,7 @@ export function useCheckout({ inventory, customers = [], initialCustomer, onCons
 
     const transaction: SalesTransaction = {
       id: transactionId, date: soldDate,
-      customerId: customer?.id, customerName, customerPhone: customerPhone || undefined, customerEmail: customerEmail || undefined,
+      customerId: customer?.id, customerName: effectiveName, customerPhone: customerPhone || undefined, customerEmail: customerEmail || undefined,
       paymentMethod,
       cashAmount: paymentMethod === 'mixed' ? (parseFloat(cashAmount) || 0) : undefined,
       cardAmount: paymentMethod === 'mixed' ? (parseFloat(cardAmount) || 0) : undefined,
@@ -295,6 +320,8 @@ export function useCheckout({ inventory, customers = [], initialCustomer, onCons
       platformName,
       subtotal, tax, platformFee, purchaseCost: purchaseCostTotal, repairCost: repairCostTotal,
       totalCost, totalPaid, netProfit,
+      deposit: isLayaway ? depositAmount : undefined,
+      balanceOwing: isLayaway ? balanceOwing : undefined,
       lines: cart.map(l => ({ inventoryId: l.inventoryId, kind: l.kind, name: l.name, sku: l.code, quantity: l.quantity, unitPrice: l.unitPrice, deviceType: l.kind === 'device' ? l.deviceType : undefined })),
       notes: paymentNotes || undefined,
     };
@@ -307,7 +334,7 @@ export function useCheckout({ inventory, customers = [], initialCustomer, onCons
   const reset = () => {
     setCart([]); setCustomerName(''); setCustomerPhone(''); setCustomerEmail(''); setCustomerNotes(''); setSelectedCustomerId(undefined);
     setPaymentNotes(''); setPaymentMethod('cash'); setCashTaxStatus('none');
-    setCashAmount(''); setCardAmount(''); setEtransferAmount(''); setTaxCollected('');
+    setCashAmount(''); setCardAmount(''); setEtransferAmount(''); setTaxCollected(''); setDeposit('');
     setPlatformName('None / In-Store'); setPlatformFeePercent('0');
     setLastTx(null); setShowTx(false); setConfirmed(false);
     setCustom(emptyCustom()); setShowCustom(false); setAllowZeroPrice(false);
@@ -333,6 +360,7 @@ export function useCheckout({ inventory, customers = [], initialCustomer, onCons
         <div class="row"><span>Subtotal</span><span>$${lastTx.subtotal.toFixed(2)}</span></div>
         <div class="row"><span>Tax</span><span>$${lastTx.tax.toFixed(2)}</span></div>
         <div class="row b" style="margin-top:4px"><span>Total</span><span>$${lastTx.totalPaid.toFixed(2)}</span></div>
+        ${lastTx.balanceOwing ? `<div class="row" style="margin-top:4px"><span>Deposit Paid</span><span>$${(lastTx.deposit || 0).toFixed(2)}</span></div><div class="row b" style="color:#b45309"><span>Balance Owing</span><span>$${lastTx.balanceOwing.toFixed(2)}</span></div>` : ''}
         <div class="row" style="margin-top:6px;color:#555"><span>Payment</span><span>${payParts}</span></div>
         ${lastTx.customerName ? `<div class="row" style="color:#555"><span>Customer</span><span>${lastTx.customerName}</span></div>` : ''}
       </div>
@@ -352,6 +380,7 @@ export function useCheckout({ inventory, customers = [], initialCustomer, onCons
     customerNotes, setCustomerNotes, selectedCustomerId, setSelectedCustomerId,
     paymentMethod, setPaymentMethod, cashTaxStatus, setCashTaxStatus, paymentNotes, setPaymentNotes,
     cashAmount, setCashAmount, cardAmount, setCardAmount, etransferAmount, setEtransferAmount, taxCollected, setTaxCollected,
+    deposit, setDeposit, depositAmount, balanceOwing, isLayaway, effectiveName,
     scan, setScan, scanMsg, setScanMsg, scanRef, lastTx, showTx, setShowTx, labelItem, setLabelItem,
     emptyCustom, showCustom, setShowCustom, custom, setCustom,
     taxRate, feePercent, previousPurchases, availableDevices, availableAccessories,

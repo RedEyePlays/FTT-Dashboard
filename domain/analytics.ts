@@ -111,7 +111,10 @@ export function computeAnalytics(range: DateRange, input: AnalyticsInput, now: n
   };
 
   // --- Sales: POS transactions in range ---
-  const txns = salesTransactions.filter(t => inRange(ymdMs(t.date), range));
+  // A layaway (balance still owing) is captured but NOT yet recognized as
+  // revenue/profit — the sale isn't fully settled, so it's excluded until the
+  // balance is paid off (at which point balanceOwing clears and it counts).
+  const txns = salesTransactions.filter(t => inRange(ymdMs(t.date), range) && !((t.balanceOwing || 0) > 0));
   const txnInvIds = new Set<string>();
   salesTransactions.forEach(t => t.lines?.forEach(l => l.inventoryId && txnInvIds.add(l.inventoryId)));
 
