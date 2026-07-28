@@ -35,6 +35,7 @@ export const CartSaleView: React.FC<Props> = (props) => {
     customerNotes, setCustomerNotes, setSelectedCustomerId,
     paymentMethod, setPaymentMethod, cashTaxStatus, setCashTaxStatus, paymentNotes, setPaymentNotes,
     cashAmount, setCashAmount, cardAmount, setCardAmount, etransferAmount, setEtransferAmount, taxCollected, setTaxCollected,
+    deposit, setDeposit, balanceOwing, isLayaway,
     scan, setScan, scanMsg, scanRef, lastTx, showTx, setShowTx, labelItem, setLabelItem,
     emptyCustom, showCustom, setShowCustom, custom, setCustom,
     taxRate, feePercent, previousPurchases, availableDevices, availableAccessories,
@@ -54,11 +55,18 @@ export const CartSaleView: React.FC<Props> = (props) => {
           <CheckCircle className="w-10 h-10 text-emerald-500" />
         </div>
         <div>
-          <p className="text-xl font-bold text-slate-800 dark:text-slate-100">Sale Complete!</p>
-          <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">{lastTx.lines.length} item{lastTx.lines.length !== 1 ? 's' : ''} sold to {lastTx.customerName || 'customer'}</p>
+          <p className="text-xl font-bold text-slate-800 dark:text-slate-100">{lastTx.balanceOwing ? 'Deposit Taken — On Layaway' : 'Sale Complete!'}</p>
+          <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">{lastTx.lines.length} item{lastTx.lines.length !== 1 ? 's' : ''} {lastTx.balanceOwing ? 'reserved for' : 'sold to'} {lastTx.customerName || 'customer'}</p>
         </div>
         <div className="flex gap-6 text-sm">
-          <div className="text-center"><p className="text-slate-400 text-xs">Total Paid</p><p className="font-bold text-slate-800 dark:text-slate-100">${lastTx.totalPaid.toFixed(2)}</p></div>
+          {lastTx.balanceOwing ? (
+            <>
+              <div className="text-center"><p className="text-slate-400 text-xs">Deposit Paid</p><p className="font-bold text-slate-800 dark:text-slate-100">${(lastTx.deposit || 0).toFixed(2)}</p></div>
+              <div className="text-center"><p className="text-slate-400 text-xs">Balance Owing</p><p className="font-bold text-sky-600">${lastTx.balanceOwing.toFixed(2)}</p></div>
+            </>
+          ) : (
+            <div className="text-center"><p className="text-slate-400 text-xs">Total Paid</p><p className="font-bold text-slate-800 dark:text-slate-100">${lastTx.totalPaid.toFixed(2)}</p></div>
+          )}
           {canViewProfit && <div className="text-center"><p className="text-slate-400 text-xs">Net Profit</p><p className={`font-bold ${lastTx.netProfit >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>${lastTx.netProfit.toFixed(2)}</p></div>}
         </div>
 
@@ -94,7 +102,8 @@ export const CartSaleView: React.FC<Props> = (props) => {
                   <Row label="Subtotal" value={lastTx.subtotal} />
                   <Row label="Tax" value={lastTx.tax} muted />
                   <Row label="Platform fee" value={-lastTx.platformFee} muted />
-                  <Row label="Total Paid" value={lastTx.totalPaid} bold />
+                  <Row label={lastTx.balanceOwing ? 'Total Due' : 'Total Paid'} value={lastTx.totalPaid} bold />
+                  {lastTx.balanceOwing ? <><Row label="Deposit" value={lastTx.deposit || 0} muted /><Row label="Balance Owing" value={lastTx.balanceOwing} /></> : null}
                   {canViewProfit && <Row label="Net Profit" value={lastTx.netProfit} />}
                 </div>
                 <p className="text-xs text-slate-500 dark:text-slate-400">Payment: {lastTx.paymentMethod}{lastTx.paymentMethod === 'mixed' ? ` — cash $${(lastTx.cashAmount || 0).toFixed(2)}, card $${(lastTx.cardAmount || 0).toFixed(2)}, e-transfer $${(lastTx.etransferAmount || 0).toFixed(2)}` : ''}</p>
@@ -205,7 +214,16 @@ export const CartSaleView: React.FC<Props> = (props) => {
           <Row label={`Tax${taxApplies ? ` (${taxRate}%)` : ' (none)'}`} value={tax} muted />
           <Row label={`Platform fee${feePercent ? ` (${feePercent}%)` : ''}`} value={-platformFee} muted />
           <div className="border-t border-slate-100 dark:border-slate-800 my-1" />
-          <Row label="Total Paid" value={totalPaid} bold />
+          <Row label={isLayaway ? 'Total Due' : 'Total Paid'} value={totalPaid} bold />
+          {isLayaway && (
+            <>
+              <Row label="Deposit" value={cx.depositAmount} muted />
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-sky-700 dark:text-sky-300">Balance Owing</span>
+                <span className="font-bold text-sky-700 dark:text-sky-300">${balanceOwing.toFixed(2)}</span>
+              </div>
+            </>
+          )}
           {canViewProfit && (
             <>
               <Row label="Purchase Cost" value={purchaseCostTotal} muted />
@@ -226,7 +244,7 @@ export const CartSaleView: React.FC<Props> = (props) => {
             <CustomerSearchInput customers={customers} placeholder="Find existing customer…"
               onSelect={c => { setCustomerName(c.name); setCustomerPhone(c.phone || ''); setCustomerEmail(c.email || ''); setSelectedCustomerId(c.id); }} />
           )}
-          <IconInput icon={<User className="w-4 h-4" />} placeholder="Customer name *" value={customerName} onChange={v => { setCustomerName(v); setSelectedCustomerId(undefined); }} />
+          <IconInput icon={<User className="w-4 h-4" />} placeholder="Customer name (optional — defaults to Walk-in)" value={customerName} onChange={v => { setCustomerName(v); setSelectedCustomerId(undefined); }} />
           <IconInput icon={<Phone className="w-4 h-4" />} placeholder="Phone number" value={customerPhone} onChange={setCustomerPhone} />
           <IconInput icon={<Mail className="w-4 h-4" />} placeholder="Email (optional)" value={customerEmail} onChange={setCustomerEmail} />
           <IconInput icon={<FileText className="w-4 h-4" />} placeholder="Customer notes" value={customerNotes} onChange={setCustomerNotes} />
@@ -267,6 +285,16 @@ export const CartSaleView: React.FC<Props> = (props) => {
             </div>
           )}
           <IconInput icon={<FileText className="w-4 h-4" />} placeholder="Payment notes, e.g. $200 cash + $15 tax" value={paymentNotes} onChange={setPaymentNotes} />
+          <div>
+            <label className={labelCls}>Deposit / partial payment (optional)</label>
+            <input type="number" step="0.01" min="0" className={inputCls} value={deposit} onChange={e => setDeposit(e.target.value)} placeholder={`Leave blank if paying in full ($${totalPaid.toFixed(2)})`} />
+            {isLayaway && (
+              <div className="mt-2 flex items-center justify-between rounded-lg bg-sky-50 dark:bg-sky-900/20 border border-sky-200 dark:border-sky-500/30 px-3 py-2 text-sm">
+                <span className="font-semibold text-sky-700 dark:text-sky-300">Balance owing (layaway)</span>
+                <span className="font-bold text-sky-700 dark:text-sky-300">${balanceOwing.toFixed(2)}</span>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Platform */}
@@ -294,9 +322,9 @@ export const CartSaleView: React.FC<Props> = (props) => {
           </div>
         )}
 
-        <button onClick={handleCheckout} disabled={cart.length === 0 || !customerName || blockedByZeroPrice}
+        <button onClick={handleCheckout} disabled={cart.length === 0 || blockedByZeroPrice}
           className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold rounded-xl text-sm transition-colors flex items-center justify-center gap-2">
-          <ShoppingCart className="w-4 h-4" /> Complete Sale · ${totalPaid.toFixed(2)}
+          <ShoppingCart className="w-4 h-4" /> {isLayaway ? `Take Deposit · $${cx.depositAmount.toFixed(2)}` : `Complete Sale · $${totalPaid.toFixed(2)}`}
         </button>
       </div>
 

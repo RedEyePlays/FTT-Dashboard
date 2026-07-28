@@ -32,6 +32,23 @@ describe('presetRange', () => {
   });
 });
 
+describe('layaway (unpaid balance) is not recognized as revenue', () => {
+  it('excludes a transaction with a balance still owing until it is paid off', () => {
+    const withLayaway: AnalyticsInput = {
+      ...base,
+      salesTransactions: [
+        tx({ id: 'paid', date: '2026-07-20', subtotal: 500, totalPaid: 500, netProfit: 200, lines: [{ kind: 'device', name: 'Pixel', quantity: 1, unitPrice: 500 } as any] }),
+        tx({ id: 'layaway', date: '2026-07-20', subtotal: 800, totalPaid: 800, netProfit: 300, deposit: 200, balanceOwing: 600, lines: [{ kind: 'device', name: 'iPhone', quantity: 1, unitPrice: 800 } as any] }),
+      ],
+    };
+    const a = computeAnalytics(presetRange('today', NOW), withLayaway, NOW);
+    expect(a.revenue).toBe(500);      // only the fully-paid sale
+    expect(a.grossProfit).toBe(200);
+    expect(a.salesCount).toBe(1);
+    expect(a.devicesSold).toBe(1);
+  });
+});
+
 describe('computeAnalytics overview + payments', () => {
   const input: AnalyticsInput = {
     ...base,
