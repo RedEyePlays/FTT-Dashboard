@@ -110,10 +110,27 @@ describe('CRM stats + devices', () => {
       batches: [],
     });
     expect(s.activeRepairs).toBe(1);
-    expect(s.warrantyClaims).toBe(1);
+    expect(s.activeWarranties).toBe(1);
     expect(s.outstandingBalance).toBe(150);
     expect(s.isVIP).toBe(true);
     expect(s.hasOpenRepairs).toBe(true);
+  });
+
+  it('excludes voided and returned sales from lifetime spend and profit', () => {
+    const c = cust({ id: 'c1', phone: '555-1' });
+    const s = customerStats(c, {
+      salesTransactions: [
+        tx({ customerId: 'c1', totalPaid: 300, netProfit: 100 }),                       // counts
+        tx({ customerId: 'c1', totalPaid: 500, netProfit: 200, status: 'voided' }),      // excluded
+        tx({ customerId: 'c1', totalPaid: 400, netProfit: 150, status: 'returned' }),    // excluded
+      ],
+      repairs: [],
+      batches: [],
+    });
+    expect(s.lifetimeSpent).toBe(300);
+    expect(s.lifetimeProfit).toBe(100);
+    expect(s.avgPurchase).toBe(300);        // averaged over the one realized sale
+    expect(s.purchaseCount).toBe(3);        // history still lists all three
   });
 
   it('includes unpaid layaway sale balances in outstanding balance', () => {

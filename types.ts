@@ -181,6 +181,7 @@ export type Role = 'owner' | 'manager' | 'employee' | 'technician';
 export type Permission =
   | 'inventory.add' | 'inventory.edit' | 'inventory.delete'
   | 'sales.complete' | 'sales.void'   // sales.void = reverse a completed sale (owner + manager)
+  | 'sales.return'                    // sales.return = process a return after the same-day void window (owner + manager)
   | 'dropoffs.manage'
   | 'repairs.manage'  // full repair management: create/delete, price, batches, customer
   | 'repairs.tech'    // technician-scoped: view + update repair work fields & status
@@ -266,12 +267,19 @@ export interface SalesTransaction {
   balanceOwing?: number;
   lines: SalesLine[];
   notes?: string;
-  // Voiding keeps the record for audit history rather than deleting it. Absent
-  // status means a normal completed sale (legacy rows have no field).
-  status?: 'completed' | 'voided';
+  // Voiding (same-day mistake) and returning (later refund) both keep the record
+  // for audit history rather than deleting it. Absent status = a normal completed
+  // sale (legacy rows have no field).
+  status?: 'completed' | 'voided' | 'returned';
   voidedAt?: number;       // epoch ms
   voidedBy?: string;       // uid of the owner/manager who voided it
   voidedByEmail?: string;
+  // Return details (status === 'returned'). refundAmount = totalPaid − restockingFee.
+  returnedAt?: number;         // epoch ms
+  returnedBy?: string;         // uid of the owner/manager who processed the return
+  returnedByEmail?: string;
+  restockingFee?: number;      // fee withheld from the refund (0 / absent = full refund)
+  refundAmount?: number;       // actual amount refunded to the customer
 }
 
 export interface AppData {

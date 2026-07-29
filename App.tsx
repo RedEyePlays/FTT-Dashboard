@@ -34,7 +34,7 @@ import { auth } from './services/firebase';
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import {
   saveMeta, saveItem, deleteItem, syncArray, allocateSku,
-  logActivityDoc, commitSale, voidSale, seedSampleData,
+  logActivityDoc, commitSale, voidSale, returnSale, seedSampleData,
   updateUserDoc, setInvite, deleteInvite,
   logAudit, exportWorkspaceData, recordBackup, saveSettings,
   saveTimeEntry, savePayPeriodPaid, deletePayPeriodPaid,
@@ -44,7 +44,7 @@ import { listWorkspaceBackups, getBackupDownloadUrl } from './services/backupSto
 import { useWorkspaceData } from './hooks/useWorkspaceData';
 import { newId, mkActivity } from './domain/ids';
 import { collectionFor, stockChange } from './domain/inventory';
-import { canVoidSale } from './domain/pos';
+import { canVoidSale, canReturnSale, returnRefund, saleAccessoryRestock } from './domain/pos';
 import { openEntryFor, isOnBreak, periodPayFor, paidKey, toISODate, PayPeriod } from './domain/timeclock';
 import { buildAlerts } from './domain/alerts';
 import { changedSettingsSections } from './domain/audit';
@@ -432,11 +432,7 @@ const App: React.FC = () => {
       .filter(i => (i.kind ?? 'device') === 'device' && i.transactionId === tx.id)
       .map(i => i.id);
     // Restock accessories by the quantity sold on each accessory line.
-    const accByLine = new Map<string, number>();
-    for (const l of tx.lines) {
-      if (l.kind === 'accessory' && l.inventoryId) accByLine.set(l.inventoryId, (accByLine.get(l.inventoryId) || 0) + (l.quantity || 0));
-    }
-    const accessoryUpdates = [...accByLine].map(([id, qty]) => ({ id, delta: qty }));
+    const accessoryUpdates = saleAccessoryRestock(tx);
 
     const activity: ActivityEntry[] = [mkActivity(`Sale ${tx.id.slice(0, 8)} voided (${tx.customerName || 'customer'})`)];
     voidSale(uid, {
@@ -445,6 +441,34 @@ const App: React.FC = () => {
       activity,
     }).catch(e => console.error('Void failed', e));
     audit('sale.void', 'sale', tx.id, { totalPaid: tx.totalPaid }, { devices: deviceIds.length, accessories: accessoryUpdates.length });
+  };
+
+  // Process a return (the after-the-void-window counterpart to Void): refund the
+  // customer (optionally minus a restocking fee), restock accessories atomically,
+  // set each returned device to its chosen disposition (resellable or defective),
+  // and flag the transaction 'returned' (kept for audit). Custom lines (no
+  // inventoryId) are not touched, same as Void.
+  const handleReturnSale = (tx: SalesTransaction, opts: { restockingFee?: number; disposition: 'resell' | 'defective' }) => {
+    if (!uid || !appUser || !allow('sales.return')) return;
+    if (!canReturnSale(tx, new Date().toISOString().split('T')[0])) return;
+
+    const deviceIds = dataRef.current
+      .filter(i => (i.kind ?? 'device') === 'device' && i.transactionId === tx.id)
+      .map(i => i.id);
+    const resellDeviceIds = opts.disposition === 'resell' ? deviceIds : [];
+    const defectiveDeviceIds = opts.disposition === 'defective' ? deviceIds : [];
+    const accessoryUpdates = saleAccessoryRestock(tx);
+    const restockingFee = opts.restockingFee && opts.restockingFee > 0 ? opts.restockingFee : undefined;
+    const refundAmount = returnRefund(tx.totalPaid || 0, restockingFee);
+
+    const activity: ActivityEntry[] = [mkActivity(`Sale ${tx.id.slice(0, 8)} returned — refunded ${refundAmount.toFixed(2)} (${tx.customerName || 'customer'})`)];
+    returnSale(uid, {
+      transactionId: tx.id, resellDeviceIds, defectiveDeviceIds, accessoryUpdates,
+      returned: { returnedAt: Date.now(), returnedBy: appUser.id, returnedByEmail: appUser.email, restockingFee, refundAmount },
+      activity,
+    }).catch(e => console.error('Return failed', e));
+    audit('sale.return', 'sale', tx.id, { totalPaid: tx.totalPaid },
+      { refundAmount, restockingFee: restockingFee || 0, disposition: opts.disposition, devices: deviceIds.length, accessories: accessoryUpdates.length });
   };
 
   const handleBulkImport = (items: InventoryItem[]) => {
@@ -927,6 +951,8 @@ const App: React.FC = () => {
               onCreateRepair={allow('repairs.manage') ? createRepairFor : undefined}
               onVoidSale={allow('sales.void') ? handleVoidSale : undefined}
               canVoidSale={(tx) => allow('sales.void') && canVoidSale(tx, new Date().toISOString().split('T')[0])}
+              onReturnSale={allow('sales.return') ? handleReturnSale : undefined}
+              canReturnSale={(tx) => allow('sales.return') && canReturnSale(tx, new Date().toISOString().split('T')[0])}
             />
           )}
           {view === 'repairs' && allow('repairs.manage') && (

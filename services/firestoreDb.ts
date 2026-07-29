@@ -131,6 +131,32 @@ export async function voidSale(uid: string, payload: {
   await batch.commit();
 }
 
+// Process a return in one atomic commit (the after-the-void-window counterpart
+// to voidSale): restock accessories via the same atomic increment(), set each
+// returned device to its chosen disposition — resellable ('ready') or
+// not-for-resale ('returned') — clearing its sale fields either way, and flag the
+// transaction 'returned' with the refund + restocking fee (kept for history).
+export async function returnSale(uid: string, payload: {
+  transactionId: string;
+  resellDeviceIds: string[];                         // devices going back to sellable stock
+  defectiveDeviceIds: string[];                      // devices pulled from sale (not-for-resale)
+  accessoryUpdates: { id: string; delta: number }[]; // positive deltas to restock
+  returned: { returnedAt: number; returnedBy: string; returnedByEmail?: string; restockingFee?: number; refundAmount: number };
+  activity: ActivityEntry[];
+}) {
+  const batch = writeBatch(db);
+  payload.resellDeviceIds.forEach(id => batch.set(docRef(uid, 'inventory', id),
+    { soldDate: '', soldTo: '', salePrice: 0, deviceStatus: 'ready', transactionId: '' }, { merge: true } as any));
+  payload.defectiveDeviceIds.forEach(id => batch.set(docRef(uid, 'inventory', id),
+    { soldDate: '', soldTo: '', salePrice: 0, deviceStatus: 'returned', transactionId: '' }, { merge: true } as any));
+  payload.accessoryUpdates.forEach(a => batch.set(docRef(uid, 'accessories', a.id),
+    { quantity: increment(a.delta) }, { merge: true } as any));
+  batch.set(docRef(uid, 'salesTransactions', payload.transactionId),
+    { status: 'returned', ...payload.returned }, { merge: true } as any);
+  payload.activity.forEach(a => batch.set(docRef(uid, 'activityLog', a.id), clean(a)));
+  await batch.commit();
+}
+
 // Seed sample devices/accessories into Firestore (demo option, not auto-loaded).
 export async function seedSampleData(uid: string, items: InventoryItem[]) {
   const batch = writeBatch(db);
