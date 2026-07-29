@@ -1,5 +1,6 @@
 import { Customer, SalesTransaction, Repair, RepairBatch, InventoryItem } from '../types';
 import { isRepairOpen, balanceOwing, batchTotals } from './repairs';
+import { salesBalanceOwing, isVoided } from './pos';
 
 // All customer statistics are DERIVED from existing documents (salesTransactions
 // + repairs + repairBatches + inventory) — nothing is duplicated or stored on the
@@ -45,7 +46,7 @@ export interface CustomerStats {
   avgRepair: number;
   activeRepairs: number;      // repairs not in a terminal state
   warrantyClaims: number;     // repairs currently under warranty
-  outstandingBalance: number; // unpaid retail balances + wholesale batch remainders
+  outstandingBalance: number; // unpaid layaway sale balances + repair balances + wholesale remainders
   firstSeen: number;          // epoch ms (0 = unknown)
   lastActivity: number;       // epoch ms (0 = unknown)
   lastPurchase: number;       // epoch ms (0 = none)
@@ -75,7 +76,13 @@ export function customerStats(c: Customer, data: CustomerData, now: number = Dat
   const lifetimeProfit = purchases.reduce((s, t) => s + (t.netProfit || 0), 0);
   const repairRevenue = repairs.reduce((s, r) => s + (r.repairPrice || 0), 0);
 
-  // Outstanding = unpaid retail balances (open repairs) + wholesale batch remainders.
+  // Outstanding = unpaid layaway sale balances + open-repair balances + wholesale
+  // batch remainders. Layaway deposits leave a balance owing on the sale itself
+  // (a voided sale owes nothing), so those must be counted here too or a customer
+  // who put a deposit down would show $0 outstanding.
+  const salesOwing = purchases
+    .filter(t => !isVoided(t))
+    .reduce((s, t) => s + salesBalanceOwing(t.totalPaid || 0, t.deposit), 0);
   const retailOwing = repairs
     .filter(r => r.type !== 'wholesale' && isRepairOpen(r))
     .reduce((s, r) => s + balanceOwing(r), 0);
@@ -97,7 +104,7 @@ export function customerStats(c: Customer, data: CustomerData, now: number = Dat
     avgRepair: repairs.length ? repairRevenue / repairs.length : 0,
     activeRepairs: repairs.filter(isRepairOpen).length,
     warrantyClaims: repairs.filter(r => underWarranty(r, now)).length,
-    outstandingBalance: retailOwing + wholesaleOwing,
+    outstandingBalance: salesOwing + retailOwing + wholesaleOwing,
     firstSeen: activityTimes.length ? Math.min(...activityTimes) : 0,
     lastActivity,
     lastPurchase: purchaseTimes.length ? Math.max(...purchaseTimes) : 0,

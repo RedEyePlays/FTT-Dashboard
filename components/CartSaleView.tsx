@@ -41,7 +41,7 @@ export const CartSaleView: React.FC<Props> = (props) => {
     taxRate, feePercent, previousPurchases, availableDevices, availableAccessories,
     lineSubtotal, subtotal, purchaseCostTotal, repairCostTotal, totalCost, taxApplies, tax, platformFee, totalPaid, netProfit,
     isZeroPricedDevice, hasZeroPricedDevice, allowZeroPrice, setAllowZeroPrice, blockedByZeroPrice,
-    addDevice, addAccessory, updateLine, removeLine, num, addCustomItem, handleScan, handleCheckout, reset, printReceipt, emailReceipt, soldDeviceRows,
+    addDevice, addAccessory, updateLine, removeLine, num, addCustomItem, handleScan, handleCheckout, reset, printReceipt, printInvoice, emailReceipt, soldDeviceRows,
     scanResults, addScanResult,
   } = cx;
 
@@ -72,6 +72,8 @@ export const CartSaleView: React.FC<Props> = (props) => {
 
         <div className="grid grid-cols-2 gap-2 w-full max-w-sm mt-2">
           <button onClick={printReceipt} className="flex items-center justify-center gap-2 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium"><Printer className="w-4 h-4" /> Print Receipt</button>
+          <button onClick={printInvoice} title="Full-page invoice with your store details — for a business/wholesale buyer"
+            className="flex items-center justify-center gap-2 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-lg text-sm font-medium hover:border-indigo-400"><FileText className="w-4 h-4" /> Print Invoice</button>
           <button onClick={emailReceipt} title={lastTx.customerEmail ? `Email to ${lastTx.customerEmail}` : 'No email captured — opens a blank To: field'}
             className="flex items-center justify-center gap-2 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-lg text-sm font-medium hover:border-indigo-400"><Mail className="w-4 h-4" /> Email Receipt</button>
           <button onClick={() => soldDeviceRows[0] && setLabelItem(soldDeviceRows[0])} disabled={soldDeviceRows.length === 0}

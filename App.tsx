@@ -6,7 +6,7 @@ import { DataEntryForm } from './components/DataEntryForm';
 import { BulkEntryModal } from './components/BulkEntryModal';
 import { AuthScreen } from './components/AuthScreen';
 import { NotesBoard } from './components/NotesBoard';
-import { SettingsModal, cacheLabelSizes } from './components/SettingsModal';
+import { SettingsModal, cacheLabelSizes, cacheStoreProfile } from './components/SettingsModal';
 import { SettingsView } from './components/SettingsView';
 import { BackupPanel } from './components/BackupPanel';
 import { CalculatorTool } from './components/CalculatorTool';
@@ -251,6 +251,10 @@ const App: React.FC = () => {
   // Mirror the workspace's custom label sizes into the local cache so the label
   // modals (which don't receive settings as props) can read the merged list.
   useEffect(() => { cacheLabelSizes(settings.labels.customSizes); }, [settings.labels.customSizes]);
+
+  // Mirror the store profile (business identity) into the local cache so the
+  // checkout hook can print a proper invoice header without settings as props.
+  useEffect(() => { cacheStoreProfile(settings.general); }, [settings.general]);
 
   // Mirror the owner's "QR encodes" choice into the same local label-prefs blob
   // the label modal reads (it doesn't receive settings as props), so a device's
