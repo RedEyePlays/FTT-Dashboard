@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import {
   Users, Search, ArrowLeft, Phone, Mail, ShoppingCart, Wrench, DollarSign,
   ChevronRight, Receipt, Pencil, X, Clock, Smartphone, ShieldCheck, AlertTriangle,
-  Copy, PlusCircle, Printer, FileText, Merge, Hash, Check, Ban,
+  Copy, PlusCircle, Printer, FileText, Merge, Hash, Check, Ban, RotateCcw,
 } from 'lucide-react';
 import { Customer, SalesTransaction, Repair, RepairBatch, InventoryItem, AuditEntry } from '../types';
 import {
@@ -30,9 +30,13 @@ interface Props {
   onMergeCustomers?: (plan: MergePlan) => void;
   onStartSale?: (c: Customer) => void;
   onCreateRepair?: (c: Customer) => void;
-  onVoidSale?: (tx: SalesTransaction) => void;         // owner/manager: reverse a sale
+  onVoidSale?: (tx: SalesTransaction) => void;         // owner/manager: reverse a same-day sale
   canVoidSale?: (tx: SalesTransaction) => boolean;     // within-window + permission check
+  onReturnSale?: (tx: SalesTransaction, opts: { restockingFee?: number; disposition: 'resell' | 'defective' }) => void; // owner/manager: process a return
+  canReturnSale?: (tx: SalesTransaction) => boolean;   // after-void-window + permission check
 }
+
+export type ReturnDisposition = 'resell' | 'defective';
 
 const money = (n: number) => `$${(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const money0 = (n: number) => `$${Math.round(n || 0).toLocaleString()}`;
@@ -193,7 +197,7 @@ export const CustomersView: React.FC<Props> = (props) => {
 
 /* ---------------- Profile ---------------- */
 const CustomerProfile: React.FC<Props & { customer: Customer; data: CustomerData; onBack: () => void }> = (
-  { customer, data, canViewProfit, canEdit, auditLogs, inventory, onBack, onSaveCustomer, onStartSale, onCreateRepair, onVoidSale, canVoidSale },
+  { customer, data, canViewProfit, canEdit, auditLogs, inventory, onBack, onSaveCustomer, onStartSale, onCreateRepair, onVoidSale, canVoidSale, onReturnSale, canReturnSale },
 ) => {
   const s = useMemo(() => customerStats(customer, data), [customer, data]);
   const timeline = useMemo(() => customerTimeline(s), [s]);
@@ -277,7 +281,7 @@ const CustomerProfile: React.FC<Props & { customer: Customer; data: CustomerData
         <Stat label="Total Purchases" value={String(s.purchaseCount)} />
         <Stat label="Total Repairs" value={String(s.repairCount)} />
         <Stat label="Active Repairs" value={String(s.activeRepairs)} accent={s.activeRepairs ? 'text-blue-600 dark:text-blue-400' : undefined} />
-        <Stat label="Warranty Claims" value={String(s.warrantyClaims)} />
+        <Stat label="Active Warranties" value={String(s.activeWarranties)} />
         <Stat label="Last Purchase" value={fmtDate(s.lastPurchase)} />
         <Stat label="Last Repair" value={fmtDate(s.lastRepair)} />
       </div>
@@ -327,8 +331,8 @@ const CustomerProfile: React.FC<Props & { customer: Customer; data: CustomerData
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                 {s.purchases.map(t => (
                   <tr key={t.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40 cursor-pointer" onClick={() => setInvoice(t)}>
-                    <td className="py-2 font-mono text-xs text-slate-500">{t.id.slice(0, 8)}{t.status === 'voided' && <span className="ml-1 text-[9px] font-sans font-semibold px-1 py-0.5 rounded bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300 align-middle">VOID</span>}</td>
-                    <td className={`py-2 text-slate-600 dark:text-slate-300 ${t.status === 'voided' ? 'line-through opacity-60' : ''}`}>{t.date}</td>
+                    <td className="py-2 font-mono text-xs text-slate-500">{t.id.slice(0, 8)}{t.status === 'voided' && <span className="ml-1 text-[9px] font-sans font-semibold px-1 py-0.5 rounded bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300 align-middle">VOID</span>}{t.status === 'returned' && <span className="ml-1 text-[9px] font-sans font-semibold px-1 py-0.5 rounded bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300 align-middle">RETURNED</span>}</td>
+                    <td className={`py-2 text-slate-600 dark:text-slate-300 ${t.status === 'voided' || t.status === 'returned' ? 'line-through opacity-60' : ''}`}>{t.date}</td>
                     <td className="py-2 text-slate-500 dark:text-slate-400 truncate max-w-[220px]">{t.lines.map(l => `${l.quantity}× ${l.name}`).join(', ')}</td>
                     <td className="py-2 text-slate-500 dark:text-slate-400">{PAYMENT_LABEL[t.paymentMethod || ''] || '—'}</td>
                     <td className="py-2">{warrantyBadge(t, s, inventory)}</td>
@@ -416,7 +420,8 @@ const CustomerProfile: React.FC<Props & { customer: Customer; data: CustomerData
 
       {editing && <EditModal customer={customer} onClose={() => setEditing(false)} onSave={c => { onSaveCustomer(c, customer); setEditing(false); }} />}
       {invoice && <InvoiceModal tx={invoice} customer={customer} canViewProfit={canViewProfit} onClose={() => setInvoice(null)}
-        onVoid={onVoidSale && canVoidSale && canVoidSale(invoice) ? () => { onVoidSale(invoice); setInvoice(null); } : undefined} />}
+        onVoid={onVoidSale && canVoidSale && canVoidSale(invoice) ? () => { onVoidSale(invoice); setInvoice(null); } : undefined}
+        onReturn={onReturnSale && canReturnSale && canReturnSale(invoice) ? (opts) => { onReturnSale(invoice, opts); setInvoice(null); } : undefined} />}
       {ticket && <TicketModal repair={ticket} tech={techFor.get(ticket.id)} customer={customer} onClose={() => setTicket(null)} />}
     </div>
   );
@@ -445,12 +450,17 @@ const Row: React.FC<{ label: string; value: string }> = ({ label, value }) => (
 const Empty: React.FC<{ text: string }> = ({ text }) => <p className="text-sm text-slate-400 py-6 text-center">{text}</p>;
 
 /* ---------------- Invoice modal ---------------- */
-const InvoiceModal: React.FC<{ tx: SalesTransaction; customer: Customer; canViewProfit: boolean; onClose: () => void; onVoid?: () => void }> = ({ tx, customer, canViewProfit, onClose, onVoid }) => (
+const InvoiceModal: React.FC<{ tx: SalesTransaction; customer: Customer; canViewProfit: boolean; onClose: () => void; onVoid?: () => void; onReturn?: (opts: { restockingFee?: number; disposition: ReturnDisposition }) => void }> = ({ tx, customer, canViewProfit, onClose, onVoid, onReturn }) => (
   <Modal title={`Invoice ${tx.id.slice(0, 8)}`} onClose={onClose} onPrint={() => printInvoice(tx, customer)}>
     <div className="space-y-2 text-sm">
       {tx.status === 'voided' && (
         <div className="flex items-center gap-2 text-xs font-semibold text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-900/20 border border-rose-200 dark:border-rose-900/40 rounded-lg px-3 py-2">
           VOIDED{tx.voidedAt ? ` · ${new Date(tx.voidedAt).toLocaleString()}` : ''} — stock and devices were reversed; the record is kept for history.
+        </div>
+      )}
+      {tx.status === 'returned' && (
+        <div className="text-xs font-semibold text-amber-800 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-900/40 rounded-lg px-3 py-2">
+          RETURNED{tx.returnedAt ? ` · ${new Date(tx.returnedAt).toLocaleString()}` : ''} — refunded {money(tx.refundAmount || 0)}{tx.restockingFee ? ` (restocking fee ${money(tx.restockingFee)})` : ''}. Kept for history.
         </div>
       )}
       <Row label="Date" value={tx.date} />
@@ -480,9 +490,47 @@ const InvoiceModal: React.FC<{ tx: SalesTransaction; customer: Customer; canView
           </button>
         </div>
       )}
+      {onReturn && <ReturnSection total={tx.totalPaid} onReturn={onReturn} />}
     </div>
   </Modal>
 );
+
+/* ---------------- Return processing ---------------- */
+// Restocking fee (optional) + device disposition, then confirm. Refund is the
+// sale total minus the fee; the fee is clamped so the refund never goes negative.
+const ReturnSection: React.FC<{ total: number; onReturn: (opts: { restockingFee?: number; disposition: ReturnDisposition }) => void }> = ({ total, onReturn }) => {
+  const [fee, setFee] = useState('');
+  const [disposition, setDisposition] = useState<ReturnDisposition>('resell');
+  const feeNum = Math.min(Math.max(parseFloat(fee) || 0, 0), Math.max(0, total));
+  const refund = Math.max(0, Math.round((total - feeNum) * 100) / 100);
+  const submit = () => {
+    if (!window.confirm(`Process this return? Refund ${money(refund)}${feeNum > 0 ? ` (after a ${money(feeNum)} restocking fee)` : ''}. ${disposition === 'resell' ? 'Device(s) return to sellable stock' : 'Device(s) are marked not-for-resale'}; accessory stock is restored. The sale is flagged returned (kept for history).`)) return;
+    onReturn({ restockingFee: feeNum > 0 ? feeNum : undefined, disposition });
+  };
+  return (
+    <div className="pt-3 mt-1 border-t border-slate-100 dark:border-slate-800 space-y-2">
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Process Return</p>
+      <label className="flex items-center justify-between gap-3 text-sm text-slate-600 dark:text-slate-300">
+        <span>Restocking fee (optional)</span>
+        <span className="flex items-center gap-1">$<input type="number" min="0" step="0.01" value={fee} onChange={e => setFee(e.target.value)} placeholder="0.00"
+          className="w-24 px-2 py-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md text-right text-sm focus:outline-none focus:ring-2 focus:ring-amber-500" /></span>
+      </label>
+      <div className="flex items-center justify-between text-sm"><span className="text-slate-400">Refund amount</span><span className="font-bold text-slate-800 dark:text-slate-100">{money(refund)}</span></div>
+      <div className="grid grid-cols-2 gap-2 pt-1">
+        {([['resell', 'Return to stock'], ['defective', 'Not for resale']] as [ReturnDisposition, string][]).map(([val, label]) => (
+          <button key={val} onClick={() => setDisposition(val)}
+            className={`py-1.5 rounded-lg text-xs font-medium border ${disposition === val ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-200 border-amber-300 dark:border-amber-700' : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700'}`}>
+            {label}
+          </button>
+        ))}
+      </div>
+      <button onClick={submit}
+        className="w-full flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium bg-amber-500 hover:bg-amber-600 text-white">
+        <RotateCcw className="w-4 h-4" /> Process Return · refund {money(refund)}
+      </button>
+    </div>
+  );
+};
 
 /* ---------------- Repair ticket modal ---------------- */
 const TicketModal: React.FC<{ repair: Repair; tech?: string; customer: Customer; onClose: () => void }> = ({ repair: r, tech, customer, onClose }) => (

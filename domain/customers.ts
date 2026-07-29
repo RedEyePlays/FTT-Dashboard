@@ -1,6 +1,6 @@
 import { Customer, SalesTransaction, Repair, RepairBatch, InventoryItem } from '../types';
 import { isRepairOpen, balanceOwing, batchTotals } from './repairs';
-import { salesBalanceOwing, isVoided } from './pos';
+import { salesBalanceOwing, isReversed } from './pos';
 
 // All customer statistics are DERIVED from existing documents (salesTransactions
 // + repairs + repairBatches + inventory) — nothing is duplicated or stored on the
@@ -45,7 +45,7 @@ export interface CustomerStats {
   repairCount: number;
   avgRepair: number;
   activeRepairs: number;      // repairs not in a terminal state
-  warrantyClaims: number;     // repairs currently under warranty
+  activeWarranties: number;   // repairs currently within their warranty window (NOT filed claims)
   outstandingBalance: number; // unpaid layaway sale balances + repair balances + wholesale remainders
   firstSeen: number;          // epoch ms (0 = unknown)
   lastActivity: number;       // epoch ms (0 = unknown)
@@ -72,8 +72,11 @@ export function customerStats(c: Customer, data: CustomerData, now: number = Dat
     })
     .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
 
-  const lifetimeSpent = purchases.reduce((s, t) => s + (t.totalPaid || 0), 0);
-  const lifetimeProfit = purchases.reduce((s, t) => s + (t.netProfit || 0), 0);
+  // Reversed sales (voided or returned) stay in the purchase history but must not
+  // inflate money totals — the customer didn't ultimately spend that.
+  const realized = purchases.filter(t => !isReversed(t));
+  const lifetimeSpent = realized.reduce((s, t) => s + (t.totalPaid || 0), 0);
+  const lifetimeProfit = realized.reduce((s, t) => s + (t.netProfit || 0), 0);
   const repairRevenue = repairs.reduce((s, r) => s + (r.repairPrice || 0), 0);
 
   // Outstanding = unpaid layaway sale balances + open-repair balances + wholesale
@@ -81,7 +84,7 @@ export function customerStats(c: Customer, data: CustomerData, now: number = Dat
   // (a voided sale owes nothing), so those must be counted here too or a customer
   // who put a deposit down would show $0 outstanding.
   const salesOwing = purchases
-    .filter(t => !isVoided(t))
+    .filter(t => !isReversed(t))
     .reduce((s, t) => s + salesBalanceOwing(t.totalPaid || 0, t.deposit), 0);
   const retailOwing = repairs
     .filter(r => r.type !== 'wholesale' && isRepairOpen(r))
@@ -98,12 +101,12 @@ export function customerStats(c: Customer, data: CustomerData, now: number = Dat
     purchases, repairs,
     lifetimeSpent, lifetimeProfit,
     purchaseCount: purchases.length,
-    avgPurchase: purchases.length ? lifetimeSpent / purchases.length : 0,
+    avgPurchase: realized.length ? lifetimeSpent / realized.length : 0,
     repairRevenue,
     repairCount: repairs.length,
     avgRepair: repairs.length ? repairRevenue / repairs.length : 0,
     activeRepairs: repairs.filter(isRepairOpen).length,
-    warrantyClaims: repairs.filter(r => underWarranty(r, now)).length,
+    activeWarranties: repairs.filter(r => underWarranty(r, now)).length,
     outstandingBalance: salesOwing + retailOwing + wholesaleOwing,
     firstSeen: activityTimes.length ? Math.min(...activityTimes) : 0,
     lastActivity,
@@ -211,7 +214,7 @@ export function passesFilter(filter: CustomerFilter, s: CustomerStats): boolean 
     case 'open_repairs': return s.hasOpenRepairs;
     case 'vip': return s.isVIP;
     case 'balance': return s.outstandingBalance > 0.005;
-    case 'warranty': return s.warrantyClaims > 0;
+    case 'warranty': return s.activeWarranties > 0;
     default: return true;
   }
 }

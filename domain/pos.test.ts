@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { platformFeeAmount, isZeroPricedDevice, cartHasZeroPricedDevice, PricedLine, salesBalanceOwing, isLayaway, searchCheckoutInventory, canVoidSale, isVoided } from './pos';
+import { platformFeeAmount, isZeroPricedDevice, cartHasZeroPricedDevice, PricedLine, salesBalanceOwing, isLayaway, searchCheckoutInventory, canVoidSale, isVoided, isReturned, isReversed, canReturnSale, returnRefund, saleAccessoryRestock } from './pos';
 import { InventoryItem, SalesTransaction } from '../types';
 
 const item = (p: Partial<InventoryItem>): InventoryItem => ({
@@ -119,5 +119,62 @@ describe('void eligibility', () => {
     expect(canVoidSale(tx({ date: '2026-07-28', status: 'voided' }), '2026-07-28')).toBe(false);
     expect(isVoided(tx({ status: 'voided' }))).toBe(true);
     expect(isVoided(tx({}))).toBe(false);
+  });
+});
+
+describe('return eligibility + refund math', () => {
+  const tx = (p: Partial<SalesTransaction>): SalesTransaction => ({
+    id: 't', date: '2026-07-28', customerName: '', subtotal: 0, tax: 0, platformFee: 0,
+    purchaseCost: 0, repairCost: 0, totalCost: 0, totalPaid: 0, netProfit: 0, lines: [], ...p,
+  });
+
+  it('allows returns only after the same-day void window (Void owns same-day)', () => {
+    expect(canReturnSale(tx({ date: '2026-07-27' }), '2026-07-28')).toBe(true);  // earlier day → return
+    expect(canReturnSale(tx({ date: '2026-07-28' }), '2026-07-28')).toBe(false); // same day → void's job
+  });
+  it('blocks returning an already voided or returned sale', () => {
+    expect(canReturnSale(tx({ date: '2026-07-27', status: 'voided' }), '2026-07-28')).toBe(false);
+    expect(canReturnSale(tx({ date: '2026-07-27', status: 'returned' }), '2026-07-28')).toBe(false);
+  });
+
+  it('isReturned / isReversed reflect the status', () => {
+    expect(isReturned(tx({ status: 'returned' }))).toBe(true);
+    expect(isReturned(tx({ status: 'voided' }))).toBe(false);
+    expect(isReversed(tx({ status: 'voided' }))).toBe(true);
+    expect(isReversed(tx({ status: 'returned' }))).toBe(true);
+    expect(isReversed(tx({}))).toBe(false);
+  });
+
+  it('refunds the full total when there is no restocking fee', () => {
+    expect(returnRefund(500)).toBe(500);
+    expect(returnRefund(500, 0)).toBe(500);
+  });
+  it('refunds total minus the restocking fee', () => {
+    expect(returnRefund(500, 50)).toBe(450);
+    expect(returnRefund(99.99, 10)).toBeCloseTo(89.99);
+  });
+  it('clamps the fee so the refund never goes negative', () => {
+    expect(returnRefund(500, 600)).toBe(0);
+    expect(returnRefund(500, -10)).toBe(500);
+  });
+});
+
+describe('saleAccessoryRestock', () => {
+  const tx = (lines: any[]): SalesTransaction => ({
+    id: 't', date: '2026-07-28', customerName: '', subtotal: 0, tax: 0, platformFee: 0,
+    purchaseCost: 0, repairCost: 0, totalCost: 0, totalPaid: 0, netProfit: 0, lines,
+  });
+
+  it('produces one positive delta per accessory line, summed by id, ignoring devices + custom', () => {
+    const updates = saleAccessoryRestock(tx([
+      { inventoryId: 'a1', kind: 'accessory', name: 'Cable', quantity: 2, unitPrice: 10 },
+      { inventoryId: 'a1', kind: 'accessory', name: 'Cable', quantity: 1, unitPrice: 10 },
+      { inventoryId: 'd1', kind: 'device', name: 'Phone', quantity: 1, unitPrice: 500 },
+      { inventoryId: '', kind: 'accessory', name: 'Custom', quantity: 5, unitPrice: 3 },
+    ]));
+    expect(updates).toEqual([{ id: 'a1', delta: 3 }]); // 2+1 restocked; device + custom excluded
+  });
+  it('is empty for a device-only sale', () => {
+    expect(saleAccessoryRestock(tx([{ inventoryId: 'd1', kind: 'device', name: 'Phone', quantity: 1, unitPrice: 500 }]))).toEqual([]);
   });
 });

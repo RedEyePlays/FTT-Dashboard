@@ -2,6 +2,7 @@ import { SalesTransaction, Repair, InventoryItem, Customer, AuditEntry, Activity
 import { kindOf } from './inventory';
 import { isRepairOpen } from './repairs';
 import { customerStats } from './customers';
+import { isReversed } from './pos';
 
 // Owner analytics — every figure is DERIVED from existing sales, repairs,
 // inventory and customer documents. Nothing is duplicated or stored.
@@ -114,7 +115,9 @@ export function computeAnalytics(range: DateRange, input: AnalyticsInput, now: n
   // A layaway (balance still owing) is captured but NOT yet recognized as
   // revenue/profit — the sale isn't fully settled, so it's excluded until the
   // balance is paid off (at which point balanceOwing clears and it counts).
-  const txns = salesTransactions.filter(t => inRange(ymdMs(t.date), range) && !((t.balanceOwing || 0) > 0));
+  // A reversed sale (voided or returned) never counts as revenue/profit, and a
+  // layaway with a balance still owing is deferred until it's paid off.
+  const txns = salesTransactions.filter(t => inRange(ymdMs(t.date), range) && !isReversed(t) && !((t.balanceOwing || 0) > 0));
   const txnInvIds = new Set<string>();
   salesTransactions.forEach(t => t.lines?.forEach(l => l.inventoryId && txnInvIds.add(l.inventoryId)));
 

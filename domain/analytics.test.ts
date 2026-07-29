@@ -32,6 +32,24 @@ describe('presetRange', () => {
   });
 });
 
+describe('reversed sales (voided / returned) are not recognized as revenue', () => {
+  it('excludes voided and returned transactions from revenue, profit and counts', () => {
+    const input: AnalyticsInput = {
+      ...base,
+      salesTransactions: [
+        tx({ id: 'ok', date: '2026-07-20', subtotal: 400, totalPaid: 400, netProfit: 150, lines: [{ kind: 'device', name: 'Nexus', quantity: 1, unitPrice: 400 } as any] }),
+        tx({ id: 'void', date: '2026-07-20', subtotal: 900, totalPaid: 900, netProfit: 300, status: 'voided', lines: [{ kind: 'device', name: 'iPhone', quantity: 1, unitPrice: 900 } as any] }),
+        tx({ id: 'ret', date: '2026-07-20', subtotal: 700, totalPaid: 700, netProfit: 250, status: 'returned', lines: [{ kind: 'device', name: 'Pixel', quantity: 1, unitPrice: 700 } as any] }),
+      ],
+    };
+    const a = computeAnalytics(presetRange('today', NOW), input, NOW);
+    expect(a.revenue).toBe(400);
+    expect(a.grossProfit).toBe(150);
+    expect(a.salesCount).toBe(1);
+    expect(a.devicesSold).toBe(1);
+  });
+});
+
 describe('layaway (unpaid balance) is not recognized as revenue', () => {
   it('excludes a transaction with a balance still owing until it is paid off', () => {
     const withLayaway: AnalyticsInput = {
