@@ -116,6 +116,20 @@ describe('CRM stats + devices', () => {
     expect(s.hasOpenRepairs).toBe(true);
   });
 
+  it('includes unpaid layaway sale balances in outstanding balance', () => {
+    const c = cust({ id: 'c1', phone: '555-1' });
+    const s = customerStats(c, {
+      salesTransactions: [
+        tx({ customerId: 'c1', totalPaid: 800, deposit: 200, balanceOwing: 600 }), // layaway: owes 600
+        tx({ customerId: 'c1', totalPaid: 150 }),                                   // paid in full: owes 0
+        tx({ customerId: 'c1', totalPaid: 500, deposit: 100, status: 'voided' }),   // voided: owes 0
+      ],
+      repairs: [rep({ customerId: 'c1', status: 'in_repair', repairPrice: 100, deposit: 40 })], // repair owes 60
+      batches: [],
+    });
+    expect(s.outstandingBalance).toBe(660); // 600 layaway + 60 repair
+  });
+
   it('builds device history linking a purchase + repair by IMEI', () => {
     const c = cust({ id: 'c1', phone: '555' });
     const s = customerStats(c, {

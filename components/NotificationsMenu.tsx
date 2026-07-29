@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Bell, PackageX, Clock, PackageCheck, AlertTriangle } from 'lucide-react';
+import { Bell, PackageX, Clock, PackageCheck, AlertTriangle, Hourglass } from 'lucide-react';
 import { ActivityEntry, ViewState } from '../types';
 import { Alert, AlertKind } from '../domain/alerts';
 import { HeaderMenu } from './HeaderMenu';
@@ -18,6 +18,7 @@ const ALERT_ICON: Record<AlertKind, React.ReactNode> = {
   low_stock: <PackageX className="w-4 h-4" />,
   repair_overdue: <Clock className="w-4 h-4" />,
   repair_awaiting_pickup: <PackageCheck className="w-4 h-4" />,
+  aging_inventory: <Hourglass className="w-4 h-4" />,
 };
 
 interface Props {

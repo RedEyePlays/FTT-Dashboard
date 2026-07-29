@@ -1,6 +1,6 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
 import { InventoryItem, ItemKind, DeviceType, SalesTransaction, Customer } from '../types';
-import { getPOSSettings } from '../components/SettingsModal';
+import { getPOSSettings, getStoreProfile } from '../components/SettingsModal';
 import { newId } from '../domain/ids';
 import { kindOf, getDeviceDisplayName } from '../domain/inventory';
 import { isZeroPricedDevice as isZeroPricedLine, cartHasZeroPricedDevice, searchCheckoutInventory, salesBalanceOwing } from '../domain/pos';
@@ -394,6 +394,82 @@ export function useCheckout({ inventory, customers = [], initialCustomer, onCons
     win.document.close();
   };
 
+  // Print a formal, full-page (8.5×11) invoice suitable for a business/wholesale
+  // buyer. Same transaction data as the receipt, but with the real Store Profile
+  // header (name, logo, address, contact, business/tax number) pulled from the
+  // cached AppSettings.general. The invoice number reuses the transaction id —
+  // it's already unique per sale, so no separate invoice counter is introduced.
+  const printInvoice = () => {
+    if (!lastTx) return;
+    const store = getStoreProfile();
+    const esc = (v?: string) => (v || '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string));
+    const money = (n: number) => `$${(n || 0).toFixed(2)}`;
+    const rows = lastTx.lines.map(l => `<tr>
+        <td>${esc(l.name)}${l.sku ? `<br/><span class="sub">${esc(l.sku)}</span>` : ''}</td>
+        <td class="c">${l.quantity}</td>
+        <td class="r">${money(l.unitPrice)}</td>
+        <td class="r">${money(l.quantity * l.unitPrice)}</td>
+      </tr>`).join('');
+    const payParts = lastTx.paymentMethod === 'mixed'
+      ? [['Cash', lastTx.cashAmount], ['Card', lastTx.cardAmount], ['E-transfer', lastTx.etransferAmount]].filter(([, v]) => v).map(([k, v]) => `${k}: ${money(Number(v))}`).join(' · ')
+      : (lastTx.paymentMethod || '');
+    const contact = [store.address, store.phone, store.email, store.website, store.businessNumber && `Business #: ${store.businessNumber}`]
+      .filter(Boolean).map(v => `<div>${esc(String(v))}</div>`).join('');
+    const win = window.open('', '_blank', 'width=800,height=1000');
+    if (!win) return;
+    win.document.write(`<html><head><title>Invoice ${esc(lastTx.id)}</title>
+      <style>
+        *{box-sizing:border-box;} body{font-family:'Inter',system-ui,Arial,sans-serif;color:#111;max-width:8.5in;margin:0 auto;padding:0.6in;font-size:13px;}
+        .top{display:flex;justify-content:space-between;align-items:flex-start;gap:24px;border-bottom:2px solid #111;padding-bottom:16px;margin-bottom:20px;}
+        .store h1{margin:0 0 4px;font-size:22px;} .store .sub,.store div{color:#555;font-size:11px;line-height:1.5;}
+        .logo{max-height:64px;max-width:180px;object-fit:contain;margin-bottom:8px;}
+        .inv{text-align:right;} .inv h2{margin:0 0 6px;font-size:26px;letter-spacing:1px;color:#333;}
+        .inv .meta{font-size:12px;color:#555;line-height:1.6;}
+        .bill{margin-bottom:18px;} .bill .label{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#888;margin-bottom:2px;}
+        .bill .who{font-size:15px;font-weight:700;}
+        table{width:100%;border-collapse:collapse;margin-bottom:16px;} th{text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:#666;border-bottom:1px solid #ccc;padding:6px 8px;}
+        td{padding:8px;border-bottom:1px solid #eee;vertical-align:top;} td.c{text-align:center;} td.r{text-align:right;} .sub{color:#888;font-size:10px;}
+        .totals{width:280px;margin-left:auto;font-size:13px;} .totals .row{display:flex;justify-content:space-between;padding:4px 8px;}
+        .totals .grand{border-top:2px solid #111;font-weight:800;font-size:15px;margin-top:4px;padding-top:8px;}
+        .totals .owe{color:#b45309;font-weight:800;}
+        .pay{margin-top:20px;font-size:12px;color:#555;} .foot{margin-top:36px;text-align:center;color:#888;font-size:11px;border-top:1px solid #eee;padding-top:12px;}
+      </style></head>
+      <body>
+        <div class="top">
+          <div class="store">
+            ${store.logoUrl ? `<img class="logo" src="${esc(store.logoUrl)}" alt="${esc(store.storeName)}"/>` : ''}
+            <h1>${esc(store.storeName)}</h1>
+            ${contact}
+          </div>
+          <div class="inv">
+            <h2>INVOICE</h2>
+            <div class="meta">Invoice #: ${esc(lastTx.id)}<br/>Date: ${esc(lastTx.date)}</div>
+          </div>
+        </div>
+        <div class="bill">
+          <div class="label">Bill To</div>
+          <div class="who">${esc(lastTx.customerName || 'Walk-in')}</div>
+          ${lastTx.customerPhone ? `<div class="sub">${esc(lastTx.customerPhone)}</div>` : ''}
+          ${lastTx.customerEmail ? `<div class="sub">${esc(lastTx.customerEmail)}</div>` : ''}
+        </div>
+        <table>
+          <thead><tr><th>Item</th><th style="text-align:center">Qty</th><th style="text-align:right">Unit</th><th style="text-align:right">Amount</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+        <div class="totals">
+          <div class="row"><span>Subtotal</span><span>${money(lastTx.subtotal)}</span></div>
+          <div class="row"><span>Tax</span><span>${money(lastTx.tax)}</span></div>
+          ${lastTx.platformFee ? `<div class="row"><span>Platform fee</span><span>-${money(lastTx.platformFee)}</span></div>` : ''}
+          <div class="row grand"><span>Total</span><span>${money(lastTx.totalPaid)}</span></div>
+          ${lastTx.balanceOwing ? `<div class="row"><span>Deposit paid</span><span>${money(lastTx.deposit || 0)}</span></div><div class="row owe"><span>Balance owing</span><span>${money(lastTx.balanceOwing)}</span></div>` : ''}
+        </div>
+        <div class="pay">Payment method: ${esc(payParts)}${lastTx.notes ? ` · ${esc(lastTx.notes)}` : ''}</div>
+        <div class="foot">Thank you for your business!${store.website ? ` · ${esc(store.website)}` : ''}</div>
+        <script>window.onload=function(){window.print();};</script>
+      </body></html>`);
+    win.document.close();
+  };
+
   // Email the receipt via a prefilled mailto: link — no backend required, opens
   // the user's own mail client with the customer's captured email pre-addressed.
   // (Limitation: it composes a draft in their client rather than sending
@@ -436,7 +512,7 @@ export function useCheckout({ inventory, customers = [], initialCustomer, onCons
     taxRate, feePercent, previousPurchases, availableDevices, availableAccessories,
     lineSubtotal, subtotal, discountTotal, purchaseCostTotal, repairCostTotal, totalCost, taxableBase, taxApplies, tax, platformFee, totalPaid, netProfit,
     isZeroPricedDevice, hasZeroPricedDevice, allowZeroPrice, setAllowZeroPrice, blockedByZeroPrice,
-    addDevice, addAccessory, updateLine, removeLine, num, addCustomItem, handleScan, handleCheckout, reset, printReceipt, emailReceipt, soldDeviceRows,
+    addDevice, addAccessory, updateLine, removeLine, num, addCustomItem, handleScan, handleCheckout, reset, printReceipt, printInvoice, emailReceipt, soldDeviceRows,
     scanResults, addScanResult,
   };
 }

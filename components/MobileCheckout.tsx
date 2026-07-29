@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import {
   ScanLine, Search, Plus, Minus, Trash2, Smartphone, Package, Sparkles, ShoppingCart,
   User, Phone, Mail, ChevronLeft, CheckCircle, Banknote, CreditCard, Blend, Send,
-  Printer, RotateCcw, Eye, X, AlertTriangle,
+  Printer, RotateCcw, Eye, X, AlertTriangle, FileText,
 } from 'lucide-react';
 import { InventoryItem, Customer, DeviceType } from '../types';
 import { getDeviceDisplayName } from '../domain/inventory';
@@ -82,6 +82,7 @@ export const MobileCheckout: React.FC<Props> = (props) => {
         </div>
         <div className="grid grid-cols-1 gap-2 w-full max-w-sm">
           <button onClick={cx.printReceipt} className="flex items-center justify-center gap-2 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold"><Printer className="w-4 h-4" /> Print Receipt</button>
+          <button onClick={cx.printInvoice} className="flex items-center justify-center gap-2 py-3 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-sm font-medium"><FileText className="w-4 h-4" /> Print Invoice</button>
           <button onClick={cx.emailReceipt} className="flex items-center justify-center gap-2 py-3 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-sm font-medium"><Mail className="w-4 h-4" /> Email Receipt</button>
           <div className="grid grid-cols-2 gap-2">
             <button onClick={() => setTxModal(true)} className="flex items-center justify-center gap-2 py-3 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-sm font-medium"><Eye className="w-4 h-4" /> View Sale</button>

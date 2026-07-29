@@ -16,6 +16,29 @@ export const getPOSSettings = () => {
 const savePOSSettings = (s: { taxRate: number }) =>
   localStorage.setItem('posSettings', JSON.stringify(s));
 
+// Store Profile (business identity) mirrored into localStorage from the owner's
+// Firestore AppSettings.general — same pattern as the label-size cache — so the
+// checkout hook can print a proper invoice header without receiving settings as
+// props. Source of truth stays AppSettings; this is a read-through cache.
+export interface StoreProfile {
+  storeName: string; logoUrl: string; address: string;
+  phone: string; email: string; website: string; businessNumber: string;
+}
+const STORE_PROFILE_KEY = 'ftt_store_profile_v1';
+const DEFAULT_STORE_PROFILE: StoreProfile = {
+  storeName: 'FlipThatTech', logoUrl: '', address: '', phone: '', email: '', website: '', businessNumber: '',
+};
+export const cacheStoreProfile = (p: Partial<StoreProfile>) => {
+  try { localStorage.setItem(STORE_PROFILE_KEY, JSON.stringify({ ...DEFAULT_STORE_PROFILE, ...p })); } catch { /* ignore */ }
+};
+export const getStoreProfile = (): StoreProfile => {
+  try {
+    const raw = localStorage.getItem(STORE_PROFILE_KEY);
+    if (raw) return { ...DEFAULT_STORE_PROFILE, ...(JSON.parse(raw) as Partial<StoreProfile>) };
+  } catch { /* ignore */ }
+  return DEFAULT_STORE_PROFILE;
+};
+
 // Client-side cache of the workspace's custom label sizes (mirrors the Firestore
 // source of truth in AppSettings.labels.customSizes). Kept in localStorage — the
 // same pattern as getPOSSettings — so the label modals can read the merged

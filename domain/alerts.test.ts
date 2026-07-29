@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   isLowStockAccessory, isOverdueRepair, isAwaitingPickup, buildAlerts,
+  isAgingDevice, deviceAgeDays, AGING_INVENTORY_DAYS,
   READY_PICKUP_STALE_DAYS, DAY_MS,
 } from './alerts';
 import { InventoryItem, Repair, RepairStatus } from '../types';
@@ -80,6 +81,33 @@ describe('isAwaitingPickup', () => {
   });
 });
 
+describe('isAgingDevice', () => {
+  const old = iso(NOW - (AGING_INVENTORY_DAYS + 5) * DAY_MS);
+  const fresh = iso(NOW - 3 * DAY_MS);
+
+  it('flags an unsold device held past the aging threshold', () => {
+    expect(isAgingDevice(device({ id: 'd', date: old, deviceStatus: 'ready' }), NOW)).toBe(true);
+    expect(deviceAgeDays(device({ date: old }), NOW)).toBe(AGING_INVENTORY_DAYS + 5);
+  });
+  it('does not flag a recently acquired device', () => {
+    expect(isAgingDevice(device({ date: fresh }), NOW)).toBe(false);
+  });
+  it('excludes sold, reserved and returned devices', () => {
+    expect(isAgingDevice(device({ date: old, soldDate: iso(NOW) }), NOW)).toBe(false);
+    expect(isAgingDevice(device({ date: old, deviceStatus: 'sold' }), NOW)).toBe(false);
+    expect(isAgingDevice(device({ date: old, deviceStatus: 'reserved' }), NOW)).toBe(false);
+    expect(isAgingDevice(device({ date: old, deviceStatus: 'returned' }), NOW)).toBe(false);
+  });
+  it('never flags an accessory, or a device with no intake date', () => {
+    expect(isAgingDevice(acc({ date: old }), NOW)).toBe(false);
+    expect(isAgingDevice(device({ date: '' }), NOW)).toBe(false);
+  });
+  it('honours a custom threshold', () => {
+    expect(isAgingDevice(device({ date: iso(NOW - 10 * DAY_MS) }), NOW, 7)).toBe(true);
+    expect(isAgingDevice(device({ date: iso(NOW - 10 * DAY_MS) }), NOW, 14)).toBe(false);
+  });
+});
+
 describe('buildAlerts', () => {
   const inventory = [
     acc({ id: 'lo', item: 'USB-C Cable', quantity: 1, lowStockThreshold: 3 }),
@@ -118,5 +146,18 @@ describe('buildAlerts', () => {
     for (const a of buildAlerts({ inventory, repairs, now: NOW })) {
       expect(a.view).toBeTruthy();
     }
+  });
+
+  it('surfaces aging unsold devices as info alerts pointing at inventory', () => {
+    const aging = device({ id: 'olddev', item: 'iPhone 12', date: iso(NOW - 45 * DAY_MS), deviceStatus: 'ready' });
+    const alerts = buildAlerts({ inventory: [aging], repairs: [], now: NOW });
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toMatchObject({ id: 'aging_inventory:olddev', kind: 'aging_inventory', severity: 'info', view: 'grid' });
+  });
+
+  it('respects a custom aging threshold', () => {
+    const inv = [device({ id: 'd', item: 'Pixel', date: iso(NOW - 20 * DAY_MS), deviceStatus: 'ready' })];
+    expect(buildAlerts({ inventory: inv, repairs: [], now: NOW, agingDays: 14 }).some(a => a.kind === 'aging_inventory')).toBe(true);
+    expect(buildAlerts({ inventory: inv, repairs: [], now: NOW, agingDays: 30 }).some(a => a.kind === 'aging_inventory')).toBe(false);
   });
 });
