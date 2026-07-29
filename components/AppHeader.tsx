@@ -2,7 +2,7 @@ import React from 'react';
 import {
   LayoutDashboard, Table, ShoppingCart, Wrench, Contact, Activity, BarChart3, StickyNote,
   Truck, ScrollText, Users as UsersIcon, Settings, Bot, Sparkles, MessageCircle, Calculator,
-  Search, PlusCircle, Moon, Sun, Menu, MoreHorizontal, ChevronDown, LogOut, Clock,
+  Search, PlusCircle, Moon, Sun, Menu, MoreHorizontal, ChevronDown, LogOut, Clock, Receipt,
 } from 'lucide-react';
 import { ViewState, Permission, ActivityEntry } from '../types';
 import { Alert } from '../domain/alerts';
@@ -63,6 +63,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
 
   const more: NavItem[] = ([
     { key: 'analytics', label: 'Analytics', icon: <BarChart3 className="w-4 h-4" />, view: 'analytics', show: (userRole === 'owner' || userRole === 'manager') && allow('reports.profit.detailed') },
+    { key: 'reports', label: 'Reports', icon: <Receipt className="w-4 h-4" />, view: 'reports', show: userRole === 'owner' || userRole === 'manager' },
     { key: 'timeclock', label: 'Time Clock', icon: <Clock className="w-4 h-4" />, view: 'timeclock', show: allow('timeclock.use') },
     { key: 'notes', label: 'Notes', icon: <StickyNote className="w-4 h-4" />, view: 'notes', show: true },
     { key: 'dropoff', label: 'Drop-Offs', icon: <Truck className="w-4 h-4" />, view: 'dropoff', show: allow('dropoffs.manage') },

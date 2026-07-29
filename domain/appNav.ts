@@ -14,6 +14,7 @@ import { InvSection, DEFAULT_INV_SECTION, invPath, parseInvPath } from './invent
 
 const VIEW_SLUGS: { view: ViewState; slug: string }[] = [
   { view: 'analytics', slug: 'analytics' },
+  { view: 'reports', slug: 'reports' },
   { view: 'pos', slug: 'checkout' },
   { view: 'repairs', slug: 'repairs' },
   { view: 'customers', slug: 'customers' },
