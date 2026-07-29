@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react';
 import {
   Store, Building2, Wrench, ShoppingCart, Percent, Tag, Contact, LayoutDashboard,
   Palette, ShieldCheck, DatabaseBackup, Info, Save, RotateCcw, Check, Lock, Plus, Trash2,
-  Download, RefreshCw, Loader2, CalendarClock,
+  Download, RefreshCw, Loader2, CalendarClock, SlidersHorizontal,
 } from 'lucide-react';
 import { Role, Permission } from '../types';
 import {
@@ -22,7 +22,7 @@ import { BackupFileMeta } from '../services/backupStorage';
 
 type SectionId =
   | 'general' | 'store' | 'repairs' | 'checkout' | 'taxes' | 'labels'
-  | 'customers' | 'dashboard' | 'appearance' | 'roles' | 'data' | 'about';
+  | 'customers' | 'operations' | 'dashboard' | 'appearance' | 'roles' | 'data' | 'about';
 
 const SECTIONS: { id: SectionId; label: string; icon: React.ReactNode }[] = [
   { id: 'general', label: 'General', icon: <Store className="w-4 h-4" /> },
@@ -32,6 +32,7 @@ const SECTIONS: { id: SectionId; label: string; icon: React.ReactNode }[] = [
   { id: 'taxes', label: 'Taxes', icon: <Percent className="w-4 h-4" /> },
   { id: 'labels', label: 'Labels & Printing', icon: <Tag className="w-4 h-4" /> },
   { id: 'customers', label: 'Customers', icon: <Contact className="w-4 h-4" /> },
+  { id: 'operations', label: 'Operations', icon: <SlidersHorizontal className="w-4 h-4" /> },
   { id: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard className="w-4 h-4" /> },
   { id: 'appearance', label: 'Appearance', icon: <Palette className="w-4 h-4" /> },
   { id: 'roles', label: 'Security & Roles', icon: <ShieldCheck className="w-4 h-4" /> },
@@ -149,6 +150,7 @@ export const SettingsView: React.FC<Props> = ({ settings, onSave, canManage, rol
             {active === 'taxes' && <TaxesSection draft={draft} patch={patch} />}
             {active === 'labels' && <LabelsSection draft={draft} patch={patch} />}
             {active === 'customers' && <CustomersSection draft={draft} patch={patch} />}
+            {active === 'operations' && <OperationsSection draft={draft} patch={patch} />}
             {active === 'dashboard' && <DashboardSection draft={draft} patch={patch} />}
             {active === 'appearance' && <AppearanceSection draft={draft} patch={patch} />}
             {active === 'roles' && <RolesSection />}
@@ -362,6 +364,29 @@ const CustomersSection: React.FC<{ draft: AppSettings; patch: PatchFn }> = ({ dr
       <SettingsToggle label="Duplicate detection" hint="Warn when a new customer matches an existing phone or email." checked={draft.customers.duplicateDetection} onChange={v => patch('customers', { duplicateDetection: v })} />
       <SettingsTextField label="Default tags" hint="Comma-separated. Offered as quick-add tags." value={draft.customers.defaultTags.join(', ')}
         onChange={v => patch('customers', { defaultTags: v.split(',').map(t => t.trim()).filter(Boolean) })} />
+    </SettingsCard>
+  </SettingsSection>
+);
+
+const OperationsSection: React.FC<{ draft: AppSettings; patch: PatchFn }> = ({ draft, patch }) => (
+  <SettingsSection title="Operations" description="Defaults and windows for the cash drawer, sale reversals and inventory alerts.">
+    <SettingsCard>
+      <SettingsTextField label="Default opening cash float ($)" type="number" min={0} step={0.01}
+        hint="Pre-filled as the starting drawer cash on the daily reconciliation screen."
+        value={draft.operations.openingFloatDefault}
+        onChange={v => patch('operations', { openingFloatDefault: Math.max(0, parseFloat(v) || 0) })} />
+      <SettingsTextField label="Void window (days)" type="number" min={0} max={365} step={1}
+        hint="How long after a sale it can still be voided. 0 = same calendar day only. Returns handle anything after this."
+        value={draft.operations.voidWindowDays}
+        onChange={v => patch('operations', { voidWindowDays: Math.max(0, Math.round(parseFloat(v) || 0)) })} />
+      <SettingsTextField label="Default restocking fee (%)" type="number" min={0} max={100} step={0.01}
+        hint="Pre-filled (as a % of the sale total) when processing a return. Still editable per return. 0 = none."
+        value={draft.operations.returnRestockingFeePercent}
+        onChange={v => patch('operations', { returnRestockingFeePercent: Math.max(0, Math.min(100, parseFloat(v) || 0)) })} />
+      <SettingsTextField label="Aging inventory alert (days)" type="number" min={1} max={365} step={1}
+        hint="An unsold device older than this triggers the aging-inventory notification."
+        value={draft.operations.agingInventoryDays}
+        onChange={v => patch('operations', { agingInventoryDays: Math.max(1, Math.round(parseFloat(v) || 1)) })} />
     </SettingsCard>
   </SettingsSection>
 );

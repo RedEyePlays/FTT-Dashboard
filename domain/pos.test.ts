@@ -137,6 +137,15 @@ describe('return eligibility + refund math', () => {
     expect(canReturnSale(tx({ date: '2026-07-27', status: 'returned' }), '2026-07-28')).toBe(false);
   });
 
+  it('respects a configurable void window, keeping Void and Returns non-overlapping', () => {
+    // 2-day void window: today and the 2 prior days are voidable, older is returnable.
+    expect(canVoidSale(tx({ date: '2026-07-28' }), '2026-07-28', 2)).toBe(true);   // same day
+    expect(canVoidSale(tx({ date: '2026-07-26' }), '2026-07-28', 2)).toBe(true);   // 2 days back (boundary)
+    expect(canVoidSale(tx({ date: '2026-07-25' }), '2026-07-28', 2)).toBe(false);  // 3 days back → return
+    expect(canReturnSale(tx({ date: '2026-07-26' }), '2026-07-28', 2)).toBe(false);// still in void window
+    expect(canReturnSale(tx({ date: '2026-07-25' }), '2026-07-28', 2)).toBe(true); // past window → return
+  });
+
   it('isReturned / isReversed reflect the status', () => {
     expect(isReturned(tx({ status: 'returned' }))).toBe(true);
     expect(isReturned(tx({ status: 'voided' }))).toBe(false);

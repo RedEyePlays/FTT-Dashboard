@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { SalesTransaction } from '../types';
 import {
   cashCollectedOnTx, expectedCashForDate, reconcileCash,
+  expectedEndingCash, sumDrawerEntries,
   taxRemittance, taxReportCsvRows,
 } from './reports';
 
@@ -42,6 +43,31 @@ describe('expectedCashForDate', () => {
   });
   it('is zero for a day with no cash sales', () => {
     expect(expectedCashForDate(txns, '2026-01-01')).toBe(0);
+  });
+});
+
+describe('sumDrawerEntries', () => {
+  it('sums entry amounts, ignoring blanks and negatives', () => {
+    expect(sumDrawerEntries([{ amount: 20 }, { amount: 5.5 }, { amount: -3 }, { amount: 0 }])).toBe(25.5);
+    expect(sumDrawerEntries()).toBe(0);
+  });
+});
+
+describe('expectedEndingCash', () => {
+  it('is opening float + cash sales − cash out − withdrawals', () => {
+    expect(expectedEndingCash({ openingFloat: 200, cashSales: 500, cashOut: 60, withdrawals: 300 })).toBe(340);
+  });
+  it('treats missing components as zero', () => {
+    expect(expectedEndingCash({ cashSales: 100 })).toBe(100);
+    expect(expectedEndingCash({})).toBe(0);
+  });
+  it('does not falsely flag a shortage when cash legitimately left the drawer', () => {
+    // Float 100, $400 cash sales, but $150 paid out + $200 pulled to the bank.
+    const expected = expectedEndingCash({ openingFloat: 100, cashSales: 400, cashOut: 150, withdrawals: 200 });
+    expect(expected).toBe(150);
+    // Counting exactly $150 is balanced — the old sales-only formula would have
+    // wrongly shown a $250 shortage.
+    expect(reconcileCash(150, expected).direction).toBe('balanced');
   });
 });
 

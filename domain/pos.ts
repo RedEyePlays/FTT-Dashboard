@@ -67,11 +67,23 @@ export const searchCheckoutInventory = (
 
 export const isVoided = (tx: Pick<SalesTransaction, 'status'>): boolean => tx.status === 'voided';
 
-// A sale may be voided only within the same calendar day it was recorded, and
-// only once. A SalesTransaction has no separate created-at timestamp, so the
-// window is measured against its `date` (YYYY-MM-DD) field.
-export const canVoidSale = (tx: Pick<SalesTransaction, 'status' | 'date'>, todayISO: string): boolean =>
-  !isVoided(tx) && !!tx.date && tx.date === todayISO;
+// Whole days between two YYYY-MM-DD dates (to − from). Parsed as UTC midnights so
+// DST never shifts the count.
+const daysBetween = (fromISO: string, toISO: string): number => {
+  const a = Date.parse(`${fromISO}T00:00:00Z`), b = Date.parse(`${toISO}T00:00:00Z`);
+  if (isNaN(a) || isNaN(b)) return NaN;
+  return Math.round((b - a) / 86_400_000);
+};
+
+// A sale may be voided only within the configurable void window (in days) after
+// its date, and only once. `windowDays` 0 = same calendar day only (the default).
+// A SalesTransaction has no separate created-at timestamp, so the window is
+// measured against its `date` (YYYY-MM-DD) field.
+export const canVoidSale = (tx: Pick<SalesTransaction, 'status' | 'date'>, todayISO: string, windowDays: number = 0): boolean => {
+  if (isReversed(tx) || !tx.date) return false;
+  const age = daysBetween(tx.date, todayISO);
+  return !isNaN(age) && age >= 0 && age <= Math.max(0, windowDays);
+};
 
 // --- Returning a completed sale --------------------------------------------
 // A return is the "everything after same-day" counterpart to Void: it refunds
@@ -84,11 +96,15 @@ export const isReturned = (tx: Pick<SalesTransaction, 'status'>): boolean => tx.
 /** A sale that has been reversed (voided or returned) — excluded from revenue, profit and balances. */
 export const isReversed = (tx: Pick<SalesTransaction, 'status'>): boolean => isVoided(tx) || isReturned(tx);
 
-// A sale may be returned once the same-day void window has passed: it must not be
-// already reversed, and its date must be a day earlier than today (same day is
-// Void's job). Measured against the transaction `date` (YYYY-MM-DD), like void.
-export const canReturnSale = (tx: Pick<SalesTransaction, 'status' | 'date'>, todayISO: string): boolean =>
-  !isReversed(tx) && !!tx.date && tx.date < todayISO;
+// A sale may be returned once the void window has passed: it must not be already
+// reversed, and it must be older than `windowDays` days (Void owns everything up
+// to and including that boundary, Returns own everything after — so the two never
+// overlap regardless of how the window is configured).
+export const canReturnSale = (tx: Pick<SalesTransaction, 'status' | 'date'>, todayISO: string, windowDays: number = 0): boolean => {
+  if (isReversed(tx) || !tx.date) return false;
+  const age = daysBetween(tx.date, todayISO);
+  return !isNaN(age) && age > Math.max(0, windowDays);
+};
 
 /**
  * Actual refund for a return: the sale total minus an optional restocking fee.

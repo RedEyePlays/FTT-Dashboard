@@ -299,11 +299,25 @@ export interface AppData {
 
 export type ViewState = 'dashboard' | 'analytics' | 'reports' | 'entry' | 'edit' | 'grid' | 'notes' | 'ai' | 'pos' | 'dropoff' | 'repairs' | 'customers' | 'users' | 'audit' | 'settings' | 'timeclock';
 
+// A single cash movement out of the drawer, logged as part of a day's
+// reconciliation: a paid cash expense, or an owner withdrawal / till pull.
+// Its date and recorder come from the parent reconciliation record.
+export interface CashDrawerEntry {
+  id: string;
+  amount: number;          // dollars leaving the drawer (positive)
+  note?: string;           // expense reason / withdrawal note
+}
+
 // A saved daily cash-drawer reconciliation (one per calendar day; id === date).
+// Expected ending cash = openingFloat + cashSales − Σ cashOut − Σ withdrawals.
 export interface CashReconciliation {
   id: string;              // the date, YYYY-MM-DD (one reconciliation per day)
   date: string;            // YYYY-MM-DD
-  expectedCash: number;    // computed cash owed to the till that day
+  openingFloat?: number;   // starting cash in the drawer at open
+  cashSales?: number;      // cash taken in from that day's sales
+  cashOut?: CashDrawerEntry[];      // cash expenses paid out of the drawer
+  withdrawals?: CashDrawerEntry[];  // owner pulls / bank deposits
+  expectedCash: number;    // computed expected ENDING cash (float + sales − out − withdrawals)
   countedCash: number;     // actual counted cash at close
   variance: number;        // countedCash − expectedCash (+ over, − short)
   note?: string;           // optional explanation of a variance
