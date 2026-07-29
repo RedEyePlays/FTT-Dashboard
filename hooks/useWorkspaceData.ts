@@ -3,7 +3,7 @@ import { User, signOut } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
 import {
   InventoryItem, Note, Task, Runner, DropOff, Settlement, Customer, SalesTransaction,
-  ActivityEntry, AppUser, WorkspaceInvite, AuditEntry, Repair, RepairBatch, TimeEntry, PayPeriodPaid,
+  ActivityEntry, AppUser, WorkspaceInvite, AuditEntry, Repair, RepairBatch, TimeEntry, PayPeriodPaid, CashReconciliation,
 } from '../types';
 import { decryptData } from '../services/security';
 import { AppSettings, mergeSettings } from '../domain/settings';
@@ -48,6 +48,7 @@ export function useWorkspaceData() {
   const [repairBatches, setRepairBatches] = useState<RepairBatch[]>([]);
   const [timeEntries, setTimeEntries] = useState<TimeEntry[]>([]);
   const [payPeriods, setPayPeriods] = useState<PayPeriodPaid[]>([]);
+  const [cashReconciliations, setCashReconciliations] = useState<CashReconciliation[]>([]);
   const [skuCounters, setSkuCounters] = useState<Record<string, number>>({});
   const [activityLog, setActivityLog] = useState<ActivityEntry[]>([]);
   const [lastBackup, setLastBackup] = useState<number | undefined>(undefined);
@@ -170,6 +171,7 @@ export function useWorkspaceData() {
       subscribeCollection<RepairBatch>(wsId, 'repairBatches', setRepairBatches, onErr),
       subscribeCollection<TimeEntry>(wsId, 'timeEntries', setTimeEntries, onErr),
       subscribeCollection<PayPeriodPaid>(wsId, 'payPeriods', setPayPeriods, onErr),
+      subscribeCollection<CashReconciliation>(wsId, 'cashReconciliations', setCashReconciliations, onErr),
       subscribeCollection<ActivityEntry>(wsId, 'activityLog', rows => setActivityLog(rows.sort((a, b) => b.ts - a.ts).slice(0, 60)), onErr),
       subscribeCollection<AuditEntry>(wsId, 'auditLogs', rows => setAuditLogs(rows.sort((a, b) => b.ts - a.ts).slice(0, 1000)), onErr),
       subscribeMeta(wsId, m => { setNotes(m.notes || []); setTasks(m.tasks || []); setSkuCounters(m.skuCounters || {}); setLastBackup(m.lastBackup); setSettings(mergeSettings(m.settings)); }, onErr),
@@ -196,7 +198,7 @@ export function useWorkspaceData() {
     // collections
     devices, accessories, data, notes, setNotes, tasks, setTasks,
     runners, dropOffs, settlements, customers, salesTransactions,
-    repairs, repairBatches, timeEntries, payPeriods,
+    repairs, repairBatches, timeEntries, payPeriods, cashReconciliations,
     skuCounters, setSkuCounters, activityLog, lastBackup, settings,
     // connection status
     dbLoading, dbError, setDbError, reconnect,

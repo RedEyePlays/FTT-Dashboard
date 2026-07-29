@@ -4,7 +4,7 @@ import {
 import { db } from './firebase';
 import {
   InventoryItem, Runner, DropOff, Settlement, Customer, SalesTransaction, ActivityEntry, Note, Task,
-  AppUser, WorkspaceInvite, AuditEntry, TimeEntry, PayPeriodPaid,
+  AppUser, WorkspaceInvite, AuditEntry, TimeEntry, PayPeriodPaid, CashReconciliation,
 } from '../types';
 import { collectionFor } from '../domain/inventory';
 import { AppSettings } from '../domain/settings';
@@ -15,7 +15,7 @@ import { allocateSkuInTxn } from './sku';
 export const COLLECTIONS = [
   'inventory', 'accessories', 'salesTransactions', 'customers',
   'dropOffs', 'runners', 'settlements', 'activityLog', 'auditLogs',
-  'repairs', 'repairBatches', 'timeEntries', 'payPeriods',
+  'repairs', 'repairBatches', 'timeEntries', 'payPeriods', 'cashReconciliations',
 ] as const;
 export type CollName = typeof COLLECTIONS[number];
 
@@ -196,6 +196,7 @@ export async function migrateLegacyIfNeeded(uid: string, legacy: {
 export const saveTimeEntry = (uid: string, e: TimeEntry) => saveItem(uid, 'timeEntries', e);
 export const deleteTimeEntry = (uid: string, id: string) => deleteItem(uid, 'timeEntries', id);
 export const savePayPeriodPaid = (uid: string, p: PayPeriodPaid) => saveItem(uid, 'payPeriods', p);
+export const saveCashReconciliation = (uid: string, r: CashReconciliation) => saveItem(uid, 'cashReconciliations', r);
 export const deletePayPeriodPaid = (uid: string, id: string) => deleteItem(uid, 'payPeriods', id);
 
 /* ------------------------- Users / roles (top-level) ------------------------- */

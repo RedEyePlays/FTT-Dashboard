@@ -297,7 +297,20 @@ export interface AppData {
   activityLog?: ActivityEntry[];
 }
 
-export type ViewState = 'dashboard' | 'analytics' | 'entry' | 'edit' | 'grid' | 'notes' | 'ai' | 'pos' | 'dropoff' | 'repairs' | 'customers' | 'users' | 'audit' | 'settings' | 'timeclock';
+export type ViewState = 'dashboard' | 'analytics' | 'reports' | 'entry' | 'edit' | 'grid' | 'notes' | 'ai' | 'pos' | 'dropoff' | 'repairs' | 'customers' | 'users' | 'audit' | 'settings' | 'timeclock';
+
+// A saved daily cash-drawer reconciliation (one per calendar day; id === date).
+export interface CashReconciliation {
+  id: string;              // the date, YYYY-MM-DD (one reconciliation per day)
+  date: string;            // YYYY-MM-DD
+  expectedCash: number;    // computed cash owed to the till that day
+  countedCash: number;     // actual counted cash at close
+  variance: number;        // countedCash − expectedCash (+ over, − short)
+  note?: string;           // optional explanation of a variance
+  recordedBy: string;      // uid of who saved it
+  recordedByEmail?: string;
+  recordedAt: number;      // epoch ms
+}
 
 // --- Time clock / payroll ---
 // Simple shift + break tracking used by the Time Clock tab. All timestamps are

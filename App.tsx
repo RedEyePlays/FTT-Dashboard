@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Dashboard } from './components/Dashboard';
 import { OwnerAnalytics } from './components/OwnerAnalytics';
+import { ReportsView } from './components/ReportsView';
 import { DataEntryForm } from './components/DataEntryForm';
 import { BulkEntryModal } from './components/BulkEntryModal';
 import { AuthScreen } from './components/AuthScreen';
@@ -20,7 +21,7 @@ import { InventoryView } from './components/InventoryView';
 import { UsersView } from './components/UsersView';
 import { AuditLogView } from './components/AuditLogView';
 import { TimeClockView } from './components/TimeClockView';
-import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, Runner, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission, Repair, RepairBatch, TimeEntry, PayPeriodPaid, BreakReason, SalesTransaction } from './types';
+import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, Runner, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission, Repair, RepairBatch, TimeEntry, PayPeriodPaid, BreakReason, SalesTransaction, CashReconciliation } from './types';
 import { skuPrefix, nextSku } from './services/sku';
 import { REPAIR_PREFIX, BATCH_PREFIX, computeWarrantyUntil, applyTechEdit, TECH_EDITABLE_FIELDS } from './domain/repairs';
 import { RepairsView } from './components/RepairsView';
@@ -34,7 +35,7 @@ import { auth } from './services/firebase';
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import {
   saveMeta, saveItem, deleteItem, syncArray, allocateSku,
-  logActivityDoc, commitSale, voidSale, returnSale, seedSampleData,
+  logActivityDoc, commitSale, voidSale, returnSale, saveCashReconciliation, seedSampleData,
   updateUserDoc, setInvite, deleteInvite,
   logAudit, exportWorkspaceData, recordBackup, saveSettings,
   saveTimeEntry, savePayPeriodPaid, deletePayPeriodPaid,
@@ -57,7 +58,7 @@ import { MobileDrawer } from './components/MobileDrawer';
 
 // Page titles for the mobile header bar.
 const PAGE_TITLES: Record<ViewState, string> = {
-  dashboard: 'Dashboard', analytics: 'Analytics', entry: 'Add Item', edit: 'Edit Item',
+  dashboard: 'Dashboard', analytics: 'Analytics', reports: 'Reports', entry: 'Add Item', edit: 'Edit Item',
   grid: 'Inventory', notes: 'Notes', ai: 'AI Assistant', pos: 'Checkout', dropoff: 'Drop-Offs',
   repairs: 'Repairs', customers: 'Customers', users: 'Users', audit: 'Audit Log',
   settings: 'Settings', timeclock: 'Time Clock',
@@ -71,7 +72,7 @@ const App: React.FC = () => {
     appUser, roleLoading, workspaceId, workspaceUsers, invites, auditLogs,
     data, notes, setNotes, tasks, setTasks,
     runners, dropOffs, settlements, salesTransactions, customers, repairs, repairBatches,
-    timeEntries, payPeriods,
+    timeEntries, payPeriods, cashReconciliations,
     skuCounters, setSkuCounters, activityLog, lastBackup, settings,
     dbLoading, dbError, reconnect,
     runnersRef, dropOffsRef, settlementsRef, customersRef, salesTransactionsRef,
@@ -469,6 +470,19 @@ const App: React.FC = () => {
     }).catch(e => console.error('Return failed', e));
     audit('sale.return', 'sale', tx.id, { totalPaid: tx.totalPaid },
       { refundAmount, restockingFee: restockingFee || 0, disposition: opts.disposition, devices: deviceIds.length, accessories: accessoryUpdates.length });
+  };
+
+  // Save (or update) a day's cash-drawer reconciliation. One doc per date (id ===
+  // date), recording who counted it and any variance note. Owner/manager only.
+  const handleSaveReconciliation = (r: { date: string; expectedCash: number; countedCash: number; variance: number; note?: string }) => {
+    if (!uid || !appUser || !(appUser.role === 'owner' || appUser.role === 'manager')) return;
+    const recon: CashReconciliation = {
+      id: r.date, date: r.date,
+      expectedCash: r.expectedCash, countedCash: r.countedCash, variance: r.variance,
+      note: r.note, recordedBy: appUser.id, recordedByEmail: appUser.email, recordedAt: Date.now(),
+    };
+    saveCashReconciliation(uid, recon).catch(e => console.error('Reconciliation save failed', e));
+    audit('cash.reconcile', 'cashReconciliation', r.date, undefined, { expected: r.expectedCash, counted: r.countedCash, variance: r.variance });
   };
 
   const handleBulkImport = (items: InventoryItem[]) => {
@@ -932,6 +946,11 @@ const App: React.FC = () => {
             (appUser.role === 'owner' || appUser.role === 'manager') && allow('reports.profit.detailed')
               ? <OwnerAnalytics salesTransactions={salesTransactions} repairs={repairs} inventory={data} customers={customers} auditLogs={auditLogs} activity={activityLog} darkMode={darkMode} />
               : <div className="text-center text-slate-400 py-20">Owner analytics are restricted to owners (and managers granted financial access).</div>
+          )}
+          {view === 'reports' && (
+            (appUser.role === 'owner' || appUser.role === 'manager')
+              ? <ReportsView salesTransactions={salesTransactions} cashReconciliations={cashReconciliations} onSaveReconciliation={handleSaveReconciliation} />
+              : <div className="text-center text-slate-400 py-20">Reports are restricted to owners and managers.</div>
           )}
           {view === 'customers' && allow('reports.view') && (
             <CustomersView
