@@ -1,26 +1,31 @@
 
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, lazy, Suspense } from 'react';
 import { Dashboard } from './components/Dashboard';
-import { OwnerAnalytics } from './components/OwnerAnalytics';
-import { ReportsView } from './components/ReportsView';
 import { DataEntryForm } from './components/DataEntryForm';
-import { BulkEntryModal } from './components/BulkEntryModal';
 import { AuthScreen } from './components/AuthScreen';
-import { NotesBoard } from './components/NotesBoard';
 import { SettingsModal, cacheLabelSizes, cacheStoreProfile } from './components/SettingsModal';
-import { SettingsView } from './components/SettingsView';
-import { BackupPanel } from './components/BackupPanel';
-import { CalculatorTool } from './components/CalculatorTool';
-import { AIChatView } from './components/AIChatView';
 import { QuickSaleView } from './components/QuickSaleView';
 import type { CartCheckout } from './components/CartSaleView';
 import { GlobalSearch } from './components/GlobalSearch';
+
+// Code-splitting: the heavier, less-frequently-visited views (and their big deps
+// like recharts in OwnerAnalytics) load on demand instead of bloating the main
+// bundle. Core everyday views — Dashboard, Inventory, Quick Sale, Repairs,
+// Customers, the entry form — stay eager. Named exports are unwrapped to default.
+const OwnerAnalytics = lazy(() => import('./components/OwnerAnalytics').then(m => ({ default: m.OwnerAnalytics })));
+const ReportsView = lazy(() => import('./components/ReportsView').then(m => ({ default: m.ReportsView })));
+const BulkEntryModal = lazy(() => import('./components/BulkEntryModal').then(m => ({ default: m.BulkEntryModal })));
+const NotesBoard = lazy(() => import('./components/NotesBoard').then(m => ({ default: m.NotesBoard })));
+const SettingsView = lazy(() => import('./components/SettingsView').then(m => ({ default: m.SettingsView })));
+const BackupPanel = lazy(() => import('./components/BackupPanel').then(m => ({ default: m.BackupPanel })));
+const CalculatorTool = lazy(() => import('./components/CalculatorTool').then(m => ({ default: m.CalculatorTool })));
+const AIChatView = lazy(() => import('./components/AIChatView').then(m => ({ default: m.AIChatView })));
 import { SearchData, SearchResult, SearchPage } from './domain/search';
-import { DropOffView } from './components/DropOffView';
 import { InventoryView } from './components/InventoryView';
-import { UsersView } from './components/UsersView';
-import { AuditLogView } from './components/AuditLogView';
-import { TimeClockView } from './components/TimeClockView';
+const DropOffView = lazy(() => import('./components/DropOffView').then(m => ({ default: m.DropOffView })));
+const UsersView = lazy(() => import('./components/UsersView').then(m => ({ default: m.UsersView })));
+const AuditLogView = lazy(() => import('./components/AuditLogView').then(m => ({ default: m.AuditLogView })));
+const TimeClockView = lazy(() => import('./components/TimeClockView').then(m => ({ default: m.TimeClockView })));
 import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, Runner, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission, Repair, RepairBatch, TimeEntry, PayPeriodPaid, BreakReason, SalesTransaction, CashReconciliation } from './types';
 import { skuPrefix, nextSku } from './services/sku';
 import { REPAIR_PREFIX, BATCH_PREFIX, computeWarrantyUntil, applyTechEdit, TECH_EDITABLE_FIELDS } from './domain/repairs';
@@ -65,11 +70,19 @@ const PAGE_TITLES: Record<ViewState, string> = {
 };
 import { LoadingScreen, DbErrorScreen } from './components/StatusScreens';
 
+// Suspense fallback for lazily-loaded views — reuses LoadingScreen's spinner
+// style, but sized to sit inside the content area rather than full-screen.
+const ViewLoader: React.FC = () => (
+  <div className="flex-1 flex items-center justify-center py-20">
+    <div className="w-8 h-8 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+  </div>
+);
+
 const App: React.FC = () => {
   // --- DATA LAYER (auth, role/workspace, Firestore subscriptions) ---
   const {
     user, isLoadingAuth, authError, setAuthError,
-    appUser, roleLoading, workspaceId, workspaceUsers, invites, auditLogs,
+    appUser, roleLoading, workspaceId, workspaceUsers, invites, auditLogs, loadMoreAuditLogs, auditHasMore,
     data, notes, setNotes, tasks, setTasks,
     runners, dropOffs, settlements, salesTransactions, customers, repairs, repairBatches,
     timeEntries, payPeriods, cashReconciliations,
@@ -935,6 +948,7 @@ const App: React.FC = () => {
       {/* Main Content */}
       <main className={`mx-auto px-3 sm:px-6 lg:px-8 py-6 sm:py-8 flex-1 w-full flex flex-col ${view === 'grid' || view === 'ai' ? 'max-w-[98%]' : 'max-w-7xl'}`}>
         <div className="animate-fadeIn flex-1 flex flex-col">
+          <Suspense fallback={<ViewLoader />}>
           {view === 'dashboard' && (
             allow('reports.view')
               ? <Dashboard data={data} salesTransactions={salesTransactions} activity={activityLog} repairs={repairs} repairBatches={repairBatches} canViewProfit={allow('reports.profit.summary')} onViewAnalytics={() => navigate('analytics')} onViewRepairs={allow('repairs.manage') ? () => navigate('repairs') : undefined} />
@@ -1088,7 +1102,7 @@ const App: React.FC = () => {
             />
           )}
           {view === 'audit' && allow('audit.view') && (
-            <AuditLogView logs={auditLogs} users={workspaceUsers} />
+            <AuditLogView logs={auditLogs} users={workspaceUsers} onLoadMore={loadMoreAuditLogs} hasMore={auditHasMore} />
           )}
           {view === 'settings' && (
             <SettingsView
@@ -1114,6 +1128,7 @@ const App: React.FC = () => {
               }
             />
           )}
+          </Suspense>
         </div>
       </main>
 
@@ -1125,26 +1140,30 @@ const App: React.FC = () => {
              onClick={() => setIsAiSidebarOpen(false)}
           />
           <div className="fixed inset-y-0 right-0 w-full sm:w-96 bg-white dark:bg-slate-900 shadow-2xl z-[50] animate-slideInRight flex flex-col border-l border-slate-200 dark:border-slate-800">
-             <AIChatView 
-                inventory={data} 
-                messages={aiMessages}
-                onUpdateMessages={setAiMessages}
-                variant="sidebar"
-                onClose={() => setIsAiSidebarOpen(false)}
-             />
+             <Suspense fallback={<ViewLoader />}>
+               <AIChatView
+                  inventory={data}
+                  messages={aiMessages}
+                  onUpdateMessages={setAiMessages}
+                  variant="sidebar"
+                  onClose={() => setIsAiSidebarOpen(false)}
+               />
+             </Suspense>
           </div>
         </>
       )}
 
       {/* Calculator Overlay */}
-      {showCalculator && <CalculatorTool onClose={() => setShowCalculator(false)} />}
+      {showCalculator && <Suspense fallback={null}><CalculatorTool onClose={() => setShowCalculator(false)} /></Suspense>}
 
       {/* Modals */}
       {showBulkModal && (
-        <BulkEntryModal 
-          onClose={() => setShowBulkModal(false)} 
-          onImport={handleBulkImport} 
-        />
+        <Suspense fallback={null}>
+          <BulkEntryModal
+            onClose={() => setShowBulkModal(false)}
+            onImport={handleBulkImport}
+          />
+        </Suspense>
       )}
       
       {showSettingsModal && (

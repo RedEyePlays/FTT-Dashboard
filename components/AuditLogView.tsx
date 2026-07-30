@@ -6,9 +6,11 @@ import { auditActionLabel } from '../domain/audit';
 interface Props {
   logs: AuditEntry[];
   users: AppUser[];
+  onLoadMore?: () => void;   // widen the fetch to include older entries
+  hasMore?: boolean;         // more older entries exist beyond what's loaded
 }
 
-export const AuditLogView: React.FC<Props> = ({ logs, users }) => {
+export const AuditLogView: React.FC<Props> = ({ logs, users, onLoadMore, hasMore }) => {
   const [q, setQ] = useState('');
   const [userId, setUserId] = useState('all');
   const [action, setAction] = useState('all');
@@ -98,6 +100,14 @@ export const AuditLogView: React.FC<Props> = ({ logs, users }) => {
             </tbody>
           </table>
         </div>
+        {onLoadMore && hasMore && (
+          <div className="pt-3 text-center">
+            <button onClick={onLoadMore} className="px-4 py-2 text-sm font-medium rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300">
+              Load older entries
+            </button>
+            <p className="mt-1 text-[11px] text-slate-400">Recent entries load first; older audit history loads on demand.</p>
+          </div>
+        )}
       </div>
     </div>
   );

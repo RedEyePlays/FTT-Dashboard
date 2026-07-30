@@ -1,5 +1,5 @@
 import {
-  collection, doc, onSnapshot, setDoc, deleteDoc, getDoc, getDocs, writeBatch, query, where, runTransaction, increment,
+  collection, doc, onSnapshot, setDoc, deleteDoc, getDoc, getDocs, writeBatch, query, where, orderBy, limit, runTransaction, increment,
 } from 'firebase/firestore';
 import { db } from './firebase';
 import {
@@ -36,8 +36,15 @@ const clean = (v: any): any => {
 
 export function subscribeCollection<T extends { id: string }>(
   uid: string, name: CollName, cb: (rows: T[]) => void, onError: (e: Error) => void,
+  // Optional server-side bound: only fetch the most recent `limitTo` docs ordered
+  // by `orderByField` (desc). Used for the unbounded logs (activity/audit) so load
+  // time and memory don't scale with the shop's entire history.
+  opts?: { orderByField: string; limitTo: number },
 ) {
-  return onSnapshot(colRef(uid, name),
+  const ref = opts
+    ? query(colRef(uid, name), orderBy(opts.orderByField, 'desc'), limit(opts.limitTo))
+    : colRef(uid, name);
+  return onSnapshot(ref,
     snap => cb(snap.docs.map(d => ({ ...(d.data() as any), id: d.id })) as T[]),
     onError);
 }
