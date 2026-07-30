@@ -1,15 +1,30 @@
 import { describe, it, expect } from 'vitest';
-import { SalesTransaction } from '../types';
+import { SalesTransaction, InventoryItem, PayPeriodPaid, CashReconciliation, Settlement, Runner } from '../types';
 import {
   cashCollectedOnTx, expectedCashForDate, reconcileCash,
   expectedEndingCash, sumDrawerEntries,
   taxRemittance, taxReportCsvRows,
+  profitAndLoss, profitLossCsvRows, settlementHistory, yearEndSummary, ProfitLossInput,
 } from './reports';
 
 const tx = (p: Partial<SalesTransaction>): SalesTransaction => ({
   id: 't', date: '2026-07-20', customerName: '', subtotal: 0, tax: 0, platformFee: 0,
   purchaseCost: 0, repairCost: 0, totalCost: 0, totalPaid: 0, netProfit: 0, lines: [], ...p,
 });
+const dev = (p: Partial<InventoryItem>): InventoryItem => ({
+  id: 'd', kind: 'device', date: '2026-01-01', item: 'Phone', imei: '', boughtFrom: '', purchaseCost: 0,
+  repairCost: 0, soldDate: '', soldTo: '', salePrice: 0, notes: '', ...p,
+} as InventoryItem);
+const paid = (p: Partial<PayPeriodPaid>): PayPeriodPaid => ({
+  id: 'x', userId: 'u', periodStart: '2026-07-01', periodEnd: '2026-07-14', markedBy: 'o', markedAt: 0, hours: 0, gross: 0, rate: 0, ...p,
+});
+const recon = (p: Partial<CashReconciliation>): CashReconciliation => ({
+  id: 'r', date: '2026-07-10', expectedCash: 0, countedCash: 0, variance: 0, recordedBy: 'o', recordedAt: 0, ...p,
+});
+const settle = (p: Partial<Settlement>): Settlement => ({
+  id: 's', runnerId: 'r1', date: '2026-07-05', dropOffIds: [], totalPurchaseFronted: 0, totalFees: 0, amountPaid: 0, notes: '', ...p,
+});
+const runner = (p: Partial<Runner>): Runner => ({ id: 'r1', name: 'Alex', phone: '', notes: '', ...p });
 
 describe('cashCollectedOnTx', () => {
   it('counts the full total of a cash sale', () => {
@@ -127,5 +142,98 @@ describe('taxRemittance', () => {
     expect(r.start).toBe('2026-01-01');
     const rows = taxReportCsvRows(r);
     expect(rows[rows.length - 1]).toMatchObject({ Period: 'Total', 'Tax Collected': '91.00' });
+  });
+});
+
+describe('profitAndLoss', () => {
+  const base: ProfitLossInput = { transactions: [], inventory: [], payPeriods: [], cashReconciliations: [], settlements: [] };
+
+  it('builds a P&L: revenue − COGS − payroll − cash expenses − runner commissions', () => {
+    const input: ProfitLossInput = {
+      ...base,
+      transactions: [
+        tx({ id: 'a', date: '2026-07-10', subtotal: 1000, purchaseCost: 400, repairCost: 50, lines: [{ inventoryId: 'd1', kind: 'device', name: 'x', quantity: 1, unitPrice: 1000 } as any] }),
+        tx({ id: 'void', date: '2026-07-11', subtotal: 500, purchaseCost: 200, status: 'voided' }),                 // excluded
+        tx({ id: 'lay', date: '2026-07-12', subtotal: 800, purchaseCost: 300, deposit: 100, balanceOwing: 700 }),  // excluded
+        tx({ id: 'old', date: '2026-06-30', subtotal: 999, purchaseCost: 999 }),                                    // out of range
+      ],
+      inventory: [
+        dev({ id: 'd9', soldDate: '2026-07-15', salePrice: 300, purchaseCost: 100, repairCost: 20 }),  // standalone sold
+        dev({ id: 'd1', soldDate: '2026-07-10', salePrice: 1000, purchaseCost: 400 }),                  // in a txn → not double counted
+        dev({ id: 'unsold', soldDate: '', salePrice: 0, purchaseCost: 250 }),                           // not sold
+      ],
+      payPeriods: [paid({ periodStart: '2026-07-01', gross: 600 }), paid({ periodStart: '2026-06-01', gross: 999 })],
+      cashReconciliations: [recon({ date: '2026-07-08', cashOut: [{ id: 'c', amount: 40 }, { id: 'c2', amount: 10 }] })],
+      settlements: [settle({ date: '2026-07-05', totalFees: 30, totalPurchaseFronted: 200, amountPaid: 230 })],
+    };
+    const pl = profitAndLoss(input, '2026-07-01', '2026-07-31');
+    expect(pl.revenue).toBe(1300);         // 1000 txn + 300 standalone
+    expect(pl.costOfGoods).toBe(570);      // (400+50) + (100+20)
+    expect(pl.grossProfit).toBe(730);
+    expect(pl.payroll).toBe(600);          // only the in-range paid period
+    expect(pl.cashExpenses).toBe(50);      // 40 + 10
+    expect(pl.runnerCommissions).toBe(30); // fees only, not amountPaid (avoids double-counting COGS)
+    expect(pl.netProfit).toBe(50);         // 730 − 600 − 50 − 30
+  });
+
+  it('is all-zero for an empty range and produces labelled CSV rows', () => {
+    const pl = profitAndLoss(base, '2026-01-01', '2026-12-31');
+    expect(pl.netProfit).toBe(0);
+    const rows = profitLossCsvRows(pl);
+    expect(rows[0]).toEqual({ Line: 'Revenue', Amount: '0.00' });
+    expect(rows[rows.length - 1]).toEqual({ Line: 'Net profit', Amount: '0.00' });
+  });
+});
+
+describe('settlementHistory', () => {
+  const runners = [runner({ id: 'r1', name: 'Alex' }), runner({ id: 'r2', name: 'Sam' })];
+  const settlements = [
+    settle({ id: 's1', runnerId: 'r1', date: '2026-07-05', totalFees: 30, totalPurchaseFronted: 200, amountPaid: 230 }),
+    settle({ id: 's2', runnerId: 'r1', date: '2026-07-20', totalFees: 20, totalPurchaseFronted: 0, amountPaid: 20 }),
+    settle({ id: 's3', runnerId: 'r2', date: '2026-07-10', totalFees: 15, totalPurchaseFronted: 100, amountPaid: 115 }),
+    settle({ id: 'old', runnerId: 'r1', date: '2026-06-01', totalFees: 999, amountPaid: 999 }), // out of range
+  ];
+
+  it('aggregates per runner and overall within the range', () => {
+    const h = settlementHistory(settlements, runners, '2026-07-01', '2026-07-31');
+    expect(h.count).toBe(3);
+    expect(h.totalPaid).toBe(365);   // 230 + 20 + 115
+    expect(h.totalFees).toBe(65);    // 30 + 20 + 15
+    const alex = h.perRunner.find(r => r.runnerId === 'r1')!;
+    expect(alex.runnerName).toBe('Alex');
+    expect(alex.settlementCount).toBe(2);
+    expect(alex.totalPaid).toBe(250);
+    expect(alex.totalFees).toBe(50);
+    // sorted by total paid, newest lines first
+    expect(h.perRunner[0].runnerId).toBe('r1');
+    expect(h.lines[0].id).toBe('s2');
+  });
+
+  it('labels an unknown runner and reverses swapped start/end', () => {
+    const h = settlementHistory([settle({ id: 'z', runnerId: 'ghost', date: '2026-07-09', amountPaid: 10 })], runners, '2026-07-31', '2026-07-01');
+    expect(h.start).toBe('2026-07-01');
+    expect(h.lines[0].runnerName).toBe('Unknown runner');
+  });
+});
+
+describe('yearEndSummary', () => {
+  it('rolls the year up into one accountant-ready summary', () => {
+    const input: ProfitLossInput = {
+      transactions: [
+        tx({ id: 'a', date: '2026-03-01', subtotal: 1000, tax: 130, purchaseCost: 400 }),
+        tx({ id: 'b', date: '2027-01-01', subtotal: 500, tax: 65, purchaseCost: 100 }), // next year, excluded
+      ],
+      inventory: [],
+      payPeriods: [paid({ periodStart: '2026-05-01', gross: 800 })],
+      cashReconciliations: [recon({ date: '2026-06-01', cashOut: [{ id: 'c', amount: 25 }] })],
+      settlements: [settle({ date: '2026-08-01', totalFees: 45, amountPaid: 45 })],
+    };
+    const s = yearEndSummary(input, 2026);
+    expect(s.revenue).toBe(1000);
+    expect(s.salesTaxCollected).toBe(130);
+    expect(s.payrollPaid).toBe(800);
+    expect(s.cashExpenses).toBe(25);
+    expect(s.runnerCommissions).toBe(45);
+    expect(s.netProfit).toBe(1000 - 400 - 800 - 25 - 45);
   });
 });

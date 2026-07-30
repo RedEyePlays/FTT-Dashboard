@@ -1,7 +1,10 @@
 import React, { useMemo, useState } from 'react';
-import { Wallet, Receipt, Download, Save, AlertTriangle, CheckCircle2, Plus, Trash2 } from 'lucide-react';
-import { SalesTransaction, CashReconciliation, CashDrawerEntry } from '../types';
-import { expectedCashForDate, expectedEndingCash, sumDrawerEntries, reconcileCash, taxRemittance, taxReportCsvRows, TaxGrouping } from '../domain/reports';
+import { Wallet, Receipt, Download, Save, AlertTriangle, CheckCircle2, Plus, Trash2, Scale, FileArchive, Truck } from 'lucide-react';
+import { SalesTransaction, CashReconciliation, CashDrawerEntry, InventoryItem, PayPeriodPaid, Settlement, Runner } from '../types';
+import {
+  expectedCashForDate, expectedEndingCash, sumDrawerEntries, reconcileCash, taxRemittance, taxReportCsvRows, TaxGrouping,
+  profitAndLoss, profitLossCsvRows, settlementHistory, yearEndSummary, yearEndCsvRows, ProfitLossInput,
+} from '../domain/reports';
 import { toCSV, triggerDownload } from '../services/backup';
 import { newId } from '../domain/ids';
 
@@ -10,9 +13,22 @@ type SaveReconciliation = (r: Omit<CashReconciliation, 'recordedBy' | 'recordedB
 interface Props {
   salesTransactions: SalesTransaction[];
   cashReconciliations: CashReconciliation[];
+  inventory: InventoryItem[];
+  payPeriods: PayPeriodPaid[];
+  settlements: Settlement[];
+  runners: Runner[];
   onSaveReconciliation: SaveReconciliation;
   defaultOpeningFloat?: number;
 }
+
+type TabId = 'cash' | 'tax' | 'pnl' | 'yearend' | 'settlements';
+const TABS: { id: TabId; label: string; icon: React.ReactNode }[] = [
+  { id: 'cash', label: 'Cash Reconciliation', icon: <Wallet className="w-4 h-4" /> },
+  { id: 'tax', label: 'Sales Tax', icon: <Receipt className="w-4 h-4" /> },
+  { id: 'pnl', label: 'Profit & Loss', icon: <Scale className="w-4 h-4" /> },
+  { id: 'settlements', label: 'Runner Settlements', icon: <Truck className="w-4 h-4" /> },
+  { id: 'yearend', label: 'Year-End Export', icon: <FileArchive className="w-4 h-4" /> },
+];
 
 const money = (n: number) => `$${(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const todayISO = () => new Date().toISOString().split('T')[0];
@@ -22,21 +38,24 @@ const card = 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-sla
 const input = 'px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500';
 const label = 'block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1';
 
-export const ReportsView: React.FC<Props> = ({ salesTransactions, cashReconciliations, onSaveReconciliation, defaultOpeningFloat = 0 }) => {
-  const [tab, setTab] = useState<'cash' | 'tax'>('cash');
+export const ReportsView: React.FC<Props> = ({ salesTransactions, cashReconciliations, inventory, payPeriods, settlements, runners, onSaveReconciliation, defaultOpeningFloat = 0 }) => {
+  const [tab, setTab] = useState<TabId>('cash');
+  // Shared input set for the P&L / settlement / year-end reports.
+  const plInput: ProfitLossInput = { transactions: salesTransactions, inventory, payPeriods, cashReconciliations, settlements };
   return (
     <div className="max-w-5xl mx-auto space-y-6">
-      <div className="flex items-center gap-2">
-        <button onClick={() => setTab('cash')} className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium ${tab === 'cash' ? 'bg-indigo-600 text-white' : 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200'}`}>
-          <Wallet className="w-4 h-4" /> Cash Reconciliation
-        </button>
-        <button onClick={() => setTab('tax')} className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium ${tab === 'tax' ? 'bg-indigo-600 text-white' : 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200'}`}>
-          <Receipt className="w-4 h-4" /> Sales Tax Remittance
-        </button>
+      <div className="flex flex-wrap items-center gap-2">
+        {TABS.map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)} className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium ${tab === t.id ? 'bg-indigo-600 text-white' : 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200'}`}>
+            {t.icon} {t.label}
+          </button>
+        ))}
       </div>
-      {tab === 'cash'
-        ? <CashReconTab salesTransactions={salesTransactions} cashReconciliations={cashReconciliations} onSave={onSaveReconciliation} defaultOpeningFloat={defaultOpeningFloat} />
-        : <TaxReportTab salesTransactions={salesTransactions} />}
+      {tab === 'cash' && <CashReconTab salesTransactions={salesTransactions} cashReconciliations={cashReconciliations} onSave={onSaveReconciliation} defaultOpeningFloat={defaultOpeningFloat} />}
+      {tab === 'tax' && <TaxReportTab salesTransactions={salesTransactions} />}
+      {tab === 'pnl' && <ProfitLossTab plInput={plInput} />}
+      {tab === 'settlements' && <SettlementsTab settlements={settlements} runners={runners} />}
+      {tab === 'yearend' && <YearEndTab plInput={plInput} />}
     </div>
   );
 };
@@ -283,6 +302,186 @@ const TaxReportTab: React.FC<{ salesTransactions: SalesTransaction[] }> = ({ sal
             </tr></tfoot>
           </table></div>
         )}
+      </div>
+    </div>
+  );
+};
+
+/* ---------------- Date-range picker (shared) ---------------- */
+const RangeControls: React.FC<{ start: string; end: string; setStart: (v: string) => void; setEnd: (v: string) => void; children?: React.ReactNode }> = ({ start, end, setStart, setEnd, children }) => (
+  <div className="flex flex-wrap items-end gap-4">
+    <div><label className={label}>From</label><input type="date" value={start} onChange={e => setStart(e.target.value)} className={input} /></div>
+    <div><label className={label}>To</label><input type="date" value={end} onChange={e => setEnd(e.target.value)} className={input} /></div>
+    {children}
+  </div>
+);
+
+const PLRow: React.FC<{ label: string; value: number; negative?: boolean; bold?: boolean; total?: boolean }> = ({ label, value, negative, bold, total }) => (
+  <div className={`flex items-center justify-between py-1.5 ${total ? 'border-t-2 border-slate-200 dark:border-slate-700 mt-1 pt-2' : ''}`}>
+    <span className={`${bold || total ? 'font-bold text-slate-800 dark:text-slate-100' : 'text-slate-600 dark:text-slate-300'}`}>{label}</span>
+    <span className={`tabular-nums ${bold || total ? 'font-bold' : ''} ${negative ? 'text-rose-600 dark:text-rose-400' : total && value < 0 ? 'text-rose-600 dark:text-rose-400' : 'text-slate-800 dark:text-slate-100'}`}>
+      {negative ? `(${money(value)})` : money(value)}
+    </span>
+  </div>
+);
+
+/* ---------------- Profit & Loss ---------------- */
+const ProfitLossTab: React.FC<{ plInput: ProfitLossInput }> = ({ plInput }) => {
+  const [start, setStart] = useState(monthStartISO());
+  const [end, setEnd] = useState(todayISO());
+  const pl = useMemo(() => profitAndLoss(plInput, start, end), [plInput, start, end]);
+  const exportCsv = () => triggerDownload(`profit-loss_${pl.start}_to_${pl.end}.csv`, toCSV(profitLossCsvRows(pl)), 'text/csv;charset=utf-8;');
+
+  return (
+    <div className="space-y-6">
+      <div className={`${card} p-5`}>
+        <RangeControls start={start} end={end} setStart={setStart} setEnd={setEnd}>
+          <button onClick={exportCsv} className="ml-auto flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-emerald-600 hover:bg-emerald-700 text-white">
+            <Download className="w-4 h-4" /> Export CSV
+          </button>
+        </RangeControls>
+      </div>
+      <div className={`${card} p-5`}>
+        <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200 mb-3">Profit &amp; Loss · {pl.start} → {pl.end}</h3>
+        <div className="text-sm">
+          <PLRow label="Revenue" value={pl.revenue} />
+          <PLRow label="Cost of goods sold" value={pl.costOfGoods} negative />
+          <PLRow label="Gross profit" value={pl.grossProfit} bold />
+          <PLRow label="Payroll" value={pl.payroll} negative />
+          <PLRow label="Cash expenses" value={pl.cashExpenses} negative />
+          <PLRow label="Runner commissions" value={pl.runnerCommissions} negative />
+          <PLRow label="Net profit" value={pl.netProfit} total />
+        </div>
+        <p className="mt-3 text-xs text-slate-400">
+          Recognized sales only (voided, returned and not-yet-settled layaway sales excluded). Runner commissions are settlement fees only — the seller-purchase reimbursement is already in cost of goods.
+        </p>
+      </div>
+    </div>
+  );
+};
+
+/* ---------------- Runner settlement history ---------------- */
+const SettlementsTab: React.FC<{ settlements: Settlement[]; runners: Runner[] }> = ({ settlements, runners }) => {
+  const [start, setStart] = useState(monthStartISO());
+  const [end, setEnd] = useState(todayISO());
+  const h = useMemo(() => settlementHistory(settlements, runners, start, end), [settlements, runners, start, end]);
+  const exportCsv = () => {
+    const rows = h.lines.map(l => ({ Date: l.date, Runner: l.runnerName, 'Commission': l.totalFees.toFixed(2), 'Purchase reimbursed': l.totalFronted.toFixed(2), 'Total paid': l.amountPaid.toFixed(2) }));
+    rows.push({ Date: 'Total', Runner: '', 'Commission': h.totalFees.toFixed(2), 'Purchase reimbursed': h.totalFronted.toFixed(2), 'Total paid': h.totalPaid.toFixed(2) });
+    triggerDownload(`runner-settlements_${h.start}_to_${h.end}.csv`, toCSV(rows), 'text/csv;charset=utf-8;');
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className={`${card} p-5`}>
+        <RangeControls start={start} end={end} setStart={setStart} setEnd={setEnd}>
+          <button onClick={exportCsv} disabled={h.count === 0} className="ml-auto flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white">
+            <Download className="w-4 h-4" /> Export CSV
+          </button>
+        </RangeControls>
+      </div>
+
+      <div className={`${card} p-5`}>
+        <div className="flex items-baseline justify-between mb-4">
+          <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200">Paid to runners · {h.start} → {h.end}</h3>
+          <div className="text-right"><p className="text-xs text-slate-400">Total paid</p><p className="text-2xl font-bold text-slate-900 dark:text-white">{money(h.totalPaid)}</p></div>
+        </div>
+        {h.perRunner.length === 0 ? <p className="text-sm text-slate-400 py-6 text-center">No settlements in this range.</p> : (
+          <div className="overflow-x-auto"><table className="w-full text-sm">
+            <thead className="text-[10px] uppercase tracking-wider text-slate-400"><tr>
+              <th className="text-left py-2">Runner</th><th className="text-right py-2">Settlements</th><th className="text-right py-2">Commission</th><th className="text-right py-2">Reimbursed</th><th className="text-right py-2">Total paid</th>
+            </tr></thead>
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+              {h.perRunner.map(r => (
+                <tr key={r.runnerId}>
+                  <td className="py-2 font-medium text-slate-700 dark:text-slate-200">{r.runnerName}</td>
+                  <td className="py-2 text-right text-slate-400">{r.settlementCount}</td>
+                  <td className="py-2 text-right text-slate-500 dark:text-slate-400">{money(r.totalFees)}</td>
+                  <td className="py-2 text-right text-slate-500 dark:text-slate-400">{money(r.totalFronted)}</td>
+                  <td className="py-2 text-right font-semibold text-slate-800 dark:text-slate-100">{money(r.totalPaid)}</td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot><tr className="border-t-2 border-slate-200 dark:border-slate-700 font-bold">
+              <td className="py-2 text-slate-800 dark:text-slate-100">Total</td><td></td>
+              <td className="py-2 text-right text-slate-800 dark:text-slate-100">{money(h.totalFees)}</td>
+              <td className="py-2 text-right text-slate-800 dark:text-slate-100">{money(h.totalFronted)}</td>
+              <td className="py-2 text-right text-slate-800 dark:text-slate-100">{money(h.totalPaid)}</td>
+            </tr></tfoot>
+          </table></div>
+        )}
+      </div>
+
+      {h.lines.length > 0 && (
+        <div className={`${card} p-5`}>
+          <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200 mb-3">Individual settlements</h3>
+          <div className="overflow-x-auto"><table className="w-full text-sm">
+            <thead className="text-[10px] uppercase tracking-wider text-slate-400"><tr>
+              <th className="text-left py-2">Date</th><th className="text-left py-2">Runner</th><th className="text-right py-2">Commission</th><th className="text-right py-2">Reimbursed</th><th className="text-right py-2">Total paid</th>
+            </tr></thead>
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+              {h.lines.map(l => (
+                <tr key={l.id}>
+                  <td className="py-2 text-slate-500 dark:text-slate-400">{l.date}</td>
+                  <td className="py-2 text-slate-700 dark:text-slate-200">{l.runnerName}</td>
+                  <td className="py-2 text-right text-slate-500 dark:text-slate-400">{money(l.totalFees)}</td>
+                  <td className="py-2 text-right text-slate-500 dark:text-slate-400">{money(l.totalFronted)}</td>
+                  <td className="py-2 text-right font-semibold text-slate-800 dark:text-slate-100">{money(l.amountPaid)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table></div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+/* ---------------- Year-end accountant export ---------------- */
+const YearEndTab: React.FC<{ plInput: ProfitLossInput }> = ({ plInput }) => {
+  const thisYear = new Date().getFullYear();
+  const [year, setYear] = useState(thisYear);
+  const summary = useMemo(() => yearEndSummary(plInput, year), [plInput, year]);
+  const years = Array.from({ length: 6 }, (_, i) => thisYear - i);
+  const exportCsv = () => triggerDownload(`year-end-summary_${year}.csv`, toCSV(yearEndCsvRows(summary)), 'text/csv;charset=utf-8;');
+
+  const rows: { label: string; value: number; strong?: boolean }[] = [
+    { label: 'Revenue', value: summary.revenue },
+    { label: 'Cost of goods sold', value: summary.costOfGoods },
+    { label: 'Gross profit', value: summary.grossProfit, strong: true },
+    { label: 'Payroll paid', value: summary.payrollPaid },
+    { label: 'Cash expenses', value: summary.cashExpenses },
+    { label: 'Runner commissions', value: summary.runnerCommissions },
+    { label: 'Net profit', value: summary.netProfit, strong: true },
+    { label: 'Sales tax collected', value: summary.salesTaxCollected },
+  ];
+
+  return (
+    <div className="space-y-6">
+      <div className={`${card} p-5`}>
+        <div className="flex flex-wrap items-end gap-4">
+          <div>
+            <label className={label}>Year</label>
+            <select value={year} onChange={e => setYear(parseInt(e.target.value, 10))} className={input}>
+              {years.map(y => <option key={y} value={y}>{y}</option>)}
+            </select>
+          </div>
+          <button onClick={exportCsv} className="ml-auto flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-emerald-600 hover:bg-emerald-700 text-white">
+            <Download className="w-4 h-4" /> Export CSV
+          </button>
+        </div>
+        <p className="mt-3 text-xs text-slate-400">One consolidated annual summary to hand to your accountant — revenue, profit, payroll, cash expenses, runner commissions and sales tax collected for {year}.</p>
+      </div>
+      <div className={`${card} p-5`}>
+        <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200 mb-3">{year} year-end summary</h3>
+        <div className="text-sm">
+          {rows.map(r => (
+            <div key={r.label} className="flex items-center justify-between py-1.5">
+              <span className={r.strong ? 'font-bold text-slate-800 dark:text-slate-100' : 'text-slate-600 dark:text-slate-300'}>{r.label}</span>
+              <span className={`tabular-nums ${r.strong ? 'font-bold' : ''} text-slate-800 dark:text-slate-100`}>{money(r.value)}</span>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );

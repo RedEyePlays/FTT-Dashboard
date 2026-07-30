@@ -1,5 +1,6 @@
-import { SalesTransaction } from '../types';
+import { SalesTransaction, InventoryItem, PayPeriodPaid, CashReconciliation, Settlement, Runner } from '../types';
 import { isReversed } from './pos';
+import { kindOf } from './inventory';
 
 // Back-office filing reports — daily cash reconciliation and sales-tax
 // remittance — derived purely from salesTransactions. Repairs have no separate
@@ -155,3 +156,200 @@ export const taxReportCsvRows = (report: TaxReport): Record<string, string | num
   });
   return rows;
 };
+
+// A sale counts toward revenue/COGS only when it's recognized — not reversed
+// (voided/returned) and not a layaway with a balance still owing. Mirrors the
+// txns filter in domain/analytics.ts so the P&L reconciles with Owner Analytics.
+const isRecognizedSale = (t: SalesTransaction): boolean => !isReversed(t) && !((t.balanceOwing || 0) > 0);
+const inDateRange = (dateISO: string | undefined, lo: string, hi: string): boolean => !!dateISO && dateISO >= lo && dateISO <= hi;
+const order = (start: string, end: string): [string, string] => (start <= end ? [start, end] : [end, start]);
+
+// --- Part 3: runner settlement history ------------------------------------
+// Settlement records already carry the money facts: totalFees (commission paid
+// to the runner), totalPurchaseFronted (reimbursement of what the runner paid
+// sellers — that becomes device purchaseCost/COGS), and amountPaid (net cash
+// paid). Pure aggregation over the existing records; no new tracking.
+
+export interface RunnerSettlementRow {
+  runnerId: string;
+  runnerName: string;
+  settlementCount: number;
+  totalFees: number;        // Σ commission
+  totalFronted: number;     // Σ seller-purchase reimbursement
+  totalPaid: number;        // Σ net cash paid to the runner
+}
+
+export interface SettlementLine {
+  id: string;
+  date: string;
+  runnerId: string;
+  runnerName: string;
+  totalFees: number;
+  totalFronted: number;
+  amountPaid: number;
+}
+
+export interface SettlementHistory {
+  start: string;
+  end: string;
+  perRunner: RunnerSettlementRow[];
+  lines: SettlementLine[];   // individual settlements in range, newest first
+  totalFees: number;
+  totalFronted: number;
+  totalPaid: number;
+  count: number;
+}
+
+export const settlementHistory = (
+  settlements: Settlement[],
+  runners: Runner[],
+  start: string,
+  end: string,
+): SettlementHistory => {
+  const [lo, hi] = order(start, end);
+  const nameOf = new Map(runners.map(r => [r.id, r.name]));
+  const inRangeSettlements = settlements.filter(s => inDateRange(s.date, lo, hi));
+
+  const byRunner = new Map<string, RunnerSettlementRow>();
+  let totalFees = 0, totalFronted = 0, totalPaid = 0;
+  const lines: SettlementLine[] = [];
+
+  for (const s of inRangeSettlements) {
+    const runnerName = nameOf.get(s.runnerId) || 'Unknown runner';
+    const fees = s.totalFees || 0, fronted = s.totalPurchaseFronted || 0, paid = s.amountPaid || 0;
+    lines.push({ id: s.id, date: s.date, runnerId: s.runnerId, runnerName, totalFees: fees, totalFronted: fronted, amountPaid: paid });
+    const row = byRunner.get(s.runnerId) || { runnerId: s.runnerId, runnerName, settlementCount: 0, totalFees: 0, totalFronted: 0, totalPaid: 0 };
+    row.settlementCount += 1;
+    row.totalFees = round2(row.totalFees + fees);
+    row.totalFronted = round2(row.totalFronted + fronted);
+    row.totalPaid = round2(row.totalPaid + paid);
+    byRunner.set(s.runnerId, row);
+    totalFees = round2(totalFees + fees); totalFronted = round2(totalFronted + fronted); totalPaid = round2(totalPaid + paid);
+  }
+
+  return {
+    start: lo, end: hi,
+    perRunner: [...byRunner.values()].sort((a, b) => b.totalPaid - a.totalPaid),
+    lines: lines.sort((a, b) => b.date.localeCompare(a.date)),
+    totalFees, totalFronted, totalPaid, count: lines.length,
+  };
+};
+
+// --- Part 1: Profit & Loss statement --------------------------------------
+
+export interface ProfitLossInput {
+  transactions: SalesTransaction[];
+  inventory: InventoryItem[];
+  payPeriods: PayPeriodPaid[];       // paid pay-period snapshots (gross pay)
+  cashReconciliations: CashReconciliation[];
+  settlements: Settlement[];
+}
+
+export interface ProfitLoss {
+  start: string;
+  end: string;
+  revenue: number;
+  costOfGoods: number;       // device purchaseCost + repairCost of goods sold
+  grossProfit: number;       // revenue − costOfGoods
+  payroll: number;           // gross pay of pay periods paid in range
+  cashExpenses: number;      // cash-out entries logged on the cash drawer
+  runnerCommissions: number; // settlement fees (commission only — see note in PR)
+  netProfit: number;         // grossProfit − payroll − cashExpenses − runnerCommissions
+}
+
+export const profitAndLoss = (input: ProfitLossInput, start: string, end: string): ProfitLoss => {
+  const [lo, hi] = order(start, end);
+  const { transactions, inventory, payPeriods, cashReconciliations, settlements } = input;
+
+  // Every inventory id referenced by any transaction line, so a device captured
+  // in a POS sale isn't also counted as a standalone sold device (mirrors analytics).
+  const txnInvIds = new Set<string>();
+  transactions.forEach(t => t.lines?.forEach(l => l.inventoryId && txnInvIds.add(l.inventoryId)));
+
+  let revenue = 0, costOfGoods = 0;
+  for (const t of transactions) {
+    if (!inDateRange(t.date, lo, hi) || !isRecognizedSale(t)) continue;
+    revenue = round2(revenue + (t.subtotal || 0));
+    costOfGoods = round2(costOfGoods + (t.purchaseCost || 0) + (t.repairCost || 0));
+  }
+  // Standalone sold devices not tied to a transaction. Voided/returned devices
+  // have their soldDate cleared, so they're naturally excluded.
+  for (const i of inventory) {
+    if (kindOf(i) !== 'device' || !i.soldDate || txnInvIds.has(i.id)) continue;
+    if (!inDateRange(i.soldDate, lo, hi)) continue;
+    revenue = round2(revenue + (i.salePrice || 0));
+    costOfGoods = round2(costOfGoods + (i.purchaseCost || 0) + (i.repairCost || 0));
+  }
+
+  const payroll = round2(payPeriods
+    .filter(p => inDateRange(p.periodStart, lo, hi))
+    .reduce((s, p) => s + (p.gross || 0), 0));
+
+  const cashExpenses = round2(cashReconciliations
+    .filter(r => inDateRange(r.date, lo, hi))
+    .reduce((s, r) => s + sumDrawerEntries(r.cashOut), 0));
+
+  const runnerCommissions = round2(settlements
+    .filter(s => inDateRange(s.date, lo, hi))
+    .reduce((s, x) => s + (x.totalFees || 0), 0));
+
+  const grossProfit = round2(revenue - costOfGoods);
+  const netProfit = round2(grossProfit - payroll - cashExpenses - runnerCommissions);
+  return { start: lo, end: hi, revenue, costOfGoods, grossProfit, payroll, cashExpenses, runnerCommissions, netProfit };
+};
+
+/** Flatten a P&L to labelled CSV rows. */
+export const profitLossCsvRows = (pl: ProfitLoss): Record<string, string | number>[] => [
+  { Line: 'Revenue', Amount: pl.revenue.toFixed(2) },
+  { Line: 'Cost of goods sold', Amount: (-pl.costOfGoods).toFixed(2) },
+  { Line: 'Gross profit', Amount: pl.grossProfit.toFixed(2) },
+  { Line: 'Payroll', Amount: (-pl.payroll).toFixed(2) },
+  { Line: 'Cash expenses', Amount: (-pl.cashExpenses).toFixed(2) },
+  { Line: 'Runner commissions', Amount: (-pl.runnerCommissions).toFixed(2) },
+  { Line: 'Net profit', Amount: pl.netProfit.toFixed(2) },
+];
+
+// --- Part 2: year-end accountant export -----------------------------------
+
+export interface YearEndSummary {
+  year: number;
+  revenue: number;
+  costOfGoods: number;
+  grossProfit: number;
+  payrollPaid: number;
+  cashExpenses: number;
+  runnerCommissions: number;
+  netProfit: number;
+  salesTaxCollected: number;
+}
+
+/** One consolidated annual summary for handing to an accountant. */
+export const yearEndSummary = (input: ProfitLossInput, year: number): YearEndSummary => {
+  const start = `${year}-01-01`, end = `${year}-12-31`;
+  const pl = profitAndLoss(input, start, end);
+  const tax = taxRemittance(input.transactions, start, end, 'month');
+  return {
+    year,
+    revenue: pl.revenue,
+    costOfGoods: pl.costOfGoods,
+    grossProfit: pl.grossProfit,
+    payrollPaid: pl.payroll,
+    cashExpenses: pl.cashExpenses,
+    runnerCommissions: pl.runnerCommissions,
+    netProfit: pl.netProfit,
+    salesTaxCollected: tax.totalTaxCollected,
+  };
+};
+
+/** Flatten the year-end summary to labelled CSV rows for the accountant export. */
+export const yearEndCsvRows = (s: YearEndSummary): Record<string, string | number>[] => [
+  { Metric: `Year`, Value: String(s.year) },
+  { Metric: 'Revenue', Value: s.revenue.toFixed(2) },
+  { Metric: 'Cost of goods sold', Value: s.costOfGoods.toFixed(2) },
+  { Metric: 'Gross profit', Value: s.grossProfit.toFixed(2) },
+  { Metric: 'Payroll paid', Value: s.payrollPaid.toFixed(2) },
+  { Metric: 'Cash expenses', Value: s.cashExpenses.toFixed(2) },
+  { Metric: 'Runner commissions', Value: s.runnerCommissions.toFixed(2) },
+  { Metric: 'Net profit', Value: s.netProfit.toFixed(2) },
+  { Metric: 'Sales tax collected', Value: s.salesTaxCollected.toFixed(2) },
+];
