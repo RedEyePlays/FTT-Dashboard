@@ -182,6 +182,8 @@ export type Permission =
   | 'inventory.add' | 'inventory.edit' | 'inventory.delete'
   | 'sales.complete' | 'sales.void'   // sales.void = reverse a completed sale (owner + manager)
   | 'sales.return'                    // sales.return = process a return after the same-day void window (owner + manager)
+  | 'cash.log'                        // cash.log = record a cash-out expense / owner withdrawal at the register (owner + manager + employee)
+  | 'cash.reconcile'                  // cash.reconcile = view/manage the daily cash reconciliation report + variance (owner + manager)
   | 'dropoffs.manage'
   | 'repairs.manage'  // full repair management: create/delete, price, batches, customer
   | 'repairs.tech'    // technician-scoped: view + update repair work fields & status

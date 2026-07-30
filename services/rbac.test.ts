@@ -111,6 +111,31 @@ describe('can()', () => {
     expect(can('employee', 'payroll.manage', { allowProfit: true })).toBe(false);
   });
 
+  it('logging a cash movement (cash.log) is for everyone who handles the register, not technicians', () => {
+    // Owner, manager and employee all handle cash day-to-day.
+    expect(can('owner', 'cash.log')).toBe(true);
+    expect(can('manager', 'cash.log')).toBe(true);
+    expect(can('employee', 'cash.log')).toBe(true);
+    // Technicians don't touch the till.
+    expect(can('technician', 'cash.log')).toBe(false);
+    expect(can(undefined, 'cash.log')).toBe(false);
+  });
+
+  it('reconciling the cash drawer (cash.reconcile) is oversight — owner + manager only', () => {
+    expect(can('owner', 'cash.reconcile')).toBe(true);
+    expect(can('manager', 'cash.reconcile')).toBe(true);
+    expect(can('employee', 'cash.reconcile')).toBe(false);
+    expect(can('technician', 'cash.reconcile')).toBe(false);
+    // The financials override does not unlock reconciliation.
+    expect(can('employee', 'cash.reconcile', { allowProfit: true })).toBe(false);
+  });
+
+  it('the two cash permissions are independent — logging a movement is not reconciling', () => {
+    // An employee can log a cash-out in the moment but cannot open the report.
+    expect(can('employee', 'cash.log')).toBe(true);
+    expect(can('employee', 'cash.reconcile')).toBe(false);
+  });
+
   it('an undefined role has no permissions', () => {
     expect(can(undefined, 'reports.view')).toBe(false);
   });

@@ -4,6 +4,7 @@ import { Role, Permission } from '../types';
 const ALL: Permission[] = [
   'inventory.add', 'inventory.edit', 'inventory.delete',
   'sales.complete', 'sales.void', 'sales.return', 'dropoffs.manage', 'repairs.manage', 'repairs.tech',
+  'cash.log', 'cash.reconcile',
   'reports.view', 'reports.profit.summary', 'reports.profit.detailed',
   'users.manage', 'users.tech', 'timeclock.use', 'payroll.manage',
   'audit.view', 'backup.export', 'settings.manage',
@@ -14,6 +15,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   manager: [
     'inventory.add', 'inventory.edit',
     'sales.complete', 'sales.void', 'sales.return', 'dropoffs.manage', 'repairs.manage', 'repairs.tech',
+    'cash.log', 'cash.reconcile',
     'reports.view', 'audit.view', 'users.tech',
     'timeclock.use', 'payroll.manage',
     // NOTE: the profit permissions are handled specially in can() below, not
@@ -23,6 +25,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   ],
   employee: [
     'inventory.add', 'sales.complete', 'repairs.manage', 'repairs.tech', 'reports.view',
+    'cash.log',   // log a cash-out / withdrawal at the register, without a manager present
     'timeclock.use',
   ],
   // Technicians get a repair-only, profit-free experience — but still clock in.

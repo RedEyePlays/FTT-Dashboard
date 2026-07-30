@@ -14,6 +14,7 @@ import { GlobalSearch } from './components/GlobalSearch';
 // Customers, the entry form — stay eager. Named exports are unwrapped to default.
 const OwnerAnalytics = lazy(() => import('./components/OwnerAnalytics').then(m => ({ default: m.OwnerAnalytics })));
 const ReportsView = lazy(() => import('./components/ReportsView').then(m => ({ default: m.ReportsView })));
+const LogCashMovementModal = lazy(() => import('./components/LogCashMovementModal').then(m => ({ default: m.LogCashMovementModal })));
 const BulkEntryModal = lazy(() => import('./components/BulkEntryModal').then(m => ({ default: m.BulkEntryModal })));
 const NotesBoard = lazy(() => import('./components/NotesBoard').then(m => ({ default: m.NotesBoard })));
 const SettingsView = lazy(() => import('./components/SettingsView').then(m => ({ default: m.SettingsView })));
@@ -51,6 +52,8 @@ import { useWorkspaceData } from './hooks/useWorkspaceData';
 import { newId, mkActivity } from './domain/ids';
 import { collectionFor, stockChange } from './domain/inventory';
 import { canVoidSale, canReturnSale, returnRefund, saleAccessoryRestock } from './domain/pos';
+import { expectedCashForDate, expectedEndingCash, sumDrawerEntries } from './domain/reports';
+import type { CashMovementKind } from './components/LogCashMovementModal';
 import { openEntryFor, isOnBreak, periodPayFor, paidKey, toISODate, PayPeriod } from './domain/timeclock';
 import { buildAlerts } from './domain/alerts';
 import { changedSettingsSections } from './domain/audit';
@@ -119,6 +122,7 @@ const App: React.FC = () => {
   const [showBulkModal, setShowBulkModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showCalculator, setShowCalculator] = useState(false);
+  const [showCashLog, setShowCashLog] = useState(false);
   const [showFinder, setShowFinder] = useState(false);
 
   // Theme State
@@ -488,12 +492,38 @@ const App: React.FC = () => {
   // Save (or update) a day's cash-drawer reconciliation. One doc per date (id ===
   // date), recording who counted it and any variance note. Owner/manager only.
   const handleSaveReconciliation = (r: Omit<CashReconciliation, 'recordedBy' | 'recordedByEmail' | 'recordedAt'>) => {
-    if (!uid || !appUser || !(appUser.role === 'owner' || appUser.role === 'manager')) return;
+    if (!uid || !appUser || !allow('cash.reconcile')) return;
     const recon: CashReconciliation = {
       ...r, recordedBy: appUser.id, recordedByEmail: appUser.email, recordedAt: Date.now(),
     };
     saveCashReconciliation(uid, recon).catch(e => console.error('Reconciliation save failed', e));
     audit('cash.reconcile', 'cashReconciliation', r.date, undefined, { expected: r.expectedCash, counted: r.countedCash, variance: r.variance });
+  };
+
+  // Log a single cash movement (cash-out expense or owner withdrawal) against
+  // today's drawer — available to anyone who handles the register (cash.log),
+  // separate from the manager-only reconciliation report. Appends to today's
+  // reconciliation record, recomputing the expected-ending baseline; the counted
+  // cash / variance are left for whoever reconciles the day at close.
+  const handleLogCashMovement = ({ kind, amount, note }: { kind: CashMovementKind; amount: number; note?: string }) => {
+    if (!uid || !appUser || !allow('cash.log') || !(amount > 0)) return;
+    const date = new Date().toISOString().split('T')[0];
+    const existing = cashReconciliations.find(r => r.date === date);
+    const entry = { id: newId(), amount, note };
+    const cashOut = [...(existing?.cashOut || []), ...(kind === 'cashOut' ? [entry] : [])];
+    const withdrawals = [...(existing?.withdrawals || []), ...(kind === 'withdrawal' ? [entry] : [])];
+    const cashSales = expectedCashForDate(salesTransactions, date);
+    const openingFloat = existing?.openingFloat ?? settings.operations.openingFloatDefault;
+    const expectedCash = expectedEndingCash({ openingFloat, cashSales, cashOut: sumDrawerEntries(cashOut), withdrawals: sumDrawerEntries(withdrawals) });
+    const countedCash = existing?.countedCash ?? 0;
+    const variance = countedCash ? Math.round((countedCash - expectedCash) * 100) / 100 : 0;
+    const recon: CashReconciliation = {
+      id: date, date, openingFloat, cashSales, cashOut, withdrawals, expectedCash, countedCash, variance,
+      note: existing?.note, recordedBy: appUser.id, recordedByEmail: appUser.email, recordedAt: Date.now(),
+    };
+    saveCashReconciliation(uid, recon).catch(e => console.error('Cash movement log failed', e));
+    logActivity(`Cash ${kind === 'cashOut' ? 'paid out' : 'withdrawal'} $${amount.toFixed(2)}${note ? ` — ${note}` : ''}`);
+    audit('cash.log', 'cashReconciliation', date, undefined, { kind, amount });
   };
 
   const handleBulkImport = (items: InventoryItem[]) => {
@@ -917,6 +947,7 @@ const App: React.FC = () => {
         onOpenFinder={() => setShowFinder(true)}
         onOpenSettings={() => navigate('settings')}
         onOpenBulk={() => setShowBulkModal(true)}
+        onOpenCashLog={() => setShowCashLog(true)}
         onStartAdd={handleStartAdd}
         onLock={handleLock}
         activity={activityLog}
@@ -939,6 +970,7 @@ const App: React.FC = () => {
         onOpenFinder={() => setShowFinder(true)}
         onOpenSettings={() => navigate('settings')}
         onOpenBulk={() => setShowBulkModal(true)}
+        onOpenCashLog={() => setShowCashLog(true)}
         onLock={handleLock}
       />
 
@@ -960,7 +992,7 @@ const App: React.FC = () => {
               : <div className="text-center text-slate-400 py-20">Owner analytics are restricted to owners (and managers granted financial access).</div>
           )}
           {view === 'reports' && (
-            (appUser.role === 'owner' || appUser.role === 'manager')
+            allow('cash.reconcile')
               ? <ReportsView salesTransactions={salesTransactions} cashReconciliations={cashReconciliations} onSaveReconciliation={handleSaveReconciliation} defaultOpeningFloat={settings.operations.openingFloatDefault} />
               : <div className="text-center text-slate-400 py-20">Reports are restricted to owners and managers.</div>
           )}
@@ -1155,6 +1187,12 @@ const App: React.FC = () => {
 
       {/* Calculator Overlay */}
       {showCalculator && <Suspense fallback={null}><CalculatorTool onClose={() => setShowCalculator(false)} /></Suspense>}
+
+      {showCashLog && allow('cash.log') && (
+        <Suspense fallback={null}>
+          <LogCashMovementModal onClose={() => setShowCashLog(false)} onLog={handleLogCashMovement} />
+        </Suspense>
+      )}
 
       {/* Modals */}
       {showBulkModal && (
