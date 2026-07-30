@@ -97,7 +97,10 @@ const CashReconTab: React.FC<{
     setOpeningFloat(saved ? String(saved.openingFloat ?? 0) : (defaultOpeningFloat ? String(defaultOpeningFloat) : ''));
     setCashOut(saved?.cashOut ? saved.cashOut.map(e => ({ ...e })) : []);
     setWithdrawals(saved?.withdrawals ? saved.withdrawals.map(e => ({ ...e })) : []);
-    setCounted(saved ? String(saved.countedCash) : '');
+    // A day may already have cash movements logged (by an employee, via the quick
+    // cash-out action) but not yet been counted/reconciled — leave the count blank
+    // in that case so it still reads as un-reconciled.
+    setCounted(saved && saved.countedCash ? String(saved.countedCash) : '');
     setNote(saved?.note || '');
   }
 
@@ -196,10 +199,10 @@ const CashReconTab: React.FC<{
                 <tr key={r.id} className="cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/40" onClick={() => setDate(r.date)}>
                   <td className="py-2 font-medium text-slate-700 dark:text-slate-200">{r.date}</td>
                   <td className="py-2 text-right text-slate-500 dark:text-slate-400">{money(r.expectedCash)}</td>
-                  <td className="py-2 text-right text-slate-500 dark:text-slate-400">{money(r.countedCash)}</td>
-                  <td className={`py-2 text-right font-semibold ${Math.abs(r.variance) < 0.005 ? 'text-emerald-600' : 'text-amber-600 dark:text-amber-400'}`}>
-                    {r.variance > 0 ? '+' : ''}{money(r.variance)}
-                  </td>
+                  <td className="py-2 text-right text-slate-500 dark:text-slate-400">{r.countedCash ? money(r.countedCash) : <span className="text-slate-400">not counted</span>}</td>
+                  {r.countedCash
+                    ? <td className={`py-2 text-right font-semibold ${Math.abs(r.variance) < 0.005 ? 'text-emerald-600' : 'text-amber-600 dark:text-amber-400'}`}>{r.variance > 0 ? '+' : ''}{money(r.variance)}</td>
+                    : <td className="py-2 text-right text-slate-400">—</td>}
                   <td className="py-2 pl-4 text-slate-500 dark:text-slate-400 truncate max-w-[220px]">{r.note || '—'}</td>
                   <td className="py-2 text-slate-400 text-xs">{(r.recordedByEmail || r.recordedBy || '').split('@')[0]}</td>
                 </tr>

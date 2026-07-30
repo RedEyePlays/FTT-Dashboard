@@ -435,6 +435,8 @@ const PERM_ROWS: { perm: Permission; label: string }[] = [
   { perm: 'inventory.edit', label: 'Edit inventory' },
   { perm: 'inventory.delete', label: 'Delete inventory' },
   { perm: 'sales.complete', label: 'Complete sales' },
+  { perm: 'cash.log', label: 'Log cash out / withdrawals' },
+  { perm: 'cash.reconcile', label: 'Reconcile the cash drawer' },
   { perm: 'repairs.tech', label: 'Work on repairs' },
   { perm: 'repairs.manage', label: 'Manage repairs' },
   { perm: 'reports.view', label: 'View reports' },
