@@ -27,6 +27,10 @@ import {
  * Behavior is intentionally identical to the previous inline implementation —
  * this is a mechanical extraction, not a rewrite.
  */
+// Bounded fetch sizes for the unbounded logs (server-side orderBy ts desc + limit).
+const ACTIVITY_LIMIT = 100;   // recent activity feed (Notifications menu)
+const AUDIT_PAGE = 500;       // audit log initial page; "load older" widens it
+
 export function useWorkspaceData() {
   // --- AUTH STATE ---
   const [user, setUser] = useState<User | null>(null);
@@ -66,6 +70,10 @@ export function useWorkspaceData() {
   const [dbLoading, setDbLoading] = useState(true);
   const [dbError, setDbError] = useState<string | null>(null);
   const [reconnectKey, setReconnectKey] = useState(0);
+  // Audit log is unbounded over the shop's lifetime, so it's fetched newest-first
+  // in bounded pages (server-side limit) with a load-older control, rather than
+  // downloaded in full on every session.
+  const [auditLimit, setAuditLimit] = useState(AUDIT_PAGE);
 
   // Refs for latest snapshots (used to diff array-based updates + SKU gen)
   const runnersRef = useRef<Runner[]>([]);
@@ -172,8 +180,7 @@ export function useWorkspaceData() {
       subscribeCollection<TimeEntry>(wsId, 'timeEntries', setTimeEntries, onErr),
       subscribeCollection<PayPeriodPaid>(wsId, 'payPeriods', setPayPeriods, onErr),
       subscribeCollection<CashReconciliation>(wsId, 'cashReconciliations', setCashReconciliations, onErr),
-      subscribeCollection<ActivityEntry>(wsId, 'activityLog', rows => setActivityLog(rows.sort((a, b) => b.ts - a.ts).slice(0, 60)), onErr),
-      subscribeCollection<AuditEntry>(wsId, 'auditLogs', rows => setAuditLogs(rows.sort((a, b) => b.ts - a.ts).slice(0, 1000)), onErr),
+      subscribeCollection<ActivityEntry>(wsId, 'activityLog', rows => setActivityLog(rows.sort((a, b) => b.ts - a.ts)), onErr, { orderByField: 'ts', limitTo: ACTIVITY_LIMIT }),
       subscribeMeta(wsId, m => { setNotes(m.notes || []); setTasks(m.tasks || []); setSkuCounters(m.skuCounters || {}); setLastBackup(m.lastBackup); setSettings(mergeSettings(m.settings)); }, onErr),
     ];
     // Owners and managers read the full member roster (managers need it for the
@@ -187,6 +194,16 @@ export function useWorkspaceData() {
     return () => subs.forEach(u => u());
   }, [user, appUser, workspaceId, reconnectKey]);
 
+  // Audit log subscription is separate so "load older" can widen the page limit
+  // without tearing down and re-subscribing every other collection.
+  useEffect(() => {
+    if (!user || !appUser || !workspaceId) return;
+    const onErr = (e: Error) => { console.error('Firestore error (audit):', e); };
+    return subscribeCollection<AuditEntry>(workspaceId, 'auditLogs',
+      rows => setAuditLogs(rows.sort((a, b) => b.ts - a.ts)), onErr,
+      { orderByField: 'ts', limitTo: auditLimit });
+  }, [user, appUser, workspaceId, reconnectKey, auditLimit]);
+
   // Retry a failed connection (used by the DB-error screen's Retry button).
   const reconnect = () => { setDbError(null); setDbLoading(true); setReconnectKey(k => k + 1); };
 
@@ -195,6 +212,9 @@ export function useWorkspaceData() {
     user, isLoadingAuth, authError, setAuthError,
     // role / workspace
     appUser, roleLoading, workspaceId, workspaceUsers, invites, auditLogs,
+    // audit paging: widen the fetch on demand; hasMore is true while the page is full
+    loadMoreAuditLogs: () => setAuditLimit(n => n + AUDIT_PAGE),
+    auditHasMore: auditLogs.length >= auditLimit,
     // collections
     devices, accessories, data, notes, setNotes, tasks, setTasks,
     runners, dropOffs, settlements, customers, salesTransactions,
