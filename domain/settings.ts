@@ -108,6 +108,12 @@ export interface AppSettings {
     frequency: 'daily' | 'weekly';     // how often the automated snapshot is taken
     retention: number;                 // how many past automated backups to keep (older ones auto-deleted)
   };
+  operations: {
+    openingFloatDefault: number;       // default opening cash float pre-filled on the reconciliation screen
+    voidWindowDays: number;            // how many days after a sale it can still be voided (0 = same day only)
+    returnRestockingFeePercent: number;// default restocking fee % pre-filled when processing a return (0 = none)
+    agingInventoryDays: number;        // unsold-device age (days) that triggers the aging-inventory alert
+  };
 }
 
 export const DASHBOARD_WIDGETS = ['periods', 'inventory', 'repairs', 'recentSales', 'lowStock', 'topPlatforms'] as const;
@@ -135,6 +141,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   dashboard: { widgets: Object.fromEntries(DASHBOARD_WIDGETS.map(w => [w, true])), landingView: 'dashboard', analyticsRange: 'today' },
   appearance: { theme: 'system' },
   backups: { enabled: false, frequency: 'daily', retention: 14 },
+  operations: { openingFloatDefault: 0, voidWindowDays: 0, returnRestockingFeePercent: 0, agingInventoryDays: 30 },
 };
 
 // Deep-merge a stored partial over the defaults (one level per section is enough).
@@ -152,6 +159,7 @@ export function mergeSettings(partial?: DeepPartial<AppSettings>): AppSettings {
     dashboard: { ...d.dashboard, ...partial.dashboard, widgets: { ...d.dashboard.widgets, ...partial.dashboard?.widgets } },
     appearance: { ...d.appearance, ...partial.appearance },
     backups: { ...d.backups, ...partial.backups },
+    operations: { ...d.operations, ...partial.operations },
   };
 }
 

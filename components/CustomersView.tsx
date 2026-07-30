@@ -34,6 +34,7 @@ interface Props {
   canVoidSale?: (tx: SalesTransaction) => boolean;     // within-window + permission check
   onReturnSale?: (tx: SalesTransaction, opts: { restockingFee?: number; disposition: 'resell' | 'defective' }) => void; // owner/manager: process a return
   canReturnSale?: (tx: SalesTransaction) => boolean;   // after-void-window + permission check
+  defaultRestockingFeePercent?: number;                // pre-filled restocking fee % when processing a return
 }
 
 export type ReturnDisposition = 'resell' | 'defective';
@@ -197,7 +198,7 @@ export const CustomersView: React.FC<Props> = (props) => {
 
 /* ---------------- Profile ---------------- */
 const CustomerProfile: React.FC<Props & { customer: Customer; data: CustomerData; onBack: () => void }> = (
-  { customer, data, canViewProfit, canEdit, auditLogs, inventory, onBack, onSaveCustomer, onStartSale, onCreateRepair, onVoidSale, canVoidSale, onReturnSale, canReturnSale },
+  { customer, data, canViewProfit, canEdit, auditLogs, inventory, onBack, onSaveCustomer, onStartSale, onCreateRepair, onVoidSale, canVoidSale, onReturnSale, canReturnSale, defaultRestockingFeePercent },
 ) => {
   const s = useMemo(() => customerStats(customer, data), [customer, data]);
   const timeline = useMemo(() => customerTimeline(s), [s]);
@@ -421,7 +422,8 @@ const CustomerProfile: React.FC<Props & { customer: Customer; data: CustomerData
       {editing && <EditModal customer={customer} onClose={() => setEditing(false)} onSave={c => { onSaveCustomer(c, customer); setEditing(false); }} />}
       {invoice && <InvoiceModal tx={invoice} customer={customer} canViewProfit={canViewProfit} onClose={() => setInvoice(null)}
         onVoid={onVoidSale && canVoidSale && canVoidSale(invoice) ? () => { onVoidSale(invoice); setInvoice(null); } : undefined}
-        onReturn={onReturnSale && canReturnSale && canReturnSale(invoice) ? (opts) => { onReturnSale(invoice, opts); setInvoice(null); } : undefined} />}
+        onReturn={onReturnSale && canReturnSale && canReturnSale(invoice) ? (opts) => { onReturnSale(invoice, opts); setInvoice(null); } : undefined}
+        defaultRestockingFeePercent={defaultRestockingFeePercent} />}
       {ticket && <TicketModal repair={ticket} tech={techFor.get(ticket.id)} customer={customer} onClose={() => setTicket(null)} />}
     </div>
   );
@@ -450,7 +452,7 @@ const Row: React.FC<{ label: string; value: string }> = ({ label, value }) => (
 const Empty: React.FC<{ text: string }> = ({ text }) => <p className="text-sm text-slate-400 py-6 text-center">{text}</p>;
 
 /* ---------------- Invoice modal ---------------- */
-const InvoiceModal: React.FC<{ tx: SalesTransaction; customer: Customer; canViewProfit: boolean; onClose: () => void; onVoid?: () => void; onReturn?: (opts: { restockingFee?: number; disposition: ReturnDisposition }) => void }> = ({ tx, customer, canViewProfit, onClose, onVoid, onReturn }) => (
+const InvoiceModal: React.FC<{ tx: SalesTransaction; customer: Customer; canViewProfit: boolean; onClose: () => void; onVoid?: () => void; onReturn?: (opts: { restockingFee?: number; disposition: ReturnDisposition }) => void; defaultRestockingFeePercent?: number }> = ({ tx, customer, canViewProfit, onClose, onVoid, onReturn, defaultRestockingFeePercent }) => (
   <Modal title={`Invoice ${tx.id.slice(0, 8)}`} onClose={onClose} onPrint={() => printInvoice(tx, customer)}>
     <div className="space-y-2 text-sm">
       {tx.status === 'voided' && (
@@ -490,7 +492,7 @@ const InvoiceModal: React.FC<{ tx: SalesTransaction; customer: Customer; canView
           </button>
         </div>
       )}
-      {onReturn && <ReturnSection total={tx.totalPaid} onReturn={onReturn} />}
+      {onReturn && <ReturnSection total={tx.totalPaid} onReturn={onReturn} defaultFeePercent={defaultRestockingFeePercent} />}
     </div>
   </Modal>
 );
@@ -498,8 +500,11 @@ const InvoiceModal: React.FC<{ tx: SalesTransaction; customer: Customer; canView
 /* ---------------- Return processing ---------------- */
 // Restocking fee (optional) + device disposition, then confirm. Refund is the
 // sale total minus the fee; the fee is clamped so the refund never goes negative.
-const ReturnSection: React.FC<{ total: number; onReturn: (opts: { restockingFee?: number; disposition: ReturnDisposition }) => void }> = ({ total, onReturn }) => {
-  const [fee, setFee] = useState('');
+const ReturnSection: React.FC<{ total: number; onReturn: (opts: { restockingFee?: number; disposition: ReturnDisposition }) => void; defaultFeePercent?: number }> = ({ total, onReturn, defaultFeePercent }) => {
+  // Pre-fill the configured default restocking fee (a % of the sale total), still
+  // fully editable per return.
+  const prefill = defaultFeePercent && defaultFeePercent > 0 ? (Math.round(total * defaultFeePercent) / 100).toFixed(2) : '';
+  const [fee, setFee] = useState(prefill);
   const [disposition, setDisposition] = useState<ReturnDisposition>('resell');
   const feeNum = Math.min(Math.max(parseFloat(fee) || 0, 0), Math.max(0, total));
   const refund = Math.max(0, Math.round((total - feeNum) * 100) / 100);

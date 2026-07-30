@@ -185,7 +185,7 @@ const App: React.FC = () => {
 
   // Standing, actionable alerts for the notifications menu (low stock, overdue /
   // unclaimed repairs). Derived from live data already in memory.
-  const alerts = useMemo(() => buildAlerts({ inventory: data, repairs, now: Date.now() }), [data, repairs]);
+  const alerts = useMemo(() => buildAlerts({ inventory: data, repairs, now: Date.now(), agingDays: settings.operations.agingInventoryDays }), [data, repairs, settings.operations.agingInventoryDays]);
 
   // Per-user notification read state persists on the user doc, so it follows the
   // staff member across devices instead of living in this browser's localStorage.
@@ -426,7 +426,7 @@ const App: React.FC = () => {
   // voided (kept for audit). Does NOT touch custom lines (no inventoryId).
   const handleVoidSale = (tx: SalesTransaction) => {
     if (!uid || !appUser || !allow('sales.void')) return;
-    if (!canVoidSale(tx, new Date().toISOString().split('T')[0])) return;
+    if (!canVoidSale(tx, new Date().toISOString().split('T')[0], settings.operations.voidWindowDays)) return;
 
     // Device lines are the actual sold inventory rows (still carrying this txn id).
     const deviceIds = dataRef.current
@@ -451,7 +451,7 @@ const App: React.FC = () => {
   // inventoryId) are not touched, same as Void.
   const handleReturnSale = (tx: SalesTransaction, opts: { restockingFee?: number; disposition: 'resell' | 'defective' }) => {
     if (!uid || !appUser || !allow('sales.return')) return;
-    if (!canReturnSale(tx, new Date().toISOString().split('T')[0])) return;
+    if (!canReturnSale(tx, new Date().toISOString().split('T')[0], settings.operations.voidWindowDays)) return;
 
     const deviceIds = dataRef.current
       .filter(i => (i.kind ?? 'device') === 'device' && i.transactionId === tx.id)
@@ -474,12 +474,10 @@ const App: React.FC = () => {
 
   // Save (or update) a day's cash-drawer reconciliation. One doc per date (id ===
   // date), recording who counted it and any variance note. Owner/manager only.
-  const handleSaveReconciliation = (r: { date: string; expectedCash: number; countedCash: number; variance: number; note?: string }) => {
+  const handleSaveReconciliation = (r: Omit<CashReconciliation, 'recordedBy' | 'recordedByEmail' | 'recordedAt'>) => {
     if (!uid || !appUser || !(appUser.role === 'owner' || appUser.role === 'manager')) return;
     const recon: CashReconciliation = {
-      id: r.date, date: r.date,
-      expectedCash: r.expectedCash, countedCash: r.countedCash, variance: r.variance,
-      note: r.note, recordedBy: appUser.id, recordedByEmail: appUser.email, recordedAt: Date.now(),
+      ...r, recordedBy: appUser.id, recordedByEmail: appUser.email, recordedAt: Date.now(),
     };
     saveCashReconciliation(uid, recon).catch(e => console.error('Reconciliation save failed', e));
     audit('cash.reconcile', 'cashReconciliation', r.date, undefined, { expected: r.expectedCash, counted: r.countedCash, variance: r.variance });
@@ -949,7 +947,7 @@ const App: React.FC = () => {
           )}
           {view === 'reports' && (
             (appUser.role === 'owner' || appUser.role === 'manager')
-              ? <ReportsView salesTransactions={salesTransactions} cashReconciliations={cashReconciliations} onSaveReconciliation={handleSaveReconciliation} />
+              ? <ReportsView salesTransactions={salesTransactions} cashReconciliations={cashReconciliations} onSaveReconciliation={handleSaveReconciliation} defaultOpeningFloat={settings.operations.openingFloatDefault} />
               : <div className="text-center text-slate-400 py-20">Reports are restricted to owners and managers.</div>
           )}
           {view === 'customers' && allow('reports.view') && (
@@ -969,9 +967,10 @@ const App: React.FC = () => {
               onStartSale={allow('sales.complete') ? startSaleFor : undefined}
               onCreateRepair={allow('repairs.manage') ? createRepairFor : undefined}
               onVoidSale={allow('sales.void') ? handleVoidSale : undefined}
-              canVoidSale={(tx) => allow('sales.void') && canVoidSale(tx, new Date().toISOString().split('T')[0])}
+              canVoidSale={(tx) => allow('sales.void') && canVoidSale(tx, new Date().toISOString().split('T')[0], settings.operations.voidWindowDays)}
               onReturnSale={allow('sales.return') ? handleReturnSale : undefined}
-              canReturnSale={(tx) => allow('sales.return') && canReturnSale(tx, new Date().toISOString().split('T')[0])}
+              canReturnSale={(tx) => allow('sales.return') && canReturnSale(tx, new Date().toISOString().split('T')[0], settings.operations.voidWindowDays)}
+              defaultRestockingFeePercent={settings.operations.returnRestockingFeePercent}
             />
           )}
           {view === 'repairs' && allow('repairs.manage') && (

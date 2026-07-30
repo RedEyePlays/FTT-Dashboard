@@ -41,13 +41,34 @@ export interface CashVariance { expected: number; counted: number; variance: num
 
 /**
  * Reconcile a counted till against expected cash. `variance` is counted − expected:
- * positive = over (more cash than sales explain), negative = short, ~0 = balanced.
+ * positive = over (more cash than expected), negative = short, ~0 = balanced.
  */
 export const reconcileCash = (counted: number, expected: number): CashVariance => {
   const variance = round2((counted || 0) - (expected || 0));
   const direction = variance > 0.005 ? 'over' : variance < -0.005 ? 'short' : 'balanced';
   return { expected: round2(expected), counted: round2(counted || 0), variance, direction };
 };
+
+/** Sum a list of cash-drawer entries (cash-out or withdrawals), ignoring negatives. */
+export const sumDrawerEntries = (entries?: { amount: number }[]): number =>
+  round2((entries || []).reduce((s, e) => s + Math.max(0, e.amount || 0), 0));
+
+export interface DayCashInputs {
+  openingFloat?: number;   // starting cash in the drawer
+  cashSales?: number;      // cash-in from that day's sales
+  cashOut?: number;        // total cash expenses paid out
+  withdrawals?: number;    // total owner pulls / deposits
+}
+
+/**
+ * Expected ending cash in the drawer:
+ *   opening float + cash sales − cash paid out − withdrawals to owner.
+ * This is the corrected reconciliation baseline — comparing the count against
+ * sales alone would falsely flag a shortage whenever cash legitimately leaves
+ * the drawer (an expense paid in cash, or a till pull / deposit).
+ */
+export const expectedEndingCash = (i: DayCashInputs): number =>
+  round2((i.openingFloat || 0) + (i.cashSales || 0) - (i.cashOut || 0) - (i.withdrawals || 0));
 
 // --- Part 2: sales-tax remittance -----------------------------------------
 

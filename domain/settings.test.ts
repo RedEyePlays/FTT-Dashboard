@@ -79,6 +79,17 @@ describe('mergeSettings', () => {
     // a partial patch still fills the rest from defaults
     expect(mergeSettings({ backups: { enabled: true } as any }).backups).toEqual({ enabled: true, frequency: 'daily', retention: 14 });
   });
+
+  it('defaults operations to same-day void, no float, no restocking fee, 30-day aging', () => {
+    expect(mergeSettings().operations).toEqual({
+      openingFloatDefault: 0, voidWindowDays: 0, returnRestockingFeePercent: 0, agingInventoryDays: 30,
+    });
+  });
+
+  it('merges a partial operations patch over the defaults', () => {
+    const o = mergeSettings({ operations: { voidWindowDays: 3, returnRestockingFeePercent: 15 } as any }).operations;
+    expect(o).toEqual({ openingFloatDefault: 0, voidWindowDays: 3, returnRestockingFeePercent: 15, agingInventoryDays: 30 });
+  });
 });
 
 describe('label sizes', () => {
