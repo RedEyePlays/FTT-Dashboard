@@ -1,0 +1,46 @@
+{
+  "expo": {
+    "name": "FTT Device Diagnostics",
+    "slug": "ftt-device-diagnostics",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "scheme": "fttdiag",
+    "newArchEnabled": false,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.ftt.devicediagnostics",
+      "buildNumber": "1",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Used to test the front and back cameras of the device.",
+        "NSMicrophoneUsageDescription": "Used to record a short clip to verify the microphone works.",
+        "NSFaceIDUsageDescription": "Used to verify Face ID / Touch ID hardware is functional.",
+        "NSMotionUsageDescription": "Used to test the accelerometer, gyroscope and compass.",
+        "NSLocationWhenInUseUsageDescription": "Used only so the magnetometer/compass heading can be read for the sensor test."
+      }
+    },
+    "android": {
+      "package": "com.ftt.devicediagnostics"
+    },
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Used to test the front and back cameras of the device."
+        }
+      ],
+      [
+        "expo-av",
+        {
+          "microphonePermission": "Used to record a short clip to verify the microphone works."
+        }
+      ],
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Used to verify Face ID / Touch ID hardware is functional."
+        }
+      ]
+    ]
+  }
+}
