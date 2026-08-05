@@ -9,7 +9,7 @@
     "newArchEnabled": false,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.ftt.devicediagnostics",
+      "bundleIdentifier": "com.flipthattech.devicediagnostics",
       "buildNumber": "1",
       "infoPlist": {
         "NSCameraUsageDescription": "Used to test the front and back cameras of the device.",
@@ -20,7 +20,7 @@
       }
     },
     "android": {
-      "package": "com.ftt.devicediagnostics"
+      "package": "com.flipthattech.devicediagnostics"
     },
     "plugins": [
       [

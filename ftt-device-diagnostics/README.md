@@ -80,6 +80,60 @@ eas build --platform ios --profile production   # store build
 Camera, torch, microphone, sensors and biometrics need a **real device** (or an
 EAS dev/preview build) — they don't work in the iOS simulator.
 
+### Local native build on a Mac with a free (personal-team) Apple ID
+
+Bundle id: **`com.flipthattech.devicediagnostics`**.
+
+```bash
+cd ftt-device-diagnostics
+npm install
+npx expo prebuild --platform ios     # generates the native ios/ project (regenerable; gitignored)
+npx expo run:ios --device            # builds, installs to a USB iPhone, runs pod install for you
+```
+
+Prefer Xcode directly? After `prebuild`, run `pod install` in `ios/`, then open
+`ios/FTTDeviceDiagnostics.xcworkspace`, select the target ▸ **Signing &
+Capabilities**, tick **Automatically manage signing**, and pick your personal
+team. Then Product ▸ Run to your connected iPhone.
+
+**Command-line build check** (does not install, just verifies it compiles):
+
+```bash
+cd ios && pod install && cd ..
+xcodebuild -workspace ios/FTTDeviceDiagnostics.xcworkspace \
+  -scheme FTTDeviceDiagnostics -configuration Debug \
+  -sdk iphoneos -destination generic/platform=iOS \
+  DEVELOPMENT_TEAM=YOUR_TEAM_ID -allowProvisioningUpdates build
+```
+
+#### Free-account signing — verified compatible
+
+The prebuilt project is already set up for a personal team:
+
+- **Automatic signing** (no `CODE_SIGN_STYLE = Manual`, no `ProvisioningStyle`
+  override) — you just pick your Apple ID team in Xcode.
+- **No `DEVELOPMENT_TEAM` or `PROVISIONING_PROFILE` pinned** — nothing to unset.
+- The **`.entitlements` file is empty** (`<dict/>`) — no push, App Groups,
+  Associated Domains, iCloud, HealthKit, Apple Pay or other paid-only
+  capabilities are referenced anywhere.
+- All device access is via **Info.plist privacy strings** (camera, mic, motion,
+  Face ID, location) — none require an entitlement or a paid account.
+
+**Every test in this app runs on a free personal team.** Nothing here needs a
+paid capability.
+
+#### Free-account limitations to expect (general, not test-specific)
+
+- Provisioning profiles from a free Apple ID **expire after 7 days** — the app
+  stops launching and must be rebuilt/reinstalled from Xcode. (A paid account
+  gives a 1-year profile.)
+- Max **3 sideloaded apps** installed per device, and **10 new App IDs per 7
+  days**.
+- First launch: trust the developer on the phone at **Settings ▸ General ▸ VPN &
+  Device Management ▸ (your Apple ID) ▸ Trust**.
+- No TestFlight / OTA distribution on a free account — install over USB from
+  Xcode.
+
 ## Architecture
 
 - `src/tests/registry.ts` — single source of truth. Each entry has an `id`,
