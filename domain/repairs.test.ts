@@ -4,6 +4,7 @@ import {
   matchesRepair, matchesBatch, isInProgress, isRepairOpen,
   applyTechEdit, repairAgeDays, TECH_STATUSES,
   repairNeedsCustomer, isInternalRepair, canSaveRepair, linkedRepairFor,
+  partsTotal, repairPartsCost, repairLabor, repairCheckoutSummary, completeRepair,
 } from './repairs';
 import { Repair, RepairBatch } from '../types';
 
@@ -196,5 +197,47 @@ describe('terminal statuses', () => {
     expect(isRepairOpen(repair({ status: 'completed' }))).toBe(false);
     expect(isRepairOpen(repair({ status: 'testing' }))).toBe(true);
     expect(isInProgress(repair({ status: 'testing' }))).toBe(true);
+  });
+});
+
+describe('parts breakdown + repair cost', () => {
+  const part = (name: string, unitCost: number, quantity = 1) => ({ id: name, name, unitCost, quantity });
+
+  it('partsTotal sums unitCost × quantity, clamping negatives', () => {
+    expect(partsTotal([part('Screen', 80), part('Battery', 20, 2)])).toBe(120);
+    expect(partsTotal([part('x', -5, 3), part('y', 10, -1)])).toBe(0);
+    expect(partsTotal()).toBe(0);
+  });
+
+  it('repairPartsCost prefers the structured parts, falls back to legacy partsCost', () => {
+    expect(repairPartsCost(repair({ parts: [part('Screen', 80)], partsCost: 999 }))).toBe(80); // array wins
+    expect(repairPartsCost(repair({ partsCost: 45 }))).toBe(45);                                // legacy fallback
+    expect(repairPartsCost(repair({}))).toBe(0);
+  });
+
+  it('repairLabor is price minus parts cost, never negative', () => {
+    expect(repairLabor(repair({ repairPrice: 200, parts: [part('Screen', 80)] }))).toBe(120);
+    expect(repairLabor(repair({ repairPrice: 50, partsCost: 90 }))).toBe(0);
+  });
+
+  it('repairCheckoutSummary reports parts / labor / price / deposit / balance', () => {
+    const s = repairCheckoutSummary(repair({ repairPrice: 200, deposit: 50, parts: [part('Screen', 80), part('Adhesive', 5, 2)] }));
+    expect(s).toEqual({ partsCost: 90, labor: 110, repairPrice: 200, deposit: 50, balanceDue: 150 });
+  });
+});
+
+describe('completeRepair', () => {
+  const NOW = new Date('2026-07-20T12:00:00Z').getTime();
+  it('stamps status, completedAt, warranty, and denormalizes parts cost', () => {
+    const done = completeRepair(repair({ repairPrice: 200, warrantyDays: 30, parts: [{ id: 'p', name: 'Screen', unitCost: 80, quantity: 1 }] }), NOW);
+    expect(done.status).toBe('completed');
+    expect(done.completedAt).toBe(NOW);
+    expect(done.partsCost).toBe(80);                 // denormalized from the parts array
+    expect(done.warrantyUntil).toBe('2026-08-19');   // 2026-07-20 + 30d
+  });
+  it('supports a picked_up terminal and no-warranty case', () => {
+    const done = completeRepair(repair({ repairPrice: 100 }), NOW, 'picked_up');
+    expect(done.status).toBe('picked_up');
+    expect(done.warrantyUntil).toBe('');
   });
 });

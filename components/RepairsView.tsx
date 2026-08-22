@@ -3,10 +3,11 @@ import {
   Wrench, Plus, Search, X, Trash2, Printer, FileText, Receipt, History as HistoryIcon,
   ArrowLeft, DollarSign, ChevronRight, Building2, ClipboardCheck, PackageCheck, ScrollText, QrCode,
 } from 'lucide-react';
-import { Repair, RepairBatch, Customer, AuditEntry, RepairStatus, RepairType, DeviceType } from '../types';
+import { Repair, RepairBatch, Customer, AuditEntry, RepairStatus, RepairType, DeviceType, RepairPart } from '../types';
 import {
   REPAIR_STATUSES, REPAIR_STATUS_CELL,
   balanceOwing, batchTotals, matchesRepair, matchesBatch, canSaveRepair,
+  partsTotal, repairPartsCost, repairLabor, repairCheckoutSummary, completeRepair,
 } from '../domain/repairs';
 import { newId } from '../domain/ids';
 import { printRetailReceipt, printBatchIntake, printBatchInvoice, printBatchSummary, printDeviceSheet } from '../services/repairPrint';
@@ -164,7 +165,9 @@ export const RepairsView: React.FC<Props> = (props) => {
   const newBatch = (): RepairBatch => ({ id: newId(), batchNumber: '', createdAt: Date.now(), dateReceived: today(), companyName: '', status: 'active', amountPaid: 0 });
 
   const saveDrawer = async (form: Repair) => {
-    let next = form;
+    // Keep partsCost in sync with the structured parts breakdown on every save,
+    // so analytics/reports read one consistent number.
+    let next: Repair = { ...form, partsCost: repairPartsCost(form) };
     if (drawer?.isNew && !next.repairNumber) next = { ...next, repairNumber: await props.onGenerateRepairNumber() };
     onSaveRepair(next, drawer?.isNew ? undefined : drawer?.repair);
     setDrawer(null);
@@ -427,16 +430,22 @@ const RepairDrawer: React.FC<{
   onClose: () => void; onSave: (r: Repair) => void; onDelete: () => void; onPrint: (doc: 'intake' | 'repair' | 'pickup') => void; onPrintSheet: () => void; onPrintLabel: () => void;
 }> = ({ initial, isNew, canDelete, auditLogs, customers, onClose, onSave, onDelete, onPrint, onPrintSheet, onPrintLabel }) => {
   const [f, setF] = useState<Repair>(initial);
+  const [showCheckout, setShowCheckout] = useState(false);
   // Snapshot the form state at mount for a dirty check, so a stray backdrop/X
   // click doesn't silently discard typed changes.
   const [snapshot] = useState(() => JSON.stringify(initial));
   const set = (patch: Partial<Repair>) => setF(prev => ({ ...prev, ...patch }));
+  // Structured parts editor.
+  const addPart = () => set({ parts: [...(f.parts || []), { id: newId(), name: '', unitCost: 0, quantity: 1 }] });
+  const updatePart = (id: string, patch: Partial<RepairPart>) => set({ parts: (f.parts || []).map(p => p.id === id ? { ...p, ...patch } : p) });
+  const removePart = (id: string) => set({ parts: (f.parts || []).filter(p => p.id !== id) });
   const isRetail = f.type === 'retail';
   const isInternal = f.type === 'internal';
   const showDeviceDetail = isRetail || isInternal; // full device fields; wholesale keeps the minimal set
   const history = auditLogs.filter(a => a.entityId === f.id).slice(0, 20);
   const num = (v: string) => parseFloat(v) || 0;
   const canSave = canSaveRepair(f);
+  const isTerminal = f.status === 'completed' || f.status === 'picked_up' || f.status === 'cancelled';
   const dirty = JSON.stringify(f) !== snapshot;
   const requestClose = () => { if (!dirty || window.confirm('Discard unsaved changes to this repair?')) onClose(); };
 
@@ -505,6 +514,23 @@ const RepairDrawer: React.FC<{
             </div>
           </Section>
 
+          <Section title="Parts & Labor">
+            <p className="text-xs text-slate-400 mb-2">Log each part used and its cost — the parts total feeds repair margin, separate from the price you charge.</p>
+            {(f.parts || []).map(p => (
+              <div key={p.id} className="flex items-center gap-2 mb-2">
+                <input className={`${inputCls} flex-1`} placeholder="Part (e.g. OLED screen)" value={p.name} onChange={e => updatePart(p.id, { name: e.target.value })} />
+                <input type="number" min="0" step="0.01" className={`${inputCls} w-24`} placeholder="Cost" value={p.unitCost || ''} onChange={e => updatePart(p.id, { unitCost: num(e.target.value) })} />
+                <input type="number" min="1" step="1" className={`${inputCls} w-16`} placeholder="Qty" value={p.quantity || ''} onChange={e => updatePart(p.id, { quantity: Math.max(1, Math.round(num(e.target.value)) || 1) })} />
+                <button type="button" onClick={() => removePart(p.id)} className="p-1.5 text-slate-400 hover:text-rose-500 shrink-0" aria-label="Remove part"><Trash2 className="w-4 h-4" /></button>
+              </div>
+            ))}
+            <button type="button" onClick={addPart} className="flex items-center gap-1 text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:underline"><Plus className="w-3.5 h-3.5" /> Add part</button>
+            <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
+              <div className="flex justify-between px-3 py-2 rounded-lg bg-slate-50 dark:bg-slate-800/60"><span className="text-slate-500 dark:text-slate-400">Parts cost</span><span className="font-semibold text-slate-800 dark:text-slate-100">{money(partsTotal(f.parts))}</span></div>
+              <div className="flex justify-between px-3 py-2 rounded-lg bg-slate-50 dark:bg-slate-800/60"><span className="text-slate-500 dark:text-slate-400">Labor (margin)</span><span className="font-semibold text-slate-800 dark:text-slate-100">{money(repairLabor(f))}</span></div>
+            </div>
+          </Section>
+
           <Section title="Notes">
             <div className="grid grid-cols-1 gap-3">
               <Field label="Internal Notes"><textarea rows={2} className={inputCls} value={f.internalNotes || ''} onChange={e => set({ internalNotes: e.target.value })} /></Field>
@@ -527,7 +553,11 @@ const RepairDrawer: React.FC<{
 
         <div className="px-5 py-3 border-t border-slate-100 dark:border-slate-800 flex items-center gap-2 flex-wrap">
           <button onClick={() => canSave && onSave(f)} disabled={!canSave} title={canSave ? undefined : 'Enter a customer name first'}
-            className="flex-1 min-w-[120px] px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg text-sm font-medium">Save</button>
+            className="flex-1 min-w-[110px] px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg text-sm font-medium">Save</button>
+          {!isNew && !isTerminal && (
+            <button onClick={() => canSave && setShowCheckout(true)} disabled={!canSave}
+              className="flex-1 min-w-[110px] px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white rounded-lg text-sm font-medium flex items-center justify-center gap-1.5"><ClipboardCheck className="w-4 h-4" /> Check Out</button>
+          )}
           {!isNew && (
             <div className="flex items-center gap-1">
               <button onClick={onPrintLabel} title="Print QR label" className="p-2 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-500 hover:border-indigo-400"><QrCode className="w-4 h-4" /></button>
@@ -540,6 +570,77 @@ const RepairDrawer: React.FC<{
             </div>
           )}
           {canDelete && !isNew && <button onClick={onDelete} className="p-2 text-slate-400 hover:text-rose-500"><Trash2 className="w-4 h-4" /></button>}
+        </div>
+      </div>
+
+      {showCheckout && (
+        <RepairCheckoutModal
+          repair={f}
+          onClose={() => setShowCheckout(false)}
+          onConfirm={(terminal) => {
+            const done = completeRepair(f, Date.now(), terminal);
+            if (isRetail) printRetailReceipt(done, 'pickup'); // print the completed record (stamped warranty/price)
+            onSave(done);
+          }}
+        />
+      )}
+    </div>
+  );
+};
+
+/* ---------------- Streamlined repair checkout ---------------- */
+// A one-screen summary — parts breakdown, parts cost, labor, price, deposit,
+// balance due — with a single action that marks the repair complete (stamping
+// status/completedAt/warranty and denormalizing parts cost) and, for retail,
+// prints the pickup receipt.
+const RepairCheckoutModal: React.FC<{ repair: Repair; onClose: () => void; onConfirm: (terminal: 'completed' | 'picked_up') => void }> = ({ repair, onClose, onConfirm }) => {
+  const s = repairCheckoutSummary(repair);
+  const terminal: 'completed' | 'picked_up' = repair.type === 'retail' ? 'picked_up' : 'completed';
+  const parts = repair.parts || [];
+  const Line: React.FC<{ label: string; value: number; strong?: boolean; accent?: string }> = ({ label, value, strong, accent }) => (
+    <div className={`flex items-center justify-between py-1.5 ${strong ? 'border-t border-slate-200 dark:border-slate-700 mt-1 pt-2' : ''}`}>
+      <span className={strong ? 'font-bold text-slate-800 dark:text-slate-100' : 'text-slate-600 dark:text-slate-300'}>{label}</span>
+      <span className={`tabular-nums ${strong ? 'font-bold' : ''} ${accent || 'text-slate-800 dark:text-slate-100'}`}>{money(value)}</span>
+    </div>
+  );
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={onClose}>
+      <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-md border border-slate-200 dark:border-slate-700 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <div className="px-5 py-3 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
+          <h2 className="font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2"><ClipboardCheck className="w-4 h-4 text-emerald-600" /> Check out repair</h2>
+          <button onClick={onClose} aria-label="Close"><X className="w-5 h-5 text-slate-400" /></button>
+        </div>
+        <div className="p-5 space-y-4 text-sm">
+          <div>
+            <p className="font-semibold text-slate-800 dark:text-slate-100">{deviceName(repair)}</p>
+            <p className="text-xs text-slate-400">{repair.repairNumber}{repair.customerName ? ` · ${repair.customerName}` : ''} · {repair.issue || 'Repair'}</p>
+          </div>
+
+          {parts.length > 0 && (
+            <div className="rounded-lg border border-slate-200 dark:border-slate-700 divide-y divide-slate-100 dark:divide-slate-800">
+              {parts.map(p => (
+                <div key={p.id} className="flex items-center justify-between px-3 py-1.5 text-xs">
+                  <span className="text-slate-700 dark:text-slate-200 truncate">{p.name || 'Part'}{p.quantity > 1 ? ` ×${p.quantity}` : ''}</span>
+                  <span className="text-slate-500 dark:text-slate-400 tabular-nums">{money((p.unitCost || 0) * (p.quantity || 0))}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div>
+            <Line label="Parts cost" value={s.partsCost} />
+            <Line label="Labor (margin)" value={s.labor} />
+            <Line label="Repair price" value={s.repairPrice} strong />
+            {s.deposit > 0 && <Line label="Deposit paid" value={s.deposit} />}
+            <Line label="Balance due" value={s.balanceDue} strong accent={s.balanceDue > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600'} />
+          </div>
+          {repair.warrantyDays ? <p className="text-xs text-slate-400">Warranty: {repair.warrantyDays} days from today.</p> : null}
+        </div>
+        <div className="px-5 py-3 border-t border-slate-100 dark:border-slate-800 flex justify-end gap-2">
+          <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm font-medium bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">Cancel</button>
+          <button onClick={() => onConfirm(terminal)} className="px-4 py-2 rounded-lg text-sm font-medium bg-emerald-600 hover:bg-emerald-700 text-white flex items-center gap-1.5">
+            <ClipboardCheck className="w-4 h-4" /> Mark complete{repair.type === 'retail' ? ' & print' : ''}
+          </button>
         </div>
       </div>
     </div>
