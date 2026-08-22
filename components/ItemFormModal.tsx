@@ -33,6 +33,22 @@ const CONDITIONS = ['New', 'Like New', 'Excellent', 'Good', 'Fair', 'For Parts']
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 const today = () => new Date().toISOString().split('T')[0];
 
+const inp = 'w-full p-2 bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-md text-sm focus:ring-indigo-500 focus:border-indigo-500';
+const lbl = 'block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1';
+
+// Defined at MODULE scope (not inside ItemFormModal) on purpose: a component
+// declared inside another component's body gets a new function identity on every
+// render, so React unmounts/remounts its DOM subtree each time the parent
+// re-renders — which for a text input means losing focus after every keystroke.
+// Hoisting it keeps the input mounted so typing stays continuous.
+const Field: React.FC<{ label: string; value: unknown; onChange: (v: string) => void; type?: string; placeholder?: string }> = ({ label, value, onChange, type = 'text', placeholder = '' }) => (
+  <div>
+    <label className={lbl}>{label}</label>
+    <input type={type} className={inp} placeholder={placeholder}
+      value={(value as any) ?? ''} onChange={e => onChange(e.target.value)} />
+  </div>
+);
+
 export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, runners, onSave, onGenerateSku, onClose, linkedRepair, onCreateRepair, onOpenRepair }) => {
   const [kind, setKind] = useState<ItemKind>(initial?.kind ?? initialKind ?? 'device');
   const [f, setF] = useState<InventoryItem>(() => initial ?? {
@@ -69,19 +85,11 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, runners, 
     onClose();
   };
 
-  const inp = 'w-full p-2 bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-md text-sm focus:ring-indigo-500 focus:border-indigo-500';
-  const lbl = 'block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1';
-
   const canSave = kind === 'device' ? !!(f.item || f.brand || f.model) : !!f.item;
 
-  const Field = ({ label, k, type = 'text', placeholder = '' }: { label: string; k: keyof InventoryItem; type?: string; placeholder?: string }) => (
-    <div>
-      <label className={lbl}>{label}</label>
-      <input type={type} className={inp} placeholder={placeholder}
-        value={(f[k] as any) ?? ''}
-        onChange={e => set(k, (type === 'number' ? (parseFloat(e.target.value) || 0) : e.target.value) as any)} />
-    </div>
-  );
+  // Text/date fields go straight through; number fields parse to a number.
+  const setText = (k: keyof InventoryItem) => (v: string) => set(k, v as any);
+  const setNum = (k: keyof InventoryItem) => (v: string) => set(k, (parseFloat(v) || 0) as any);
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={requestClose}>
@@ -144,12 +152,12 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, runners, 
                     {DEVICE_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
                   </select>
                 </div>
-                <Field label="Brand" k="brand" placeholder="Apple" />
-                <Field label="Model" k="model" placeholder="iPhone 14 Pro" />
-                <Field label="Storage" k="storage" placeholder="256GB" />
-                <Field label="Color" k="color" placeholder="Space Black" />
-                <Field label="Carrier" k="carrier" placeholder="Unlocked" />
-                <Field label="Battery Health" k="batteryHealth" placeholder="92%" />
+                <Field label="Brand" value={f.brand} onChange={setText('brand')} placeholder="Apple" />
+                <Field label="Model" value={f.model} onChange={setText('model')} placeholder="iPhone 14 Pro" />
+                <Field label="Storage" value={f.storage} onChange={setText('storage')} placeholder="256GB" />
+                <Field label="Color" value={f.color} onChange={setText('color')} placeholder="Space Black" />
+                <Field label="Carrier" value={f.carrier} onChange={setText('carrier')} placeholder="Unlocked" />
+                <Field label="Battery Health" value={f.batteryHealth} onChange={setText('batteryHealth')} placeholder="92%" />
                 <div>
                   <label className={lbl}>Condition</label>
                   <select className={inp} value={f.condition} onChange={e => set('condition', e.target.value)}>
@@ -162,11 +170,11 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, runners, 
                     {DEVICE_STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
                   </select>
                 </div>
-                <Field label="Item Name (override)" k="item" placeholder="Auto from brand/model" />
+                <Field label="Item Name (override)" value={f.item} onChange={setText('item')} placeholder="Auto from brand/model" />
               </div>
               <div className="grid grid-cols-3 gap-4">
-                <Field label="Bought From (seller)" k="boughtFrom" />
-                <Field label="Purchase Source (channel)" k="purchaseSource" placeholder="Marketplace" />
+                <Field label="Bought From (seller)" value={f.boughtFrom} onChange={setText('boughtFrom')} />
+                <Field label="Purchase Source (channel)" value={f.purchaseSource} onChange={setText('purchaseSource')} placeholder="Marketplace" />
                 <div>
                   <label className={lbl}>Runner (drop-off)</label>
                   <select className={inp} value={f.runnerId ?? ''} onChange={e => {
@@ -177,22 +185,22 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, runners, 
                     {runners.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
                   </select>
                 </div>
-                <Field label="Purchase Price ($)" k="purchaseCost" type="number" />
-                <Field label="Repair Cost ($)" k="repairCost" type="number" />
-                <Field label="Target Sale Price ($)" k="targetSalePrice" type="number" />
-                <Field label="Date In" k="date" type="date" />
+                <Field label="Purchase Price ($)" value={f.purchaseCost} onChange={setNum('purchaseCost')} type="number" />
+                <Field label="Repair Cost ($)" value={f.repairCost} onChange={setNum('repairCost')} type="number" />
+                <Field label="Target Sale Price ($)" value={f.targetSalePrice} onChange={setNum('targetSalePrice')} type="number" />
+                <Field label="Date In" value={f.date} onChange={setText('date')} type="date" />
               </div>
             </>
           ) : (
             <div className="grid grid-cols-3 gap-4">
-              <div className="col-span-2"><Field label="Item Name" k="item" placeholder="Lightning Cable 1m" /></div>
-              <Field label="Category" k="category" placeholder="Cables" />
-              <Field label="Quantity" k="quantity" type="number" />
-              <Field label="Cost / Unit ($)" k="costPerUnit" type="number" />
-              <Field label="Selling Price ($)" k="sellingPrice" type="number" />
-              <Field label="Low Stock Threshold" k="lowStockThreshold" type="number" />
-              <Field label="Purchase Date" k="date" type="date" />
-              <Field label="Bought From" k="boughtFrom" />
+              <div className="col-span-2"><Field label="Item Name" value={f.item} onChange={setText('item')} placeholder="Lightning Cable 1m" /></div>
+              <Field label="Category" value={f.category} onChange={setText('category')} placeholder="Cables" />
+              <Field label="Quantity" value={f.quantity} onChange={setNum('quantity')} type="number" />
+              <Field label="Cost / Unit ($)" value={f.costPerUnit} onChange={setNum('costPerUnit')} type="number" />
+              <Field label="Selling Price ($)" value={f.sellingPrice} onChange={setNum('sellingPrice')} type="number" />
+              <Field label="Low Stock Threshold" value={f.lowStockThreshold} onChange={setNum('lowStockThreshold')} type="number" />
+              <Field label="Purchase Date" value={f.date} onChange={setText('date')} type="date" />
+              <Field label="Bought From" value={f.boughtFrom} onChange={setText('boughtFrom')} />
             </div>
           )}
 
