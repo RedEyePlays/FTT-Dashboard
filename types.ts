@@ -374,6 +374,15 @@ export interface PayPeriodPaid {
 // customer involved); links back to the InventoryItem via `inventoryId`.
 export type RepairType = 'retail' | 'wholesale' | 'internal';
 
+// A single part used on a repair (screen, battery, charging port, …). Structured
+// breakdown of the repair's parts cost for accurate per-repair margin tracking.
+export interface RepairPart {
+  id: string;
+  name: string;       // e.g. "OLED screen", "Battery"
+  unitCost: number;   // cost per unit (what the shop paid)
+  quantity: number;   // units used (default 1)
+}
+
 // Status set. `completed` is retained for backward compatibility with existing
 // records; `picked_up` is the technician-workflow terminal (device returned).
 export type RepairStatus =
@@ -420,8 +429,9 @@ export interface Repair {
   techNotes?: string;        // technician notes
   diagnostics?: string;      // diagnostic findings
   workPerformed?: string;    // work performed
-  partsUsed?: string;        // parts used (free text)
-  partsCost?: number;        // parts cost (for repair profit / analytics; default 0)
+  partsUsed?: string;        // parts used (free text — legacy / quick note)
+  parts?: RepairPart[];      // structured parts breakdown (name/unitCost/quantity)
+  partsCost?: number;        // parts cost total (denormalized from `parts` when present; legacy fallback otherwise)
   testingResults?: string;   // testing results / notes
   testChecks?: string[];     // testing checklist selections
 

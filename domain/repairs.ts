@@ -1,4 +1,4 @@
-import { Repair, RepairBatch, RepairStatus, RepairType } from '../types';
+import { Repair, RepairBatch, RepairStatus, RepairType, RepairPart } from '../types';
 
 // --- Numbering prefixes (reuse the meta.skuCounters mechanism) ---
 export const REPAIR_PREFIX = 'RPR';
@@ -104,6 +104,58 @@ export const COSMETIC_OPTIONS = [
   'Scratches', 'Cracked screen', 'Cracked back', 'Dents', 'Water damage',
   'Bent frame', 'Missing parts', 'Screen burn', 'Loose buttons', 'Clean / Good',
 ];
+
+// --- Parts & repair cost breakdown ---
+const round2 = (n: number): number => Math.round((n || 0) * 100) / 100;
+
+/** Total cost of a structured parts list: Σ unitCost × quantity (never negative). */
+export const partsTotal = (parts?: RepairPart[]): number =>
+  round2((parts || []).reduce((s, p) => s + Math.max(0, p.unitCost || 0) * Math.max(0, p.quantity || 0), 0));
+
+/**
+ * The repair's parts cost. Prefers the structured `parts` breakdown when present,
+ * otherwise falls back to the legacy `partsCost` number — so old records and the
+ * technician free-text flow keep working.
+ */
+export const repairPartsCost = (r: Pick<Repair, 'parts' | 'partsCost'>): number =>
+  r.parts && r.parts.length ? partsTotal(r.parts) : round2(r.partsCost || 0);
+
+/** Labor / margin portion of a repair = price − parts cost (never negative). */
+export const repairLabor = (r: Pick<Repair, 'repairPrice' | 'parts' | 'partsCost'>): number =>
+  round2(Math.max(0, (r.repairPrice || 0) - repairPartsCost(r)));
+
+export interface RepairCheckoutSummary {
+  partsCost: number;
+  labor: number;        // repairPrice − partsCost
+  repairPrice: number;
+  deposit: number;
+  balanceDue: number;   // repairPrice − deposit
+}
+
+/** Everything a tech needs to check a repair out: parts cost, labor, price, deposit, balance. */
+export const repairCheckoutSummary = (r: Repair): RepairCheckoutSummary => {
+  const partsCost = repairPartsCost(r);
+  const repairPrice = round2(r.repairPrice || 0);
+  const deposit = round2(r.deposit || 0);
+  return { partsCost, labor: round2(Math.max(0, repairPrice - partsCost)), repairPrice, deposit, balanceDue: Math.max(0, round2(repairPrice - deposit)) };
+};
+
+/**
+ * Complete a repair in one step (the streamlined checkout): stamp the terminal
+ * status + completion time, denormalize the parts cost onto `partsCost` so
+ * downstream reports read one consistent number, and compute the warranty expiry.
+ * Pure — the app persists the returned record.
+ */
+export const completeRepair = (r: Repair, now: number = Date.now(), status: 'completed' | 'picked_up' = 'completed'): Repair => {
+  const completedDate = new Date(now).toISOString().split('T')[0];
+  return {
+    ...r,
+    status,
+    completedAt: now,
+    partsCost: repairPartsCost(r),
+    warrantyUntil: computeWarrantyUntil(completedDate, r.warrantyDays),
+  };
+};
 
 // --- Money ---
 export const balanceOwing = (r: Repair): number => Math.max(0, (r.repairPrice || 0) - (r.deposit || 0));

@@ -1,6 +1,6 @@
 import { SalesTransaction, Repair, InventoryItem, Customer, AuditEntry, ActivityEntry, DeviceType } from '../types';
 import { kindOf } from './inventory';
-import { isRepairOpen } from './repairs';
+import { isRepairOpen, repairPartsCost as partsCostOf } from './repairs';
 import { customerStats } from './customers';
 import { isReversed } from './pos';
 
@@ -183,7 +183,7 @@ export function computeAnalytics(range: DateRange, input: AnalyticsInput, now: n
   const repairsInRange = repairs.filter(r => inRange(r.createdAt || ymdMs(r.date), range));
   const completedInRange = repairs.filter(r => (r.completedAt && inRange(r.completedAt, range)) || (!r.completedAt && (r.status === 'completed' || r.status === 'picked_up') && inRange(ymdMs(r.date), range)));
   const repairRevenue = repairsInRange.reduce((s, r) => s + (r.repairPrice || 0), 0);
-  const repairPartsCost = repairsInRange.reduce((s, r) => s + (r.partsCost || 0), 0);
+  const repairPartsCost = repairsInRange.reduce((s, r) => s + partsCostOf(r), 0);
   const repairProfit = repairRevenue - repairPartsCost;
   const repairLabourRevenue = repairRevenue - repairPartsCost; // parts billed at cost → labour = margin
   bumpCat('Repairs', repairRevenue, repairProfit, repairsInRange.length);
@@ -193,7 +193,7 @@ export function computeAnalytics(range: DateRange, input: AnalyticsInput, now: n
   for (const r of repairsInRange) {
     const key = (r.issue || 'Repair').trim().slice(0, 40) || 'Repair';
     const a = rtAgg.get(key) || { name: key, revenue: 0, profit: 0, count: 0 };
-    a.revenue += r.repairPrice || 0; a.profit += (r.repairPrice || 0) - (r.partsCost || 0); a.count += 1; rtAgg.set(key, a);
+    a.revenue += r.repairPrice || 0; a.profit += (r.repairPrice || 0) - partsCostOf(r); a.count += 1; rtAgg.set(key, a);
   }
 
   const completedTimes = completedInRange.filter(r => r.completedAt && r.createdAt).map(r => (r.completedAt! - r.createdAt) / DAY);
