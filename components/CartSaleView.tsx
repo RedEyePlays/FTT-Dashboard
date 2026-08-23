@@ -5,6 +5,7 @@ import {
   Printer, Eye, RotateCcw, QrCode, Sparkles, AlertTriangle,
 } from 'lucide-react';
 import { InventoryItem, Customer, DeviceType } from '../types';
+import { RepairSalePrefill } from '../domain/repairs';
 import { getDeviceDisplayName } from '../domain/inventory';
 import { LabelModal } from './LabelModal';
 import { PLATFORMS } from '../domain/pos';
@@ -18,6 +19,8 @@ interface Props {
   customers?: Customer[];
   initialCustomer?: Customer;   // pre-seed the sale customer (CRM quick action)
   onConsumeInitial?: () => void;
+  initialRepair?: RepairSalePrefill;   // pre-seed a repair checkout (Repairs → Check Out)
+  onConsumeInitialRepair?: () => void;
   onComplete: (payload: import('../hooks/useCheckout').CartCheckout) => void;
   canViewProfit?: boolean;      // gate cost/profit figures (same pattern as Dashboard)
   onGenerateSku?: (deviceType?: DeviceType) => Promise<string>;

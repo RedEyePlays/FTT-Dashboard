@@ -157,6 +157,46 @@ export const completeRepair = (r: Repair, now: number = Date.now(), status: 'com
   };
 };
 
+// --- Quick Sale checkout prefill ---
+// A repair is checked out through the SAME Quick Sale flow as a regular in-store
+// sale (rather than a separate screen), so its revenue/profit land in the sales
+// P&L, cash reconciliation and dashboard totals like any other sale. This builds
+// the single service line + customer to pre-seed that cart with.
+export interface RepairSalePrefill {
+  repairId: string;
+  lineName: string;      // e.g. "Repair · iPhone 14 — Screen"
+  repairPrice: number;   // full price → recognized as sale revenue
+  partsCost: number;     // → the line's cost, so profit = price − parts
+  deposit: number;       // already collected earlier (noted, not re-collected)
+  terminal: 'completed' | 'picked_up';
+  customer?: { id?: string; name?: string; phone?: string; email?: string };
+}
+
+const repairDeviceName = (r: Repair): string =>
+  [r.brand, r.model].filter(Boolean).join(' ') || r.deviceType || 'Device';
+
+export const repairSalePrefill = (r: Repair): RepairSalePrefill => {
+  const issue = (r.issue || '').trim();
+  const lineName = `Repair · ${repairDeviceName(r)}${issue ? ` — ${issue}` : ''}`;
+  return {
+    repairId: r.id,
+    lineName,
+    repairPrice: round2(r.repairPrice || 0),
+    partsCost: repairPartsCost(r),
+    deposit: round2(r.deposit || 0),
+    terminal: r.type === 'retail' ? 'picked_up' : 'completed',
+    customer: r.customerName || r.customerPhone || r.customerEmail || r.customerId
+      ? { id: r.customerId, name: r.customerName, phone: r.customerPhone, email: r.customerEmail }
+      : undefined,
+  };
+};
+
+// Finish a repair that was checked out via a Quick Sale: stamp it complete
+// (status/completedAt/warranty/denormalized parts) and link it to the sale that
+// recognized its money.
+export const completeRepairSale = (r: Repair, salesTransactionId: string, now: number = Date.now(), status: 'completed' | 'picked_up' = 'completed'): Repair =>
+  ({ ...completeRepair(r, now, status), salesTransactionId });
+
 // --- Money ---
 export const balanceOwing = (r: Repair): number => Math.max(0, (r.repairPrice || 0) - (r.deposit || 0));
 

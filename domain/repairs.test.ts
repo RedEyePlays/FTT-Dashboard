@@ -5,6 +5,7 @@ import {
   applyTechEdit, repairAgeDays, TECH_STATUSES,
   repairNeedsCustomer, isInternalRepair, canSaveRepair, linkedRepairFor,
   partsTotal, repairPartsCost, repairLabor, repairCheckoutSummary, completeRepair,
+  repairSalePrefill, completeRepairSale,
 } from './repairs';
 import { Repair, RepairBatch } from '../types';
 
@@ -239,5 +240,38 @@ describe('completeRepair', () => {
     const done = completeRepair(repair({ repairPrice: 100 }), NOW, 'picked_up');
     expect(done.status).toBe('picked_up');
     expect(done.warrantyUntil).toBe('');
+  });
+});
+
+describe('repairSalePrefill', () => {
+  it('builds a single service line at full price (cost = parts) + customer', () => {
+    const p = repairSalePrefill(repair({
+      brand: 'Apple', model: 'iPhone 14', issue: 'Screen', repairPrice: 180, deposit: 50,
+      parts: [{ id: 'p', name: 'OLED', unitCost: 40, quantity: 1 }],
+      customerName: 'Sam', customerPhone: '555', customerId: 'c1',
+    }));
+    expect(p.repairPrice).toBe(180);
+    expect(p.partsCost).toBe(40);          // labor/margin = 140 recognized on sale
+    expect(p.deposit).toBe(50);
+    expect(p.terminal).toBe('picked_up');  // retail
+    expect(p.lineName).toContain('iPhone 14');
+    expect(p.lineName).toContain('Screen');
+    expect(p.customer).toEqual({ id: 'c1', name: 'Sam', phone: '555', email: undefined });
+  });
+  it('uses a completed terminal and omits customer for non-retail', () => {
+    const p = repairSalePrefill(repair({ type: 'internal', repairPrice: 60, customerName: undefined }));
+    expect(p.terminal).toBe('completed');
+    expect(p.customer).toBeUndefined();
+  });
+});
+
+describe('completeRepairSale', () => {
+  it('stamps the repair complete and links it to the sale', () => {
+    const NOW = new Date('2026-07-20T12:00:00Z').getTime();
+    const done = completeRepairSale(repair({ repairPrice: 120, warrantyDays: 90 }), 'tx-123', NOW, 'picked_up');
+    expect(done.status).toBe('picked_up');
+    expect(done.completedAt).toBe(NOW);
+    expect(done.salesTransactionId).toBe('tx-123');
+    expect(done.warrantyUntil).toBe('2026-10-18'); // 2026-07-20 + 90d
   });
 });
