@@ -1,17 +1,21 @@
 
 import React, { useState, useEffect, useRef, useMemo, lazy, Suspense } from 'react';
-import { Dashboard } from './components/Dashboard';
 import { DataEntryForm } from './components/DataEntryForm';
 import { AuthScreen } from './components/AuthScreen';
 import { SettingsModal, cacheLabelSizes, cacheStoreProfile } from './components/SettingsModal';
-import { QuickSaleView } from './components/QuickSaleView';
 import type { CartCheckout } from './components/CartSaleView';
 import { GlobalSearch } from './components/GlobalSearch';
 
-// Code-splitting: the heavier, less-frequently-visited views (and their big deps
-// like recharts in OwnerAnalytics) load on demand instead of bloating the main
-// bundle. Core everyday views — Dashboard, Inventory, Quick Sale, Repairs,
-// Customers, the entry form — stay eager. Named exports are unwrapped to default.
+// Code-splitting: every page-level view loads on demand as its own chunk (each
+// route only downloads the JS it renders) instead of bloating the initial
+// bundle. They all render inside the single <Suspense> boundary below. Named
+// exports are unwrapped to default for React.lazy.
+const Dashboard = lazy(() => import('./components/Dashboard').then(m => ({ default: m.Dashboard })));
+const QuickSaleView = lazy(() => import('./components/QuickSaleView').then(m => ({ default: m.QuickSaleView })));
+const InventoryView = lazy(() => import('./components/InventoryView').then(m => ({ default: m.InventoryView })));
+const RepairsView = lazy(() => import('./components/RepairsView').then(m => ({ default: m.RepairsView })));
+const TechRepairsView = lazy(() => import('./components/TechRepairsView').then(m => ({ default: m.TechRepairsView })));
+const CustomersView = lazy(() => import('./components/CustomersView').then(m => ({ default: m.CustomersView })));
 const OwnerAnalytics = lazy(() => import('./components/OwnerAnalytics').then(m => ({ default: m.OwnerAnalytics })));
 const ReportsView = lazy(() => import('./components/ReportsView').then(m => ({ default: m.ReportsView })));
 const LogCashMovementModal = lazy(() => import('./components/LogCashMovementModal').then(m => ({ default: m.LogCashMovementModal })));
@@ -22,7 +26,6 @@ const BackupPanel = lazy(() => import('./components/BackupPanel').then(m => ({ d
 const CalculatorTool = lazy(() => import('./components/CalculatorTool').then(m => ({ default: m.CalculatorTool })));
 const AIChatView = lazy(() => import('./components/AIChatView').then(m => ({ default: m.AIChatView })));
 import { SearchData, SearchResult, SearchPage } from './domain/search';
-import { InventoryView } from './components/InventoryView';
 const DropOffView = lazy(() => import('./components/DropOffView').then(m => ({ default: m.DropOffView })));
 const UsersView = lazy(() => import('./components/UsersView').then(m => ({ default: m.UsersView })));
 const AuditLogView = lazy(() => import('./components/AuditLogView').then(m => ({ default: m.AuditLogView })));
@@ -30,9 +33,6 @@ const TimeClockView = lazy(() => import('./components/TimeClockView').then(m => 
 import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, Runner, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission, Repair, RepairBatch, TimeEntry, PayPeriodPaid, BreakReason, SalesTransaction, CashReconciliation } from './types';
 import { skuPrefix, nextSku } from './services/sku';
 import { REPAIR_PREFIX, BATCH_PREFIX, computeWarrantyUntil, applyTechEdit, TECH_EDITABLE_FIELDS, repairSalePrefill, completeRepairSale } from './domain/repairs';
-import { RepairsView } from './components/RepairsView';
-import { TechRepairsView } from './components/TechRepairsView';
-import { CustomersView } from './components/CustomersView';
 import { MergePlan } from './domain/customers';
 import { can } from './services/rbac';
 import { downloadJson, toCSV, triggerDownload } from './services/backup';
@@ -90,13 +90,19 @@ const App: React.FC = () => {
     runners, dropOffs, settlements, salesTransactions, customers, repairs, repairBatches,
     timeEntries, payPeriods, cashReconciliations,
     skuCounters, setSkuCounters, activityLog, lastBackup, settings,
-    dbLoading, dbError, reconnect,
+    dbLoading, dbError, reconnect, enableExtendedData,
     runnersRef, dropOffsRef, settlementsRef, customersRef, salesTransactionsRef,
     repairsRef, repairBatchesRef, skuRef, dataRef,
   } = useWorkspaceData();
 
   // --- UI STATE ---
   const [view, setView] = useState<ViewState>('dashboard');
+  // Load the deferred collections (time entries, pay periods, cash
+  // reconciliations, drop-offs, settlements) the first time the user opens a view
+  // that needs them. Idempotent; once enabled it stays for the session.
+  useEffect(() => {
+    if (view === 'timeclock' || view === 'reports' || view === 'dropoff') enableExtendedData();
+  }, [view, enableExtendedData]);
   // Active Inventory sub-section, mirrored to the URL (/inventory/<section>).
   const [invSection, setInvSection] = useState<InvSection>(DEFAULT_INV_SECTION);
   // A customer to pre-seed the POS / Repairs view with (from a CRM quick action).

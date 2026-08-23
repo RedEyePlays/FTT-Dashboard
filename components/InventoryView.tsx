@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef, useEffect, useLayoutEffect } from 'react';
+import React, { useState, useMemo, useRef, useEffect, useLayoutEffect, lazy, Suspense } from 'react';
 import {
   Search, Smartphone, Package, QrCode, Trash2, X, Plus, ScanLine, AlertTriangle,
   Columns3, SlidersHorizontal, Bookmark, Download, Upload, Copy, ChevronUp, ChevronDown,
@@ -8,7 +8,8 @@ import {
 import { InventoryItem, Runner, ItemKind, DeviceType, DeviceStatus, ActivityEntry, AuditEntry, Repair } from '../types';
 import { linkedRepairFor, REPAIR_STATUS_LABEL } from '../domain/repairs';
 import { ItemFormModal } from './ItemFormModal';
-import { LabelModal } from './LabelModal';
+// Lazy: defers jsPDF (~390 kB) until a label is actually printed.
+const LabelModal = lazy(() => import('./LabelModal').then(m => ({ default: m.LabelModal })));
 import { useIsMobile } from '../hooks/useMediaQuery';
 import { ResponsiveDialog, EmptyState } from './responsive';
 import { InvSection, INV_SECTIONS } from '../domain/inventoryNav';
@@ -643,7 +644,7 @@ export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, a
         linkedRepair={linkedRepairOf(expandItem.id)}
         onCreateRepair={onCreateRepair ? () => { onCreateRepair(expandItem); setExpandItem(null); } : undefined}
         onOpenRepair={onOpenRepair ? (id: string) => { onOpenRepair(id); setExpandItem(null); } : undefined} />}
-      {labelItem && <LabelModal item={labelItem} onClose={() => setLabelItem(null)} />}
+      {labelItem && <Suspense fallback={null}><LabelModal item={labelItem} onClose={() => setLabelItem(null)} /></Suspense>}
       {historyItem && <HistoryModal item={historyItem.item} mode={historyItem.mode} activity={activity} auditLogs={auditLogs} onClose={() => setHistoryItem(null)} />}
     </div>
   );

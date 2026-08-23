@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { lazy, Suspense } from 'react';
 import {
   ShoppingCart, Trash2, X, Search, User, Phone, FileText, Mail,
   Banknote, CreditCard, Blend, CheckCircle, Package, Smartphone, ScanLine, History,
@@ -7,7 +7,9 @@ import {
 import { InventoryItem, Customer, DeviceType, Repair } from '../types';
 import { RepairSalePrefill } from '../domain/repairs';
 import { getDeviceDisplayName } from '../domain/inventory';
-import { LabelModal } from './LabelModal';
+// Lazy: the label modal pulls in jsPDF (~390 kB). Load it only when a label is
+// actually printed, not on every Quick Sale.
+const LabelModal = lazy(() => import('./LabelModal').then(m => ({ default: m.LabelModal })));
 import { PLATFORMS } from '../domain/pos';
 import { CustomerSearchInput } from './CustomerSearchInput';
 import { useCheckout, CustomCategory, CUSTOM_DEVICE_TYPES } from '../hooks/useCheckout';
@@ -87,7 +89,7 @@ export const CartSaleView: React.FC<Props> = (props) => {
           <button onClick={reset} className="flex items-center justify-center gap-2 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium"><RotateCcw className="w-4 h-4" /> Sell Another</button>
         </div>
 
-        {labelItem && <LabelModal item={labelItem} onClose={() => setLabelItem(null)} />}
+        {labelItem && <Suspense fallback={null}><LabelModal item={labelItem} onClose={() => setLabelItem(null)} /></Suspense>}
         {showTx && (
           <div className="fixed inset-0 z-[65] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={() => setShowTx(false)}>
             <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-md border border-slate-200 dark:border-slate-700 max-h-[90vh] overflow-y-auto text-left" onClick={e => e.stopPropagation()}>
