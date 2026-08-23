@@ -80,10 +80,17 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, salesTransactions, a
     const accessories = data.filter(i => kindOf(i) === 'accessory');
     const soldDev = (i: InventoryItem) => !!i.soldDate || i.deviceStatus === 'sold';
     const held = devices.filter(i => !soldDev(i) && i.deviceStatus !== 'returned');
-    const invCost = held.reduce((a, i) => a + (i.purchaseCost || 0) + (i.repairCost || 0), 0)
+    const deviceCost = (i: InventoryItem) => (i.purchaseCost || 0) + (i.repairCost || 0);
+    // Expected resale value. When an item has no sale price set yet (incomplete
+    // data), fall back to its cost so it nets $0 in Expected Gross Profit rather
+    // than counting as a full loss — while Inventory Cost still reflects all the
+    // capital tied up, and the tiles stay reconciled (Value − Cost).
+    const deviceValue = (i: InventoryItem) => (i.targetSalePrice || 0) > 0 ? i.targetSalePrice! : deviceCost(i);
+    const accValue = (i: InventoryItem) => ((i.sellingPrice || 0) > 0 ? i.sellingPrice! : (i.costPerUnit || 0)) * (i.quantity || 0);
+    const invCost = held.reduce((a, i) => a + deviceCost(i), 0)
       + accessories.reduce((a, i) => a + (i.costPerUnit || 0) * (i.quantity || 0), 0);
-    const invValue = held.reduce((a, i) => a + (i.targetSalePrice || 0), 0)
-      + accessories.reduce((a, i) => a + (i.sellingPrice || 0) * (i.quantity || 0), 0);
+    const invValue = held.reduce((a, i) => a + deviceValue(i), 0)
+      + accessories.reduce((a, i) => a + accValue(i), 0);
 
     const pendingRepairsList = devices.filter(i => i.deviceStatus === 'pending_repair');
     const oldestRepair = pendingRepairsList.reduce<string>((min, i) => (i.date && (!min || i.date < min) ? i.date : min), '');
