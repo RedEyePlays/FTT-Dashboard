@@ -52,6 +52,44 @@ const money = (n?: number) => `$${(n || 0).toFixed(2)}`;
 const totalCost = (i: InventoryItem) => (i.purchaseCost || 0) + (i.repairCost || 0);
 const profitOf = (i: InventoryItem) => i.salePrice ? i.salePrice - i.purchaseCost - (i.repairCost || 0) : 0;
 
+// Actual sale-price cell: editable directly so an off-POS sale (private sale,
+// trade show, …) can be logged without running Quick Sale. Value commits on
+// blur / Enter — not per keystroke — so the row isn't stamped sold (and yanked
+// out of the Devices tab) while the number is still being typed. Stays blank
+// with a dash placeholder until a real sale price exists. Module-scope so the
+// input keeps focus across parent re-renders.
+const ActualCell: React.FC<{ item: InventoryItem; onCommit: (v: number) => void; className: string }> = ({ item, onCommit, className }) => {
+  const stored = item.salePrice || 0;
+  const [val, setVal] = useState(stored ? String(stored) : '');
+  useEffect(() => { setVal(stored ? String(stored) : ''); }, [stored, item.soldDate]);
+  const commit = () => { const n = parseFloat(val) || 0; if (n !== stored) onCommit(n); };
+  return (
+    <input type="number" inputMode="decimal" value={val}
+      placeholder={!item.soldDate && !val ? '—' : undefined}
+      onChange={e => setVal(e.target.value)}
+      onBlur={commit}
+      onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+      className={className} />
+  );
+};
+
+// Date cell: shows a muted dash instead of the browser's literal "yyyy-mm-dd"
+// placeholder when empty (consistent with how blank Profit renders), while
+// staying a real date picker on focus.
+const DateCell: React.FC<{ value?: string; onChange: (v: string) => void; className: string }> = ({ value, onChange, className }) => {
+  const [focused, setFocused] = useState(false);
+  const empty = !value;
+  return (
+    <div className="relative">
+      <input type="date" value={value ?? ''}
+        onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
+        onChange={e => onChange(e.target.value)}
+        className={`${className} ${empty && !focused ? 'text-transparent' : ''}`} />
+      {empty && !focused && <span className="absolute inset-0 flex items-center px-2 text-slate-300 dark:text-slate-600 pointer-events-none">–</span>}
+    </div>
+  );
+};
+
 const DEVICE_TYPES: DeviceType[] = ['Phone', 'Tablet', 'Laptop', 'Console', 'Watch', 'Other'];
 const CONDITIONS = ['New', 'Like New', 'Excellent', 'Good', 'Fair', 'For Parts'];
 const STATUS_OPTS: { value: DeviceStatus; label: string }[] = [
@@ -260,7 +298,10 @@ export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, a
   const deviceRows = useMemo(() => {
     let r = inventory.filter(i => kindOf(i) === 'device' && matchesQuery(i));
     if (statusFilter !== 'all') r = r.filter(i => i.deviceStatus === statusFilter);
-    r = r.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    // Default order: oldest Date In first, so aging stock surfaces at the top and
+    // nothing sits forgotten at the bottom. A user's column-header sort overrides
+    // this via applySort.
+    r = r.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
     return applySort(r, DEVICE_COLS);
   }, [inventory, query, statusFilter, sort]);
   // Devices tab = current stock only: once a device is sold it drops out of here
@@ -806,7 +847,7 @@ const Sheet: React.FC<{
           </colgroup>
           <thead className="sticky top-0 z-20 bg-slate-50 dark:bg-slate-800">
             <tr className="text-[10px] uppercase tracking-wider text-slate-500 dark:text-slate-400 font-semibold">
-              <th style={{ left: 0 }} className="px-2 py-2 text-center border-b border-slate-200 dark:border-slate-700 sticky !z-30 bg-slate-50 dark:bg-slate-800">
+              <th style={{ left: 0, top: 0 }} className="px-2 py-2 text-center border-b border-slate-200 dark:border-slate-700 sticky !z-30 bg-slate-50 dark:bg-slate-800">
                 <div className="flex items-center gap-1 justify-center">
                   <button onClick={() => onToggleAll(rows)}>{allSel ? <CheckSquare className="w-4 h-4 text-indigo-500" /> : <Square className="w-4 h-4 text-slate-400" />}</button>
                   <span>Actions</span>
@@ -814,9 +855,9 @@ const Sheet: React.FC<{
               </th>
               {cols.map(c => (
                 <th key={c.key}
-                  style={c.frozen ? { left: `var(--l-${c.key})`, position: 'sticky' as const } : undefined}
+                  style={c.frozen ? { left: `var(--l-${c.key})`, top: 0, position: 'sticky' as const } : { top: 0 }}
                   onClick={() => onSort(c.key)}
-                  className={`relative px-2 py-2 border-b border-slate-200 dark:border-slate-700 cursor-pointer select-none hover:text-indigo-600 ${c.align === 'right' ? 'text-right' : 'text-left'} ${c.frozen ? 'z-30 bg-slate-50 dark:bg-slate-800' : ''}`}>
+                  className={`relative px-2 py-2 border-b border-slate-200 dark:border-slate-700 cursor-pointer select-none hover:text-indigo-600 sticky top-0 ${c.align === 'right' ? 'text-right' : 'text-left'} ${c.frozen ? 'z-30 bg-slate-50 dark:bg-slate-800' : 'z-20 bg-slate-50 dark:bg-slate-800'}`}>
                   <span className="inline-flex items-center gap-1">{c.label}{sort?.key === c.key && (sort.dir === 'asc' ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />)}</span>
                   {onResize && (
                     <span onMouseDown={e => startResize(e, c)} onClick={e => e.stopPropagation()} onDoubleClick={e => { e.stopPropagation(); onResetWidth?.(c.key); }}
@@ -827,7 +868,7 @@ const Sheet: React.FC<{
                   )}
                 </th>
               ))}
-              <th aria-hidden className="border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800" />
+              <th aria-hidden style={{ top: 0 }} className="sticky top-0 z-20 border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800" />
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -884,19 +925,25 @@ const Sheet: React.FC<{
                             {c.options!.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                           </select>
                         )
+                      ) : c.key === 'salePrice' ? (
+                        // Actual: editable directly (records a private/off-POS sale).
+                        // Commits on blur so the row isn't marked sold mid-keystroke;
+                        // stays blank until a real sale exists.
+                        <ActualCell item={i} onCommit={v => onUpdate(i.id, 'salePrice', v)}
+                          className={`${cellBase} ${emph(c)} text-right font-mono dark:[color-scheme:dark]`} />
+                      ) : c.type === 'date' ? (
+                        // Date shows a dash placeholder (not the native yyyy-mm-dd) when empty.
+                        <DateCell value={(i[c.key as keyof InventoryItem] as any) ?? ''}
+                          onChange={v => onUpdate(i.id, c.key as keyof InventoryItem, v)}
+                          className={`${cellBase} ${emph(c)} dark:[color-scheme:dark]`} />
                       ) : (
                         <div className="relative">
                           {low && c.key === 'quantity' && <AlertTriangle className="w-3 h-3 text-rose-500 absolute right-1 top-1/2 -translate-y-1/2 pointer-events-none" />}
-                          {/* Actual (salePrice) stays blank until a real sale is recorded (Date
-                              Sold set), so an unsold device never shows a placeholder price. */}
-                          {(() => { const unsoldActual = c.key === 'salePrice' && !i.soldDate; return (
-                          <input type={c.type === 'number' ? 'number' : c.type === 'date' ? 'date' : 'text'}
-                            value={unsoldActual ? '' : ((i[c.key as keyof InventoryItem] as any) ?? (c.type === 'number' ? 0 : ''))}
-                            placeholder={unsoldActual ? '—' : undefined}
+                          <input type={c.type === 'number' ? 'number' : 'text'}
+                            value={(i[c.key as keyof InventoryItem] as any) ?? (c.type === 'number' ? 0 : '')}
                             title={c.type === 'text' ? String((i[c.key as keyof InventoryItem] as any) ?? '') : undefined}
                             onChange={e => onUpdate(i.id, c.key as keyof InventoryItem, c.type === 'number' ? (parseFloat(e.target.value) || 0) : e.target.value)}
                             className={`${cellBase} ${emph(c)} ${c.align === 'right' ? 'text-right font-mono' : ''} ${c.key === 'sku' ? 'font-mono text-xs' : ''} dark:[color-scheme:dark]`} />
-                          ); })()}
                         </div>
                       )}
                     </td>

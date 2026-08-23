@@ -7,7 +7,7 @@ import { Repair, RepairBatch, Customer, AuditEntry, RepairStatus, RepairType, De
 import {
   REPAIR_STATUSES, REPAIR_STATUS_CELL,
   balanceOwing, batchTotals, matchesRepair, matchesBatch, canSaveRepair,
-  partsTotal, repairPartsCost, repairLabor, completeRepair,
+  partsTotal, repairPartsCost, repairLabor, completeRepair, isRepairOpen,
 } from '../domain/repairs';
 import { newId } from '../domain/ids';
 import { printRetailReceipt, printBatchIntake, printBatchInvoice, printBatchSummary, printDeviceSheet } from '../services/repairPrint';
@@ -96,9 +96,16 @@ export const RepairsView: React.FC<Props> = (props) => {
 
   // "Tickets" = standalone repairs (retail + internal). Wholesale devices live
   // under their batches, not in this list.
+  // Default order: open (active) tickets first, oldest → newest, so the ticket
+  // that has waited longest is at the top and nothing active sits forgotten at
+  // the bottom; completed/cancelled tickets sink below (also oldest-first). The
+  // status filter and search remain the manual controls.
   const retail = useMemo(() => repairs.filter(r => r.type !== 'wholesale')
     .filter(r => matchFilter(r) && (!query || matchesRepair(r, query)))
-    .sort((a, b) => b.createdAt - a.createdAt), [repairs, statusFilter, query]);
+    .sort((a, b) => {
+      const ao = isRepairOpen(a) ? 0 : 1, bo = isRepairOpen(b) ? 0 : 1;
+      return ao !== bo ? ao - bo : a.createdAt - b.createdAt;
+    }), [repairs, statusFilter, query]);
 
   const visibleBatches = useMemo(() => batches
     .filter(b => !query || matchesBatch(b, query) || repairs.some(r => r.batchId === b.id && matchesRepair(r, query)))

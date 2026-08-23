@@ -40,6 +40,25 @@ export const stockChange = (sold: number | undefined): number => -Math.max(0, so
 // True when an on-hand quantity has gone below zero — i.e. the item was oversold.
 export const isOversold = (onHand: number | undefined): boolean => (onHand ?? 0) < 0;
 
+// --- Direct sale (outside Quick Sale) -------------------------------------
+//
+// A device can be sold outside the normal Quick Sale checkout — a private sale,
+// a trade show, etc. Recording an Actual sale price directly on the device row
+// or the edit form should mark it sold the SAME way Quick Sale does (soldDate +
+// deviceStatus 'sold'), so it drops out of active stock AND is picked up by the
+// dashboard / P&L / analytics, which recognize any device carrying a soldDate
+// that isn't already part of a POS transaction. Without this a directly-entered
+// price would be a silent second path that never shows up in reporting.
+//
+// Idempotent and side-effect free: only devices with a positive Actual price are
+// stamped; an explicit soldDate the user picked is preserved, otherwise it
+// defaults to today. Accessories and unpriced devices pass through unchanged.
+export const applyDirectSale = (i: InventoryItem, now: number = Date.now()): InventoryItem => {
+  if (kindOf(i) !== 'device' || (i.salePrice || 0) <= 0) return i;
+  const soldDate = i.soldDate || new Date(now).toISOString().split('T')[0];
+  return { ...i, soldDate, deviceStatus: 'sold' };
+};
+
 // --- Device display name --------------------------------------------------
 //
 // The single source of truth for the "Item" value shown for a device. Every
