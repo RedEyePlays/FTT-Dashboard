@@ -131,7 +131,9 @@ const DEVICE_COLS: Col[] = [
   { key: 'targetSalePrice', label: 'Target', type: 'number', w: 78, min: 44, max: 130, align: 'right' },
   // Actual = the real sale price the device sold for; drives the Profit column.
   { key: 'salePrice', label: 'Actual', type: 'number', w: 78, min: 44, max: 130, align: 'right' },
-  { key: '__profit', label: 'Profit', type: 'computed', w: 84, min: 48, max: 130, align: 'right', compute: i => i.salePrice ? money(profitOf(i)) : '—', sortVal: profitOf },
+  // Profit is only real once the device has actually sold (Date Sold set). Until
+  // then show '—' — never compute a profit against an unrealized/placeholder price.
+  { key: '__profit', label: 'Profit', type: 'computed', w: 84, min: 48, max: 130, align: 'right', compute: i => i.soldDate ? money(profitOf(i)) : '—', sortVal: i => (i.soldDate ? profitOf(i) : 0) },
   // Sale group. (The device Status column is intentionally not shown in the
   // grid — status is still stored and driven via the Filters, the item form,
   // bulk actions, sold detection and analytics.)
@@ -865,7 +867,7 @@ const Sheet: React.FC<{
                           className={`${cellBase} ${emph(c)}`} />
                       ) : c.type === 'computed' ? (
                         <div title={c.compute!(i)} className={`px-2 py-1.5 text-sm truncate ${c.align === 'right' ? 'text-right font-mono' : ''} ${emph(c)}`}>
-                          {c.key === '__profit' && i.salePrice ? <span className={profitOf(i) >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}>{c.compute!(i)}</span> : c.compute!(i)}
+                          {c.key === '__profit' && i.soldDate ? <span className={profitOf(i) >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}>{c.compute!(i)}</span> : c.compute!(i)}
                         </div>
                       ) : c.readOnly ? (
                         <div title={String((i[c.key as keyof InventoryItem] as any) ?? '')} className={`px-2 py-1.5 text-sm truncate ${emph(c)}`}>{((i[c.key as keyof InventoryItem] as any) ?? '') || '—'}</div>
@@ -885,11 +887,16 @@ const Sheet: React.FC<{
                       ) : (
                         <div className="relative">
                           {low && c.key === 'quantity' && <AlertTriangle className="w-3 h-3 text-rose-500 absolute right-1 top-1/2 -translate-y-1/2 pointer-events-none" />}
+                          {/* Actual (salePrice) stays blank until a real sale is recorded (Date
+                              Sold set), so an unsold device never shows a placeholder price. */}
+                          {(() => { const unsoldActual = c.key === 'salePrice' && !i.soldDate; return (
                           <input type={c.type === 'number' ? 'number' : c.type === 'date' ? 'date' : 'text'}
-                            value={(i[c.key as keyof InventoryItem] as any) ?? (c.type === 'number' ? 0 : '')}
+                            value={unsoldActual ? '' : ((i[c.key as keyof InventoryItem] as any) ?? (c.type === 'number' ? 0 : ''))}
+                            placeholder={unsoldActual ? '—' : undefined}
                             title={c.type === 'text' ? String((i[c.key as keyof InventoryItem] as any) ?? '') : undefined}
                             onChange={e => onUpdate(i.id, c.key as keyof InventoryItem, c.type === 'number' ? (parseFloat(e.target.value) || 0) : e.target.value)}
                             className={`${cellBase} ${emph(c)} ${c.align === 'right' ? 'text-right font-mono' : ''} ${c.key === 'sku' ? 'font-mono text-xs' : ''} dark:[color-scheme:dark]`} />
+                          ); })()}
                         </div>
                       )}
                     </td>
