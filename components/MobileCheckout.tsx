@@ -2,9 +2,9 @@ import React, { useEffect, useState } from 'react';
 import {
   ScanLine, Search, Plus, Minus, Trash2, Smartphone, Package, Sparkles, ShoppingCart,
   User, Phone, Mail, ChevronLeft, CheckCircle, Banknote, CreditCard, Blend, Send,
-  Printer, RotateCcw, Eye, X, AlertTriangle, FileText,
+  Printer, RotateCcw, Eye, X, AlertTriangle, FileText, Wrench,
 } from 'lucide-react';
-import { InventoryItem, Customer, DeviceType } from '../types';
+import { InventoryItem, Customer, DeviceType, Repair } from '../types';
 import { RepairSalePrefill } from '../domain/repairs';
 import { getDeviceDisplayName } from '../domain/inventory';
 import { useCheckout, CartCheckout, CustomCategory, CUSTOM_DEVICE_TYPES } from '../hooks/useCheckout';
@@ -15,6 +15,7 @@ import { ResponsiveDialog, EmptyState } from './responsive';
 interface Props {
   inventory: InventoryItem[];
   customers?: Customer[];
+  repairs?: Repair[];
   initialCustomer?: Customer;
   onConsumeInitial?: () => void;
   initialRepair?: RepairSalePrefill;
@@ -84,7 +85,7 @@ export const MobileCheckout: React.FC<Props> = (props) => {
           ) : null}
         </div>
         <div className="grid grid-cols-1 gap-2 w-full max-w-sm">
-          <button onClick={cx.printReceipt} className="flex items-center justify-center gap-2 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold"><Printer className="w-4 h-4" /> Print Receipt</button>
+          <button onClick={() => cx.printReceipt()} className="flex items-center justify-center gap-2 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold"><Printer className="w-4 h-4" /> Print Receipt</button>
           <button onClick={cx.printInvoice} className="flex items-center justify-center gap-2 py-3 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-sm font-medium"><FileText className="w-4 h-4" /> Print Invoice</button>
           <button onClick={cx.emailReceipt} className="flex items-center justify-center gap-2 py-3 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-sm font-medium"><Mail className="w-4 h-4" /> Email Receipt</button>
           <div className="grid grid-cols-2 gap-2">
@@ -143,10 +144,23 @@ export const MobileCheckout: React.FC<Props> = (props) => {
             <input inputMode="search" value={cx.scan} autoFocus
               onChange={e => { cx.setScan(e.target.value); cx.setScanMsg(null); }}
               onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); cx.handleScan(cx.scan); } }}
-              placeholder="Scan a code, or type a name to search"
+              placeholder="Scan a code, or type a name / repair # to search"
               className="w-full pl-10 pr-3 py-3.5 bg-white dark:bg-slate-900 border-2 border-indigo-200 dark:border-indigo-800 rounded-xl text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-            {cx.scan.trim() && cx.scanResults.length > 0 && (
+            {cx.scan.trim() && (cx.scanResults.length > 0 || cx.repairMatches.length > 0) && (
               <div className="absolute left-0 right-0 top-full mt-1 z-20 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl overflow-hidden">
+                {cx.repairMatches.map(r => (
+                  <button key={r.id} onClick={() => cx.addRepair(r)}
+                    className="w-full text-left px-3 py-2.5 flex items-center justify-between gap-2 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 border-b border-slate-50 dark:border-slate-800 last:border-0">
+                    <span className="min-w-0 flex items-center gap-2">
+                      <Wrench className="w-4 h-4 text-emerald-500 shrink-0" />
+                      <span className="min-w-0">
+                        <span className="block text-sm text-slate-800 dark:text-slate-100 truncate">{r.repairNumber || 'Repair'}{r.customerName ? ` · ${r.customerName}` : ''}</span>
+                        <span className="block text-[11px] text-slate-400 truncate">{[r.brand, r.model].filter(Boolean).join(' ') || r.deviceType || 'Device'}{r.issue ? ` — ${r.issue}` : ''} · ${(r.repairPrice || 0).toFixed(2)}</span>
+                      </span>
+                    </span>
+                    <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded shrink-0 bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400">Repair</span>
+                  </button>
+                ))}
                 {cx.scanResults.map(i => (
                   <button key={i.id} onClick={() => cx.addScanResult(i)}
                     className="w-full text-left px-3 py-2.5 flex items-center justify-between gap-2 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 border-b border-slate-50 dark:border-slate-800 last:border-0">
@@ -286,6 +300,10 @@ export const MobileCheckout: React.FC<Props> = (props) => {
               </>
             )}
           </div>
+          <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
+            <input type="checkbox" checked={cx.printReceiptOnComplete} onChange={e => cx.setPrintReceiptOnComplete(e.target.checked)} className="rounded" />
+            <Printer className="w-4 h-4 text-slate-400" /> Print receipt on completion
+          </label>
         </div>
       )}
 

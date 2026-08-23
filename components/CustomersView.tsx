@@ -12,6 +12,8 @@ import {
 } from '../domain/customers';
 import { REPAIR_STATUS_CELL, REPAIR_STATUS_LABEL } from '../domain/repairs';
 import { printRetailReceipt } from '../services/repairPrint';
+import { printSalesReceipt } from '../services/salesReceipt';
+import { getStoreProfile } from './SettingsModal';
 import { useIsMobile } from '../hooks/useMediaQuery';
 import { MobileDataCard, CardRow, EmptyState } from './responsive';
 
@@ -483,6 +485,10 @@ const InvoiceModal: React.FC<{ tx: SalesTransaction; customer: Customer; canView
       {tx.tax ? <Row label="Tax" value={money(tx.tax)} /> : null}
       <div className="flex items-center justify-between py-1 text-base font-bold"><span>Total</span><span>{money(tx.totalPaid)}</span></div>
       {canViewProfit && <Row label="Profit" value={money(tx.netProfit)} />}
+      <button onClick={() => printSalesReceipt(tx, { storeName: getStoreProfile().storeName })}
+        className="w-full mt-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700">
+        <Printer className="w-4 h-4" /> Print Receipt
+      </button>
       {onVoid && (
         <div className="pt-2 mt-1 border-t border-slate-100 dark:border-slate-800">
           <button
