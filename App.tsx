@@ -50,7 +50,7 @@ import { AppSettings } from './domain/settings';
 import { listWorkspaceBackups, getBackupDownloadUrl } from './services/backupStorage';
 import { useWorkspaceData } from './hooks/useWorkspaceData';
 import { newId, mkActivity } from './domain/ids';
-import { collectionFor, stockChange } from './domain/inventory';
+import { collectionFor, stockChange, applyDirectSale } from './domain/inventory';
 import { canVoidSale, canReturnSale, returnRefund, saleAccessoryRestock } from './domain/pos';
 import { expectedCashForDate, expectedEndingCash, sumDrawerEntries } from './domain/reports';
 import type { CashMovementKind } from './components/LogCashMovementModal';
@@ -358,7 +358,10 @@ const App: React.FC = () => {
   };
 
   // --- Inventory writes go straight to Firestore; live subs update the UI ---
-  const handleSaveItem = (item: InventoryItem) => {
+  const handleSaveItem = (raw: InventoryItem) => {
+    // Entering an Actual sale price on the form records a direct sale (stamps
+    // soldDate + marks sold) so it counts in reporting like a Quick Sale.
+    const item = applyDirectSale(raw);
     const isNew = !dataRef.current.some(i => i.id === item.id);
     if (uid && (isNew ? allow('inventory.add') : allow('inventory.edit'))) {
       if (isNew) { logActivity(`${item.sku || item.item || 'Item'} added`); audit('inventory.add', collectionFor(item), item.id, undefined, item); }
@@ -385,7 +388,11 @@ const App: React.FC = () => {
     if (field === 'deviceStatus') logActivity(`${label} marked ${String(value).replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}`);
     else if (field === 'quantity') { logActivity(`${label} quantity updated`); audit('accessory.quantity', collectionFor(target), id, { quantity: target.quantity }, { quantity: value }); }
     audit('inventory.edit', collectionFor(target), id, { [field]: (target as any)[field] }, { [field]: value });
-    saveItem(uid, collectionFor(target), { ...target, [field]: value });
+    // Entering an Actual sale price inline records a direct sale: stamp soldDate +
+    // mark sold (like Quick Sale) so it leaves active stock and feeds reporting.
+    const next = applyDirectSale({ ...target, [field]: value });
+    if (field === 'salePrice' && next.soldDate && !target.soldDate) logActivity(`${label} sold for $${(next.salePrice || 0).toFixed(2)}`);
+    saveItem(uid, collectionFor(target), next);
   };
 
   // Update an entire row
@@ -404,12 +411,17 @@ const App: React.FC = () => {
   };
 
   // Add or update a single inventory item (device or accessory) from InventoryView
-  const handleSaveInventoryItem = (item: InventoryItem) => {
+  const handleSaveInventoryItem = (raw: InventoryItem) => {
     if (!uid) return;
+    // Entering an Actual sale price records a direct sale (private sale, trade
+    // show, …): stamp soldDate + mark sold so it leaves active stock and feeds
+    // the dashboard/P&L the same way Quick Sale does.
+    const item = applyDirectSale(raw);
     const isNew = !dataRef.current.some(i => i.id === item.id);
     if (isNew ? !allow('inventory.add') : !allow('inventory.edit')) return;
     if (isNew) { logActivity(`${item.sku || item.item || 'Item'} added`); audit('inventory.add', collectionFor(item), item.id, undefined, item); }
     else audit('inventory.edit', collectionFor(item), item.id);
+    if (item.soldDate && !raw.soldDate) logActivity(`${item.sku || item.item || 'Device'} sold for $${(item.salePrice || 0).toFixed(2)}`);
     saveItem(uid, collectionFor(item), item);
   };
 

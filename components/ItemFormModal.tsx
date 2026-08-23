@@ -190,6 +190,17 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, runners, 
                 <Field label="Target Sale Price ($)" value={f.targetSalePrice} onChange={setNum('targetSalePrice')} type="number" />
                 <Field label="Date In" value={f.date} onChange={setText('date')} type="date" />
               </div>
+              {/* Record a sale made outside Quick Sale (private sale, trade show, …).
+                  Entering an Actual price marks the device sold on save (Date Sold
+                  defaults to today if blank) so it counts in the dashboard/P&L. */}
+              <div className="grid grid-cols-3 gap-4">
+                <Field label="Actual Sale Price ($)" value={f.salePrice} onChange={setNum('salePrice')} type="number" placeholder="0.00" />
+                <Field label="Date Sold" value={f.soldDate} onChange={setText('soldDate')} type="date" />
+                <Field label="Sold To" value={f.soldTo} onChange={setText('soldTo')} placeholder="Buyer (optional)" />
+              </div>
+              {(f.salePrice || 0) > 0 && !f.soldDate && (
+                <p className="text-xs text-emerald-600 dark:text-emerald-400 -mt-1">Saving will mark this device sold today and include it in revenue/profit totals.</p>
+              )}
             </>
           ) : (
             <div className="grid grid-cols-3 gap-4">

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { kindOf, isDevice, isAccessory, collectionFor, stockChange, isOversold, getDeviceDisplayName } from './inventory';
+import { kindOf, isDevice, isAccessory, collectionFor, stockChange, isOversold, getDeviceDisplayName, applyDirectSale } from './inventory';
 import { InventoryItem } from '../types';
 
 const base: InventoryItem =
@@ -17,6 +17,29 @@ describe('guards', () => {
     expect(isDevice(base)).toBe(true);
     expect(isAccessory(base)).toBe(false);
     expect(isAccessory({ ...base, kind: 'accessory' })).toBe(true);
+  });
+});
+
+describe('applyDirectSale', () => {
+  const NOW = new Date('2026-08-23T12:00:00Z').getTime();
+  it('stamps soldDate (today) + marks sold when an Actual price is entered', () => {
+    const out = applyDirectSale({ ...base, kind: 'device', salePrice: 300, soldDate: '' }, NOW);
+    expect(out.soldDate).toBe('2026-08-23');
+    expect(out.deviceStatus).toBe('sold');
+    expect(out.salePrice).toBe(300);
+  });
+  it('preserves an explicit soldDate the user picked', () => {
+    const out = applyDirectSale({ ...base, kind: 'device', salePrice: 300, soldDate: '2026-08-01' }, NOW);
+    expect(out.soldDate).toBe('2026-08-01');
+    expect(out.deviceStatus).toBe('sold');
+  });
+  it('leaves unpriced devices untouched (no phantom sale)', () => {
+    const item = { ...base, kind: 'device' as const, salePrice: 0, soldDate: '' };
+    expect(applyDirectSale(item, NOW)).toEqual(item);
+  });
+  it('never touches accessories', () => {
+    const acc = { ...base, kind: 'accessory' as const, salePrice: 50, soldDate: '' };
+    expect(applyDirectSale(acc, NOW)).toEqual(acc);
   });
 });
 
