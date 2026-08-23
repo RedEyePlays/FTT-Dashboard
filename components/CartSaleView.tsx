@@ -2,9 +2,9 @@ import React from 'react';
 import {
   ShoppingCart, Trash2, X, Search, User, Phone, FileText, Mail,
   Banknote, CreditCard, Blend, CheckCircle, Package, Smartphone, ScanLine, History,
-  Printer, Eye, RotateCcw, QrCode, Sparkles, AlertTriangle,
+  Printer, Eye, RotateCcw, QrCode, Sparkles, AlertTriangle, Wrench,
 } from 'lucide-react';
-import { InventoryItem, Customer, DeviceType } from '../types';
+import { InventoryItem, Customer, DeviceType, Repair } from '../types';
 import { RepairSalePrefill } from '../domain/repairs';
 import { getDeviceDisplayName } from '../domain/inventory';
 import { LabelModal } from './LabelModal';
@@ -17,6 +17,7 @@ export type { CartCheckout } from '../hooks/useCheckout';
 interface Props {
   inventory: InventoryItem[];
   customers?: Customer[];
+  repairs?: Repair[];           // ready repairs, searchable/selectable in-cart
   initialCustomer?: Customer;   // pre-seed the sale customer (CRM quick action)
   onConsumeInitial?: () => void;
   initialRepair?: RepairSalePrefill;   // pre-seed a repair checkout (Repairs → Check Out)
@@ -45,7 +46,8 @@ export const CartSaleView: React.FC<Props> = (props) => {
     lineSubtotal, subtotal, purchaseCostTotal, repairCostTotal, totalCost, taxApplies, tax, platformFee, totalPaid, netProfit,
     isZeroPricedDevice, hasZeroPricedDevice, allowZeroPrice, setAllowZeroPrice, blockedByZeroPrice,
     addDevice, addAccessory, updateLine, removeLine, num, addCustomItem, handleScan, handleCheckout, reset, printReceipt, printInvoice, emailReceipt, soldDeviceRows,
-    scanResults, addScanResult,
+    scanResults, addScanResult, repairMatches, addRepair,
+    printReceiptOnComplete, setPrintReceiptOnComplete,
   } = cx;
 
   const inputCls = 'w-full px-2 py-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500';
@@ -74,7 +76,7 @@ export const CartSaleView: React.FC<Props> = (props) => {
         </div>
 
         <div className="grid grid-cols-2 gap-2 w-full max-w-sm mt-2">
-          <button onClick={printReceipt} className="flex items-center justify-center gap-2 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium"><Printer className="w-4 h-4" /> Print Receipt</button>
+          <button onClick={() => printReceipt()} className="flex items-center justify-center gap-2 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium"><Printer className="w-4 h-4" /> Print Receipt</button>
           <button onClick={printInvoice} title="Full-page invoice with your store details — for a business/wholesale buyer"
             className="flex items-center justify-center gap-2 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-lg text-sm font-medium hover:border-indigo-400"><FileText className="w-4 h-4" /> Print Invoice</button>
           <button onClick={emailReceipt} title={lastTx.customerEmail ? `Email to ${lastTx.customerEmail}` : 'No email captured — opens a blank To: field'}
@@ -136,13 +138,28 @@ export const CartSaleView: React.FC<Props> = (props) => {
             value={scan}
             onChange={e => { setScan(e.target.value); cx.setScanMsg(null); }}
             onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleScan(scan); } }}
-            placeholder="Scan a SKU/IMEI/barcode, or type a name to search"
+            placeholder="Scan a SKU/IMEI/barcode, or type a name / repair # to search"
             className="w-full pl-9 pr-3 py-3 bg-white dark:bg-slate-900 border-2 border-indigo-200 dark:border-indigo-800 rounded-xl text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
           />
           {/* Typed-search pick-list: substring matches to click-to-add (partial
-              matches never auto-add). Exact scans still add instantly on Enter. */}
-          {scan.trim() && scanResults.length > 0 && (
+              matches never auto-add). Exact scans still add instantly on Enter.
+              Ready repairs matching the query appear here too, so a repair can be
+              checked out straight from Quick Sale. */}
+          {scan.trim() && (scanResults.length > 0 || repairMatches.length > 0) && (
             <div className="absolute left-0 right-0 top-full mt-1 z-20 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg shadow-xl overflow-hidden">
+              {repairMatches.map(r => (
+                <button key={r.id} onClick={() => addRepair(r)}
+                  className="w-full text-left px-3 py-2 flex items-center justify-between gap-2 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 border-b border-slate-50 dark:border-slate-800 last:border-0">
+                  <span className="min-w-0 flex items-center gap-2">
+                    <Wrench className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                    <span className="min-w-0">
+                      <span className="block text-sm text-slate-800 dark:text-slate-100 truncate">{r.repairNumber || 'Repair'}{r.customerName ? ` · ${r.customerName}` : ''}</span>
+                      <span className="block text-[11px] text-slate-400 truncate">{[r.brand, r.model].filter(Boolean).join(' ') || r.deviceType || 'Device'}{r.issue ? ` — ${r.issue}` : ''} · ${(r.repairPrice || 0).toFixed(2)}</span>
+                    </span>
+                  </span>
+                  <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded shrink-0 bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400">Repair</span>
+                </button>
+              ))}
               {scanResults.map(i => (
                 <button key={i.id} onClick={() => addScanResult(i)}
                   className="w-full text-left px-3 py-2 flex items-center justify-between gap-2 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 border-b border-slate-50 dark:border-slate-800 last:border-0">
@@ -326,6 +343,11 @@ export const CartSaleView: React.FC<Props> = (props) => {
             </label>
           </div>
         )}
+
+        <label className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300 cursor-pointer select-none">
+          <input type="checkbox" checked={printReceiptOnComplete} onChange={e => setPrintReceiptOnComplete(e.target.checked)} className="rounded" />
+          <Printer className="w-3.5 h-3.5 text-slate-400" /> Print receipt on completion
+        </label>
 
         <button onClick={handleCheckout} disabled={cart.length === 0 || blockedByZeroPrice}
           className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold rounded-xl text-sm transition-colors flex items-center justify-center gap-2">

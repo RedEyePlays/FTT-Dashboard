@@ -1106,6 +1106,7 @@ const App: React.FC = () => {
             <QuickSaleView
               inventory={data}
               customers={customers}
+              repairs={repairs}
               initialCustomer={prefillCustomer}
               onConsumeInitial={() => setPrefillCustomer(undefined)}
               initialRepair={prefillRepairSale ? repairSalePrefill(prefillRepairSale) : undefined}

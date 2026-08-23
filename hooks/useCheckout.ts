@@ -1,10 +1,11 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
-import { InventoryItem, ItemKind, DeviceType, SalesTransaction, Customer } from '../types';
+import { InventoryItem, ItemKind, DeviceType, SalesTransaction, Customer, Repair } from '../types';
 import { getPOSSettings, getStoreProfile } from '../components/SettingsModal';
 import { newId } from '../domain/ids';
 import { kindOf, getDeviceDisplayName } from '../domain/inventory';
 import { isZeroPricedDevice as isZeroPricedLine, cartHasZeroPricedDevice, searchCheckoutInventory, salesBalanceOwing } from '../domain/pos';
-import { RepairSalePrefill } from '../domain/repairs';
+import { RepairSalePrefill, repairSalePrefill, isRepairOpen, matchesRepair } from '../domain/repairs';
+import { printSalesReceipt } from '../services/salesReceipt';
 
 // All Quick Sale / checkout state, pricing math and the commit-payload builder
 // live here so the desktop CartSaleView and the mobile step flow share ONE
@@ -48,6 +49,9 @@ export interface CartLine {
 interface Args {
   inventory: InventoryItem[];
   customers?: Customer[];
+  // Open retail repairs, so a tech can find and add a "Ready for Pickup" repair
+  // to the sale directly from Quick Sale (same result as the ticket's Check Out).
+  repairs?: Repair[];
   initialCustomer?: Customer;
   onConsumeInitial?: () => void;
   // Pre-seed the cart as a repair checkout (device/parts/labor/price as one
@@ -64,7 +68,7 @@ interface Args {
 
 const uid = newId;
 
-export function useCheckout({ inventory, customers = [], initialCustomer, onConsumeInitial, initialRepair, onConsumeInitialRepair, onComplete, onGenerateSku }: Args) {
+export function useCheckout({ inventory, customers = [], repairs = [], initialCustomer, onConsumeInitial, initialRepair, onConsumeInitialRepair, onComplete, onGenerateSku }: Args) {
   const [cart, setCart] = useState<CartLine[]>([]);
   const [picker, setPicker] = useState<null | ItemKind>(null);
   const [search, setSearch] = useState('');
@@ -85,6 +89,35 @@ export function useCheckout({ inventory, customers = [], initialCustomer, onCons
   // the built transaction can link back to it (transaction.repairId) and the app
   // can mark the repair complete + linked once the sale commits.
   const [linkedRepairId, setLinkedRepairId] = useState<string | undefined>(undefined);
+  // Print the receipt automatically when the sale completes. Opt-in — off by
+  // default so completing a sale never force-opens a print dialog; the tech can
+  // tick it to auto-print, or use the Print Receipt button on the done screen.
+  const [printReceiptOnComplete, setPrintReceiptOnComplete] = useState(false);
+
+  // Seed the cart from a repair checkout: one service line priced at the full
+  // repair price (cost = parts cost, so profit = labor) plus the repair's
+  // customer. `replace` starts a fresh cart (the ticket's Check Out flow);
+  // otherwise the repair is appended to whatever's already in the cart (added
+  // from the Quick Sale search) and the customer is only filled if still blank.
+  const seedRepairPrefill = (p: RepairSalePrefill, replace: boolean) => {
+    const c = p.customer;
+    if (c && (replace || !customerName.trim())) {
+      setCustomerName(c.name || '');
+      setCustomerPhone(c.phone || '');
+      setCustomerEmail(c.email || '');
+      setSelectedCustomerId(c.id);
+    }
+    setLinkedRepairId(p.repairId);
+    const line: CartLine = {
+      key: uid(), inventoryId: '', kind: 'accessory', name: p.lineName, code: '',
+      quantity: 1, maxQty: 1, unitPrice: p.repairPrice, purchaseCost: p.partsCost,
+      repairCost: 0, taxable: true, discount: 0, isCustom: true, category: 'service', addToInventory: false,
+    };
+    setCart(prev => replace ? [line] : [...prev, line]);
+    // Any deposit was collected earlier — note it for the tech rather than
+    // re-collecting it or deferring recognition as a layaway.
+    if (p.deposit > 0) setPaymentNotes(`Repair deposit of $${p.deposit.toFixed(2)} already collected — balance due $${Math.max(0, p.repairPrice - p.deposit).toFixed(2)}.`);
+  };
 
   useEffect(() => {
     if (!initialCustomer) return;
@@ -96,27 +129,10 @@ export function useCheckout({ inventory, customers = [], initialCustomer, onCons
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialCustomer?.id]);
 
-  // Seed the cart from a repair checkout: one service line priced at the full
-  // repair price (cost = parts cost, so profit = labor) plus the repair's
-  // customer. The full price is recognized now — any deposit was collected
-  // earlier, so it's noted for the tech rather than re-collected or deferred as a
-  // layaway (which would postpone recognizing the repair's revenue).
+  // Seed the cart from the ticket's Check Out flow (fresh cart).
   useEffect(() => {
     if (!initialRepair) return;
-    const c = initialRepair.customer;
-    if (c) {
-      setCustomerName(c.name || '');
-      setCustomerPhone(c.phone || '');
-      setCustomerEmail(c.email || '');
-      setSelectedCustomerId(c.id);
-    }
-    setLinkedRepairId(initialRepair.repairId);
-    setCart([{
-      key: uid(), inventoryId: '', kind: 'accessory', name: initialRepair.lineName, code: '',
-      quantity: 1, maxQty: 1, unitPrice: initialRepair.repairPrice, purchaseCost: initialRepair.partsCost,
-      repairCost: 0, taxable: true, discount: 0, isCustom: true, category: 'service', addToInventory: false,
-    }]);
-    if (initialRepair.deposit > 0) setPaymentNotes(`Repair deposit of $${initialRepair.deposit.toFixed(2)} already collected — balance due $${Math.max(0, initialRepair.repairPrice - initialRepair.deposit).toFixed(2)}.`);
+    seedRepairPrefill(initialRepair, true);
     onConsumeInitialRepair?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialRepair?.repairId]);
@@ -277,6 +293,26 @@ export function useCheckout({ inventory, customers = [], initialCustomer, onCons
     limit: 6,
   });
 
+  // Checkout-eligible repairs: retail tickets that are still open (not
+  // completed/cancelled/picked-up) and not already checked out via a sale — the
+  // same set the ticket's Check Out button acts on. A repair already added to
+  // this cart is excluded so it can't be added twice.
+  const eligibleRepairs = useMemo(
+    () => repairs.filter(r => r.type === 'retail' && isRepairOpen(r) && !r.salesTransactionId && r.id !== linkedRepairId),
+    [repairs, linkedRepairId],
+  );
+  // Typed-search matches among those repairs (by repair #, customer, phone,
+  // IMEI/serial, model, issue) — surfaced in the same pick-list as inventory.
+  const repairMatches = scan.trim() ? eligibleRepairs.filter(r => matchesRepair(r, scan)).slice(0, 6) : [];
+
+  // Add a ready repair to the cart (from the Quick Sale search) — same pre-fill
+  // as the ticket's Check Out: a service line at the repair price (cost = parts)
+  // plus the customer. Appends to the current cart rather than replacing it.
+  const addRepair = (r: Repair) => {
+    seedRepairPrefill(repairSalePrefill(r), false);
+    setScan(''); setScanMsg(null);
+  };
+
   const handleScan = (raw: string) => {
     const v = raw.trim();
     if (!v) return;
@@ -295,9 +331,13 @@ export function useCheckout({ inventory, customers = [], initialCustomer, onCons
       setScan(''); setScanMsg(null); return;
     }
 
+    // Exact repair match (repair number or device IMEI/serial) adds it instantly.
+    const rep = eligibleRepairs.find(r => eq(r.repairNumber) || eq(r.imei));
+    if (rep) { addRepair(rep); return; }
+
     // No exact match: leave the pick-list of substring matches visible (don't
     // auto-add — several items may match). Only warn when there's nothing at all.
-    if (scanResults.length === 0) { setScanMsg(`No item found for "${v}"`); setScan(''); }
+    if (scanResults.length === 0 && repairMatches.length === 0) { setScanMsg(`No item found for "${v}"`); setScan(''); }
     else setScanMsg(null);
   };
 
@@ -389,6 +429,9 @@ export function useCheckout({ inventory, customers = [], initialCustomer, onCons
     onComplete({ soldRows, accessoryQtys, transaction, customer, newInventoryItems });
     setLastTx(transaction);
     setConfirmed(true);
+    // Opt-in auto-print: only when the tech ticked "Print receipt" at checkout.
+    // Prints the just-built transaction (state's lastTx isn't set yet this tick).
+    if (printReceiptOnComplete) printReceipt(transaction);
   };
 
   const reset = () => {
@@ -401,33 +444,11 @@ export function useCheckout({ inventory, customers = [], initialCustomer, onCons
     setTimeout(() => scanRef.current?.focus(), 0);
   };
 
-  const printReceipt = () => {
-    if (!lastTx) return;
-    const rows = lastTx.lines.map(l => `<tr><td>${l.name}</td><td style="text-align:center">${l.quantity}</td><td style="text-align:right">$${(l.quantity * l.unitPrice).toFixed(2)}</td></tr>`).join('');
-    const payParts = lastTx.paymentMethod === 'mixed'
-      ? [['Cash', lastTx.cashAmount], ['Card', lastTx.cardAmount], ['E-transfer', lastTx.etransferAmount]].filter(([, v]) => v).map(([k, v]) => `${k}: $${Number(v).toFixed(2)}`).join(' · ')
-      : (lastTx.paymentMethod || '');
-    const win = window.open('', '_blank', 'width=380,height=640');
-    if (!win) return;
-    win.document.write(`<html><head><title>Receipt ${lastTx.id}</title>
-      <style>body{font-family:'Inter',system-ui,Arial,sans-serif;width:280px;margin:0 auto;padding:12px;color:#000;}
-      h2{text-align:center;margin:0 0 2px;} .muted{color:#555;font-size:11px;text-align:center;margin-bottom:8px;}
-      table{width:100%;border-collapse:collapse;font-size:12px;} td{padding:2px 0;} .tot td{border-top:1px dashed #999;padding-top:4px;}
-      .row{display:flex;justify-content:space-between;font-size:12px;} .b{font-weight:800;}</style></head>
-      <body><h2>FlipThatTech</h2><div class="muted">Receipt ${lastTx.id}<br/>${lastTx.date}</div>
-      <table>${rows}</table>
-      <div style="margin-top:8px">
-        <div class="row"><span>Subtotal</span><span>$${lastTx.subtotal.toFixed(2)}</span></div>
-        <div class="row"><span>Tax</span><span>$${lastTx.tax.toFixed(2)}</span></div>
-        <div class="row b" style="margin-top:4px"><span>Total</span><span>$${lastTx.totalPaid.toFixed(2)}</span></div>
-        ${lastTx.balanceOwing ? `<div class="row" style="margin-top:4px"><span>Deposit Paid</span><span>$${(lastTx.deposit || 0).toFixed(2)}</span></div><div class="row b" style="color:#b45309"><span>Balance Owing</span><span>$${lastTx.balanceOwing.toFixed(2)}</span></div>` : ''}
-        <div class="row" style="margin-top:6px;color:#555"><span>Payment</span><span>${payParts}</span></div>
-        ${lastTx.customerName ? `<div class="row" style="color:#555"><span>Customer</span><span>${lastTx.customerName}</span></div>` : ''}
-      </div>
-      <p style="text-align:center;font-size:11px;color:#555;margin-top:12px">Thank you!</p>
-      <script>window.onload=function(){window.print();setTimeout(function(){window.close();},300);};</script>
-      </body></html>`);
-    win.document.close();
+  // Print the thermal receipt via the shared service (same output as the
+  // reprint-from-history action). Defaults to the just-completed sale.
+  const printReceipt = (tx: SalesTransaction | null = lastTx) => {
+    if (!tx) return;
+    printSalesReceipt(tx, { storeName: getStoreProfile().storeName });
   };
 
   // Print a formal, full-page (8.5×11) invoice suitable for a business/wholesale
@@ -550,6 +571,8 @@ export function useCheckout({ inventory, customers = [], initialCustomer, onCons
     isZeroPricedDevice, hasZeroPricedDevice, allowZeroPrice, setAllowZeroPrice, blockedByZeroPrice,
     addDevice, addAccessory, updateLine, removeLine, num, addCustomItem, handleScan, handleCheckout, reset, printReceipt, printInvoice, emailReceipt, soldDeviceRows,
     scanResults, addScanResult,
+    eligibleRepairs, repairMatches, addRepair,
+    printReceiptOnComplete, setPrintReceiptOnComplete,
   };
 }
 

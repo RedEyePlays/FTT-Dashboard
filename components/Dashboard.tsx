@@ -2,10 +2,12 @@ import React, { useMemo } from 'react';
 import { InventoryItem, SalesTransaction, ActivityEntry, Repair, RepairBatch } from '../types';
 import { kindOf } from '../domain/inventory';
 import { isInProgress } from '../domain/repairs';
+import { printSalesReceipt } from '../services/salesReceipt';
+import { getStoreProfile } from './SettingsModal';
 import {
   DollarSign, TrendingUp, CalendarDays, CalendarRange, Calendar, Smartphone, Package,
   Tag, Wrench, ShoppingCart, AlertTriangle, Clock, Receipt, Activity as ActivityIcon,
-  Store, BarChart3, ArrowRight, ClipboardCheck, PackageSearch, PackageCheck, Building2, CheckCircle2, CalendarClock,
+  Store, BarChart3, ArrowRight, ClipboardCheck, PackageSearch, PackageCheck, Building2, CheckCircle2, CalendarClock, Printer,
 } from 'lucide-react';
 
 interface DashboardProps {
@@ -214,9 +216,14 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, salesTransactions, a
                       <span>{t.date}</span>·<span className="inline-flex items-center gap-1"><Store className="w-3 h-3" />{platformLabel(t.platformName)}</span>·<span>{t.lines?.length || 0} item{(t.lines?.length || 0) !== 1 ? 's' : ''}</span>
                     </p>
                   </div>
-                  <div className="text-right shrink-0">
-                    <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">{money2(t.totalPaid)}</p>
-                    <p className={`text-xs font-medium ${(t.netProfit || 0) >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>{mask(`${(t.netProfit || 0) >= 0 ? '+' : ''}${money2(t.netProfit)}`)}</p>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <div className="text-right">
+                      <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">{money2(t.totalPaid)}</p>
+                      <p className={`text-xs font-medium ${(t.netProfit || 0) >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>{mask(`${(t.netProfit || 0) >= 0 ? '+' : ''}${money2(t.netProfit)}`)}</p>
+                    </div>
+                    <button onClick={() => printSalesReceipt(t, { storeName: getStoreProfile().storeName })}
+                      title="Print receipt" aria-label="Print receipt"
+                      className="p-1.5 rounded-lg text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/20"><Printer className="w-4 h-4" /></button>
                   </div>
                 </div>
               ))}
