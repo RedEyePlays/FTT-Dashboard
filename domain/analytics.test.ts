@@ -143,6 +143,62 @@ describe('device category from the sales line (custom device sales)', () => {
   });
 });
 
+describe('repair checked out through Quick Sale', () => {
+  // A repair completed via Quick Sale becomes a SalesTransaction carrying its
+  // repairId, and the repair record is stamped with the matching
+  // salesTransactionId. The money must be counted ONCE (via the sale) — in the
+  // headline totals AND the Repairs category — never doubled.
+  const input: AnalyticsInput = {
+    ...base,
+    salesTransactions: [
+      tx({ id: 'sale-r', date: '2026-07-20', subtotal: 180, totalPaid: 180, netProfit: 140,
+        purchaseCost: 40, totalCost: 40, cashAmount: 180, paymentMethod: 'cash', repairId: 'r1',
+        lines: [{ kind: 'accessory', name: 'Repair · iPhone — Screen', quantity: 1, unitPrice: 180, inventoryId: '' } as any] }),
+    ],
+    repairs: [
+      // Same repair, now linked to the sale above (parts $40, price $180).
+      rep({ id: 'r1', repairPrice: 180, partsCost: 40, createdAt: NOW, completedAt: NOW, status: 'picked_up', salesTransactionId: 'sale-r' }),
+    ],
+  };
+  const a = computeAnalytics(presetRange('today', NOW), input, NOW);
+
+  it('recognizes the repair once in the headline revenue/profit', () => {
+    expect(a.revenue).toBe(180);
+    expect(a.grossProfit).toBe(140);
+    expect(a.salesCount).toBe(1);
+    expect(a.devicesSold).toBe(0); // a repair line is not a device sale
+  });
+
+  it('attributes it to Repairs — not Accessories — with no double count', () => {
+    expect(a.categories.find(c => c.name === 'Repairs')?.revenue).toBe(180);
+    expect(a.categories.find(c => c.name === 'Accessories')).toBeUndefined();
+    // repairRevenue/profit reflect the single recognition (via the sale)
+    expect(a.repairRevenue).toBe(180);
+    expect(a.repairPartsCost).toBe(40);
+    expect(a.repairProfit).toBe(140);
+    expect(a.topRepairTypes.find(t => t.name === 'Screen')?.revenue).toBe(180);
+  });
+
+  it('still counts the repair operationally (created + completed)', () => {
+    expect(a.repairsCount).toBe(1);
+    expect(a.eod.repairsCompleted).toBe(1);
+  });
+
+  it('does not double-count when both a linked repair and a separate open repair exist', () => {
+    const a2 = computeAnalytics(presetRange('today', NOW), {
+      ...input,
+      repairs: [
+        ...input.repairs,
+        rep({ id: 'r2', repairPrice: 100, partsCost: 20, createdAt: NOW }), // open, unlinked
+      ],
+    }, NOW);
+    // headline = the one sale (180); Repairs category = sale (180) + open record (100)
+    expect(a2.revenue).toBe(180);
+    expect(a2.repairRevenue).toBe(280);
+    expect(a2.categories.find(c => c.name === 'Repairs')?.revenue).toBe(280);
+  });
+});
+
 describe('inventory snapshot', () => {
   it('values cost/retail, low + out of stock', () => {
     const input: AnalyticsInput = {

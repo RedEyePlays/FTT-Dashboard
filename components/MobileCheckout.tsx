@@ -5,6 +5,7 @@ import {
   Printer, RotateCcw, Eye, X, AlertTriangle, FileText,
 } from 'lucide-react';
 import { InventoryItem, Customer, DeviceType } from '../types';
+import { RepairSalePrefill } from '../domain/repairs';
 import { getDeviceDisplayName } from '../domain/inventory';
 import { useCheckout, CartCheckout, CustomCategory, CUSTOM_DEVICE_TYPES } from '../hooks/useCheckout';
 import { CustomerSearchInput } from './CustomerSearchInput';
@@ -16,6 +17,8 @@ interface Props {
   customers?: Customer[];
   initialCustomer?: Customer;
   onConsumeInitial?: () => void;
+  initialRepair?: RepairSalePrefill;
+  onConsumeInitialRepair?: () => void;
   onComplete: (payload: CartCheckout) => void;
   // Accepted for a uniform QuickSaleView call; the mobile flow shows no
   // cost/profit figures, so there is nothing to mask here.

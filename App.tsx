@@ -29,7 +29,7 @@ const AuditLogView = lazy(() => import('./components/AuditLogView').then(m => ({
 const TimeClockView = lazy(() => import('./components/TimeClockView').then(m => ({ default: m.TimeClockView })));
 import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, Runner, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission, Repair, RepairBatch, TimeEntry, PayPeriodPaid, BreakReason, SalesTransaction, CashReconciliation } from './types';
 import { skuPrefix, nextSku } from './services/sku';
-import { REPAIR_PREFIX, BATCH_PREFIX, computeWarrantyUntil, applyTechEdit, TECH_EDITABLE_FIELDS } from './domain/repairs';
+import { REPAIR_PREFIX, BATCH_PREFIX, computeWarrantyUntil, applyTechEdit, TECH_EDITABLE_FIELDS, repairSalePrefill, completeRepairSale } from './domain/repairs';
 import { RepairsView } from './components/RepairsView';
 import { TechRepairsView } from './components/TechRepairsView';
 import { CustomersView } from './components/CustomersView';
@@ -104,6 +104,10 @@ const App: React.FC = () => {
   // A new, prefilled repair to open in the Repairs view (e.g. an internal repair
   // started from an inventory device row).
   const [prefillRepair, setPrefillRepair] = useState<Repair | undefined>(undefined);
+  // A retail repair being checked out through Quick Sale (Repairs → Check Out).
+  // Seeds the POS cart with the repair's service line + customer; on sale commit
+  // the repair is stamped complete and linked to the transaction.
+  const [prefillRepairSale, setPrefillRepairSale] = useState<Repair | undefined>(undefined);
   const [drawerOpen, setDrawerOpen] = useState(false);
   // Deep-link targets from Global Search (open a specific record on the target view).
   const [focusRepairId, setFocusRepairId] = useState<string | undefined>(undefined);
@@ -428,6 +432,22 @@ const App: React.FC = () => {
       }),
     ];
     commitSale(uid, { soldRows: payload.soldRows, accessoryUpdates, transaction: payload.transaction, customer: payload.customer, activity }).catch(e => console.error('Sale commit failed', e));
+
+    // Repair checkout: this sale recognized a repair's revenue/profit, so stamp
+    // the repair complete and link it to the transaction. Analytics reads that
+    // link to count the repair's money once (via the sale), never twice.
+    const repairId = payload.transaction.repairId;
+    if (repairId && !isLayaway) {
+      const rep = repairsRef.current.find(r => r.id === repairId);
+      if (rep) {
+        const terminal = rep.type === 'retail' ? 'picked_up' : 'completed';
+        const done = completeRepairSale(rep, payload.transaction.id, Date.now(), terminal);
+        saveItem(uid, 'repairs', done);
+        logActivity(`${done.repairNumber} checked out (${payload.transaction.customerName || 'customer'})`);
+        audit('repair.status_change', 'repair', done.id, { status: rep.status }, { status: terminal });
+        audit('repair.completed', 'repair', done.id, undefined, { salesTransactionId: payload.transaction.id });
+      }
+    }
 
     // Custom items opted into inventory: fill a real SKU and persist to the right collection
     (payload.newInventoryItems || []).forEach(async item => {
@@ -848,6 +868,9 @@ const App: React.FC = () => {
   // Quick actions from a customer profile: seed the target view with the customer.
   const startSaleFor = (c: Customer) => { setPrefillCustomer(c); navigate('pos'); };
   const createRepairFor = (c: Customer) => { setPrefillCustomer(c); navigate('repairs'); };
+  // Check out a retail repair through Quick Sale: hand the repair to the POS view,
+  // which pre-seeds the cart with its service line + customer.
+  const checkoutRepairViaSale = (r: Repair) => { setPrefillRepairSale(r); navigate('pos'); };
 
   // Start an internal repair ticket for a shop-owned device, prefilled from the
   // inventory row and linked via inventoryId. Cost/price is NOT synced back to
@@ -1033,6 +1056,7 @@ const App: React.FC = () => {
               onGenerateRepairNumber={handleGenRepairNumber}
               onGenerateBatchNumber={handleGenBatchNumber}
               onSaveRepair={handleSaveRepair}
+              onCheckoutViaSale={allow('sales.complete') ? checkoutRepairViaSale : undefined}
               onDeleteRepair={handleDeleteRepair}
               onSaveBatch={handleSaveBatch}
               onDeleteBatch={handleDeleteBatch}
@@ -1072,6 +1096,8 @@ const App: React.FC = () => {
               customers={customers}
               initialCustomer={prefillCustomer}
               onConsumeInitial={() => setPrefillCustomer(undefined)}
+              initialRepair={prefillRepairSale ? repairSalePrefill(prefillRepairSale) : undefined}
+              onConsumeInitialRepair={() => setPrefillRepairSale(undefined)}
               onSellCart={handleSellCart}
               canViewProfit={allow('reports.profit.detailed')}
               onGenerateSku={(deviceType) => handleGenerateSku('device', deviceType)}

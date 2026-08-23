@@ -269,6 +269,10 @@ export interface SalesTransaction {
   balanceOwing?: number;
   lines: SalesLine[];
   notes?: string;
+  // Set when this sale is a repair checkout routed through Quick Sale — links the
+  // transaction back to its Repair. Lets analytics attribute the money to Repairs
+  // (not devices/accessories) and avoid double-counting the same repair.
+  repairId?: string;
   // Voiding (same-day mistake) and returning (later refund) both keep the record
   // for audit history rather than deleting it. Absent status = a normal completed
   // sale (legacy rows have no field).
@@ -443,6 +447,10 @@ export interface Repair {
   status: RepairStatus;
   photos?: string[];            // reserved for future uploads
   completedAt?: number;
+  // Set when the repair was checked out through Quick Sale — links to the
+  // SalesTransaction that recognized its revenue/profit. Analytics reads this to
+  // count the repair's money once (via the sale) instead of twice.
+  salesTransactionId?: string;
 }
 
 export type RepairBatchStatus = 'active' | 'completed' | 'cancelled';

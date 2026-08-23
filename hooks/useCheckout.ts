@@ -4,6 +4,7 @@ import { getPOSSettings, getStoreProfile } from '../components/SettingsModal';
 import { newId } from '../domain/ids';
 import { kindOf, getDeviceDisplayName } from '../domain/inventory';
 import { isZeroPricedDevice as isZeroPricedLine, cartHasZeroPricedDevice, searchCheckoutInventory, salesBalanceOwing } from '../domain/pos';
+import { RepairSalePrefill } from '../domain/repairs';
 
 // All Quick Sale / checkout state, pricing math and the commit-payload builder
 // live here so the desktop CartSaleView and the mobile step flow share ONE
@@ -49,6 +50,11 @@ interface Args {
   customers?: Customer[];
   initialCustomer?: Customer;
   onConsumeInitial?: () => void;
+  // Pre-seed the cart as a repair checkout (device/parts/labor/price as one
+  // service line + the repair's customer), so a "Ready for Pickup" repair is
+  // completed through the same Quick Sale flow as a regular in-store sale.
+  initialRepair?: RepairSalePrefill;
+  onConsumeInitialRepair?: () => void;
   onComplete: (payload: CartCheckout) => void;
   // Allocate a real SKU the same way normal device intake does (App's atomic
   // generator). Used to give a custom device opted into inventory a proper SKU
@@ -58,7 +64,7 @@ interface Args {
 
 const uid = newId;
 
-export function useCheckout({ inventory, customers = [], initialCustomer, onConsumeInitial, onComplete, onGenerateSku }: Args) {
+export function useCheckout({ inventory, customers = [], initialCustomer, onConsumeInitial, initialRepair, onConsumeInitialRepair, onComplete, onGenerateSku }: Args) {
   const [cart, setCart] = useState<CartLine[]>([]);
   const [picker, setPicker] = useState<null | ItemKind>(null);
   const [search, setSearch] = useState('');
@@ -75,6 +81,10 @@ export function useCheckout({ inventory, customers = [], initialCustomer, onCons
   const [customerEmail, setCustomerEmail] = useState('');
   const [customerNotes, setCustomerNotes] = useState('');
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | undefined>(undefined);
+  // The repair being checked out (if this cart was seeded from a repair). Kept so
+  // the built transaction can link back to it (transaction.repairId) and the app
+  // can mark the repair complete + linked once the sale commits.
+  const [linkedRepairId, setLinkedRepairId] = useState<string | undefined>(undefined);
 
   useEffect(() => {
     if (!initialCustomer) return;
@@ -85,6 +95,31 @@ export function useCheckout({ inventory, customers = [], initialCustomer, onCons
     onConsumeInitial?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialCustomer?.id]);
+
+  // Seed the cart from a repair checkout: one service line priced at the full
+  // repair price (cost = parts cost, so profit = labor) plus the repair's
+  // customer. The full price is recognized now — any deposit was collected
+  // earlier, so it's noted for the tech rather than re-collected or deferred as a
+  // layaway (which would postpone recognizing the repair's revenue).
+  useEffect(() => {
+    if (!initialRepair) return;
+    const c = initialRepair.customer;
+    if (c) {
+      setCustomerName(c.name || '');
+      setCustomerPhone(c.phone || '');
+      setCustomerEmail(c.email || '');
+      setSelectedCustomerId(c.id);
+    }
+    setLinkedRepairId(initialRepair.repairId);
+    setCart([{
+      key: uid(), inventoryId: '', kind: 'accessory', name: initialRepair.lineName, code: '',
+      quantity: 1, maxQty: 1, unitPrice: initialRepair.repairPrice, purchaseCost: initialRepair.partsCost,
+      repairCost: 0, taxable: true, discount: 0, isCustom: true, category: 'service', addToInventory: false,
+    }]);
+    if (initialRepair.deposit > 0) setPaymentNotes(`Repair deposit of $${initialRepair.deposit.toFixed(2)} already collected — balance due $${Math.max(0, initialRepair.repairPrice - initialRepair.deposit).toFixed(2)}.`);
+    onConsumeInitialRepair?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialRepair?.repairId]);
 
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'mixed'>('cash');
   const [cashTaxStatus, setCashTaxStatus] = useState<'none' | 'separate' | 'included'>('none');
@@ -348,6 +383,7 @@ export function useCheckout({ inventory, customers = [], initialCustomer, onCons
       balanceOwing: isLayaway ? balanceOwing : undefined,
       lines: cart.map(l => ({ inventoryId: l.inventoryId, kind: l.kind, name: l.name, sku: l.code, quantity: l.quantity, unitPrice: l.unitPrice, deviceType: l.kind === 'device' ? l.deviceType : undefined })),
       notes: paymentNotes || undefined,
+      repairId: linkedRepairId,
     };
 
     onComplete({ soldRows, accessoryQtys, transaction, customer, newInventoryItems });
@@ -356,7 +392,7 @@ export function useCheckout({ inventory, customers = [], initialCustomer, onCons
   };
 
   const reset = () => {
-    setCart([]); setCustomerName(''); setCustomerPhone(''); setCustomerEmail(''); setCustomerNotes(''); setSelectedCustomerId(undefined);
+    setCart([]); setLinkedRepairId(undefined); setCustomerName(''); setCustomerPhone(''); setCustomerEmail(''); setCustomerNotes(''); setSelectedCustomerId(undefined);
     setPaymentNotes(''); setPaymentMethod('cash'); setCashTaxStatus('none');
     setCashAmount(''); setCardAmount(''); setEtransferAmount(''); setTaxCollected(''); setDeposit('');
     setPlatformName('None / In-Store'); setPlatformFeePercent('0');

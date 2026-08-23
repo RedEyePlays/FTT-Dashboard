@@ -131,6 +131,14 @@ export function computeAnalytics(range: DateRange, input: AnalyticsInput, now: n
   };
   const devAgg = new Map<string, NamedStat>();
   const accAgg = new Map<string, NamedStat>();
+  const rtAgg = new Map<string, NamedStat>();
+  // Repairs checked out through Quick Sale carry a `repairId` on their sales
+  // transaction. Their money is recognized here as a sale (headline revenue /
+  // profit / payments), and attributed to the Repairs category + repair
+  // aggregates below — NOT to devices/accessories — and the matching repair
+  // records are excluded from the independent repair tally to avoid double count.
+  const repairById = new Map(repairs.map(r => [r.id, r]));
+  let repairTxnRevenue = 0, repairTxnProfit = 0, repairTxnPartsCost = 0;
 
   for (const t of txns) {
     revenue += t.subtotal || 0;
@@ -142,6 +150,19 @@ export function computeAnalytics(range: DateRange, input: AnalyticsInput, now: n
     else if (t.paymentMethod === 'cash') payments.cash += t.totalPaid || 0;
     else if (t.paymentMethod === 'card') payments.card += t.totalPaid || 0;
     else payments.other += t.totalPaid || 0;
+
+    // Repair checkout: attribute the whole sale to Repairs (its single service
+    // line is priced at the repair price, cost = parts), keeping it out of the
+    // device/accessory breakdowns.
+    if (t.repairId) {
+      const rev = t.subtotal || 0, profit = t.netProfit || 0;
+      repairTxnRevenue += rev; repairTxnProfit += profit; repairTxnPartsCost += t.purchaseCost || 0;
+      bumpCat('Repairs', rev, profit, 1);
+      const key = ((repairById.get(t.repairId)?.issue) || 'Repair').trim().slice(0, 40) || 'Repair';
+      const a = rtAgg.get(key) || { name: key, revenue: 0, profit: 0, count: 0 };
+      a.revenue += rev; a.profit += profit; a.count += 1; rtAgg.set(key, a);
+      continue;
+    }
 
     // per-line revenue + proportional profit allocation
     const lineRevs = (t.lines || []).map(l => (l.unitPrice || 0) * (l.quantity || 0));
@@ -182,15 +203,22 @@ export function computeAnalytics(range: DateRange, input: AnalyticsInput, now: n
   // --- Repairs ---
   const repairsInRange = repairs.filter(r => inRange(r.createdAt || ymdMs(r.date), range));
   const completedInRange = repairs.filter(r => (r.completedAt && inRange(r.completedAt, range)) || (!r.completedAt && (r.status === 'completed' || r.status === 'picked_up') && inRange(ymdMs(r.date), range)));
-  const repairRevenue = repairsInRange.reduce((s, r) => s + (r.repairPrice || 0), 0);
-  const repairPartsCost = repairsInRange.reduce((s, r) => s + partsCostOf(r), 0);
-  const repairProfit = repairRevenue - repairPartsCost;
+  // Repairs whose revenue was recognized through a Quick Sale checkout are already
+  // counted above (via their sales transaction). Only the rest — open tickets,
+  // legacy completions, wholesale/internal work — are tallied from the records so
+  // the money is never counted twice.
+  const unlinkedInRange = repairsInRange.filter(r => !r.salesTransactionId);
+  const recRepairRevenue = unlinkedInRange.reduce((s, r) => s + (r.repairPrice || 0), 0);
+  const recRepairPartsCost = unlinkedInRange.reduce((s, r) => s + partsCostOf(r), 0);
+  const repairRevenue = repairTxnRevenue + recRepairRevenue;
+  const repairPartsCost = repairTxnPartsCost + recRepairPartsCost;
+  const repairProfit = repairTxnProfit + (recRepairRevenue - recRepairPartsCost);
   const repairLabourRevenue = repairRevenue - repairPartsCost; // parts billed at cost → labour = margin
-  bumpCat('Repairs', repairRevenue, repairProfit, repairsInRange.length);
+  bumpCat('Repairs', recRepairRevenue, recRepairRevenue - recRepairPartsCost, unlinkedInRange.length);
 
-  // repair types (group by normalized issue)
-  const rtAgg = new Map<string, NamedStat>();
-  for (const r of repairsInRange) {
+  // repair types (group by normalized issue) — sale-linked repairs already added
+  // to rtAgg in the transaction loop; add the remaining record-based ones here.
+  for (const r of unlinkedInRange) {
     const key = (r.issue || 'Repair').trim().slice(0, 40) || 'Repair';
     const a = rtAgg.get(key) || { name: key, revenue: 0, profit: 0, count: 0 };
     a.revenue += r.repairPrice || 0; a.profit += (r.repairPrice || 0) - partsCostOf(r); a.count += 1; rtAgg.set(key, a);
