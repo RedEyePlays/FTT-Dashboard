@@ -194,6 +194,8 @@ export type Permission =
   | 'reports.profit.detailed'   // full historical breakdowns + per-record cost/profit — owner default
   | 'users.manage'    // full user/role management (owner)
   | 'users.tech'      // manage technician accounts only (owner + manager)
+  | 'users.pin'        // assign/update PINs for roles below the assigner (owner + manager; see domain/pin.ts canAssignPin)
+  | 'security.manage'  // configure the auto-lock inactivity timer (owner + manager)
   | 'timeclock.use'   // clock in/out & take breaks (every active staff member)
   | 'payroll.manage'  // view the biweekly pay-period summary (owner + manager)
   | 'closeout.view'   // end-of-day close-out summary (owner + manager)
@@ -210,6 +212,15 @@ export interface AppUser {
   notifSeenTs?: number;  // newest activity ts this user has seen (per-user read state)
   lastLogin?: number;    // epoch ms (best-effort, updated client-side)
   createdAt?: number;
+  // Auto-lock PIN — assigned by a manager/owner (see domain/pin.ts), used only to
+  // unlock the inactivity lock screen. Hashed (PBKDF2-SHA256) + salted; the
+  // plaintext PIN is never stored or transmitted.
+  pinHash?: string;
+  pinSalt?: string;
+  pinIterations?: number;
+  pinUpdatedAt?: number;      // epoch ms
+  pinUpdatedBy?: string;      // uid of the manager/owner who set it
+  pinUpdatedByEmail?: string;
 }
 
 export interface WorkspaceInvite {

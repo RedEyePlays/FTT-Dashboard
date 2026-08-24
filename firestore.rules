@@ -29,6 +29,17 @@ service cloud.firestore {
     // may write general shop data.
     function isStaffOf(ws) { return activeMemberOf(ws) && myRole() != 'technician'; }
 
+    // Role rank for PIN assignment (domain/pin.ts mirrors this exactly): an
+    // owner/manager may set a PIN only for someone STRICTLY below their own
+    // rank — never a peer or above, so a manager can never PIN another manager
+    // or the owner, and nobody can PIN themselves via this path.
+    function roleRank(r) {
+      return r == 'owner' ? 3 : r == 'manager' ? 2 : r == 'employee' ? 1 : 0;
+    }
+    function pinKeys() {
+      return ['pinHash', 'pinSalt', 'pinIterations', 'pinUpdatedAt', 'pinUpdatedBy', 'pinUpdatedByEmail'];
+    }
+
     // The only repair fields a technician may change (mirrors TECH_EDITABLE_FIELDS
     // in domain/repairs.ts, plus the completedAt/warrantyUntil the app stamps when
     // a device is picked up).
@@ -138,6 +149,15 @@ service cloud.firestore {
             && request.resource.data.role == 'technician'
             && request.resource.data.workspaceId == resource.data.workspaceId
             && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['disabled']))
+        // PIN assignment: owner/manager may set the PIN fields ONLY on a user
+        // strictly below their own role rank (never a peer or above), and only
+        // those fields — no role/workspace/disabled/pay change riding along.
+        || (hasProfile() && (myRole() == 'owner' || myRole() == 'manager')
+            && resource.data.workspaceId == myWorkspace()
+            && roleRank(resource.data.role) < roleRank(myRole())
+            && request.resource.data.role == resource.data.role
+            && request.resource.data.workspaceId == resource.data.workspaceId
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(pinKeys()))
       );
 
       allow delete: if hasProfile() && myRole() == 'owner' && resource.data.workspaceId == myWorkspace();

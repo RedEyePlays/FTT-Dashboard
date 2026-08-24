@@ -51,6 +51,18 @@ describe('can()', () => {
     expect(can('technician', 'closeout.view')).toBe(false);
   });
 
+  it('assigning PINs (users.pin) and the auto-lock timer (security.manage) are owner + manager only', () => {
+    expect(can('owner', 'users.pin')).toBe(true);
+    expect(can('manager', 'users.pin')).toBe(true);
+    expect(can('employee', 'users.pin')).toBe(false);
+    expect(can('technician', 'users.pin')).toBe(false);
+
+    expect(can('owner', 'security.manage')).toBe(true);
+    expect(can('manager', 'security.manage')).toBe(true);
+    expect(can('employee', 'security.manage')).toBe(false);
+    expect(can('technician', 'security.manage')).toBe(false);
+  });
+
   it('the two profit tiers are independent — summary access does not imply detailed', () => {
     // A manager (summary by default, no override) sees period totals but not
     // the deep historical/cost breakdowns.
