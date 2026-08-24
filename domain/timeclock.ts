@@ -1,4 +1,4 @@
-import { TimeEntry, TimeBreak, BreakReason } from '../types';
+import { TimeEntry, TimeBreak, BreakReason, TimeEntryCorrection } from '../types';
 
 // --- Time clock: pure hours & pay math --------------------------------------
 //
@@ -196,6 +196,47 @@ export const entriesOnDate = (entries: TimeEntry[], dateISO: string): TimeEntry[
   entries
     .filter(e => e.clockIn != null && toISODate(e.clockIn) === dateISO)
     .sort((a, b) => a.clockIn - b.clockIn);
+
+// --- Missed clock-out flag + correction --------------------------------------
+//
+// An entry is "missed" when it's still open (no clockOut) but its clock-in was
+// on an earlier calendar day than `now` — i.e. someone forgot to clock out
+// before leaving, rather than simply still being on shift today.
+
+export const isMissedClockOut = (e: TimeEntry, now: number): boolean =>
+  isClockedIn(e) && toISODate(e.clockIn) !== toISODate(now);
+
+/** Every open shift left over from a previous day, oldest clock-in first. */
+export const missedClockOuts = (entries: TimeEntry[], now: number): TimeEntry[] =>
+  entries.filter(e => isMissedClockOut(e, now)).sort((a, b) => a.clockIn - b.clockIn);
+
+/** A corrected clock-out must land after the clock-in and not be in the future. */
+export const isValidClockOutCorrection = (entry: TimeEntry, newClockOut: number, now: number): boolean =>
+  isFinite(newClockOut) && newClockOut > entry.clockIn && newClockOut <= now;
+
+/**
+ * Apply a manual clock-out correction, appending to the entry's correction
+ * history rather than silently replacing the old value — the original stays
+ * visible (via `fromClockOut`) alongside who made the change and when. Pure:
+ * returns the next entry, does not touch Firestore.
+ */
+export const correctClockOut = (
+  entry: TimeEntry,
+  newClockOut: number,
+  correctedBy: string,
+  now: number,
+  opts?: { correctedByEmail?: string; note?: string },
+): TimeEntry => {
+  const correction: TimeEntryCorrection = {
+    correctedBy,
+    correctedByEmail: opts?.correctedByEmail,
+    correctedAt: now,
+    fromClockOut: entry.clockOut,
+    toClockOut: newClockOut,
+    note: opts?.note,
+  };
+  return { ...entry, clockOut: newClockOut, corrections: [...(entry.corrections || []), correction] };
+};
 
 // --- Pay --------------------------------------------------------------------
 

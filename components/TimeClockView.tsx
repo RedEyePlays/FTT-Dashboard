@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
-  Clock, LogIn, LogOut, Coffee, Play, Check, DollarSign, CalendarDays, Undo2, X,
+  Clock, LogIn, LogOut, Coffee, Play, Check, DollarSign, CalendarDays, Undo2, X, AlertTriangle, Wrench, History,
 } from 'lucide-react';
 import { AppUser, TimeEntry, PayPeriodPaid, BreakReason } from '../types';
 import {
   BREAK_REASONS, breakReasonLabel, openEntryFor, isOnBreak, workedHours, isClockedIn,
   hoursInRange, dayRange, weekRange, recentPayPeriods, periodPayFor, paidKey,
   toISODate, periodEndInclusive, entriesOnDate, PayPeriod,
+  isMissedClockOut, missedClockOuts, isValidClockOutCorrection,
 } from '../domain/timeclock';
 
 interface Props {
@@ -22,6 +23,9 @@ interface Props {
   onEndBreak: () => void;
   onMarkPaid: (userId: string, period: PayPeriod) => void;
   onUnmarkPaid: (userId: string, period: PayPeriod) => void;
+  // Owner/manager only (same gate as canManagePayroll): fix a shift someone
+  // forgot to clock out of, by setting its actual clock-out time.
+  onCorrectClockOut: (entryId: string, newClockOut: number) => void;
 }
 
 const fmtHours = (h: number): string => `${h.toFixed(2)} h`;
@@ -49,7 +53,7 @@ const fmtElapsed = (ms: number): string => {
 
 export const TimeClockView: React.FC<Props> = ({
   me, users, entries, payPeriods, canManagePayroll, canMarkPaid,
-  onClockIn, onClockOut, onStartBreak, onEndBreak, onMarkPaid, onUnmarkPaid,
+  onClockIn, onClockOut, onStartBreak, onEndBreak, onMarkPaid, onUnmarkPaid, onCorrectClockOut,
 }) => {
   const now = useNow();
   const [showBreakPicker, setShowBreakPicker] = useState(false);
@@ -125,7 +129,7 @@ export const TimeClockView: React.FC<Props> = ({
       </div>
 
       {/* --- Daily hours (owner/manager) ---------------------------------- */}
-      {canManagePayroll && <DailyHours users={users} entries={entries} now={now} />}
+      {canManagePayroll && <DailyHours users={users} entries={entries} now={now} onCorrectClockOut={onCorrectClockOut} />}
 
       {/* --- Payroll summary (owner/manager) ------------------------------ */}
       {canManagePayroll && (
@@ -247,14 +251,47 @@ const BreakPickerModal: React.FC<{ onClose: () => void; onPick: (r: BreakReason,
 // only (rendered behind canManagePayroll).
 const fmtTime = (ms: number): string => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-const DailyHours: React.FC<{ users: AppUser[]; entries: TimeEntry[]; now: number }> = ({ users, entries, now }) => {
+// <input type="datetime-local"> uses local wall-clock time with no timezone —
+// pad manually rather than slicing an ISO string (which is UTC).
+const toLocalInput = (ms: number): string => {
+  const d = new Date(ms);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+};
+const fromLocalInput = (v: string): number => new Date(v).getTime();
+
+// Inline editor for correcting one shift's clock-out (missed or otherwise
+// wrong). Owner/manager only — rendered behind the same gate as Daily Hours.
+const ClockOutFixer: React.FC<{ entry: TimeEntry; now: number; onCancel: () => void; onSave: (newClockOut: number) => void }> = ({ entry, now, onCancel, onSave }) => {
+  const [value, setValue] = useState(() => toLocalInput(entry.clockOut ?? now));
+  const parsed = fromLocalInput(value);
+  const valid = isFinite(parsed) && isValidClockOutCorrection(entry, parsed, now);
+  return (
+    <div className="flex flex-wrap items-center gap-2 bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2">
+      <span className="text-xs text-slate-500 dark:text-slate-400">Set actual clock-out for {new Date(entry.clockIn).toLocaleDateString()}:</span>
+      <input type="datetime-local" value={value} max={toLocalInput(now)} onChange={e => setValue(e.target.value)}
+        className="px-2 py-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-md text-sm text-slate-900 dark:text-slate-100 dark:[color-scheme:dark]" />
+      <button onClick={() => valid && onSave(parsed)} disabled={!valid} className="px-3 py-1 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white rounded-md text-xs font-medium">Save</button>
+      <button onClick={onCancel} className="px-3 py-1 text-xs text-slate-500 hover:text-slate-700">Cancel</button>
+      {!valid && <span className="text-xs text-rose-500">Must be after clock-in ({fmtTime(entry.clockIn)}) and not in the future.</span>}
+    </div>
+  );
+};
+
+const DailyHours: React.FC<{ users: AppUser[]; entries: TimeEntry[]; now: number; onCorrectClockOut: (entryId: string, newClockOut: number) => void }> = ({ users, entries, now, onCorrectClockOut }) => {
   const today = toISODate(now);
   const [from, setFrom] = useState(today);
   const [to, setTo] = useState(today);
+  const [fixing, setFixing] = useState<string | null>(null); // entry id being corrected
   // Normalize an inverted range so From ≤ To either way it's typed.
   const [lo, hi] = from <= to ? [from, to] : [to, from];
 
   const nameById = useMemo(() => new Map(users.map(u => [u.id, nameOf(u)])), [users]);
+
+  // Missed clock-outs are surfaced regardless of the selected date range —
+  // they need attention whether or not today's range happens to include them.
+  const missed = useMemo(() => missedClockOuts(entries, now), [entries, now]);
+  const jumpToMissed = (e: TimeEntry) => { const d = toISODate(e.clockIn); setFrom(d); setTo(d); setFixing(e.id); };
 
   // Shifts whose clock-in day falls in [lo, hi], grouped by employee, each with
   // its own day total; sorted by employee name.
@@ -288,6 +325,21 @@ const DailyHours: React.FC<{ users: AppUser[]; entries: TimeEntry[]; now: number
         </div>
       </div>
 
+      {missed.length > 0 && (
+        <div className="px-4 py-2.5 bg-amber-50 dark:bg-amber-900/20 border-b border-amber-200 dark:border-amber-800 flex flex-wrap items-center gap-2">
+          <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+          <span className="text-sm text-amber-800 dark:text-amber-300 font-medium">
+            {missed.length} missed clock-out{missed.length !== 1 ? 's' : ''} —
+          </span>
+          {missed.map(e => (
+            <button key={e.id} onClick={() => jumpToMissed(e)}
+              className="text-xs font-medium px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-300 hover:bg-amber-200 dark:hover:bg-amber-800/60">
+              {nameById.get(e.userId) || e.userId} · {toISODate(e.clockIn)}
+            </button>
+          ))}
+        </div>
+      )}
+
       {groups.length === 0 ? (
         <p className="text-sm text-slate-400 py-8 text-center">No shifts {singleDay ? 'on this day' : 'in this range'}.</p>
       ) : (
@@ -304,14 +356,47 @@ const DailyHours: React.FC<{ users: AppUser[]; entries: TimeEntry[]; now: number
                   <th className="text-left py-1 pr-4">Clock in</th><th className="text-left py-1 pr-4">Clock out</th><th className="text-right py-1">Hours</th>
                 </tr></thead>
                 <tbody className="divide-y divide-slate-50 dark:divide-slate-800/60">
-                  {g.shifts.map(e => (
-                    <tr key={e.id}>
-                      {!singleDay && <td className="py-1 pr-4 text-slate-500 dark:text-slate-400">{toISODate(e.clockIn)}</td>}
-                      <td className="py-1 pr-4 text-slate-600 dark:text-slate-300 tabular-nums">{fmtTime(e.clockIn)}</td>
-                      <td className="py-1 pr-4 text-slate-600 dark:text-slate-300 tabular-nums">{isClockedIn(e) ? <span className="text-emerald-600 dark:text-emerald-400">On the clock</span> : fmtTime(e.clockOut!)}</td>
-                      <td className="py-1 text-right text-slate-700 dark:text-slate-200 tabular-nums">{fmtHours(workedHours(e, now))}</td>
-                    </tr>
-                  ))}
+                  {g.shifts.map(e => {
+                    const stale = isMissedClockOut(e, now);
+                    const hasCorrections = (e.corrections?.length ?? 0) > 0;
+                    return (
+                      <React.Fragment key={e.id}>
+                        <tr>
+                          {!singleDay && <td className="py-1 pr-4 text-slate-500 dark:text-slate-400">{toISODate(e.clockIn)}</td>}
+                          <td className="py-1 pr-4 text-slate-600 dark:text-slate-300 tabular-nums">{fmtTime(e.clockIn)}</td>
+                          <td className="py-1 pr-4 text-slate-600 dark:text-slate-300 tabular-nums">
+                            {isClockedIn(e) ? (
+                              <span className={`inline-flex items-center gap-1 ${stale ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400'}`}>
+                                {stale && <AlertTriangle className="w-3.5 h-3.5" />}
+                                {stale ? 'Missed clock-out' : 'On the clock'}
+                              </span>
+                            ) : fmtTime(e.clockOut!)}
+                            {hasCorrections && (
+                              <span title={e.corrections!.map(c => `${c.fromClockOut ? fmtTime(c.fromClockOut) : 'open'} → ${fmtTime(c.toClockOut)} by ${c.correctedByEmail || c.correctedBy} on ${new Date(c.correctedAt).toLocaleString()}${c.note ? ` — ${c.note}` : ''}`).join('\n')}
+                                className="inline-flex items-center gap-0.5 ml-1.5 text-[10px] text-slate-400 cursor-help"><History className="w-3 h-3" /> corrected</span>
+                            )}
+                          </td>
+                          <td className="py-1 text-right text-slate-700 dark:text-slate-200 tabular-nums">
+                            <span className="inline-flex items-center gap-2 justify-end">
+                              {fmtHours(workedHours(e, now))}
+                              {(stale || isClockedIn(e)) && (
+                                <button onClick={() => setFixing(fixing === e.id ? null : e.id)} title="Fix clock-out" className="p-0.5 text-slate-400 hover:text-indigo-600"><Wrench className="w-3.5 h-3.5" /></button>
+                              )}
+                            </span>
+                          </td>
+                        </tr>
+                        {fixing === e.id && (
+                          <tr>
+                            <td colSpan={singleDay ? 3 : 4} className="py-2">
+                              <ClockOutFixer entry={e} now={now}
+                                onCancel={() => setFixing(null)}
+                                onSave={t => { onCorrectClockOut(e.id, t); setFixing(null); }} />
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    );
+                  })}
                 </tbody>
               </table></div>
             </div>

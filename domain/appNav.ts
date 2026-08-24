@@ -25,6 +25,7 @@ const VIEW_SLUGS: { view: ViewState; slug: string }[] = [
   { view: 'users', slug: 'users' },
   { view: 'settings', slug: 'settings' },
   { view: 'timeclock', slug: 'time-clock' },
+  { view: 'closeout', slug: 'close-out' },
 ];
 
 // Views that have no restorable URL of their own.

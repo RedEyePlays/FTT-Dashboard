@@ -196,6 +196,7 @@ export type Permission =
   | 'users.tech'      // manage technician accounts only (owner + manager)
   | 'timeclock.use'   // clock in/out & take breaks (every active staff member)
   | 'payroll.manage'  // view the biweekly pay-period summary (owner + manager)
+  | 'closeout.view'   // end-of-day close-out summary (owner + manager)
   | 'audit.view' | 'backup.export' | 'settings.manage';
 
 export interface AppUser {
@@ -305,7 +306,7 @@ export interface AppData {
   activityLog?: ActivityEntry[];
 }
 
-export type ViewState = 'dashboard' | 'analytics' | 'reports' | 'entry' | 'edit' | 'grid' | 'notes' | 'ai' | 'pos' | 'dropoff' | 'repairs' | 'customers' | 'users' | 'audit' | 'settings' | 'timeclock';
+export type ViewState = 'dashboard' | 'analytics' | 'reports' | 'entry' | 'edit' | 'grid' | 'notes' | 'ai' | 'pos' | 'dropoff' | 'repairs' | 'customers' | 'users' | 'audit' | 'settings' | 'timeclock' | 'closeout';
 
 // A single cash movement in a day's drawer, logged as part of reconciliation:
 // a manual cash-in (top-up / tip / off-sale payment), a paid cash expense, or an
@@ -363,6 +364,18 @@ export interface TimeBreak {
   note?: string;          // optional free text — only offered for the 'other' reason
 }
 
+// A manual correction to a shift's clock-out (typically fixing a missed
+// clock-out). Corrections are appended, never overwritten in place, so the
+// original value stays visible alongside who changed it and when.
+export interface TimeEntryCorrection {
+  correctedBy: string;        // owner/manager uid who made the correction
+  correctedByEmail?: string;
+  correctedAt: number;        // epoch ms
+  fromClockOut?: number;      // the value before this correction (undefined = was still open)
+  toClockOut: number;         // the corrected value
+  note?: string;
+}
+
 export interface TimeEntry {
   id: string;
   userId: string;         // the staff member's uid (owner of this shift)
@@ -372,6 +385,7 @@ export interface TimeEntry {
   breaks: TimeBreak[];
   note?: string;
   createdAt?: number;
+  corrections?: TimeEntryCorrection[]; // history of manual clock-out corrections, oldest first
 }
 
 // A record-keeping acknowledgment that an owner reviewed/paid an employee for a
