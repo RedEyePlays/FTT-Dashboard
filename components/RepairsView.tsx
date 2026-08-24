@@ -386,11 +386,15 @@ export const RepairsView: React.FC<Props> = (props) => {
           onEditBatch={() => setBatchForm({ batch: openBatch, isNew: false })}
           onDeleteBatch={() => { onDeleteBatch(openBatch.id); setOpenBatchId(null); }}
           onRecordPayment={onRecordPayment}
-          onPrint={(doc) => {
+          onPrint={(doc, justPaid) => {
             const devices = repairs.filter(r => r.batchId === openBatch.id);
-            if (doc === 'intake') printBatchIntake(openBatch, devices);
-            if (doc === 'invoice') printBatchInvoice(openBatch, devices);
-            if (doc === 'summary') printBatchSummary(openBatch, devices);
+            // Printing right after Record Payment races the Firestore round-trip —
+            // openBatch.amountPaid won't reflect this payment yet. justPaid lets the
+            // caller fold it in locally so the invoice shows the correct running total.
+            const forPrint = justPaid ? { ...openBatch, amountPaid: (openBatch.amountPaid || 0) + justPaid } : openBatch;
+            if (doc === 'intake') printBatchIntake(forPrint, devices);
+            if (doc === 'invoice') printBatchInvoice(forPrint, devices);
+            if (doc === 'summary') printBatchSummary(forPrint, devices);
             onPrintAudit('repairBatch', openBatch.id, doc);
           }} />
       )}
@@ -434,11 +438,14 @@ const BatchDetail: React.FC<{
   onBack: () => void; onAddDevice: () => void; onEditDevice: (r: Repair) => void;
   onStatus: (r: Repair, s: RepairStatus) => void; onPrintDevice: (r: Repair) => void; onPrintLabel: (r: Repair) => void; onRemoveDevice: (r: Repair) => void;
   onEditBatch: () => void; onDeleteBatch: () => void;
-  onRecordPayment: (b: RepairBatch, amount: number) => void; onPrint: (doc: 'intake' | 'invoice' | 'summary') => void;
+  onRecordPayment: (b: RepairBatch, amount: number) => void; onPrint: (doc: 'intake' | 'invoice' | 'summary', justPaid?: number) => void;
 }> = ({ batch, repairs, canDelete, onBack, onAddDevice, onEditDevice, onStatus, onPrintDevice, onPrintLabel, onRemoveDevice, onEditBatch, onDeleteBatch, onRecordPayment, onPrint }) => {
   const devices = repairs.filter(r => r.batchId === batch.id).sort((a, b) => a.createdAt - b.createdAt);
   const t = batchTotals(batch, repairs);
   const [pay, setPay] = useState('');
+  // Optional: print the invoice right at checkout (recording a payment) rather
+  // than only afterward via the standalone Invoice button above.
+  const [printOnPay, setPrintOnPay] = useState(false);
   const statusCounts = REPAIR_STATUSES
     .map(s => ({ ...s, n: devices.filter(d => d.status === s.value).length }))
     .filter(s => s.n > 0);
@@ -480,9 +487,12 @@ const BatchDetail: React.FC<{
         <button onClick={() => onPrint('intake')} className="flex items-center gap-2 px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-600 dark:text-slate-300 hover:border-indigo-400"><FileText className="w-4 h-4" /> Intake Sheet</button>
         <button onClick={() => onPrint('invoice')} className="flex items-center gap-2 px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-600 dark:text-slate-300 hover:border-indigo-400"><Receipt className="w-4 h-4" /> Invoice</button>
         <button onClick={() => onPrint('summary')} className="flex items-center gap-2 px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-600 dark:text-slate-300 hover:border-indigo-400"><Printer className="w-4 h-4" /> Summary</button>
-        <div className="flex items-center gap-1 ml-auto">
+        <div className="flex items-center gap-2 ml-auto">
+          <label className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400 cursor-pointer" title="Also print the invoice when this payment is recorded">
+            <input type="checkbox" checked={printOnPay} onChange={e => setPrintOnPay(e.target.checked)} className="rounded" /> Print invoice
+          </label>
           <div className="relative"><DollarSign className="w-4 h-4 text-slate-400 absolute left-2 top-1/2 -translate-y-1/2" /><input value={pay} onChange={e => setPay(e.target.value)} placeholder="0.00" inputMode="decimal" className="w-24 pl-7 pr-2 py-2 text-sm bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg" /></div>
-          <button onClick={() => { const a = parseFloat(pay) || 0; if (a > 0) { onRecordPayment(batch, a); setPay(''); } }} className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium">Record Payment</button>
+          <button onClick={() => { const a = parseFloat(pay) || 0; if (a > 0) { onRecordPayment(batch, a); setPay(''); if (printOnPay) onPrint('invoice', a); } }} className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium">Record Payment</button>
         </div>
       </div>
 
@@ -657,7 +667,8 @@ const RepairDrawer: React.FC<{
         </div>
 
         <div className="px-5 py-3 border-t border-slate-100 dark:border-slate-800 flex items-center gap-2 flex-wrap">
-          <button onClick={() => canSave && onSave(f)} disabled={!canSave} title={canSave ? undefined : 'Enter a customer name first'}
+          <button onClick={() => canSave && onSave(f)} disabled={!canSave}
+            title={canSave ? undefined : (f.parts || []).some(p => !p.name?.trim()) ? 'Name every part before saving' : 'Enter a customer name first'}
             className="flex-1 min-w-[110px] px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg text-sm font-medium">Save</button>
           {!isNew && !isTerminal && (
             <button onClick={checkOut} disabled={!canSave}

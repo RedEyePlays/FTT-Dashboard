@@ -1,11 +1,14 @@
 import { Repair, RepairBatch } from '../types';
-import { REPAIR_STATUS_LABEL, balanceOwing, batchTotals, repairPartsCost, repairLabor } from '../domain/repairs';
+import { REPAIR_STATUS_LABEL, balanceOwing, batchTotals, repairPartsCost, repairLabor, partName } from '../domain/repairs';
 
 // Reuses the app's print pattern: open a window, write inline-styled HTML, print.
 const SHOP = 'FlipThatTech';
 const money = (n?: number) => `$${(n || 0).toFixed(2)}`;
 const esc = (s?: string) => (s || '').replace(/[<>&]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c] as string));
 
+// Regular-paper documents (wholesale batch intake/invoice/summary, device
+// sheet) — NOT thermal, no forced @page size; the browser's normal print
+// dialog / default paper size applies, same as before.
 const openPrint = (title: string, width: number, body: string) => {
   const win = window.open('', '_blank', 'width=420,height=640');
   if (!win) return;
@@ -23,6 +26,41 @@ const openPrint = (title: string, width: number, body: string) => {
       .disc{font-size:9px;color:#777;margin-top:10px;line-height:1.3;}
       .foot{text-align:center;font-size:11px;color:#555;margin-top:12px;}
       .estamp{text-align:center;font-weight:800;font-size:18px;letter-spacing:3px;color:#b45309;border:2px solid #b45309;border-radius:6px;padding:4px 0;margin:8px 0 4px;}
+    </style></head><body>${body}
+    <script>window.onload=function(){window.print();setTimeout(function(){window.close();},300);};</script>
+    </body></html>`);
+  win.document.close();
+};
+
+// Thermal (80mm) documents — the retail intake/repair/pickup receipt and the
+// pre-work estimate, both printed on the same register thermal printer as
+// services/salesReceipt.ts. Real physical mm sizing via @page (not a CSS px
+// guess): the page is declared 80mm wide with an open-ended (auto) height for
+// the continuous roll, and content is capped at 72mm — the safe printable
+// width most 80mm thermal printheads actually use (leaves ~4mm margin each
+// side, matching the printer's own physical, non-printable edge).
+const THERMAL_PAGE_MM = 80;
+const THERMAL_CONTENT_MM = 72;
+const openThermalPrint = (title: string, body: string) => {
+  const win = window.open('', '_blank', 'width=320,height=640');
+  if (!win) return;
+  win.document.write(`<html><head><title>${esc(title)}</title>
+    <style>
+      @page { size: ${THERMAL_PAGE_MM}mm auto; margin: 0; }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; }
+      body{font-family:'Inter',system-ui,Arial,sans-serif;width:${THERMAL_CONTENT_MM}mm;margin:0 auto;padding:2mm 0;color:#000;font-size:3.1mm;}
+      h2{text-align:center;margin:0;font-size:4.4mm;} .sub{text-align:center;color:#555;font-size:2.6mm;margin:0.5mm 0 2.5mm;}
+      h3{font-size:3mm;margin:3mm 0 1mm;border-bottom:0.25mm solid #000;padding-bottom:0.5mm;}
+      .row{display:flex;justify-content:space-between;font-size:2.9mm;padding:0.3mm 0;}
+      .k{color:#555;} .b{font-weight:800;}
+      table{width:100%;border-collapse:collapse;font-size:2.7mm;margin-top:1mm;}
+      th,td{text-align:left;padding:0.7mm 0.9mm;border-bottom:0.2mm solid #ddd;} th{border-bottom:0.2mm solid #000;}
+      td.r,th.r{text-align:right;}
+      .tot{border-top:0.25mm dashed #999;margin-top:1.5mm;padding-top:1mm;}
+      .disc{font-size:2.2mm;color:#777;margin-top:2.5mm;line-height:1.3;}
+      .foot{text-align:center;font-size:2.7mm;color:#555;margin-top:3mm;}
+      .estamp{text-align:center;font-weight:800;font-size:4.4mm;letter-spacing:0.6mm;color:#b45309;border:0.5mm solid #b45309;border-radius:1.5mm;padding:1mm 0;margin:2mm 0 1mm;}
     </style></head><body>${body}
     <script>window.onload=function(){window.print();setTimeout(function(){window.close();},300);};</script>
     </body></html>`);
@@ -63,7 +101,7 @@ export const printRetailReceipt = (r: Repair, kind: 'intake' | 'repair' | 'picku
     ${kind !== 'pickup' ? `<h3>Track Your Repair</h3><div class="row"><span class="k">Check status online anytime — no account needed:</span></div><div class="row b"><span>${esc(trackUrl())}</span></div><div class="row"><span class="k">Ticket ${esc(r.repairNumber)} + the name/phone on this ticket.</span></div>` : ''}
     ${kind === 'intake' ? '<p class="disc">The shop is not responsible for data loss. Devices not collected within 90 days may be sold to recover costs. Diagnostic fees may apply if repair is declined.</p>' : ''}
     <p class="foot">Thank you!</p>`;
-  openPrint(`${title} ${r.repairNumber}`, 280, body);
+  openThermalPrint(`${title} ${r.repairNumber}`, body);
 };
 
 // --- Repair estimate / quote (pre-work) ---
@@ -77,7 +115,7 @@ export const printRepairEstimate = (r: Repair, opts?: { validDays?: number }) =>
   const labor = repairLabor(r);
   const validDays = opts?.validDays ?? 14;
   const partRows = parts.length
-    ? parts.map(p => `<tr><td>${esc(p.name) || 'Part'}</td><td class="r">${p.quantity || 1}</td><td class="r">${money((p.unitCost || 0) * (p.quantity || 1))}</td></tr>`).join('')
+    ? parts.map(p => `<tr><td>${esc(partName(p))}</td><td class="r">${p.quantity || 1}</td><td class="r">${money((p.unitCost || 0) * (p.quantity || 1))}</td></tr>`).join('')
     : `<tr><td>Parts (estimated)</td><td class="r"></td><td class="r">${money(partsCost)}</td></tr>`;
   const body = `
     <h2>${SHOP}</h2><div class="sub">REPAIR ESTIMATE — not a final bill<br/>${esc(r.repairNumber)} · ${esc(r.date)}</div>
@@ -98,7 +136,7 @@ export const printRepairEstimate = (r: Repair, opts?: { validDays?: number }) =>
     ${r.estimatedCompletion ? row('Est. Completion', r.estimatedCompletion) : ''}
     <p class="disc"><strong>This is an estimate, not a final bill.</strong> Prices are approximate and may change once the device is fully diagnosed or if additional parts/work are required. We will contact you for approval before exceeding this estimate. Estimate valid for ${validDays} days from the date above. No work has been authorized or performed by this document.</p>
     <p class="foot">Questions? Contact ${SHOP}.</p>`;
-  openPrint(`Estimate ${r.repairNumber}`, 300, body);
+  openThermalPrint(`Estimate ${r.repairNumber}`, body);
 };
 
 // --- Wholesale documents ---
