@@ -25,7 +25,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   ],
   employee: [
     'inventory.add', 'sales.complete', 'repairs.manage', 'repairs.tech', 'reports.view',
-    'cash.log',   // log a cash-out / withdrawal at the register, without a manager present
+    'cash.log',   // log a cash in/out / withdrawal at the register, without a manager present
     'timeclock.use',
   ],
   // Technicians get a repair-only, profit-free experience — but still clock in.

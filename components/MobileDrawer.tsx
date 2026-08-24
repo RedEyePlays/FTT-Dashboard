@@ -2,7 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import {
   LayoutDashboard, BarChart3, Table, StickyNote, ShoppingCart, Wrench, Contact, Truck,
   ScrollText, Users as UsersIcon, Bot, Search, Settings, Sparkles, Moon, Sun, Lock, X, Clock,
-  Receipt, Wallet,
+  Receipt,
 } from 'lucide-react';
 import { ViewState, Permission } from '../types';
 import { useLockBodyScroll } from '../hooks/useMediaQuery';
@@ -20,7 +20,6 @@ interface Props {
   onOpenFinder: () => void;
   onOpenSettings: () => void;
   onOpenBulk: () => void;
-  onOpenCashLog: () => void;
   onLock: () => void;
 }
 
@@ -28,7 +27,7 @@ interface Props {
 // desktop top nav. Closes on select, backdrop, or Escape; traps initial focus.
 export const MobileDrawer: React.FC<Props> = ({
   open, onClose, view, onNavigate, allow, userRole, userEmail,
-  darkMode, onToggleTheme, onOpenFinder, onOpenSettings, onOpenBulk, onOpenCashLog, onLock,
+  darkMode, onToggleTheme, onOpenFinder, onOpenSettings, onOpenBulk, onLock,
 }) => {
   const panelRef = useRef<HTMLDivElement>(null);
   useLockBodyScroll(open);
@@ -62,7 +61,6 @@ export const MobileDrawer: React.FC<Props> = ({
   const actions: Item[] = [
     { label: 'Find item', icon: <Search className="w-5 h-5" />, on: () => act(onOpenFinder), show: true },
     { label: 'AI Bulk Add', icon: <Sparkles className="w-5 h-5" />, on: () => act(onOpenBulk), show: true },
-    { label: 'Log cash out', icon: <Wallet className="w-5 h-5" />, on: () => act(onOpenCashLog), show: allow('cash.log') },
     { label: 'Settings', icon: <Settings className="w-5 h-5" />, on: () => act(onOpenSettings), show: allow('settings.manage') },
     { label: darkMode ? 'Light theme' : 'Dark theme', icon: darkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />, on: () => onToggleTheme(), show: true },
     { label: 'Lock app', icon: <Lock className="w-5 h-5" />, on: () => act(onLock), show: true },

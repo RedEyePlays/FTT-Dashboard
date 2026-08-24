@@ -2,7 +2,7 @@ import React from 'react';
 import {
   LayoutDashboard, Table, ShoppingCart, Wrench, Contact, Activity, BarChart3, StickyNote,
   Truck, ScrollText, Users as UsersIcon, Settings, Bot, Sparkles, MessageCircle, Calculator,
-  Search, PlusCircle, Moon, Sun, Menu, MoreHorizontal, ChevronDown, LogOut, Clock, Receipt, Wallet,
+  Search, PlusCircle, Moon, Sun, Menu, MoreHorizontal, ChevronDown, LogOut, Clock, Receipt,
 } from 'lucide-react';
 import { ViewState, Permission, ActivityEntry } from '../types';
 import { Alert } from '../domain/alerts';
@@ -31,7 +31,6 @@ interface AppHeaderProps {
   onOpenFinder: () => void;
   onOpenSettings: () => void;
   onOpenBulk: () => void;
-  onOpenCashLog?: () => void;
   onStartAdd: () => void;
   onLock: () => void;
   activity?: ActivityEntry[];
@@ -51,7 +50,7 @@ const iconBtn =
 export const AppHeader: React.FC<AppHeaderProps> = ({
   view, onNavigate, allow, isTech, pageTitle, onOpenDrawer, userEmail, userRole,
   darkMode, onToggleTheme, onToggleAiSidebar, onToggleCalculator, onOpenFinder,
-  onOpenSettings, onOpenBulk, onOpenCashLog = () => {}, onStartAdd, onLock, activity = [],
+  onOpenSettings, onOpenBulk, onStartAdd, onLock, activity = [],
   alerts = [], notifSeenTs = 0, onMarkNotificationsSeen = () => {},
 }) => {
   const primary: NavItem[] = ([
@@ -114,9 +113,6 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           <MenuItem key={i.key} icon={i.icon} label={i.label} active={i.view === view} onClick={() => { onNavigate(i.view); close(); }} />
         ))}
         <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
-        {allow('cash.log') && (
-          <MenuItem icon={<Wallet className="w-4 h-4" />} label="Log cash out" onClick={() => { onOpenCashLog(); close(); }} />
-        )}
         <MenuItem icon={<Calculator className="w-4 h-4" />} label="Profit Calculator" onClick={() => { onToggleCalculator(); close(); }} />
       </>)}
     </HeaderMenu>

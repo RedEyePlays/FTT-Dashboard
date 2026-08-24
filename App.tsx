@@ -52,8 +52,9 @@ import { useWorkspaceData } from './hooks/useWorkspaceData';
 import { newId, mkActivity } from './domain/ids';
 import { collectionFor, stockChange, applyDirectSale } from './domain/inventory';
 import { canVoidSale, canReturnSale, returnRefund, saleAccessoryRestock } from './domain/pos';
-import { expectedCashForDate, expectedEndingCash, sumDrawerEntries } from './domain/reports';
+import { expectedCashForDate, expectedEndingCash, sumDrawerEntries, cashDrawerSummary, ReconciliationInput } from './domain/reports';
 import type { CashMovementKind } from './components/LogCashMovementModal';
+const OpenDrawerModal = lazy(() => import('./components/OpenDrawerModal').then(m => ({ default: m.OpenDrawerModal })));
 import { openEntryFor, isOnBreak, periodPayFor, paidKey, toISODate, PayPeriod } from './domain/timeclock';
 import { buildAlerts } from './domain/alerts';
 import { changedSettingsSections } from './domain/audit';
@@ -126,7 +127,10 @@ const App: React.FC = () => {
   const [showBulkModal, setShowBulkModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showCalculator, setShowCalculator] = useState(false);
-  const [showCashLog, setShowCashLog] = useState(false);
+  // Cash drawer UI: which movement kind to log (null = closed), and the
+  // open-drawer modal. Both live on the POS screen where cash is handled.
+  const [cashLogKind, setCashLogKind] = useState<CashMovementKind | null>(null);
+  const [showOpenDrawer, setShowOpenDrawer] = useState(false);
   const [showFinder, setShowFinder] = useState(false);
 
   // Theme State
@@ -523,40 +527,81 @@ const App: React.FC = () => {
 
   // Save (or update) a day's cash-drawer reconciliation. One doc per date (id ===
   // date), recording who counted it and any variance note. Owner/manager only.
-  const handleSaveReconciliation = (r: Omit<CashReconciliation, 'recordedBy' | 'recordedByEmail' | 'recordedAt'>) => {
-    if (!uid || !appUser || !allow('cash.reconcile')) return;
-    const recon: CashReconciliation = {
-      ...r, recordedBy: appUser.id, recordedByEmail: appUser.email, recordedAt: Date.now(),
+  // Merge a change into a day's drawer record and recompute the expected-cash
+  // baseline (and variance, once counted) from the shared domain math — the
+  // single write path for opening the drawer, logging a movement and
+  // reconciling, so the three can never diverge. Returns the saved record.
+  const commitDrawerRecord = (date: string, patch: Partial<CashReconciliation>): CashReconciliation | null => {
+    if (!uid || !appUser) return null;
+    const existing = cashReconciliations.find(r => r.date === date);
+    const merged: CashReconciliation = {
+      id: date, date, openingFloat: 0, expectedCash: 0, variance: 0,
+      recordedBy: appUser.id, recordedByEmail: appUser.email, recordedAt: Date.now(),
+      ...existing, ...patch,
     };
-    saveCashReconciliation(uid, recon).catch(e => console.error('Reconciliation save failed', e));
-    audit('cash.reconcile', 'cashReconciliation', r.date, undefined, { expected: r.expectedCash, counted: r.countedCash, variance: r.variance });
+    const cashSales = expectedCashForDate(salesTransactions, date);
+    merged.cashSales = cashSales;
+    merged.expectedCash = expectedEndingCash({
+      openingFloat: merged.openingFloat, cashSales,
+      cashIn: sumDrawerEntries(merged.cashIn), cashOut: sumDrawerEntries(merged.cashOut), withdrawals: sumDrawerEntries(merged.withdrawals),
+    });
+    merged.variance = merged.countedCash != null ? Math.round((merged.countedCash - merged.expectedCash) * 100) / 100 : 0;
+    merged.recordedBy = appUser.id; merged.recordedByEmail = appUser.email; merged.recordedAt = Date.now();
+    saveCashReconciliation(uid, merged).catch(e => console.error('Cash drawer save failed', e));
+    return merged;
   };
 
-  // Log a single cash movement (cash-out expense or owner withdrawal) against
-  // today's drawer — available to anyone who handles the register (cash.log),
-  // separate from the manager-only reconciliation report. Appends to today's
-  // reconciliation record, recomputing the expected-ending baseline; the counted
-  // cash / variance are left for whoever reconciles the day at close.
+  // Reconcile (count + close) a day — owner/manager only. Recomputes expected /
+  // variance from the shared math and stamps the reconciled-by/at close markers.
+  const handleSaveReconciliation = (r: ReconciliationInput) => {
+    if (!uid || !appUser || !allow('cash.reconcile')) return;
+    const saved = commitDrawerRecord(r.date, {
+      openingFloat: r.openingFloat, cashIn: r.cashIn, cashOut: r.cashOut, withdrawals: r.withdrawals,
+      countedCash: r.countedCash, note: r.note,
+      reconciledAt: Date.now(), reconciledBy: appUser.id, reconciledByEmail: appUser.email,
+    });
+    if (saved) audit('cash.reconcile', 'cashReconciliation', r.date, undefined, { expected: saved.expectedCash, counted: saved.countedCash, variance: saved.variance });
+  };
+
+  // Open the drawer for the day — record the actual starting float explicitly
+  // (no silent default). Available to anyone who runs the register (cash.log).
+  const handleOpenDrawer = (openingFloat: number) => {
+    if (!uid || !appUser || !allow('cash.log')) return;
+    const date = new Date().toISOString().split('T')[0];
+    const existing = cashReconciliations.find(r => r.date === date);
+    commitDrawerRecord(date, {
+      openingFloat: Math.max(0, openingFloat),
+      openedAt: existing?.openedAt ?? Date.now(),
+      openedBy: existing?.openedBy ?? appUser.id,
+      openedByEmail: existing?.openedByEmail ?? appUser.email,
+    });
+    logActivity(`Drawer opened with $${openingFloat.toFixed(2)}`);
+    audit('cash.log', 'cashReconciliation', date, undefined, { kind: 'open', openingFloat });
+  };
+
+  // Log a single cash movement (cash-in / cash-out / withdrawal) against today's
+  // drawer — available to anyone who handles the register (cash.log). Appends the
+  // entry and recomputes the expected baseline; the count + close stay separate,
+  // so a movement never masquerades as a completed reconciliation.
   const handleLogCashMovement = ({ kind, amount, note }: { kind: CashMovementKind; amount: number; note?: string }) => {
     if (!uid || !appUser || !allow('cash.log') || !(amount > 0)) return;
     const date = new Date().toISOString().split('T')[0];
     const existing = cashReconciliations.find(r => r.date === date);
-    const entry = { id: newId(), amount, note };
-    const cashOut = [...(existing?.cashOut || []), ...(kind === 'cashOut' ? [entry] : [])];
-    const withdrawals = [...(existing?.withdrawals || []), ...(kind === 'withdrawal' ? [entry] : [])];
-    const cashSales = expectedCashForDate(salesTransactions, date);
-    const openingFloat = existing?.openingFloat ?? settings.operations.openingFloatDefault;
-    const expectedCash = expectedEndingCash({ openingFloat, cashSales, cashOut: sumDrawerEntries(cashOut), withdrawals: sumDrawerEntries(withdrawals) });
-    const countedCash = existing?.countedCash ?? 0;
-    const variance = countedCash ? Math.round((countedCash - expectedCash) * 100) / 100 : 0;
-    const recon: CashReconciliation = {
-      id: date, date, openingFloat, cashSales, cashOut, withdrawals, expectedCash, countedCash, variance,
-      note: existing?.note, recordedBy: appUser.id, recordedByEmail: appUser.email, recordedAt: Date.now(),
-    };
-    saveCashReconciliation(uid, recon).catch(e => console.error('Cash movement log failed', e));
-    logActivity(`Cash ${kind === 'cashOut' ? 'paid out' : 'withdrawal'} $${amount.toFixed(2)}${note ? ` — ${note}` : ''}`);
+    const listKey: 'cashIn' | 'cashOut' | 'withdrawals' = kind === 'cashIn' ? 'cashIn' : kind === 'cashOut' ? 'cashOut' : 'withdrawals';
+    const list = [...(existing?.[listKey] || []), { id: newId(), amount, note }];
+    commitDrawerRecord(date, { [listKey]: list });
+    const label = kind === 'cashIn' ? 'in' : kind === 'cashOut' ? 'paid out' : 'withdrawal';
+    logActivity(`Cash ${label} $${amount.toFixed(2)}${note ? ` — ${note}` : ''}`);
     audit('cash.log', 'cashReconciliation', date, undefined, { kind, amount });
   };
+
+  // Today's live drawer (shared math) — drives the POS running total and the
+  // quick-log modal's before/after figures.
+  const todayDrawer = useMemo(() => {
+    const date = new Date().toISOString().split('T')[0];
+    return cashDrawerSummary(cashReconciliations.find(r => r.date === date), expectedCashForDate(salesTransactions, date));
+  }, [cashReconciliations, salesTransactions]);
+  const todayRecon = cashReconciliations.find(r => r.date === new Date().toISOString().split('T')[0]);
 
   const handleBulkImport = (items: InventoryItem[]) => {
     if (uid) items.forEach(it => saveItem(uid, collectionFor(it), it));
@@ -982,7 +1027,6 @@ const App: React.FC = () => {
         onOpenFinder={() => setShowFinder(true)}
         onOpenSettings={() => navigate('settings')}
         onOpenBulk={() => setShowBulkModal(true)}
-        onOpenCashLog={() => setShowCashLog(true)}
         onStartAdd={handleStartAdd}
         onLock={handleLock}
         activity={activityLog}
@@ -1005,7 +1049,6 @@ const App: React.FC = () => {
         onOpenFinder={() => setShowFinder(true)}
         onOpenSettings={() => navigate('settings')}
         onOpenBulk={() => setShowBulkModal(true)}
-        onOpenCashLog={() => setShowCashLog(true)}
         onLock={handleLock}
       />
 
@@ -1114,6 +1157,9 @@ const App: React.FC = () => {
               onSellCart={handleSellCart}
               canViewProfit={allow('reports.profit.detailed')}
               onGenerateSku={(deviceType) => handleGenerateSku('device', deviceType)}
+              cashDrawer={allow('cash.log') ? todayDrawer : undefined}
+              onOpenDrawer={allow('cash.log') ? () => setShowOpenDrawer(true) : undefined}
+              onLogCash={allow('cash.log') ? (kind) => setCashLogKind(kind) : undefined}
             />
           )}
           {view === 'dropoff' && (
@@ -1227,9 +1273,17 @@ const App: React.FC = () => {
       {/* Calculator Overlay */}
       {showCalculator && <Suspense fallback={null}><CalculatorTool onClose={() => setShowCalculator(false)} /></Suspense>}
 
-      {showCashLog && allow('cash.log') && (
+      {cashLogKind && allow('cash.log') && (
         <Suspense fallback={null}>
-          <LogCashMovementModal onClose={() => setShowCashLog(false)} onLog={handleLogCashMovement} />
+          <LogCashMovementModal onClose={() => setCashLogKind(null)} onLog={handleLogCashMovement} initialKind={cashLogKind} expectedBefore={todayDrawer.expected} />
+        </Suspense>
+      )}
+
+      {showOpenDrawer && allow('cash.log') && (
+        <Suspense fallback={null}>
+          <OpenDrawerModal onClose={() => setShowOpenDrawer(false)} onOpen={handleOpenDrawer}
+            defaultFloat={settings.operations.openingFloatDefault}
+            alreadyOpen={!!todayRecon?.openedAt} currentFloat={todayRecon?.openingFloat} />
         </Suspense>
       )}
 

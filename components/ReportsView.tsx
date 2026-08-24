@@ -1,14 +1,14 @@
 import React, { useMemo, useState } from 'react';
-import { Wallet, Receipt, Download, Save, AlertTriangle, CheckCircle2, Plus, Trash2, Scale, FileArchive, Truck } from 'lucide-react';
+import { Wallet, Receipt, Download, Save, AlertTriangle, CheckCircle2, Plus, Trash2, Scale, FileArchive, Truck, DoorOpen } from 'lucide-react';
 import { SalesTransaction, CashReconciliation, CashDrawerEntry, InventoryItem, PayPeriodPaid, Settlement, Runner } from '../types';
 import {
   expectedCashForDate, expectedEndingCash, sumDrawerEntries, reconcileCash, taxRemittance, taxReportCsvRows, TaxGrouping,
-  profitAndLoss, profitLossCsvRows, settlementHistory, yearEndSummary, yearEndCsvRows, ProfitLossInput,
+  profitAndLoss, profitLossCsvRows, settlementHistory, yearEndSummary, yearEndCsvRows, ProfitLossInput, ReconciliationInput,
 } from '../domain/reports';
 import { toCSV, triggerDownload } from '../services/backup';
 import { newId } from '../domain/ids';
 
-type SaveReconciliation = (r: Omit<CashReconciliation, 'recordedBy' | 'recordedByEmail' | 'recordedAt'>) => void;
+type SaveReconciliation = (r: ReconciliationInput) => void;
 
 interface Props {
   salesTransactions: SalesTransaction[];
@@ -38,7 +38,7 @@ const card = 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-sla
 const input = 'px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500';
 const label = 'block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1';
 
-export const ReportsView: React.FC<Props> = ({ salesTransactions, cashReconciliations, inventory, payPeriods, settlements, runners, onSaveReconciliation, defaultOpeningFloat = 0 }) => {
+export const ReportsView: React.FC<Props> = ({ salesTransactions, cashReconciliations, inventory, payPeriods, settlements, runners, onSaveReconciliation }) => {
   const [tab, setTab] = useState<TabId>('cash');
   // Shared input set for the P&L / settlement / year-end reports.
   const plInput: ProfitLossInput = { transactions: salesTransactions, inventory, payPeriods, cashReconciliations, settlements };
@@ -51,7 +51,7 @@ export const ReportsView: React.FC<Props> = ({ salesTransactions, cashReconcilia
           </button>
         ))}
       </div>
-      {tab === 'cash' && <CashReconTab salesTransactions={salesTransactions} cashReconciliations={cashReconciliations} onSave={onSaveReconciliation} defaultOpeningFloat={defaultOpeningFloat} />}
+      {tab === 'cash' && <CashReconTab salesTransactions={salesTransactions} cashReconciliations={cashReconciliations} onSave={onSaveReconciliation} />}
       {tab === 'tax' && <TaxReportTab salesTransactions={salesTransactions} />}
       {tab === 'pnl' && <ProfitLossTab plInput={plInput} />}
       {tab === 'settlements' && <SettlementsTab settlements={settlements} runners={runners} />}
@@ -98,13 +98,16 @@ const CashReconTab: React.FC<{
   salesTransactions: SalesTransaction[];
   cashReconciliations: CashReconciliation[];
   onSave: SaveReconciliation;
-  defaultOpeningFloat: number;
-}> = ({ salesTransactions, cashReconciliations, onSave, defaultOpeningFloat }) => {
+}> = ({ salesTransactions, cashReconciliations, onSave }) => {
   const [date, setDate] = useState(todayISO());
   const cashSales = useMemo(() => expectedCashForDate(salesTransactions, date), [salesTransactions, date]);
   const saved = cashReconciliations.find(r => r.date === date);
+  // The drawer must have been explicitly opened for this day; otherwise we flag
+  // it rather than silently assuming a starting float.
+  const wasOpened = !!saved?.openedAt;
 
   const [openingFloat, setOpeningFloat] = useState('');
+  const [cashIn, setCashIn] = useState<CashDrawerEntry[]>([]);
   const [cashOut, setCashOut] = useState<CashDrawerEntry[]>([]);
   const [withdrawals, setWithdrawals] = useState<CashDrawerEntry[]>([]);
   const [counted, setCounted] = useState('');
@@ -113,48 +116,58 @@ const CashReconTab: React.FC<{
   const [loadedFor, setLoadedFor] = useState<string | null>(null);
   if (loadedFor !== date) {
     setLoadedFor(date);
-    setOpeningFloat(saved ? String(saved.openingFloat ?? 0) : (defaultOpeningFloat ? String(defaultOpeningFloat) : ''));
+    // Only prefill the float from a real open/save — never a silent default.
+    setOpeningFloat(saved?.openingFloat != null ? String(saved.openingFloat) : '');
+    setCashIn(saved?.cashIn ? saved.cashIn.map(e => ({ ...e })) : []);
     setCashOut(saved?.cashOut ? saved.cashOut.map(e => ({ ...e })) : []);
     setWithdrawals(saved?.withdrawals ? saved.withdrawals.map(e => ({ ...e })) : []);
-    // A day may already have cash movements logged (by an employee, via the quick
-    // cash-out action) but not yet been counted/reconciled — leave the count blank
-    // in that case so it still reads as un-reconciled.
-    setCounted(saved && saved.countedCash ? String(saved.countedCash) : '');
+    // A day may already have cash movements logged but not yet been counted —
+    // leave the count blank in that case so it still reads as un-reconciled.
+    setCounted(saved && saved.countedCash != null ? String(saved.countedCash) : '');
     setNote(saved?.note || '');
   }
 
   const openingNum = num(openingFloat);
+  const cashInTotal = sumDrawerEntries(cashIn);
   const cashOutTotal = sumDrawerEntries(cashOut);
   const withdrawalTotal = sumDrawerEntries(withdrawals);
-  const expected = expectedEndingCash({ openingFloat: openingNum, cashSales, cashOut: cashOutTotal, withdrawals: withdrawalTotal });
+  const expected = expectedEndingCash({ openingFloat: openingNum, cashSales, cashIn: cashInTotal, cashOut: cashOutTotal, withdrawals: withdrawalTotal });
   const countedNum = num(counted);
   const { variance, direction } = reconcileCash(countedNum, expected);
   const hasCount = counted.trim() !== '';
+  // A discrepancy (over/short) must be explained before it can be saved.
+  const needsNote = hasCount && direction !== 'balanced' && !note.trim();
+  const canSave = hasCount && !needsNote;
 
   const cleanEntries = (list: CashDrawerEntry[]) => list.filter(e => (e.amount || 0) > 0).map(e => ({ id: e.id, amount: e.amount, note: e.note?.trim() || undefined }));
 
   const save = () => {
+    if (!canSave) return;
     onSave({
-      id: date, date,
-      openingFloat: openingNum, cashSales,
-      cashOut: cleanEntries(cashOut), withdrawals: cleanEntries(withdrawals),
-      expectedCash: expected, countedCash: countedNum, variance,
+      date,
+      openingFloat: openingNum,
+      cashIn: cleanEntries(cashIn), cashOut: cleanEntries(cashOut), withdrawals: cleanEntries(withdrawals),
+      countedCash: countedNum,
       note: note.trim() || undefined,
     });
   };
 
-  const history = [...cashReconciliations].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 30);
-
   return (
     <div className="space-y-6">
       <div className={`${card} p-5 space-y-4`}>
+        {!wasOpened && (
+          <div className="flex items-start gap-2 rounded-lg px-3 py-2 text-sm bg-amber-50 dark:bg-amber-900/20 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-900/40">
+            <DoorOpen className="w-4 h-4 shrink-0 mt-0.5" />
+            <span>The drawer wasn't opened for this day, so no starting float was recorded. Enter the float you started with below before reconciling — don't leave it assumed.</span>
+          </div>
+        )}
         <div className="flex flex-wrap items-end gap-4">
           <div>
             <label className={label}>Date</label>
             <input type="date" max={todayISO()} value={date} onChange={e => setDate(e.target.value)} className={input} />
           </div>
           <div>
-            <label className={label}>Opening float</label>
+            <label className={label}>Opening float{wasOpened ? '' : ' (not opened)'}</label>
             <input type="number" step="0.01" min="0" value={openingFloat} onChange={e => setOpeningFloat(e.target.value)} placeholder="0.00" className={input} />
           </div>
           <div>
@@ -163,7 +176,8 @@ const CashReconTab: React.FC<{
           </div>
         </div>
 
-        <div className="grid md:grid-cols-2 gap-4">
+        <div className="grid md:grid-cols-3 gap-4">
+          <EntryList title="Cash in (top-ups / tips)" entries={cashIn} onChange={setCashIn} notePlaceholder="Reason, e.g. change top-up" />
           <EntryList title="Cash paid out (expenses)" entries={cashOut} onChange={setCashOut} notePlaceholder="Reason, e.g. courier COD" />
           <EntryList title="Withdrawals to owner (pulls / deposits)" entries={withdrawals} onChange={setWithdrawals} notePlaceholder="Note, e.g. bank deposit" />
         </div>
@@ -172,6 +186,7 @@ const CashReconTab: React.FC<{
         <div className="rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 px-4 py-3 text-sm space-y-1">
           <BreakdownRow label="Opening float" value={openingNum} />
           <BreakdownRow label="+ Cash sales" value={cashSales} />
+          {cashInTotal > 0 && <BreakdownRow label="+ Cash in (manual)" value={cashInTotal} />}
           <BreakdownRow label="− Cash paid out" value={-cashOutTotal} />
           <BreakdownRow label="− Withdrawals to owner" value={-withdrawalTotal} />
           <div className="flex items-center justify-between pt-1 border-t border-slate-200 dark:border-slate-700 font-bold text-slate-800 dark:text-slate-100">
@@ -190,46 +205,93 @@ const CashReconTab: React.FC<{
         )}
 
         <div>
-          <label className={label}>Note {direction !== 'balanced' && hasCount ? '(explain the variance)' : '(optional)'}</label>
-          <textarea value={note} onChange={e => setNote(e.target.value)} rows={2} placeholder="e.g. $5 float miscount; card tip paid out in cash" className={`${input} w-full resize-y`} />
+          <label className={label}>Note {hasCount && direction !== 'balanced' ? '(required — explain the variance)' : '(optional)'}</label>
+          <textarea value={note} onChange={e => setNote(e.target.value)} rows={2} placeholder="e.g. $5 float miscount; card tip paid out in cash"
+            className={`${input} w-full resize-y ${needsNote ? 'ring-2 ring-amber-400 border-amber-400' : ''}`} />
+          {needsNote && <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">A note is required to save an over/short count.</p>}
         </div>
 
         <div className="flex items-center justify-between">
           <p className="text-xs text-slate-400">
-            {saved ? `Last recorded by ${saved.recordedByEmail || saved.recordedBy} · ${new Date(saved.recordedAt).toLocaleString()}` : 'Not yet reconciled for this day.'}
+            {saved?.reconciledAt
+              ? `Reconciled by ${saved.reconciledByEmail || saved.reconciledBy} · ${new Date(saved.reconciledAt).toLocaleString()}`
+              : saved
+                ? 'Open — cash movements logged, not yet reconciled.'
+                : 'Not yet reconciled for this day.'}
           </p>
-          <button onClick={save} disabled={!hasCount} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white">
-            <Save className="w-4 h-4" /> {saved ? 'Update' : 'Save'} reconciliation
+          <button onClick={save} disabled={!canSave} title={needsNote ? 'Add a note explaining the variance first' : undefined} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white">
+            <Save className="w-4 h-4" /> {saved?.reconciledAt ? 'Update' : 'Save'} reconciliation
           </button>
         </div>
       </div>
 
-      <div className={`${card} p-5`}>
-        <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200 mb-3">Past reconciliations</h3>
-        {history.length === 0 ? (
-          <p className="text-sm text-slate-400 py-4 text-center">No reconciliations saved yet.</p>
-        ) : (
-          <div className="overflow-x-auto"><table className="w-full text-sm">
-            <thead className="text-[10px] uppercase tracking-wider text-slate-400"><tr>
-              <th className="text-left py-2">Date</th><th className="text-right py-2">Expected</th><th className="text-right py-2">Counted</th><th className="text-right py-2">Variance</th><th className="text-left py-2 pl-4">Note</th><th className="text-left py-2">By</th>
-            </tr></thead>
-            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-              {history.map(r => (
-                <tr key={r.id} className="cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/40" onClick={() => setDate(r.date)}>
+      <CashHistory cashReconciliations={cashReconciliations} onPick={setDate} />
+    </div>
+  );
+};
+
+// Owner/manager cash history (this whole Reports view is gated by cash.reconcile).
+// Full audit trail per day: opening float, cash in / out / withdrawals, closing
+// count, variance and the variance note. Defaults to the last 30 days with a
+// control to widen the window (90 / 365 / all).
+const RANGES: { days: number; label: string }[] = [
+  { days: 30, label: '30 days' }, { days: 90, label: '90 days' }, { days: 365, label: '1 year' }, { days: 0, label: 'All' },
+];
+const CashHistory: React.FC<{ cashReconciliations: CashReconciliation[]; onPick: (date: string) => void }> = ({ cashReconciliations, onPick }) => {
+  const [days, setDays] = useState(30);
+  const cutoff = useMemo(() => {
+    if (!days) return '';
+    const d = new Date(); d.setDate(d.getDate() - (days - 1));
+    return d.toISOString().split('T')[0];
+  }, [days]);
+  const rows = useMemo(
+    () => [...cashReconciliations].filter(r => !cutoff || r.date >= cutoff).sort((a, b) => b.date.localeCompare(a.date)),
+    [cashReconciliations, cutoff],
+  );
+  return (
+    <div className={`${card} p-5`}>
+      <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
+        <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200">Cash history</h3>
+        <div className="inline-flex rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden text-xs">
+          {RANGES.map(r => (
+            <button key={r.days} onClick={() => setDays(r.days)}
+              className={`px-2.5 py-1 font-medium ${days === r.days ? 'bg-indigo-600 text-white' : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300'}`}>{r.label}</button>
+          ))}
+        </div>
+      </div>
+      {rows.length === 0 ? (
+        <p className="text-sm text-slate-400 py-4 text-center">No cash records in this range.</p>
+      ) : (
+        <div className="overflow-x-auto"><table className="w-full text-sm whitespace-nowrap">
+          <thead className="text-[10px] uppercase tracking-wider text-slate-400"><tr>
+            <th className="text-left py-2">Date</th><th className="text-right py-2">Opening</th><th className="text-right py-2">Cash in</th><th className="text-right py-2">Cash out</th><th className="text-right py-2">Withdrawn</th><th className="text-right py-2">Counted</th><th className="text-right py-2">Variance</th><th className="text-left py-2 pl-4">Note</th><th className="text-left py-2">Status</th>
+          </tr></thead>
+          <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+            {rows.map(r => {
+              const reconciled = !!r.reconciledAt;
+              return (
+                <tr key={r.id} className="cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/40" onClick={() => onPick(r.date)}>
                   <td className="py-2 font-medium text-slate-700 dark:text-slate-200">{r.date}</td>
-                  <td className="py-2 text-right text-slate-500 dark:text-slate-400">{money(r.expectedCash)}</td>
-                  <td className="py-2 text-right text-slate-500 dark:text-slate-400">{r.countedCash ? money(r.countedCash) : <span className="text-slate-400">not counted</span>}</td>
-                  {r.countedCash
+                  <td className="py-2 text-right text-slate-500 dark:text-slate-400">{r.openedAt || r.openingFloat != null ? money(r.openingFloat || 0) : <span className="text-amber-500" title="Drawer not opened">—</span>}</td>
+                  <td className="py-2 text-right text-slate-500 dark:text-slate-400">{money(sumDrawerEntries(r.cashIn))}</td>
+                  <td className="py-2 text-right text-slate-500 dark:text-slate-400">{money(sumDrawerEntries(r.cashOut))}</td>
+                  <td className="py-2 text-right text-slate-500 dark:text-slate-400">{money(sumDrawerEntries(r.withdrawals))}</td>
+                  <td className="py-2 text-right text-slate-500 dark:text-slate-400">{reconciled && r.countedCash != null ? money(r.countedCash) : <span className="text-slate-400">—</span>}</td>
+                  {reconciled && r.countedCash != null
                     ? <td className={`py-2 text-right font-semibold ${Math.abs(r.variance) < 0.005 ? 'text-emerald-600' : 'text-amber-600 dark:text-amber-400'}`}>{r.variance > 0 ? '+' : ''}{money(r.variance)}</td>
                     : <td className="py-2 text-right text-slate-400">—</td>}
                   <td className="py-2 pl-4 text-slate-500 dark:text-slate-400 truncate max-w-[220px]">{r.note || '—'}</td>
-                  <td className="py-2 text-slate-400 text-xs">{(r.recordedByEmail || r.recordedBy || '').split('@')[0]}</td>
+                  <td className="py-2">
+                    {reconciled
+                      ? <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">Reconciled</span>
+                      : <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400">Open</span>}
+                  </td>
                 </tr>
-              ))}
-            </tbody>
-          </table></div>
-        )}
-      </div>
+              );
+            })}
+          </tbody>
+        </table></div>
+      )}
     </div>
   );
 };
