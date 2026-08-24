@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { kindOf, isDevice, isAccessory, collectionFor, stockChange, isOversold, getDeviceDisplayName, applyDirectSale, suggestedSalePrice } from './inventory';
+import { kindOf, isDevice, isAccessory, collectionFor, stockChange, isOversold, getDeviceDisplayName, applyDirectSale, suggestedSalePrice, priceFieldFor } from './inventory';
 import { InventoryItem } from '../types';
 
 const base: InventoryItem =
@@ -211,5 +211,13 @@ describe('suggestedSalePrice', () => {
   it('is case-insensitive on the match fields', () => {
     const s = suggestedSalePrice({ model: 'IPHONE 13', storage: '128gb', condition: 'GOOD' }, stock);
     expect(s?.sampleSize).toBe(2);
+  });
+});
+
+describe('priceFieldFor', () => {
+  it('picks targetSalePrice for devices and sellingPrice for accessories', () => {
+    expect(priceFieldFor({ kind: 'device' })).toBe('targetSalePrice');
+    expect(priceFieldFor({})).toBe('targetSalePrice'); // legacy rows default to device
+    expect(priceFieldFor({ kind: 'accessory' })).toBe('sellingPrice');
   });
 });

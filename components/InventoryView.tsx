@@ -3,11 +3,11 @@ import {
   Search, Smartphone, Package, QrCode, Trash2, X, Plus, ScanLine, AlertTriangle,
   Columns3, SlidersHorizontal, Bookmark, Download, Upload, Copy, ChevronUp, ChevronDown,
   ChevronLeft, ChevronRight, CheckSquare, Square, Boxes,
-  Pencil, MoreVertical, Printer, History, ScrollText, Wrench, Tag,
+  Pencil, MoreVertical, Printer, History, ScrollText, Wrench, Tag, DollarSign, CheckCircle2, AlertCircle,
 } from 'lucide-react';
 import { InventoryItem, Runner, ItemKind, DeviceType, DeviceStatus, ActivityEntry, AuditEntry, Repair } from '../types';
 import { linkedRepairFor, REPAIR_STATUS_LABEL } from '../domain/repairs';
-import { printShelfTag } from '../services/shelfTag';
+import { printShelfTag, printShelfTagsBatch } from '../services/shelfTag';
 import { getStoreProfile } from './SettingsModal';
 import { ItemFormModal } from './ItemFormModal';
 // Lazy: defers jsPDF (~390 kB) until a label is actually printed.
@@ -15,7 +15,7 @@ const LabelModal = lazy(() => import('./LabelModal').then(m => ({ default: m.Lab
 import { useIsMobile } from '../hooks/useMediaQuery';
 import { ResponsiveDialog, EmptyState } from './responsive';
 import { InvSection, INV_SECTIONS } from '../domain/inventoryNav';
-import { getDeviceDisplayName } from '../domain/inventory';
+import { getDeviceDisplayName, priceFieldFor } from '../domain/inventory';
 import { clampWidth, fitWidths } from '../domain/columnLayout';
 
 interface Props {
@@ -27,7 +27,9 @@ interface Props {
   section: InvSection;              // active inventory section (URL-driven)
   onSelectSection: (s: InvSection) => void; // switch section (updates the route)
   onSave: (item: InventoryItem) => void;
-  onUpdate: (id: string, field: keyof InventoryItem, value: any) => void;
+  // May return a promise so bulk actions can tell which items in a multi-select
+  // action actually succeeded, instead of assuming every write landed.
+  onUpdate: (id: string, field: keyof InventoryItem, value: any) => void | Promise<void>;
   onDelete: (id: string) => void;
   onGenerateSku: (kind: ItemKind, deviceType?: DeviceType) => Promise<string>;
   onSeed?: () => void;
@@ -264,7 +266,7 @@ export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, a
     setColW(c => { const next = { ...c[kind] }; delete next[key]; return { ...c, [kind]: next }; });
   const resetAllWidths = (kind: 'device' | 'accessory') => setColW(c => ({ ...c, [kind]: {} }));
   // Reset pagination + selection whenever the active page or its filters change.
-  useEffect(() => { setPageNum(1); setSelected(new Set()); }, [page, query, statusFilter, sort]);
+  useEffect(() => { setPageNum(1); setSelected(new Set()); setBulkResult(null); setBulkPriceOpen(false); }, [page, query, statusFilter, sort]);
 
   const counts = useMemo(() => ({
     all: inventory.length,
@@ -358,6 +360,45 @@ export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, a
   });
   const bulkDelete = () => { selected.forEach(id => onDelete(id)); setSelected(new Set()); };
   const bulkStatus = (status: DeviceStatus) => { selected.forEach(id => { const it = inventory.find(x => x.id === id); if (it && kindOf(it) === 'device') onUpdate(id, 'deviceStatus', status); }); };
+
+  // Bulk price / listed actions run each write independently and report which
+  // ones actually succeeded — a multi-select action must never silently drop
+  // failures for some items while claiming success for the whole selection.
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkResult, setBulkResult] = useState<{ ok: number; fail: number; failLabels: string[] } | null>(null);
+  const [bulkPriceOpen, setBulkPriceOpen] = useState(false);
+  const [bulkPriceValue, setBulkPriceValue] = useState('');
+
+  const labelOf = (id: string) => { const it = inventory.find(x => x.id === id); return it?.sku || it?.item || id; };
+
+  const runBulk = async (ids: string[], apply: (id: string) => void | Promise<void>) => {
+    setBulkBusy(true);
+    setBulkResult(null);
+    const results = await Promise.allSettled(ids.map(id => Promise.resolve(apply(id))));
+    const fails = results
+      .map((r, idx) => ({ r, id: ids[idx] }))
+      .filter((x): x is { r: PromiseRejectedResult; id: string } => x.r.status === 'rejected');
+    setBulkBusy(false);
+    setBulkResult({ ok: ids.length - fails.length, fail: fails.length, failLabels: fails.map(f => labelOf(f.id)) });
+  };
+
+  const bulkMarkListed = () => runBulk([...selected], id => onUpdate(id, 'listed', true));
+
+  const applyBulkPrice = () => {
+    const price = parseFloat(bulkPriceValue);
+    if (!isFinite(price) || price < 0) return;
+    setBulkPriceOpen(false); setBulkPriceValue('');
+    runBulk([...selected], id => {
+      const it = inventory.find(x => x.id === id);
+      if (!it) return Promise.reject(new Error('Item no longer exists'));
+      return onUpdate(id, priceFieldFor(it), price);
+    });
+  };
+
+  const bulkPrintShelfTags = () => {
+    const items = inventory.filter(i => selected.has(i.id));
+    printShelfTagsBatch(items, { storeName: getStoreProfile().storeName });
+  };
 
   const exportCSV = (rows: InventoryItem[], cols: Col[], name: string) => {
     const blob = new Blob([toCSV(rows, cols)], { type: 'text/csv;charset=utf-8;' });
@@ -538,17 +579,44 @@ export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, a
 
           {/* Bulk action bar (desktop) */}
           {selected.size > 0 && (
-            <div className="hidden md:flex items-center gap-2 flex-wrap bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800 rounded-lg px-3 py-2">
-              <span className="text-sm font-medium text-indigo-700 dark:text-indigo-300">{selected.size} selected</span>
-              {activeKind === 'device' && (
-                <select onChange={e => { if (e.target.value) { bulkStatus(e.target.value as DeviceStatus); e.target.value = ''; } }} className="text-sm bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md px-2 py-1">
-                  <option value="">Set status…</option>
-                  {STATUS_OPTS.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
-                </select>
+            <div className="hidden md:flex flex-col gap-2">
+              <div className="flex items-center gap-2 flex-wrap bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800 rounded-lg px-3 py-2">
+                <span className="text-sm font-medium text-indigo-700 dark:text-indigo-300">{selected.size} selected</span>
+                {activeKind === 'device' && (
+                  <select onChange={e => { if (e.target.value) { bulkStatus(e.target.value as DeviceStatus); e.target.value = ''; } }} className="text-sm bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md px-2 py-1">
+                    <option value="">Set status…</option>
+                    {STATUS_OPTS.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+                  </select>
+                )}
+                {bulkPriceOpen ? (
+                  <span className="flex items-center gap-1">
+                    <input autoFocus type="number" step="0.01" min="0" value={bulkPriceValue} onChange={e => setBulkPriceValue(e.target.value)}
+                      onKeyDown={e => e.key === 'Enter' && applyBulkPrice()} placeholder="New price"
+                      className="w-24 text-sm bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md px-2 py-1" />
+                    <button onClick={applyBulkPrice} disabled={!bulkPriceValue} className="text-sm px-2 py-1 rounded-md bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white">Apply</button>
+                    <button onClick={() => { setBulkPriceOpen(false); setBulkPriceValue(''); }} className="text-sm px-2 py-1 rounded-md text-slate-500 hover:text-slate-700">Cancel</button>
+                  </span>
+                ) : (
+                  <button onClick={() => setBulkPriceOpen(true)} disabled={bulkBusy} className="text-sm px-2 py-1 rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-indigo-400 flex items-center gap-1 disabled:opacity-40"><DollarSign className="w-3.5 h-3.5" /> Update Price</button>
+                )}
+                <button onClick={bulkMarkListed} disabled={bulkBusy} className="text-sm px-2 py-1 rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-indigo-400 flex items-center gap-1 disabled:opacity-40"><Tag className="w-3.5 h-3.5" /> Mark Listed</button>
+                <button onClick={bulkPrintShelfTags} disabled={bulkBusy} className="text-sm px-2 py-1 rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-indigo-400 flex items-center gap-1 disabled:opacity-40"><Printer className="w-3.5 h-3.5" /> Print Shelf Tags</button>
+                <button onClick={() => exportCSV(inventory.filter(i => selected.has(i.id)), activeCols, 'selection')} className="text-sm px-2 py-1 rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-indigo-400 flex items-center gap-1"><Download className="w-3.5 h-3.5" /> Export</button>
+                <button onClick={bulkDelete} className="text-sm px-2 py-1 rounded-md bg-rose-50 text-rose-600 dark:bg-rose-900/30 dark:text-rose-300 hover:bg-rose-100 flex items-center gap-1"><Trash2 className="w-3.5 h-3.5" /> Delete</button>
+                <button onClick={() => { setSelected(new Set()); setBulkResult(null); }} className="text-sm px-2 py-1 rounded-md text-slate-500 hover:text-slate-700">Clear</button>
+                {bulkBusy && <span className="text-xs text-indigo-500">Working…</span>}
+              </div>
+              {bulkResult && (
+                <div className={`flex items-start gap-2 text-sm rounded-lg px-3 py-2 border ${bulkResult.fail > 0 ? 'bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300' : 'bg-emerald-50 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300'}`}>
+                  {bulkResult.fail > 0 ? <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" /> : <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />}
+                  <span>
+                    {bulkResult.fail === 0
+                      ? `Updated ${bulkResult.ok} item${bulkResult.ok !== 1 ? 's' : ''}.`
+                      : `Updated ${bulkResult.ok} of ${bulkResult.ok + bulkResult.fail} items — ${bulkResult.fail} failed: ${bulkResult.failLabels.join(', ')}.`}
+                  </span>
+                  <button onClick={() => setBulkResult(null)} className="ml-auto text-xs opacity-70 hover:opacity-100 shrink-0"><X className="w-3.5 h-3.5" /></button>
+                </div>
               )}
-              <button onClick={() => exportCSV(inventory.filter(i => selected.has(i.id)), activeCols, 'selection')} className="text-sm px-2 py-1 rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-indigo-400 flex items-center gap-1"><Download className="w-3.5 h-3.5" /> Export</button>
-              <button onClick={bulkDelete} className="text-sm px-2 py-1 rounded-md bg-rose-50 text-rose-600 dark:bg-rose-900/30 dark:text-rose-300 hover:bg-rose-100 flex items-center gap-1"><Trash2 className="w-3.5 h-3.5" /> Delete</button>
-              <button onClick={() => setSelected(new Set())} className="text-sm px-2 py-1 rounded-md text-slate-500 hover:text-slate-700">Clear</button>
             </div>
           )}
 
@@ -594,17 +662,43 @@ export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, a
 
           {/* Mobile: bottom bulk action bar (selection mode) */}
           {isMobile && selectMode && selected.size > 0 && (
-            <div className="md:hidden fixed left-0 right-0 bottom-14 z-40 bg-white/95 dark:bg-slate-900/95 backdrop-blur border-t border-slate-200 dark:border-slate-800 px-3 py-2 flex items-center gap-2 safe-b">
-              <span className="text-sm font-medium text-indigo-700 dark:text-indigo-300">{selected.size}</span>
-              {activeKind === 'device' && (
-                <select onChange={e => { if (e.target.value) { bulkStatus(e.target.value as DeviceStatus); e.target.value = ''; } }} className="text-sm bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md px-2 py-1.5 flex-1">
-                  <option value="">Set status…</option>
-                  {STATUS_OPTS.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
-                </select>
+            <div className="md:hidden fixed left-0 right-0 bottom-14 z-40 bg-white/95 dark:bg-slate-900/95 backdrop-blur border-t border-slate-200 dark:border-slate-800 safe-b">
+              {bulkResult && (
+                <div className={`flex items-start gap-2 text-xs px-3 py-2 border-b ${bulkResult.fail > 0 ? 'bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300' : 'bg-emerald-50 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300'}`}>
+                  {bulkResult.fail > 0 ? <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" /> : <CheckCircle2 className="w-3.5 h-3.5 shrink-0 mt-0.5" />}
+                  <span>
+                    {bulkResult.fail === 0
+                      ? `Updated ${bulkResult.ok} item${bulkResult.ok !== 1 ? 's' : ''}.`
+                      : `Updated ${bulkResult.ok} of ${bulkResult.ok + bulkResult.fail} — ${bulkResult.fail} failed: ${bulkResult.failLabels.join(', ')}.`}
+                  </span>
+                  <button onClick={() => setBulkResult(null)} className="ml-auto opacity-70"><X className="w-3.5 h-3.5" /></button>
+                </div>
               )}
-              <button onClick={() => exportCSV(inventory.filter(i => selected.has(i.id)), activeCols, 'selection')} aria-label="Export selection" className="tap-target flex items-center justify-center rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300"><Download className="w-4 h-4" /></button>
-              <button onClick={bulkDelete} aria-label="Delete selection" className="tap-target flex items-center justify-center rounded-md bg-rose-50 text-rose-600 dark:bg-rose-900/30 dark:text-rose-300"><Trash2 className="w-4 h-4" /></button>
-              <button onClick={() => setSelected(new Set())} className="text-sm px-2 py-1 rounded-md text-slate-500">Clear</button>
+              {bulkPriceOpen ? (
+                <div className="px-3 py-2 flex items-center gap-2">
+                  <input autoFocus type="number" step="0.01" min="0" value={bulkPriceValue} onChange={e => setBulkPriceValue(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && applyBulkPrice()} placeholder="New price"
+                    className="flex-1 text-sm bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md px-2 py-1.5" />
+                  <button onClick={applyBulkPrice} disabled={!bulkPriceValue} className="text-sm px-3 py-1.5 rounded-md bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white">Apply</button>
+                  <button onClick={() => { setBulkPriceOpen(false); setBulkPriceValue(''); }} className="text-sm px-2 py-1.5 rounded-md text-slate-500">Cancel</button>
+                </div>
+              ) : (
+                <div className="px-3 py-2 flex items-center gap-2 overflow-x-auto">
+                  <span className="text-sm font-medium text-indigo-700 dark:text-indigo-300 shrink-0">{selected.size}</span>
+                  {activeKind === 'device' && (
+                    <select onChange={e => { if (e.target.value) { bulkStatus(e.target.value as DeviceStatus); e.target.value = ''; } }} className="text-sm bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md px-2 py-1.5 shrink-0">
+                      <option value="">Status…</option>
+                      {STATUS_OPTS.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+                    </select>
+                  )}
+                  <button onClick={() => setBulkPriceOpen(true)} disabled={bulkBusy} aria-label="Update price" className="tap-target flex items-center justify-center rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 shrink-0 disabled:opacity-40"><DollarSign className="w-4 h-4" /></button>
+                  <button onClick={bulkMarkListed} disabled={bulkBusy} aria-label="Mark listed" className="tap-target flex items-center justify-center rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 shrink-0 disabled:opacity-40"><Tag className="w-4 h-4" /></button>
+                  <button onClick={bulkPrintShelfTags} disabled={bulkBusy} aria-label="Print shelf tags" className="tap-target flex items-center justify-center rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 shrink-0 disabled:opacity-40"><Printer className="w-4 h-4" /></button>
+                  <button onClick={() => exportCSV(inventory.filter(i => selected.has(i.id)), activeCols, 'selection')} aria-label="Export selection" className="tap-target flex items-center justify-center rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 shrink-0"><Download className="w-4 h-4" /></button>
+                  <button onClick={bulkDelete} aria-label="Delete selection" className="tap-target flex items-center justify-center rounded-md bg-rose-50 text-rose-600 dark:bg-rose-900/30 dark:text-rose-300 shrink-0"><Trash2 className="w-4 h-4" /></button>
+                  <button onClick={() => { setSelected(new Set()); setBulkResult(null); }} className="text-sm px-2 py-1 rounded-md text-slate-500 shrink-0">Clear</button>
+                </div>
+              )}
             </div>
           )}
 
@@ -1078,6 +1172,7 @@ const InvCard: React.FC<{
         <button onClick={tap} className="text-left min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-semibold text-slate-800 dark:text-slate-100 truncate">{nameOf(i)}</span>
+            {i.listed && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">Listed</span>}
             {/* Devices no longer show a status badge here (status removed from the
                 device view); accessories still flag low stock. */}
             {!isDevice && (i.quantity ?? 0) <= (i.lowStockThreshold ?? 0) && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300">Low · {i.quantity ?? 0}</span>}

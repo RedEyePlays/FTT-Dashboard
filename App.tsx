@@ -401,11 +401,13 @@ const App: React.FC = () => {
     deleteItem(uid, target ? collectionFor(target) : 'inventory', id);
   };
 
-  // Update single field (inline edit)
-  const handleUpdateItem = (id: string, field: keyof InventoryItem, value: any) => {
-    if (!uid || !allow('inventory.edit')) return;
+  // Update single field (inline edit). Returns the write's promise so bulk
+  // callers (e.g. Inventory's multi-select actions) can detect per-item
+  // failures instead of assuming every write in a batch succeeded.
+  const handleUpdateItem = (id: string, field: keyof InventoryItem, value: any): Promise<void> => {
+    if (!uid || !allow('inventory.edit')) return Promise.resolve();
     const target = dataRef.current.find(i => i.id === id);
-    if (!target) return;
+    if (!target) return Promise.reject(new Error(`Item ${id} not found`));
     const label = target.sku || target.item || id;
     if (field === 'deviceStatus') logActivity(`${label} marked ${String(value).replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}`);
     else if (field === 'quantity') { logActivity(`${label} quantity updated`); audit('accessory.quantity', collectionFor(target), id, { quantity: target.quantity }, { quantity: value }); }
@@ -414,7 +416,7 @@ const App: React.FC = () => {
     // mark sold (like Quick Sale) so it leaves active stock and feeds reporting.
     const next = applyDirectSale({ ...target, [field]: value });
     if (field === 'salePrice' && next.soldDate && !target.soldDate) logActivity(`${label} sold for $${(next.salePrice || 0).toFixed(2)}`);
-    saveItem(uid, collectionFor(target), next);
+    return saveItem(uid, collectionFor(target), next);
   };
 
   // Update an entire row
