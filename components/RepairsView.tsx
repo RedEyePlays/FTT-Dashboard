@@ -10,7 +10,7 @@ import {
   partsTotal, repairPartsCost, repairLabor, completeRepair, isRepairOpen, technicianPerformance,
 } from '../domain/repairs';
 import { newId } from '../domain/ids';
-import { printRetailReceipt, printBatchIntake, printBatchInvoice, printBatchSummary, printDeviceSheet } from '../services/repairPrint';
+import { printRetailReceipt, printBatchIntake, printBatchInvoice, printBatchSummary, printDeviceSheet, printRepairEstimate } from '../services/repairPrint';
 // Lazy: the repair label modal pulls in jsPDF (~390 kB); load it on demand.
 const RepairLabelModal = lazy(() => import('./RepairLabelModal').then(m => ({ default: m.RepairLabelModal })));
 import { CustomerSearchInput } from './CustomerSearchInput';
@@ -405,7 +405,8 @@ export const RepairsView: React.FC<Props> = (props) => {
           onDelete={() => { onDeleteRepair(drawer.repair.id); setDrawer(null); }}
           onPrint={(doc) => { printRetailReceipt(drawer.repair, doc); onPrintAudit('repair', drawer.repair.id, doc); }}
           onPrintSheet={() => printSheet(drawer.repair)}
-          onPrintLabel={() => openLabel(drawer.repair)} />
+          onPrintLabel={() => openLabel(drawer.repair)}
+          onPrintEstimate={() => { printRepairEstimate(drawer.repair); onPrintAudit('repair', drawer.repair.id, 'estimate'); }} />
       )}
 
       {/* Batch create/edit form */}
@@ -521,8 +522,8 @@ const BatchDetail: React.FC<{
 /* ---------------- Repair drawer ---------------- */
 const RepairDrawer: React.FC<{
   initial: Repair; isNew: boolean; canDelete: boolean; auditLogs: AuditEntry[]; customers: Customer[];
-  onClose: () => void; onSave: (r: Repair) => void; onCheckoutViaSale?: (r: Repair) => void; onDelete: () => void; onPrint: (doc: 'intake' | 'repair' | 'pickup') => void; onPrintSheet: () => void; onPrintLabel: () => void;
-}> = ({ initial, isNew, canDelete, auditLogs, customers, onClose, onSave, onCheckoutViaSale, onDelete, onPrint, onPrintSheet, onPrintLabel }) => {
+  onClose: () => void; onSave: (r: Repair) => void; onCheckoutViaSale?: (r: Repair) => void; onDelete: () => void; onPrint: (doc: 'intake' | 'repair' | 'pickup') => void; onPrintSheet: () => void; onPrintLabel: () => void; onPrintEstimate: () => void;
+}> = ({ initial, isNew, canDelete, auditLogs, customers, onClose, onSave, onCheckoutViaSale, onDelete, onPrint, onPrintSheet, onPrintLabel, onPrintEstimate }) => {
   const [f, setF] = useState<Repair>(initial);
   // Snapshot the form state at mount for a dirty check, so a stray backdrop/X
   // click doesn't silently discard typed changes.
@@ -667,6 +668,7 @@ const RepairDrawer: React.FC<{
               <button onClick={onPrintLabel} title="Print QR label" className="p-2 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-500 hover:border-indigo-400"><QrCode className="w-4 h-4" /></button>
               <button onClick={onPrintSheet} title="Print device sheet" className="p-2 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-500 hover:border-indigo-400"><ScrollText className="w-4 h-4" /></button>
               {isRetail && <>
+                <button onClick={onPrintEstimate} title="Print estimate (before work begins — not a final bill)" className="p-2 border border-amber-300 dark:border-amber-700 rounded-lg text-amber-600 dark:text-amber-400 hover:border-amber-400"><DollarSign className="w-4 h-4" /></button>
                 <button onClick={() => onPrint('intake')} title="Intake receipt" className="p-2 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-500 hover:border-indigo-400"><FileText className="w-4 h-4" /></button>
                 <button onClick={() => onPrint('repair')} title="Repair receipt" className="p-2 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-500 hover:border-indigo-400"><Receipt className="w-4 h-4" /></button>
                 <button onClick={() => onPrint('pickup')} title="Pickup receipt" className="p-2 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-500 hover:border-indigo-400"><Printer className="w-4 h-4" /></button>
