@@ -11,6 +11,7 @@ import {
 } from '../domain/settings';
 import { ROLE_PERMISSIONS, ROLE_LABEL } from '../services/rbac';
 import { REPAIR_STATUS_LABEL } from '../domain/repairs';
+import { formatPhoneInput } from '../domain/phone';
 import { useIsMobile } from '../hooks/useMediaQuery';
 import { SettingsSection, SettingsCard, SettingsToggle, SettingsSelect, SettingsTextField } from './settingsPrimitives';
 import { BackupFileMeta } from '../services/backupStorage';
@@ -199,7 +200,7 @@ const StoreSection: React.FC<{ draft: AppSettings; patch: PatchFn }> = ({ draft,
   <SettingsSection title="Store Profile" description="Contact details used on receipts, labels and documents.">
     <SettingsCard>
       <SettingsTextField label="Address" value={draft.general.address} onChange={v => patch('general', { address: v })} placeholder="123 Main St, Toronto, ON" />
-      <SettingsTextField label="Phone" type="tel" value={draft.general.phone} onChange={v => patch('general', { phone: v })} placeholder="(555) 123-4567" />
+      <SettingsTextField label="Phone" type="tel" value={draft.general.phone} onChange={v => patch('general', { phone: formatPhoneInput(v) })} placeholder="(555) 123-4567" />
       <SettingsTextField label="Email" type="email" value={draft.general.email} onChange={v => patch('general', { email: v })} placeholder="shop@flipthattech.com" />
       <SettingsTextField label="Website" type="url" value={draft.general.website} onChange={v => patch('general', { website: v })} placeholder="https://flipthattech.com" />
       <SettingsTextField label="Business / tax number" value={draft.general.businessNumber} onChange={v => patch('general', { businessNumber: v })} placeholder="Optional" />

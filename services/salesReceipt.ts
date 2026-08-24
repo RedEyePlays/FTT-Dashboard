@@ -1,4 +1,5 @@
 import { SalesTransaction } from '../types';
+import { PRINT_PREVIEW_BAR_STYLE, PRINT_PREVIEW_BAR_HTML } from './printPreview';
 
 // The thermal (80mm) sales receipt. Extracted here so it renders identically
 // whether printed at checkout (hooks/useCheckout) or reprinted later from a
@@ -30,8 +31,9 @@ export function printSalesReceipt(tx: SalesTransaction, opts: { storeName?: stri
     body{font-family:'Inter',system-ui,Arial,sans-serif;width:72mm;margin:0 auto;padding:2mm 0;color:#000;font-size:3mm;}
     h2{text-align:center;margin:0 0 0.5mm;font-size:4.2mm;} .muted{color:#555;font-size:2.6mm;text-align:center;margin-bottom:2mm;}
     table{width:100%;border-collapse:collapse;font-size:2.9mm;} td{padding:0.5mm 0;} .tot td{border-top:0.25mm dashed #999;padding-top:1mm;}
-    .row{display:flex;justify-content:space-between;font-size:2.9mm;} .b{font-weight:800;}</style></head>
-    <body><h2>${store}</h2><div class="muted">Receipt ${tx.id}<br/>${tx.date}</div>
+    .row{display:flex;justify-content:space-between;font-size:2.9mm;} .b{font-weight:800;}
+    ${PRINT_PREVIEW_BAR_STYLE}</style></head>
+    <body>${PRINT_PREVIEW_BAR_HTML}<h2>${store}</h2><div class="muted">Receipt ${tx.id}<br/>${tx.date}</div>
     <table>${rows}</table>
     <div style="margin-top:2mm">
       <div class="row"><span>Subtotal</span><span>${money(tx.subtotal)}</span></div>
@@ -42,7 +44,6 @@ export function printSalesReceipt(tx: SalesTransaction, opts: { storeName?: stri
       ${tx.customerName ? `<div class="row" style="color:#555"><span>Customer</span><span>${tx.customerName}</span></div>` : ''}
     </div>
     <p style="text-align:center;font-size:2.7mm;color:#555;margin-top:3mm">Thank you!</p>
-    <script>window.onload=function(){window.print();setTimeout(function(){window.close();},300);};</script>
     </body></html>`);
   win.document.close();
   return true;

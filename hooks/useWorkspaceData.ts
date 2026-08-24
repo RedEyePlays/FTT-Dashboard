@@ -3,7 +3,7 @@ import { User, signOut } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
 import {
   InventoryItem, Note, Task, Runner, DropOff, Settlement, Customer, SalesTransaction,
-  ActivityEntry, AppUser, WorkspaceInvite, AuditEntry, Repair, RepairBatch, TimeEntry, PayPeriodPaid, CashReconciliation,
+  ActivityEntry, AppUser, WorkspaceInvite, AuditEntry, Repair, RepairBatch, TimeEntry, PayPeriodPaid, CashReconciliation, StaffNote,
 } from '../types';
 import { decryptData } from '../services/security';
 import { AppSettings, mergeSettings } from '../domain/settings';
@@ -53,6 +53,7 @@ export function useWorkspaceData() {
   const [timeEntries, setTimeEntries] = useState<TimeEntry[]>([]);
   const [payPeriods, setPayPeriods] = useState<PayPeriodPaid[]>([]);
   const [cashReconciliations, setCashReconciliations] = useState<CashReconciliation[]>([]);
+  const [staffNotes, setStaffNotes] = useState<StaffNote[]>([]);
   const [skuCounters, setSkuCounters] = useState<Record<string, number>>({});
   const [activityLog, setActivityLog] = useState<ActivityEntry[]>([]);
   const [lastBackup, setLastBackup] = useState<number | undefined>(undefined);
@@ -115,7 +116,7 @@ export function useWorkspaceData() {
         setDevices([]); setAccessories([]); setNotes([]); setTasks([]);
         setRunners([]); setDropOffs([]); setSettlements([]); setCustomers([]);
         setSalesTransactions([]); setRepairs([]); setRepairBatches([]); setTimeEntries([]); setPayPeriods([]); setActivityLog([]); setSkuCounters({});
-        setAppUser(null); setWorkspaceUsers([]); setInvites([]); setAuditLogs([]); setExtendedEnabled(false); setCashEnabled(false);
+        setAppUser(null); setWorkspaceUsers([]); setInvites([]); setAuditLogs([]); setStaffNotes([]); setExtendedEnabled(false); setCashEnabled(false);
         setDbLoading(false); setRoleLoading(false);
       }
       setIsLoadingAuth(false);
@@ -235,6 +236,14 @@ export function useWorkspaceData() {
       { orderByField: 'ts', limitTo: auditLimit });
   }, [user, appUser, workspaceId, reconnectKey, auditLimit]);
 
+  // Staff notes (owner-only shoutout/notes log) — its own effect, gated to
+  // owners only, so it never subscribes for roles that can't see it.
+  useEffect(() => {
+    if (!user || !appUser || !workspaceId || appUser.role !== 'owner') { setStaffNotes([]); return; }
+    const onErr = (e: Error) => { console.error('Firestore error (staff notes):', e); };
+    return subscribeCollection<StaffNote>(workspaceId, 'staffNotes', setStaffNotes, onErr);
+  }, [user, appUser, workspaceId, reconnectKey]);
+
   // Retry a failed connection (used by the DB-error screen's Retry button).
   const reconnect = () => { setDbError(null); setDbLoading(true); setReconnectKey(k => k + 1); };
 
@@ -253,7 +262,7 @@ export function useWorkspaceData() {
     // collections
     devices, accessories, data, notes, setNotes, tasks, setTasks,
     runners, dropOffs, settlements, customers, salesTransactions,
-    repairs, repairBatches, timeEntries, payPeriods, cashReconciliations,
+    repairs, repairBatches, timeEntries, payPeriods, cashReconciliations, staffNotes,
     skuCounters, setSkuCounters, activityLog, lastBackup, settings,
     // connection status
     dbLoading, dbError, setDbError, reconnect,

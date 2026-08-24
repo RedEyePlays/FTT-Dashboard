@@ -7,7 +7,7 @@ const ALL: Permission[] = [
   'cash.log', 'cash.reconcile',
   'reports.view', 'reports.profit.summary', 'reports.profit.detailed',
   'users.manage', 'users.tech', 'users.pin', 'security.manage', 'timeclock.use', 'payroll.manage', 'closeout.view',
-  'audit.view', 'backup.export', 'settings.manage',
+  'audit.view', 'backup.export', 'settings.manage', 'staffNotes.manage',
 ];
 
 export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {

@@ -1,5 +1,6 @@
 import { Repair, RepairBatch } from '../types';
 import { REPAIR_STATUS_LABEL, balanceOwing, batchTotals, repairPartsCost, repairLabor, partName } from '../domain/repairs';
+import { PRINT_PREVIEW_BAR_STYLE, PRINT_PREVIEW_BAR_HTML } from './printPreview';
 
 // Reuses the app's print pattern: open a window, write inline-styled HTML, print.
 const SHOP = 'FlipThatTech';
@@ -26,8 +27,8 @@ const openPrint = (title: string, width: number, body: string) => {
       .disc{font-size:9px;color:#777;margin-top:10px;line-height:1.3;}
       .foot{text-align:center;font-size:11px;color:#555;margin-top:12px;}
       .estamp{text-align:center;font-weight:800;font-size:18px;letter-spacing:3px;color:#b45309;border:2px solid #b45309;border-radius:6px;padding:4px 0;margin:8px 0 4px;}
-    </style></head><body>${body}
-    <script>window.onload=function(){window.print();setTimeout(function(){window.close();},300);};</script>
+      ${PRINT_PREVIEW_BAR_STYLE}
+    </style></head><body>${PRINT_PREVIEW_BAR_HTML}${body}
     </body></html>`);
   win.document.close();
 };
@@ -61,8 +62,8 @@ const openThermalPrint = (title: string, body: string) => {
       .disc{font-size:2.2mm;color:#777;margin-top:2.5mm;line-height:1.3;}
       .foot{text-align:center;font-size:2.7mm;color:#555;margin-top:3mm;}
       .estamp{text-align:center;font-weight:800;font-size:4.4mm;letter-spacing:0.6mm;color:#b45309;border:0.5mm solid #b45309;border-radius:1.5mm;padding:1mm 0;margin:2mm 0 1mm;}
-    </style></head><body>${body}
-    <script>window.onload=function(){window.print();setTimeout(function(){window.close();},300);};</script>
+      ${PRINT_PREVIEW_BAR_STYLE}
+    </style></head><body>${PRINT_PREVIEW_BAR_HTML}${body}
     </body></html>`);
   win.document.close();
 };

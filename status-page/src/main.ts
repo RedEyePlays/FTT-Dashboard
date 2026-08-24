@@ -25,7 +25,10 @@ let loading = false;
 let error: string | null = null;
 let result: RepairStatusResult | null = null;
 // Preserve what the visitor typed across a failed/loading render.
-let ticketValue = '';
+// A "Copy Link" action elsewhere in the app can deep-link straight to a
+// ticket via ?ticket=..., prefilling this field so the visitor only has to
+// enter the name/phone verification — never the ticket number itself.
+let ticketValue = new URLSearchParams(window.location.search).get('ticket') || '';
 let identifierValue = '';
 
 function errorMessage(err: unknown): string {

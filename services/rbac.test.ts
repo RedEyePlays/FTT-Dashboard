@@ -165,4 +165,12 @@ describe('can()', () => {
   it('an undefined role has no permissions', () => {
     expect(can(undefined, 'reports.view')).toBe(false);
   });
+
+  it('the staff notes log (staffNotes.manage) is owner-only', () => {
+    expect(can('owner', 'staffNotes.manage')).toBe(true);
+    expect(can('manager', 'staffNotes.manage')).toBe(false);
+    expect(can('employee', 'staffNotes.manage')).toBe(false);
+    expect(can('technician', 'staffNotes.manage')).toBe(false);
+    expect(can(undefined, 'staffNotes.manage')).toBe(false);
+  });
 });

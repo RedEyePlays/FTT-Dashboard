@@ -1,6 +1,7 @@
 import { InventoryItem } from '../types';
 import { kindOf, getDeviceDisplayName } from '../domain/inventory';
 import { BUILT_IN_LABEL_SIZES } from '../domain/settings';
+import { PRINT_PREVIEW_BAR_STYLE, PRINT_PREVIEW_BAR_HTML } from './printPreview';
 
 // A compact retail SHELF PRICE TAG — printed on a DYMO (or similar) LABEL
 // PRINTER, NOT the thermal receipt printer. This is a physically small,
@@ -86,9 +87,10 @@ const printDoc = (title: string, pages: string[]): string => {
       .tag-page { position: relative; width: ${H_MM}mm; height: ${W_MM}mm; overflow: hidden; page-break-after: always; }
       .tag-page:last-child { page-break-after: auto; }
       .rot { position: absolute; top: 0; left: 0; width: ${W_MM}mm; height: ${H_MM}mm; transform-origin: 0 0; transform: translate(${H_MM}mm, 0) rotate(90deg); }
+      ${PRINT_PREVIEW_BAR_STYLE}
     </style></head>
-    <body>${rotated}
-      <script>window.onload=function(){window.focus();window.print();setTimeout(function(){window.close();},300);};</script>
+    <body>${PRINT_PREVIEW_BAR_HTML}${rotated}
+      <script>window.onload=function(){window.focus();};</script>
     </body></html>`;
 };
 

@@ -7,6 +7,7 @@ import {
 import { InventoryItem, Customer, DeviceType, Repair } from '../types';
 import { RepairSalePrefill } from '../domain/repairs';
 import { getDeviceDisplayName, suggestedSalePrice, PriceSuggestion } from '../domain/inventory';
+import { formatPhoneInput } from '../domain/phone';
 import { useCheckout, CartCheckout, CustomCategory, CUSTOM_DEVICE_TYPES } from '../hooks/useCheckout';
 import { CustomerSearchInput } from './CustomerSearchInput';
 // Lazy: defers jsPDF (~390 kB) until a label is actually printed.
@@ -266,7 +267,7 @@ export const MobileCheckout: React.FC<Props> = (props) => {
               onSelect={c => { cx.setCustomerName(c.name); cx.setCustomerPhone(c.phone || ''); cx.setCustomerEmail(c.email || ''); cx.setSelectedCustomerId(c.id); }} />
           )}
           <div className="relative"><User className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" /><input value={cx.customerName} onChange={e => { cx.setCustomerName(e.target.value); cx.setSelectedCustomerId(undefined); }} placeholder="Customer name (optional)" className={`${input} pl-9`} /></div>
-          <div className="relative"><Phone className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" /><input type="tel" inputMode="tel" value={cx.customerPhone} onChange={e => cx.setCustomerPhone(e.target.value)} placeholder="Phone" className={`${input} pl-9`} /></div>
+          <div className="relative"><Phone className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" /><input type="tel" inputMode="tel" value={cx.customerPhone} onChange={e => cx.setCustomerPhone(formatPhoneInput(e.target.value))} placeholder="Phone" className={`${input} pl-9`} /></div>
           <div className="relative"><Mail className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" /><input type="email" inputMode="email" value={cx.customerEmail} onChange={e => cx.setCustomerEmail(e.target.value)} placeholder="Email (optional)" className={`${input} pl-9`} /></div>
           <button onClick={() => { cx.setCustomerName('Walk-in'); cx.setCustomerPhone(''); cx.setCustomerEmail(''); cx.setSelectedCustomerId(undefined); next(); }} className="w-full py-3 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-sm font-medium">Continue as Walk-in</button>
         </div>

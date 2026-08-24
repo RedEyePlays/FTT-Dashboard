@@ -17,6 +17,7 @@ import { ResponsiveDialog, EmptyState } from './responsive';
 import { InvSection, INV_SECTIONS } from '../domain/inventoryNav';
 import { getDeviceDisplayName, priceFieldFor } from '../domain/inventory';
 import { clampWidth, fitWidths } from '../domain/columnLayout';
+import { usePersistedFilter } from '../hooks/usePersistedFilter';
 
 interface Props {
   inventory: InventoryItem[];
@@ -24,6 +25,7 @@ interface Props {
   activity: ActivityEntry[];
   auditLogs?: AuditEntry[]; // display-only, for the per-row Audit Log popover
   canViewCost?: boolean;    // owner/authorized — show purchase cost on mobile cards
+  userId?: string;          // signed-in user's uid — scopes remembered filters so they never leak between accounts
   section: InvSection;              // active inventory section (URL-driven)
   onSelectSection: (s: InvSection) => void; // switch section (updates the route)
   onSave: (item: InventoryItem) => void;
@@ -232,7 +234,7 @@ const parseCSV = (text: string): Record<string, string>[] => {
   return rows.filter(r => r.some(x => x !== '')).map(r => Object.fromEntries(header.map((h, i) => [h.trim(), r[i] ?? ''])));
 };
 
-export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, auditLogs = [], canViewCost = false, section, onSelectSection, onSave, onUpdate, onDelete, onGenerateSku, onSeed, repairs = [], onCreateRepair, onOpenRepair }) => {
+export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, auditLogs = [], canViewCost = false, userId, section, onSelectSection, onSave, onUpdate, onDelete, onGenerateSku, onSeed, repairs = [], onCreateRepair, onOpenRepair }) => {
   const linkedRepairOf = (id: string): Repair | undefined => linkedRepairFor(id, repairs);
   const isMobile = useIsMobile();
   const [selectMode, setSelectMode] = useState(false); // mobile multi-select
@@ -244,7 +246,7 @@ export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, a
   const [historyItem, setHistoryItem] = useState<{ item: InventoryItem; mode: 'history' | 'audit' } | null>(null);
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<Sort | null>(null);
-  const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [statusFilter, setStatusFilter] = usePersistedFilter<string>('inv_status_filter', userId, 'all');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [hidden, setHidden] = useState<Record<'device' | 'accessory', string[]>>(() => loadLS(LS_HIDDEN, DEFAULT_HIDDEN));
   const [views, setViews] = useState<SavedView[]>(() => loadLS(LS_VIEWS, []));

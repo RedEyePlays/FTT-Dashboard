@@ -6,6 +6,7 @@ import { kindOf, getDeviceDisplayName } from '../domain/inventory';
 import { isZeroPricedDevice as isZeroPricedLine, cartHasZeroPricedDevice, searchCheckoutInventory, salesBalanceOwing } from '../domain/pos';
 import { RepairSalePrefill, repairSalePrefill, isRepairOpen, matchesRepair } from '../domain/repairs';
 import { printSalesReceipt } from '../services/salesReceipt';
+import { PRINT_PREVIEW_BAR_STYLE, PRINT_PREVIEW_BAR_HTML } from '../services/printPreview';
 
 // All Quick Sale / checkout state, pricing math and the commit-payload builder
 // live here so the desktop CartSaleView and the mobile step flow share ONE
@@ -490,8 +491,10 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
         .totals .grand{border-top:2px solid #111;font-weight:800;font-size:15px;margin-top:4px;padding-top:8px;}
         .totals .owe{color:#b45309;font-weight:800;}
         .pay{margin-top:20px;font-size:12px;color:#555;} .foot{margin-top:36px;text-align:center;color:#888;font-size:11px;border-top:1px solid #eee;padding-top:12px;}
+        ${PRINT_PREVIEW_BAR_STYLE}
       </style></head>
       <body>
+        ${PRINT_PREVIEW_BAR_HTML}
         <div class="top">
           <div class="store">
             ${store.logoUrl ? `<img class="logo" src="${esc(store.logoUrl)}" alt="${esc(store.storeName)}"/>` : ''}
@@ -522,7 +525,6 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
         </div>
         <div class="pay">Payment method: ${esc(payParts)}${lastTx.notes ? ` · ${esc(lastTx.notes)}` : ''}</div>
         <div class="foot">Thank you for your business!${store.website ? ` · ${esc(store.website)}` : ''}</div>
-        <script>window.onload=function(){window.print();};</script>
       </body></html>`);
     win.document.close();
   };
