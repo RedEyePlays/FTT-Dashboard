@@ -7,9 +7,12 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p status-page/tsconfig.json",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "dev:status": "vite --config vite.status.config.ts",
+    "build:status": "vite build --config vite.status.config.ts",
+    "preview:status": "vite preview --config vite.status.config.ts"
   },
   "dependencies": {
     "@google/genai": "^1.33.0",

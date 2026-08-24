@@ -30,8 +30,11 @@ const openPrint = (title: string, width: number, body: string) => {
 };
 
 const row = (k: string, v?: string) => (v ? `<div class="row"><span class="k">${esc(k)}</span><span>${esc(v)}</span></div>` : '');
-// Public customer-facing repair-status page (see index.tsx / RepairStatusLookup).
-const trackUrl = (): string => `${typeof window !== 'undefined' ? window.location.origin : ''}/status`;
+// Public customer-facing repair-status page — a fully separate, standalone
+// site (see status-page/) deployed to its own Firebase Hosting target, not a
+// route of this app. Hardcoded rather than derived from window.location since
+// this app's own origin is no longer where that page lives.
+const trackUrl = (): string => 'https://status.flipthat.tech';
 const deviceBlock = (r: Repair) => {
   const name = [r.brand, r.model].filter(Boolean).join(' ') || r.deviceType || 'Device';
   return `<h3>Device</h3>${row('Device', name)}${row('Type', r.deviceType)}${row('Storage', r.storage)}${row('Color', r.color)}${row('IMEI / Serial', r.imei)}${row('Carrier', r.carrier)}`;
