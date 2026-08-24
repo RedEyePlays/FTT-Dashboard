@@ -56,6 +56,7 @@ import { canVoidSale, canReturnSale, returnRefund, saleAccessoryRestock } from '
 import { expectedCashForDate, expectedEndingCash, sumDrawerEntries, cashDrawerSummary, ReconciliationInput } from './domain/reports';
 import type { CashMovementKind } from './components/LogCashMovementModal';
 const OpenDrawerModal = lazy(() => import('./components/OpenDrawerModal').then(m => ({ default: m.OpenDrawerModal })));
+const CloseDrawerModal = lazy(() => import('./components/CloseDrawerModal').then(m => ({ default: m.CloseDrawerModal })));
 import { openEntryFor, isOnBreak, periodPayFor, paidKey, toISODate, PayPeriod, correctClockOut, isValidClockOutCorrection } from './domain/timeclock';
 import { buildAlerts } from './domain/alerts';
 import { changedSettingsSections } from './domain/audit';
@@ -141,6 +142,7 @@ const App: React.FC = () => {
   // open-drawer modal. Both live on the POS screen where cash is handled.
   const [cashLogKind, setCashLogKind] = useState<CashMovementKind | null>(null);
   const [showOpenDrawer, setShowOpenDrawer] = useState(false);
+  const [showCloseDrawer, setShowCloseDrawer] = useState(false);
   const [showFinder, setShowFinder] = useState(false);
 
   // Theme State
@@ -583,6 +585,26 @@ const App: React.FC = () => {
       reconciledAt: Date.now(), reconciledBy: appUser.id, reconciledByEmail: appUser.email,
     });
     if (saved) audit('cash.reconcile', 'cashReconciliation', r.date, undefined, { expected: saved.expectedCash, counted: saved.countedCash, variance: saved.variance });
+  };
+
+  // Quick close-out right at the register (the actual "closing up" moment) —
+  // count the till and reconcile in one step, instead of only being possible
+  // from the full Reports > Cash tab. commitDrawerRecord merges over today's
+  // existing record, so the opening float and any logged cash in/out/withdrawal
+  // entries carry through unchanged; this only adds the count + note and stamps
+  // the reconciled-by/at markers. Owner/manager only (cash.reconcile).
+  const handleCloseDrawer = (countedCash: number, note?: string) => {
+    if (!uid || !appUser || !allow('cash.reconcile')) return;
+    const date = new Date().toISOString().split('T')[0];
+    const saved = commitDrawerRecord(date, {
+      countedCash, note,
+      reconciledAt: Date.now(), reconciledBy: appUser.id, reconciledByEmail: appUser.email,
+    });
+    if (saved) {
+      const variance = saved.variance;
+      logActivity(`Drawer closed — counted $${countedCash.toFixed(2)}${Math.abs(variance) >= 0.005 ? ` (${variance > 0 ? 'over' : 'short'} $${Math.abs(variance).toFixed(2)})` : ''}`);
+      audit('cash.reconcile', 'cashReconciliation', date, undefined, { expected: saved.expectedCash, counted: saved.countedCash, variance: saved.variance });
+    }
   };
 
   // Open the drawer for the day — record the actual starting float explicitly
@@ -1207,6 +1229,8 @@ const App: React.FC = () => {
               cashDrawer={allow('cash.log') ? todayDrawer : undefined}
               onOpenDrawer={allow('cash.log') ? () => setShowOpenDrawer(true) : undefined}
               onLogCash={allow('cash.log') ? (kind) => setCashLogKind(kind) : undefined}
+              onCloseDrawer={allow('cash.reconcile') ? () => setShowCloseDrawer(true) : undefined}
+              reconciledToday={!!todayRecon?.reconciledAt}
             />
           )}
           {view === 'dropoff' && (
@@ -1348,6 +1372,16 @@ const App: React.FC = () => {
           <OpenDrawerModal onClose={() => setShowOpenDrawer(false)} onOpen={handleOpenDrawer}
             defaultFloat={settings.operations.openingFloatDefault}
             alreadyOpen={!!todayRecon?.openedAt} currentFloat={todayRecon?.openingFloat} />
+        </Suspense>
+      )}
+
+      {showCloseDrawer && allow('cash.reconcile') && (
+        <Suspense fallback={null}>
+          <CloseDrawerModal onClose={() => setShowCloseDrawer(false)} onCloseDrawer={handleCloseDrawer} summary={todayDrawer}
+            alreadyReconciled={todayRecon?.reconciledAt ? {
+              countedCash: todayRecon.countedCash || 0, variance: todayRecon.variance,
+              byEmail: todayRecon.reconciledByEmail, at: todayRecon.reconciledAt,
+            } : undefined} />
         </Suspense>
       )}
 

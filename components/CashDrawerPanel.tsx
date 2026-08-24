@@ -1,5 +1,5 @@
 import React from 'react';
-import { Wallet, DoorOpen, ArrowDownToLine, Banknote, ArrowUpFromLine, AlertTriangle } from 'lucide-react';
+import { Wallet, DoorOpen, ArrowDownToLine, Banknote, ArrowUpFromLine, AlertTriangle, Lock, CheckCircle2 } from 'lucide-react';
 import { CashDrawerSummary } from '../domain/reports';
 import type { CashMovementKind } from './LogCashMovementModal';
 
@@ -7,14 +7,21 @@ interface Props {
   summary: CashDrawerSummary;         // today's live drawer (shared math)
   onOpenDrawer: () => void;
   onLog: (kind: CashMovementKind) => void;
+  // Count + close the drawer for the day, right here at the register — owner/
+  // manager only (cash.reconcile). Omitted entirely for anyone without that
+  // permission, so an employee closing up alone still sees Open/In/Out but no
+  // close action they can't complete.
+  onCloseDrawer?: () => void;
+  reconciledToday?: boolean;
 }
 
 const money = (n: number) => `$${(n || 0).toFixed(2)}`;
 
 // The register-side cash panel, shown right on the POS/checkout screen where cash
 // is actually handled (not buried in a header menu). Shows the live expected
-// drawer total and the quick actions: open drawer, cash in, cash out, withdrawal.
-export const CashDrawerPanel: React.FC<Props> = ({ summary, onOpenDrawer, onLog }) => {
+// drawer total and the quick actions: open drawer, cash in, cash out, withdrawal,
+// and — when the viewer can reconcile — close the drawer for the day.
+export const CashDrawerPanel: React.FC<Props> = ({ summary, onOpenDrawer, onLog, onCloseDrawer, reconciledToday }) => {
   const btn = 'flex items-center justify-center gap-1.5 px-2.5 py-2 rounded-lg text-xs font-medium border bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-indigo-400';
   return (
     <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-3">
@@ -30,12 +37,22 @@ export const CashDrawerPanel: React.FC<Props> = ({ summary, onOpenDrawer, onLog 
               <AlertTriangle className="w-3 h-3" /> Drawer not opened
             </span>
           )}
+          {reconciledToday && (
+            <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">
+              <CheckCircle2 className="w-3 h-3" /> Closed today
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-1.5 flex-wrap">
           <button onClick={onOpenDrawer} className={`${btn} ${!summary.opened ? '!bg-indigo-600 !text-white !border-indigo-600 hover:!bg-indigo-700' : ''}`}><DoorOpen className="w-3.5 h-3.5" /> {summary.opened ? 'Float' : 'Open drawer'}</button>
           <button onClick={() => onLog('cashIn')} className={btn}><ArrowDownToLine className="w-3.5 h-3.5" /> Cash in</button>
           <button onClick={() => onLog('cashOut')} className={btn}><Banknote className="w-3.5 h-3.5" /> Cash out</button>
           <button onClick={() => onLog('withdrawal')} className={btn}><ArrowUpFromLine className="w-3.5 h-3.5" /> Withdrawal</button>
+          {onCloseDrawer && (
+            <button onClick={onCloseDrawer} className={`${btn} !border-indigo-300 dark:!border-indigo-700 !text-indigo-700 dark:!text-indigo-300`}>
+              <Lock className="w-3.5 h-3.5" /> {reconciledToday ? 'Re-close' : 'Close drawer'}
+            </button>
+          )}
         </div>
       </div>
       {/* Compact breakdown so the number is trusted, not a black box. */}

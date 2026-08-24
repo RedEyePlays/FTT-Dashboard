@@ -24,12 +24,17 @@ interface Props {
   cashDrawer?: CashDrawerSummary;
   onOpenDrawer?: () => void;
   onLogCash?: (kind: CashMovementKind) => void;
+  // Close (count + reconcile) the drawer for the day — present only when the
+  // viewer can reconcile (cash.reconcile), so an employee sees Open/In/Out but
+  // no close action they don't have permission to complete.
+  onCloseDrawer?: () => void;
+  reconciledToday?: boolean;
 }
 
 // Quick Sale = the desktop split-screen cart on ≥md, a step-based flow on phones.
 // Both share the same checkout logic (hooks/useCheckout) — no duplicated business
 // logic; only the presentation differs, and only one renders at a time.
-export const QuickSaleView: React.FC<Props> = ({ inventory, customers, repairs, initialCustomer, onConsumeInitial, initialRepair, onConsumeInitialRepair, onSellCart, canViewProfit = true, onGenerateSku, cashDrawer, onOpenDrawer, onLogCash }) => {
+export const QuickSaleView: React.FC<Props> = ({ inventory, customers, repairs, initialCustomer, onConsumeInitial, initialRepair, onConsumeInitialRepair, onSellCart, canViewProfit = true, onGenerateSku, cashDrawer, onOpenDrawer, onLogCash, onCloseDrawer, reconciledToday }) => {
   const isMobile = useIsMobile();
   const common = { inventory, customers, repairs, initialCustomer, onConsumeInitial, initialRepair, onConsumeInitialRepair, canViewProfit, onGenerateSku } as const;
   const checkout = isMobile
@@ -38,7 +43,7 @@ export const QuickSaleView: React.FC<Props> = ({ inventory, customers, repairs, 
   return (
     <div className="flex flex-col gap-4 flex-1 min-h-0">
       {cashDrawer && onOpenDrawer && onLogCash && (
-        <CashDrawerPanel summary={cashDrawer} onOpenDrawer={onOpenDrawer} onLog={onLogCash} />
+        <CashDrawerPanel summary={cashDrawer} onOpenDrawer={onOpenDrawer} onLog={onLogCash} onCloseDrawer={onCloseDrawer} reconciledToday={reconciledToday} />
       )}
       {checkout}
     </div>
