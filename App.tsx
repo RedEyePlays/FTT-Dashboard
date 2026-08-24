@@ -93,7 +93,7 @@ const App: React.FC = () => {
     runners, dropOffs, settlements, salesTransactions, customers, repairs, repairBatches,
     timeEntries, payPeriods, cashReconciliations,
     skuCounters, setSkuCounters, activityLog, lastBackup, settings,
-    dbLoading, dbError, reconnect, enableExtendedData,
+    dbLoading, dbError, reconnect, enableExtendedData, enableCashData,
     runnersRef, dropOffsRef, settlementsRef, customersRef, salesTransactionsRef,
     repairsRef, repairBatchesRef, skuRef, dataRef,
   } = useWorkspaceData();
@@ -175,6 +175,15 @@ const App: React.FC = () => {
 
   // Role-based permission check (mirrors the Firestore rules)
   const allow = (p: Permission) => can(appUser?.role, p, { allowProfit: appUser?.allowProfit });
+
+  // The register cash drawer lives on POS (not just Reports), so load cash
+  // reconciliations for anyone who can handle cash the moment they're on POS —
+  // and on Reports. Without this the drawer summary is blank and Open Drawer /
+  // cash-log writes have no live record to read-modify-write against.
+  const canLogCash = allow('cash.log');
+  useEffect(() => {
+    if (view === 'reports' || (view === 'pos' && canLogCash)) enableCashData();
+  }, [view, canLogCash, enableCashData]);
 
   // Write an activity entry to Firestore (Recent Activity is generated from DB changes)
   const logActivity = (text: string) => { if (uid) logActivityDoc(uid, mkActivity(text)).catch(() => {}); };

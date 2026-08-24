@@ -70,13 +70,18 @@ export function useWorkspaceData() {
   const [dbLoading, setDbLoading] = useState(true);
   const [dbError, setDbError] = useState<string | null>(null);
   const [reconnectKey, setReconnectKey] = useState(0);
-  // Deferred collections: time entries, pay periods, cash reconciliations,
-  // drop-offs and settlements are read only by the Time Clock, Reports and
-  // Drop-off views (and the write handlers those views invoke) — never by the
-  // Dashboard or the other everyday pages. So they don't subscribe on login;
-  // App flips this on the first visit to one of those views, and it stays on
-  // afterwards (no tear-down, no re-fetch churn, real-time from then on).
+  // Deferred collections: time entries, pay periods, drop-offs and settlements
+  // are read only by the Time Clock, Reports and Drop-off views (and the write
+  // handlers those views invoke) — never by the Dashboard or everyday pages. So
+  // they don't subscribe on login; App flips this on the first visit to one of
+  // those views, and it stays on afterwards (no tear-down, no re-fetch churn).
   const [extendedEnabled, setExtendedEnabled] = useState(false);
+  // Cash reconciliations are separate because the register cash drawer lives on
+  // the POS/Quick Sale screen (not just Reports) — the drawer summary and the
+  // open/log/reconcile write path all need this live. App enables it for anyone
+  // who can handle cash (cash.log) the moment they're on POS, and on Reports.
+  // Kept out of the heavier extended bucket so POS doesn't pull payroll data.
+  const [cashEnabled, setCashEnabled] = useState(false);
   // Audit log is unbounded over the shop's lifetime, so it's fetched newest-first
   // in bounded pages (server-side limit) with a load-older control, rather than
   // downloaded in full on every session.
@@ -110,7 +115,7 @@ export function useWorkspaceData() {
         setDevices([]); setAccessories([]); setNotes([]); setTasks([]);
         setRunners([]); setDropOffs([]); setSettlements([]); setCustomers([]);
         setSalesTransactions([]); setRepairs([]); setRepairBatches([]); setTimeEntries([]); setPayPeriods([]); setActivityLog([]); setSkuCounters({});
-        setAppUser(null); setWorkspaceUsers([]); setInvites([]); setAuditLogs([]); setExtendedEnabled(false);
+        setAppUser(null); setWorkspaceUsers([]); setInvites([]); setAuditLogs([]); setExtendedEnabled(false); setCashEnabled(false);
         setDbLoading(false); setRoleLoading(false);
       }
       setIsLoadingAuth(false);
@@ -208,10 +213,17 @@ export function useWorkspaceData() {
       subscribeCollection<Settlement>(workspaceId, 'settlements', setSettlements, onErr),
       subscribeCollection<TimeEntry>(workspaceId, 'timeEntries', setTimeEntries, onErr),
       subscribeCollection<PayPeriodPaid>(workspaceId, 'payPeriods', setPayPeriods, onErr),
-      subscribeCollection<CashReconciliation>(workspaceId, 'cashReconciliations', setCashReconciliations, onErr),
     ];
     return () => subs.forEach(u => u());
   }, [user, appUser, workspaceId, reconnectKey, extendedEnabled]);
+
+  // Cash reconciliations subscription — enabled independently (POS cash drawer +
+  // Reports) so the drawer's read-modify-write path always sees the live record.
+  useEffect(() => {
+    if (!user || !appUser || !workspaceId || !cashEnabled) return;
+    const onErr = (e: Error) => { console.error('Firestore error (cash):', e); setDbError(e.message || 'Failed to load data'); };
+    return subscribeCollection<CashReconciliation>(workspaceId, 'cashReconciliations', setCashReconciliations, onErr);
+  }, [user, appUser, workspaceId, reconnectKey, cashEnabled]);
 
   // Audit log subscription is separate so "load older" can widen the page limit
   // without tearing down and re-subscribing every other collection.
@@ -228,6 +240,7 @@ export function useWorkspaceData() {
 
   // Stable so App's per-view effect doesn't re-run every render.
   const enableExtendedData = useCallback(() => setExtendedEnabled(true), []);
+  const enableCashData = useCallback(() => setCashEnabled(true), []);
 
   return {
     // auth
@@ -246,7 +259,7 @@ export function useWorkspaceData() {
     dbLoading, dbError, setDbError, reconnect,
     // Start the deferred subscriptions (time clock / reports / drop-offs data).
     // Idempotent — safe to call on every render of those views.
-    enableExtendedData,
+    enableExtendedData, enableCashData,
     // latest-snapshot refs
     runnersRef, dropOffsRef, settlementsRef, customersRef, salesTransactionsRef,
     repairsRef, repairBatchesRef, skuRef, dataRef,
