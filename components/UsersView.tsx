@@ -24,7 +24,7 @@ interface Props {
   onSetAutoLockMinutes?: (minutes: number) => void;
 }
 
-const AUTO_LOCK_OPTIONS = [1, 2, 5, 10, 15, 30];
+const AUTO_LOCK_OPTIONS = [1, 2, 4, 5, 10, 15, 30];
 
 const ROLES: Role[] = ['owner', 'manager', 'employee', 'technician'];
 
@@ -147,7 +147,7 @@ export const UsersView: React.FC<Props> = ({
           {canManageSecurity && onSetAutoLockMinutes && (
             <div className="flex flex-wrap items-center gap-3">
               <label className="text-sm text-slate-600 dark:text-slate-300">Auto-lock after</label>
-              <select value={autoLockMinutes ?? 2} onChange={e => onSetAutoLockMinutes(parseInt(e.target.value, 10))} className={sel}>
+              <select value={autoLockMinutes ?? 4} onChange={e => onSetAutoLockMinutes(parseInt(e.target.value, 10))} className={sel}>
                 {AUTO_LOCK_OPTIONS.map(m => <option key={m} value={m}>{m} minute{m !== 1 ? 's' : ''}</option>)}
                 <option value={0}>Never (not recommended)</option>
               </select>

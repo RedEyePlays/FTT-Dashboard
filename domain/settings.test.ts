@@ -80,15 +80,15 @@ describe('mergeSettings', () => {
     expect(mergeSettings({ backups: { enabled: true } as any }).backups).toEqual({ enabled: true, frequency: 'daily', retention: 14 });
   });
 
-  it('defaults operations to same-day void, no float, no restocking fee, 30-day aging, 2-min auto-lock', () => {
+  it('defaults operations to same-day void, no float, no restocking fee, 30-day aging, 4-min auto-lock', () => {
     expect(mergeSettings().operations).toEqual({
-      openingFloatDefault: 0, voidWindowDays: 0, returnRestockingFeePercent: 0, agingInventoryDays: 30, autoLockMinutes: 2,
+      openingFloatDefault: 0, voidWindowDays: 0, returnRestockingFeePercent: 0, agingInventoryDays: 30, autoLockMinutes: 4,
     });
   });
 
   it('merges a partial operations patch over the defaults', () => {
     const o = mergeSettings({ operations: { voidWindowDays: 3, returnRestockingFeePercent: 15 } as any }).operations;
-    expect(o).toEqual({ openingFloatDefault: 0, voidWindowDays: 3, returnRestockingFeePercent: 15, agingInventoryDays: 30, autoLockMinutes: 2 });
+    expect(o).toEqual({ openingFloatDefault: 0, voidWindowDays: 3, returnRestockingFeePercent: 15, agingInventoryDays: 30, autoLockMinutes: 4 });
   });
 });
 
