@@ -3,10 +3,12 @@ import {
   Search, Smartphone, Package, QrCode, Trash2, X, Plus, ScanLine, AlertTriangle,
   Columns3, SlidersHorizontal, Bookmark, Download, Upload, Copy, ChevronUp, ChevronDown,
   ChevronLeft, ChevronRight, CheckSquare, Square, Boxes,
-  Pencil, MoreVertical, Printer, History, ScrollText, Wrench,
+  Pencil, MoreVertical, Printer, History, ScrollText, Wrench, Tag,
 } from 'lucide-react';
 import { InventoryItem, Runner, ItemKind, DeviceType, DeviceStatus, ActivityEntry, AuditEntry, Repair } from '../types';
 import { linkedRepairFor, REPAIR_STATUS_LABEL } from '../domain/repairs';
+import { printShelfTag } from '../services/shelfTag';
+import { getStoreProfile } from './SettingsModal';
 import { ItemFormModal } from './ItemFormModal';
 // Lazy: defers jsPDF (~390 kB) until a label is actually printed.
 const LabelModal = lazy(() => import('./LabelModal').then(m => ({ default: m.LabelModal })));
@@ -971,6 +973,7 @@ const Sheet: React.FC<{
           <div className="fixed z-50 w-44 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shadow-2xl py-1 text-sm" style={{ left: menu.x, top: menu.y }}>
             {[
               { icon: <QrCode className="w-4 h-4" />, label: 'QR Code', run: () => onLabel(menu.i) },
+              { icon: <Tag className="w-4 h-4" />, label: 'Print Shelf Tag', run: () => printShelfTag(menu.i, { storeName: getStoreProfile().storeName }) },
               { icon: <Copy className="w-4 h-4" />, label: 'Duplicate', run: () => onDuplicate(menu.i) },
               ...repairMenuItems(menu.i, linkedRepairOf, onCreateRepair, onOpenRepair),
               { icon: <History className="w-4 h-4" />, label: 'View History', run: () => onHistory(menu.i, 'history') },
@@ -1108,6 +1111,7 @@ const InvCard: React.FC<{
             {[
               { icon: <Pencil className="w-4 h-4" />, label: 'Open / Edit', run: onOpen },
               { icon: <QrCode className="w-4 h-4" />, label: 'Print Label', run: onLabel },
+              { icon: <Tag className="w-4 h-4" />, label: 'Print Shelf Tag', run: () => printShelfTag(i, { storeName: getStoreProfile().storeName }) },
               { icon: <Copy className="w-4 h-4" />, label: 'Copy SKU', run: () => copy(i.sku) },
               ...(isDevice && i.imei ? [{ icon: <Copy className="w-4 h-4" />, label: 'Copy IMEI/Serial', run: () => copy(i.imei) }] : []),
               { icon: <Copy className="w-4 h-4" />, label: 'Duplicate', run: () => onDuplicate(i) },

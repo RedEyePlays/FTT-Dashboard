@@ -5,6 +5,9 @@ import { GoogleGenAI, Type } from "@google/genai";
 // Scheduled automated Firestore→Storage backups (see backups.ts).
 export { scheduledBackups } from "./backups";
 
+// Public, no-auth repair-status lookup for customers (see repairLookup.ts).
+export { repairStatusLookup } from "./repairLookup";
+
 // The Gemini API key lives in Firebase's server-side Secret Manager — it is
 // NEVER shipped to the client. Set it before deploy with:
 //   firebase functions:secrets:set GEMINI_API_KEY

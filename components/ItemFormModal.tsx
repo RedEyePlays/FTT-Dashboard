@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
-import { X, Wand2, Smartphone, Package, Barcode, Camera } from 'lucide-react';
+import { X, Wand2, Smartphone, Package, Barcode, Camera, Tag } from 'lucide-react';
+import { printShelfTag } from '../services/shelfTag';
+import { getStoreProfile } from './SettingsModal';
 import { InventoryItem, ItemKind, DeviceType, DeviceStatus, Runner, Repair } from '../types';
 import { REPAIR_STATUS_LABEL } from '../domain/repairs';
 import { ImeiScanner } from './ImeiScanner';
@@ -261,6 +263,10 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, runners, 
         </div>
 
         <div className="px-5 py-3 border-t border-slate-100 dark:border-slate-800 flex justify-end gap-2 sticky bottom-0 bg-white dark:bg-slate-900">
+          {initial && (
+            <button type="button" onClick={() => printShelfTag({ ...f, kind }, { storeName: getStoreProfile().storeName })}
+              className="mr-auto px-4 py-2 text-sm rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-indigo-400 flex items-center gap-1.5"><Tag className="w-4 h-4" /> Shelf Tag</button>
+          )}
           <button onClick={requestClose} className="px-4 py-2 text-sm rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">Cancel</button>
           <button onClick={save} disabled={!canSave} className="px-5 py-2 text-sm rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white font-medium">Save</button>
         </div>
