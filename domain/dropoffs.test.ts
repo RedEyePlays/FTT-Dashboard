@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { runnerBalance, settleableDropOffs, settlementTotals, dropOffPurchaseCost } from './dropoffs';
-import { DropOff, DropOffStatus, PaidBy } from '../types';
+import { runnerBalance, settleableDropOffs, settlementTotals, dropOffPurchaseCost, settlementDrawerEffect } from './dropoffs';
+import { DropOff, DropOffStatus, PaidBy, Settlement } from '../types';
 
 const d = (p: Partial<DropOff>): DropOff => ({
   id: 'd', runnerId: 'r1', item: 'iPhone', imei: '', sellerName: '', sellerContact: '',
@@ -76,5 +76,30 @@ describe('dropOffPurchaseCost', () => {
   it('treats missing amounts as zero', () => {
     expect(dropOffPurchaseCost({ purchasePrice: 0, dropOffFee: 0 })).toBe(0);
     expect(dropOffPurchaseCost({ purchasePrice: undefined as any, dropOffFee: undefined as any })).toBe(0);
+  });
+});
+
+describe('settlementDrawerEffect', () => {
+  it('a cash settlement paying the runner is cash OUT of the drawer', () => {
+    expect(settlementDrawerEffect({ paymentMethod: 'cash', amountPaid: 250 })).toEqual({ kind: 'cashOut', amount: 250 });
+  });
+
+  it('a cash settlement where the runner owed the store (negative amountPaid) is cash IN', () => {
+    expect(settlementDrawerEffect({ paymentMethod: 'cash', amountPaid: -40 })).toEqual({ kind: 'cashIn', amount: 40 });
+  });
+
+  it('e-transfer and other payment methods never touch the drawer, regardless of amount', () => {
+    expect(settlementDrawerEffect({ paymentMethod: 'etransfer', amountPaid: 250 })).toBeNull();
+    expect(settlementDrawerEffect({ paymentMethod: 'other', amountPaid: 250 })).toBeNull();
+    expect(settlementDrawerEffect({ paymentMethod: 'etransfer', amountPaid: -40 })).toBeNull();
+  });
+
+  it('a legacy settlement with no paymentMethod recorded defaults to cash (prior behavior)', () => {
+    expect(settlementDrawerEffect({ amountPaid: 100 } as Pick<Settlement, 'paymentMethod' | 'amountPaid'>)).toEqual({ kind: 'cashOut', amount: 100 });
+  });
+
+  it('produces no entry for a zero (or near-zero) amount', () => {
+    expect(settlementDrawerEffect({ paymentMethod: 'cash', amountPaid: 0 })).toBeNull();
+    expect(settlementDrawerEffect({ paymentMethod: 'cash', amountPaid: 0.001 })).toBeNull();
   });
 });

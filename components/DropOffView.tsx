@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
 import {
   Truck, Users, CalendarCheck, Plus, X, Trash2, Phone, User, Package,
-  CheckCircle, XCircle, DollarSign, ArrowRight, Wallet, ClipboardList,
+  CheckCircle, XCircle, DollarSign, ArrowRight, Wallet, ClipboardList, FileText,
 } from 'lucide-react';
-import { Runner, DropOff, DropOffStatus, PaidBy, Settlement, InventoryItem } from '../types';
+import { Runner, DropOff, DropOffStatus, PaidBy, Settlement, SettlementPaymentMethod, InventoryItem } from '../types';
 import { runnerBalance, settleableDropOffs, settlementTotals } from '../domain/dropoffs';
 import { formatPhoneInput } from '../domain/phone';
+import { printSettlementInvoice } from '../services/settlementInvoice';
 
 interface Props {
   runners: Runner[];
@@ -13,7 +14,9 @@ interface Props {
   settlements: Settlement[];
   onRunnersChange: (r: Runner[]) => void;
   onDropOffsChange: (d: DropOff[]) => void;
-  onSettlementsChange: (s: Settlement[]) => void;
+  // Records one completed settlement (writes the record, marks its drop-offs
+  // settled, and — for a cash payment only — logs the cash-drawer effect).
+  onSettle: (settlement: Settlement) => void;
   onAddToInventory: (d: DropOff) => void;
 }
 
@@ -29,7 +32,7 @@ const STATUS_META: Record<DropOffStatus, { label: string; cls: string }> = {
 };
 
 export const DropOffView: React.FC<Props> = ({
-  runners, dropOffs, settlements, onRunnersChange, onDropOffsChange, onSettlementsChange, onAddToInventory,
+  runners, dropOffs, settlements, onRunnersChange, onDropOffsChange, onSettle, onAddToInventory,
 }) => {
   const [tab, setTab] = useState<'entries' | 'runners' | 'settlement'>('entries');
 
@@ -69,7 +72,7 @@ export const DropOffView: React.FC<Props> = ({
       )}
       {tab === 'settlement' && (
         <SettlementTab runners={runners} dropOffs={dropOffs} settlements={settlements}
-          onDropOffsChange={onDropOffsChange} onSettlementsChange={onSettlementsChange} />
+          onDropOffsChange={onDropOffsChange} onSettle={onSettle} />
       )}
     </div>
   );
@@ -341,13 +344,18 @@ const RunnersTab: React.FC<{
 
 /* ---------------- Saturday settlement ---------------- */
 
+const PAYMENT_METHODS: { value: SettlementPaymentMethod; label: string }[] = [
+  { value: 'cash', label: 'Cash' }, { value: 'etransfer', label: 'E-Transfer' }, { value: 'other', label: 'Other' },
+];
+
 const SettlementTab: React.FC<{
   runners: Runner[]; dropOffs: DropOff[]; settlements: Settlement[];
   onDropOffsChange: (d: DropOff[]) => void;
-  onSettlementsChange: (s: Settlement[]) => void;
-}> = ({ runners, dropOffs, settlements, onDropOffsChange, onSettlementsChange }) => {
+  onSettle: (settlement: Settlement) => void;
+}> = ({ runners, dropOffs, settlements, onDropOffsChange, onSettle }) => {
   const [runnerId, setRunnerId] = useState(runners[0]?.id || '');
   const [notes, setNotes] = useState('');
+  const [paymentMethod, setPaymentMethod] = useState<SettlementPaymentMethod>('cash');
 
   // Settle everything accepted/paid-out & not yet settled/rejected for this runner
   const pending = settleableDropOffs(runnerId, dropOffs);
@@ -358,9 +366,9 @@ const SettlementTab: React.FC<{
     const settlement: Settlement = {
       id: uid(), runnerId, date: today(),
       dropOffIds: pending.map(d => d.id),
-      totalPurchaseFronted: cashFronted, totalFees, amountPaid: amountToPay, notes,
+      totalPurchaseFronted: cashFronted, totalFees, amountPaid: amountToPay, paymentMethod, notes,
     };
-    onSettlementsChange([...settlements, settlement]);
+    onSettle(settlement);
     onDropOffsChange(dropOffs.map(d =>
       pending.some(p => p.id === d.id) ? { ...d, status: 'settled', settlementId: settlement.id } : d
     ));
@@ -414,6 +422,21 @@ const SettlementTab: React.FC<{
           </div>
         </div>
 
+        <div>
+          <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Paid via</label>
+          <div className="flex gap-2">
+            {PAYMENT_METHODS.map(m => (
+              <button key={m.value} type="button" onClick={() => setPaymentMethod(m.value)}
+                className={`flex-1 py-2 rounded-lg text-sm font-medium border ${paymentMethod === m.value ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'}`}>
+                {m.label}
+              </button>
+            ))}
+          </div>
+          {paymentMethod === 'cash'
+            ? <p className="text-[11px] text-slate-400 mt-1">Reduces (or adds to) today's expected cash drawer total.</p>
+            : <p className="text-[11px] text-slate-400 mt-1">Does not touch the cash drawer.</p>}
+        </div>
+
         <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={2} placeholder="Settlement notes…"
           className="w-full p-2 bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-md text-sm" />
 
@@ -435,9 +458,13 @@ const SettlementTab: React.FC<{
                 <span className="font-bold text-emerald-600">${s.amountPaid.toFixed(2)}</span>
               </div>
               <p className="text-xs text-slate-400 mt-1">
-                {s.dropOffIds.length} device{s.dropOffIds.length !== 1 ? 's' : ''} · fronted ${s.totalPurchaseFronted.toFixed(2)} · fees ${s.totalFees.toFixed(2)}
+                {s.dropOffIds.length} device{s.dropOffIds.length !== 1 ? 's' : ''} · fronted ${s.totalPurchaseFronted.toFixed(2)} · fees ${s.totalFees.toFixed(2)} · {PAYMENT_METHODS.find(m => m.value === (s.paymentMethod || 'cash'))?.label}
               </p>
               {s.notes && <p className="text-xs text-slate-400 mt-1 italic">{s.notes}</p>}
+              <button onClick={() => printSettlementInvoice(s, runners.find(r => r.id === s.runnerId), dropOffs)}
+                className="mt-2 flex items-center gap-1 text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:underline">
+                <FileText className="w-3.5 h-3.5" /> Print Invoice
+              </button>
             </div>
           ))}
         </div>

@@ -79,6 +79,11 @@ export interface InventoryItem {
 
 export type PaidBy = 'runner' | 'store';
 
+// How a settlement was actually paid out to the runner. Only 'cash' touches the
+// cash drawer's expected total — an e-transfer or other non-cash payment never
+// should (see domain/dropoffs.ts's settlementDrawerEffect).
+export type SettlementPaymentMethod = 'cash' | 'etransfer' | 'other';
+
 export type DropOffStatus = 'pending' | 'accepted' | 'rejected' | 'paidout' | 'settled';
 
 export interface Runner {
@@ -113,6 +118,10 @@ export interface Settlement {
   totalPurchaseFronted: number; // cash the runner fronted to sellers
   totalFees: number;            // drop-off fees paid to runner
   amountPaid: number;           // net amount paid to runner (or negative = owed to store)
+  // How amountPaid was actually paid out. Optional for backward compatibility
+  // with settlements recorded before this field existed — absent is treated as
+  // 'cash' (matching how every settlement was implicitly handled previously).
+  paymentMethod?: SettlementPaymentMethod;
   notes: string;
 }
 

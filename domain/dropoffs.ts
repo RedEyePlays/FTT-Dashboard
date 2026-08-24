@@ -1,4 +1,6 @@
-import { DropOff } from '../types';
+import { DropOff, Settlement } from '../types';
+
+const round2 = (n: number): number => Math.round((n || 0) * 100) / 100;
 
 // Pure money math for the runner drop-off flow — no Firebase/React imports so it
 // can be unit-tested, matching domain/pos.ts, domain/repairs.ts, etc. The runner
@@ -53,4 +55,21 @@ export function settlementTotals(dropOffs: DropOff[]): SettlementTotals {
 // the fee, overstating resale Net Profit by exactly the fee.)
 export function dropOffPurchaseCost(d: Pick<DropOff, 'purchasePrice' | 'dropOffFee'>): number {
   return (d.purchasePrice || 0) + (d.dropOffFee || 0);
+}
+
+// A completed settlement's effect on today's cash drawer — the ONE place that
+// decides whether paying a runner touches the till. Only 'cash' ever does;
+// e-transfer/other never do, no matter the amount. A settlement predating this
+// field (paymentMethod absent) defaults to 'cash', matching how every
+// settlement was implicitly treated before payment method was tracked.
+// amountPaid > 0 (store owes runner) is cash OUT of the drawer; a negative
+// amountPaid (runner owed the store) is cash IN. Zero/near-zero produces no
+// entry at all.
+export interface SettlementDrawerEffect { kind: 'cashOut' | 'cashIn'; amount: number }
+export function settlementDrawerEffect(settlement: Pick<Settlement, 'paymentMethod' | 'amountPaid'>): SettlementDrawerEffect | null {
+  const method = settlement.paymentMethod || 'cash';
+  if (method !== 'cash') return null;
+  const amount = round2(settlement.amountPaid || 0);
+  if (Math.abs(amount) < 0.005) return null;
+  return amount > 0 ? { kind: 'cashOut', amount } : { kind: 'cashIn', amount: -amount };
 }
