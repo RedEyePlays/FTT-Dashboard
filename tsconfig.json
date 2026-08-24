@@ -29,7 +29,9 @@
   "exclude": [
     "node_modules",
     "dist",
+    "dist-status",
     "functions",
+    "status-page",
     "ftt-device-diagnostics"
   ]
 }

@@ -1,5 +1,15 @@
 {
   "projects": {
     "default": "ftt-dashboardgit-0945496-a85e0"
+  },
+  "targets": {
+    "ftt-dashboardgit-0945496-a85e0": {
+      "hosting": {
+        "main": [
+          "ftt-dashboardgit-0945496-a85e0"
+        ],
+        "status": []
+      }
+    }
   }
 }
