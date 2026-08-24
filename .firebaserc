@@ -8,7 +8,9 @@
         "main": [
           "ftt-dashboardgit-0945496-a85e0"
         ],
-        "status": []
+        "status": [
+          "ftt-status"
+        ]
       }
     }
   }
