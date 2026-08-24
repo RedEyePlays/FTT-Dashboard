@@ -305,31 +305,46 @@ export interface AppData {
 
 export type ViewState = 'dashboard' | 'analytics' | 'reports' | 'entry' | 'edit' | 'grid' | 'notes' | 'ai' | 'pos' | 'dropoff' | 'repairs' | 'customers' | 'users' | 'audit' | 'settings' | 'timeclock';
 
-// A single cash movement out of the drawer, logged as part of a day's
-// reconciliation: a paid cash expense, or an owner withdrawal / till pull.
-// Its date and recorder come from the parent reconciliation record.
+// A single cash movement in a day's drawer, logged as part of reconciliation:
+// a manual cash-in (top-up / tip / off-sale payment), a paid cash expense, or an
+// owner withdrawal / till pull. `amount` is always a positive dollar figure; the
+// list it lives in (cashIn vs cashOut vs withdrawals) decides its sign in the
+// expected-cash math. Its date and recorder come from the parent record.
 export interface CashDrawerEntry {
   id: string;
-  amount: number;          // dollars leaving the drawer (positive)
-  note?: string;           // expense reason / withdrawal note
+  amount: number;          // dollars moved (always positive)
+  note?: string;           // reason / note
 }
 
-// A saved daily cash-drawer reconciliation (one per calendar day; id === date).
-// Expected ending cash = openingFloat + cashSales − Σ cashOut − Σ withdrawals.
+// A saved daily cash-drawer record (one per calendar day; id === date). It can
+// be in two states: OPEN (a starting float was set and/or movements logged, but
+// not yet counted) or RECONCILED (counted + closed at end of day). `openedAt`
+// marks a real start-of-day open; `reconciledAt` marks a real end-of-day count —
+// so a bare cash movement is never mistaken for a completed reconciliation.
+// Expected ending cash = openingFloat + cashSales + Σ cashIn − Σ cashOut − Σ withdrawals.
 export interface CashReconciliation {
-  id: string;              // the date, YYYY-MM-DD (one reconciliation per day)
+  id: string;              // the date, YYYY-MM-DD (one record per day)
   date: string;            // YYYY-MM-DD
   openingFloat?: number;   // starting cash in the drawer at open
   cashSales?: number;      // cash taken in from that day's sales
+  cashIn?: CashDrawerEntry[];       // manual cash added (top-ups, tips, off-sale payments)
   cashOut?: CashDrawerEntry[];      // cash expenses paid out of the drawer
   withdrawals?: CashDrawerEntry[];  // owner pulls / bank deposits
-  expectedCash: number;    // computed expected ENDING cash (float + sales − out − withdrawals)
-  countedCash: number;     // actual counted cash at close
-  variance: number;        // countedCash − expectedCash (+ over, − short)
-  note?: string;           // optional explanation of a variance
-  recordedBy: string;      // uid of who saved it
+  expectedCash: number;    // computed expected ENDING cash
+  countedCash?: number;    // actual counted cash at close (absent until reconciled)
+  variance: number;        // countedCash − expectedCash (+ over, − short); 0 until counted
+  note?: string;           // explanation of a variance (required when over/short)
+  // Start-of-day open (drawer float set explicitly, not silently defaulted).
+  openedAt?: number;       // epoch ms
+  openedBy?: string;       // uid
+  openedByEmail?: string;
+  // End-of-day reconciliation (counted + closed). Absent = still open.
+  reconciledAt?: number;   // epoch ms
+  reconciledBy?: string;   // uid
+  reconciledByEmail?: string;
+  recordedBy: string;      // uid of whoever last touched the record
   recordedByEmail?: string;
-  recordedAt: number;      // epoch ms
+  recordedAt: number;      // epoch ms (last touch)
 }
 
 // --- Time clock / payroll ---

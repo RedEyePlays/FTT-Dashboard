@@ -1,4 +1,4 @@
-import { SalesTransaction, InventoryItem, PayPeriodPaid, CashReconciliation, Settlement, Runner } from '../types';
+import { SalesTransaction, InventoryItem, PayPeriodPaid, CashReconciliation, CashDrawerEntry, Settlement, Runner } from '../types';
 import { isReversed } from './pos';
 import { kindOf } from './inventory';
 
@@ -57,19 +57,60 @@ export const sumDrawerEntries = (entries?: { amount: number }[]): number =>
 export interface DayCashInputs {
   openingFloat?: number;   // starting cash in the drawer
   cashSales?: number;      // cash-in from that day's sales
+  cashIn?: number;         // total manual cash added (top-ups, tips, off-sale payments)
   cashOut?: number;        // total cash expenses paid out
   withdrawals?: number;    // total owner pulls / deposits
 }
 
 /**
  * Expected ending cash in the drawer:
- *   opening float + cash sales − cash paid out − withdrawals to owner.
+ *   opening float + cash sales + manual cash-in − cash paid out − withdrawals.
  * This is the corrected reconciliation baseline — comparing the count against
  * sales alone would falsely flag a shortage whenever cash legitimately leaves
- * the drawer (an expense paid in cash, or a till pull / deposit).
+ * the drawer (an expense paid in cash, or a till pull / deposit) or is added to
+ * it (a change-fund top-up or a cash payment taken outside a normal sale).
  */
 export const expectedEndingCash = (i: DayCashInputs): number =>
-  round2((i.openingFloat || 0) + (i.cashSales || 0) - (i.cashOut || 0) - (i.withdrawals || 0));
+  round2((i.openingFloat || 0) + (i.cashSales || 0) + (i.cashIn || 0) - (i.cashOut || 0) - (i.withdrawals || 0));
+
+// The live/at-close snapshot of one day's drawer, computed from its saved record
+// (if any) plus that day's cash sales. The SINGLE source of the expected-cash
+// figure — the POS running total, the quick-log modal and the reconciliation
+// screen all read this, so they can never drift apart. `opened` reflects whether
+// the drawer was explicitly opened (float set) vs silently assumed.
+export interface CashDrawerSummary {
+  opened: boolean;
+  openingFloat: number;
+  cashSales: number;
+  cashIn: number;
+  cashOut: number;
+  withdrawals: number;
+  expected: number;
+}
+// What the reconciliation screen hands back when a day is counted + closed. The
+// app recomputes expectedCash / variance from these via the shared math (so the
+// screen and the stored record can't disagree) and stamps who/when.
+export interface ReconciliationInput {
+  date: string;
+  openingFloat: number;
+  cashIn: CashDrawerEntry[];
+  cashOut: CashDrawerEntry[];
+  withdrawals: CashDrawerEntry[];
+  countedCash: number;
+  note?: string;
+}
+
+export const cashDrawerSummary = (recon: CashReconciliation | undefined, cashSales: number): CashDrawerSummary => {
+  const openingFloat = round2(recon?.openingFloat || 0);
+  const cashIn = sumDrawerEntries(recon?.cashIn);
+  const cashOut = sumDrawerEntries(recon?.cashOut);
+  const withdrawals = sumDrawerEntries(recon?.withdrawals);
+  return {
+    opened: !!recon?.openedAt,
+    openingFloat, cashSales: round2(cashSales), cashIn, cashOut, withdrawals,
+    expected: expectedEndingCash({ openingFloat, cashSales, cashIn, cashOut, withdrawals }),
+  };
+};
 
 // --- Part 2: sales-tax remittance -----------------------------------------
 

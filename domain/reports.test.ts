@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { SalesTransaction, InventoryItem, PayPeriodPaid, CashReconciliation, Settlement, Runner } from '../types';
 import {
   cashCollectedOnTx, expectedCashForDate, reconcileCash,
-  expectedEndingCash, sumDrawerEntries,
+  expectedEndingCash, sumDrawerEntries, cashDrawerSummary,
   taxRemittance, taxReportCsvRows,
   profitAndLoss, profitLossCsvRows, settlementHistory, yearEndSummary, ProfitLossInput,
 } from './reports';
@@ -83,6 +83,32 @@ describe('expectedEndingCash', () => {
     // Counting exactly $150 is balanced — the old sales-only formula would have
     // wrongly shown a $250 shortage.
     expect(reconcileCash(150, expected).direction).toBe('balanced');
+  });
+  it('adds manual cash-in (top-ups / tips / off-sale payments)', () => {
+    // Float 100 + 400 sales + 50 cash-in − 30 out = 520.
+    expect(expectedEndingCash({ openingFloat: 100, cashSales: 400, cashIn: 50, cashOut: 30 })).toBe(520);
+  });
+});
+
+describe('cashDrawerSummary', () => {
+  it('rolls a saved record + the day\'s cash sales into one expected figure', () => {
+    const r = recon({
+      openingFloat: 100, openedAt: 1,
+      cashIn: [{ id: 'i', amount: 20 }, { id: 'i2', amount: 5 }],
+      cashOut: [{ id: 'o', amount: 15 }],
+      withdrawals: [{ id: 'w', amount: 50 }],
+    });
+    const s = cashDrawerSummary(r, 400);
+    expect(s).toMatchObject({ opened: true, openingFloat: 100, cashSales: 400, cashIn: 25, cashOut: 15, withdrawals: 50 });
+    // 100 + 400 + 25 − 15 − 50 = 460 — same formula as reconciliation.
+    expect(s.expected).toBe(460);
+    expect(s.expected).toBe(expectedEndingCash({ openingFloat: 100, cashSales: 400, cashIn: 25, cashOut: 15, withdrawals: 50 }));
+  });
+  it('reports not-opened and zeroes for a day with no record', () => {
+    const s = cashDrawerSummary(undefined, 120);
+    expect(s.opened).toBe(false);
+    expect(s.openingFloat).toBe(0);
+    expect(s.expected).toBe(120); // just the day's cash sales
   });
 });
 
