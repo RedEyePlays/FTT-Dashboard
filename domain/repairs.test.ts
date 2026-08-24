@@ -5,7 +5,7 @@ import {
   applyTechEdit, repairAgeDays, TECH_STATUSES,
   repairNeedsCustomer, isInternalRepair, canSaveRepair, linkedRepairFor,
   partsTotal, repairPartsCost, repairLabor, repairCheckoutSummary, completeRepair,
-  repairSalePrefill, completeRepairSale, technicianPerformance,
+  repairSalePrefill, completeRepairSale, technicianPerformance, partName,
 } from './repairs';
 import { Repair, RepairBatch } from '../types';
 
@@ -124,6 +124,29 @@ describe('repair type semantics (internal / customer requirement)', () => {
     expect(canSaveRepair(repair({ type: 'internal' }))).toBe(true);
     expect(canSaveRepair(repair({ type: 'internal', customerName: '' }))).toBe(true);
     expect(canSaveRepair(repair({ type: 'wholesale' }))).toBe(true);
+  });
+
+  it('canSaveRepair requires every part line to be named', () => {
+    const part = (name: string) => ({ id: 'p1', name, unitCost: 10, quantity: 1 });
+    expect(canSaveRepair(repair({ type: 'internal', parts: [part('OLED screen')] }))).toBe(true);
+    expect(canSaveRepair(repair({ type: 'internal', parts: [part('')] }))).toBe(false);
+    expect(canSaveRepair(repair({ type: 'internal', parts: [part('  ')] }))).toBe(false);
+    expect(canSaveRepair(repair({ type: 'internal', parts: [part('Battery'), part('')] }))).toBe(false);
+    // No parts at all is fine — parts are optional, only named-when-present.
+    expect(canSaveRepair(repair({ type: 'internal', parts: [] }))).toBe(true);
+    expect(canSaveRepair(repair({ type: 'internal' }))).toBe(true);
+  });
+});
+
+describe('partName', () => {
+  it('returns the trimmed name when set', () => {
+    expect(partName({ name: 'OLED screen' })).toBe('OLED screen');
+    expect(partName({ name: '  Battery  ' })).toBe('Battery');
+  });
+
+  it('falls back to "Unspecified" for blank/legacy part rows, without mutating them', () => {
+    expect(partName({ name: '' })).toBe('Unspecified');
+    expect(partName({ name: '   ' })).toBe('Unspecified');
   });
 });
 

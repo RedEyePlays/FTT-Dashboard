@@ -84,9 +84,14 @@ export const isInternalRepair = (r: Pick<Repair, 'type'>): boolean => r.type ===
 
 // Form-save validity: a retail ticket requires a customer name; internal and
 // wholesale do not. (The customer field is optional on the type either way — this
-// is the UI-level requirement the New/Edit form enforces.)
-export const canSaveRepair = (r: Pick<Repair, 'type' | 'customerName'>): boolean =>
-  !repairNeedsCustomer(r.type) || !!(r.customerName && r.customerName.trim());
+// is the UI-level requirement the New/Edit form enforces.) Every part line added
+// in THIS edit must be named — applies going forward only: it's a save-time gate
+// on the form's current parts array, so it never forces a name onto a
+// previously-saved repair that isn't being touched (those keep showing
+// "Unspecified" wherever they're rendered — see partName in this file).
+export const canSaveRepair = (r: Pick<Repair, 'type' | 'customerName' | 'parts'>): boolean =>
+  (!repairNeedsCustomer(r.type) || !!(r.customerName && r.customerName.trim()))
+  && (r.parts || []).every(p => !!p.name && p.name.trim().length > 0);
 
 // The internal repair (if any) linked to an inventory item — most recent first.
 // Cost/price is intentionally NOT synced back to the item; this is link-only.
@@ -111,6 +116,11 @@ const round2 = (n: number): number => Math.round((n || 0) * 100) / 100;
 /** Total cost of a structured parts list: Σ unitCost × quantity (never negative). */
 export const partsTotal = (parts?: RepairPart[]): number =>
   round2((parts || []).reduce((s, p) => s + Math.max(0, p.unitCost || 0) * Math.max(0, p.quantity || 0), 0));
+
+// Display name for a part line — "Unspecified" for the blank names that only
+// pre-date the required-name validation in canSaveRepair (older repairs are
+// never backfilled), so nothing renders as an empty string.
+export const partName = (p: Pick<RepairPart, 'name'>): string => p.name && p.name.trim() ? p.name.trim() : 'Unspecified';
 
 /**
  * The repair's parts cost. Prefers the structured `parts` breakdown when present,

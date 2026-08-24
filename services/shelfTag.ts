@@ -1,12 +1,30 @@
 import { InventoryItem } from '../types';
 import { kindOf, getDeviceDisplayName } from '../domain/inventory';
+import { BUILT_IN_LABEL_SIZES } from '../domain/settings';
 
-// A compact thermal SHELF PRICE TAG for retail display — distinct from the
-// repair/receipt labels. Same print pattern as services/salesReceipt.ts (open a
-// small window, write inline-styled HTML, print), but sized and laid out as a
-// small shelf card: big price up top, the item name, a tight spec line, and the
-// SKU at the bottom. Only fields already tracked per item are shown; anything
-// missing is simply omitted so the tag stays small.
+// A compact retail SHELF PRICE TAG — printed on a DYMO (or similar) LABEL
+// PRINTER, NOT the thermal receipt printer. This is a physically small,
+// die-cut/continuous label, not an 80mm paper roll — sizing, margins and font
+// scale are completely different from services/salesReceipt.ts /
+// services/repairPrint.ts, and this file shares no print path with either.
+//
+// Sized for the DYMO 36 × 89 mm label ('dymo-36x89' in domain/settings.ts) —
+// the same physical stock already used for the QR/barcode inventory labels
+// (services/labelLayout.ts, whose header comment documents it as this shop's
+// actual Dymo media: 36mm-wide roll, fed portrait-native, 89mm long). Read
+// from that single shared preset rather than a second hardcoded copy, so the
+// two can never drift apart if the shop's real stock size ever changes.
+//
+// DYMO printing note (see labelLayout.ts for the full explanation): the
+// LabelWriter feeds this label as PORTRAIT native media (36 wide × 89 tall).
+// A landscape @page makes the driver shrink-to-fit and clip, so the print
+// page is declared portrait at the media's true size and the landscape tag
+// content is rotated 90° to fill it exactly.
+
+const IN_TO_MM = 25.4;
+const DYMO_MEDIA = BUILT_IN_LABEL_SIZES.find(s => s.id === 'dymo-36x89')!;
+const W_MM = +(DYMO_MEDIA.w * IN_TO_MM).toFixed(2); // landscape content width (89mm)
+const H_MM = +(DYMO_MEDIA.h * IN_TO_MM).toFixed(2); // landscape content height (36mm)
 
 const money = (n: number) => `$${(n || 0).toFixed(2)}`;
 const esc = (s?: string | number) => String(s ?? '').replace(/[<>&]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c] as string));
@@ -16,69 +34,82 @@ const esc = (s?: string | number) => String(s ?? '').replace(/[<>&]/g, c => ({ '
 const shelfPrice = (i: InventoryItem): number =>
   kindOf(i) === 'accessory' ? (i.sellingPrice || 0) : (i.targetSalePrice || i.salePrice || 0);
 
-// One tag's inner markup — shared by the single-item print and the batch print
-// so the two never drift apart.
+// One tag's inner markup, sized in mm to fill its W_MM × H_MM box exactly —
+// shared by the single-item print and the batch print so the two never drift.
 const tagBody = (item: InventoryItem, store: string): string => {
   const name = getDeviceDisplayName(item);
   const specs: string[] = [];
-  if (item.storage) specs.push(`${esc(item.storage)}`);
-  if (item.color) specs.push(`${esc(item.color)}`);
-  if (item.carrier) specs.push(`${esc(item.carrier)}`);
+  if (item.storage) specs.push(esc(item.storage));
+  if (item.color) specs.push(esc(item.color));
+  if (item.carrier) specs.push(esc(item.carrier));
   if (item.batteryHealth) specs.push(`Battery ${esc(item.batteryHealth)}`);
-  if (item.condition) specs.push(`${esc(item.condition)}`);
+  if (item.condition) specs.push(esc(item.condition));
   const specLine = specs.join(' · ');
   return `
+    <div class="tag-body">
       <div class="store">${esc(store)}</div>
       <div class="name">${esc(name)}</div>
       ${specLine ? `<div class="specs">${specLine}</div>` : ''}
       <div class="price">${money(shelfPrice(item))}</div>
-      ${item.batteryHealth ? `<div class="batt">Battery Health: ${esc(item.batteryHealth)}</div>` : ''}
-      ${item.sku ? `<div class="sku">${esc(item.sku)}</div>` : ''}`;
+      ${item.sku ? `<div class="sku">${esc(item.sku)}</div>` : ''}
+    </div>`;
 };
 
 const TAG_STYLE = `
-      *{box-sizing:border-box;}
-      body{font-family:'Inter',system-ui,Arial,sans-serif;color:#000;}
-      .store{text-align:center;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:#666;}
-      .name{text-align:center;font-size:16px;font-weight:800;line-height:1.15;margin:4px 0 2px;}
-      .specs{text-align:center;font-size:11px;color:#333;margin-bottom:8px;}
-      .price{text-align:center;font-size:40px;font-weight:900;letter-spacing:-1px;border-top:2px solid #000;border-bottom:2px solid #000;padding:6px 0;margin:6px 0;}
-      .sku{text-align:center;font-family:'SF Mono',ui-monospace,Menlo,Consolas,monospace;font-size:13px;letter-spacing:1px;margin-top:6px;}
-      .batt{text-align:center;font-size:11px;color:#333;}`;
+  * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  html, body { margin: 0; padding: 0; background: #fff; }
+  .tag-body {
+    width: 100%; height: 100%; padding: 1.5mm 2mm;
+    display: flex; flex-direction: column; justify-content: center; align-items: center;
+    font-family: 'Inter', system-ui, Arial, sans-serif; color: #000; overflow: hidden;
+  }
+  .store { font-size: 2.4mm; letter-spacing: 0.3mm; text-transform: uppercase; color: #666; line-height: 1; }
+  .name { font-size: 4.6mm; font-weight: 800; line-height: 1.1; margin-top: 0.8mm; text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .specs { font-size: 2.8mm; color: #333; margin-top: 0.5mm; text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .price { font-size: 8.5mm; font-weight: 900; letter-spacing: -0.2mm; border-top: 0.3mm solid #000; border-bottom: 0.3mm solid #000; padding: 0.8mm 0; margin-top: 1mm; }
+  .sku { font-family: 'SF Mono', ui-monospace, Menlo, Consolas, monospace; font-size: 2.6mm; letter-spacing: 0.3mm; margin-top: 0.8mm; }
+`;
+
+// Wraps tag content for the DYMO portrait-native page: one .tag-page per
+// physical label, each internally rotating its landscape content 90° to fill
+// the portrait media exactly (see file header). Page-break-after chains
+// multiple labels through one continuous print job.
+const printDoc = (title: string, pages: string[]): string => {
+  const rotated = pages.map(body => `
+    <div class="tag-page">
+      <div class="rot">${body}</div>
+    </div>`).join('');
+  return `<!DOCTYPE html><html><head><title>${esc(title)}</title>
+    <style>
+      @page { size: ${H_MM}mm ${W_MM}mm; margin: 0; }
+      ${TAG_STYLE}
+      .tag-page { position: relative; width: ${H_MM}mm; height: ${W_MM}mm; overflow: hidden; page-break-after: always; }
+      .tag-page:last-child { page-break-after: auto; }
+      .rot { position: absolute; top: 0; left: 0; width: ${W_MM}mm; height: ${H_MM}mm; transform-origin: 0 0; transform: translate(${H_MM}mm, 0) rotate(90deg); }
+    </style></head>
+    <body>${rotated}
+      <script>window.onload=function(){window.focus();window.print();setTimeout(function(){window.close();},300);};</script>
+    </body></html>`;
+};
 
 export function printShelfTag(item: InventoryItem, opts: { storeName?: string } = {}): boolean {
   const store = opts.storeName || 'FlipThatTech';
-  const win = window.open('', '_blank', 'width=420,height=360');
+  const win = window.open('', '_blank', 'width=380,height=260');
   if (!win) return false;
-  win.document.write(`<html><head><title>Shelf Tag ${esc(item.sku || getDeviceDisplayName(item))}</title>
-    <style>${TAG_STYLE}
-      body{width:300px;margin:0 auto;padding:14px;}
-    </style></head>
-    <body>${tagBody(item, store)}
-      <script>window.onload=function(){window.print();setTimeout(function(){window.close();},300);};</script>
-    </body></html>`);
+  win.document.write(printDoc(`Shelf Tag ${item.sku || getDeviceDisplayName(item)}`, [tagBody(item, store)]));
   win.document.close();
   return true;
 }
 
-// Print shelf tags for many items at once — one print window, one tag per page,
-// so a bulk selection prints as a single job instead of one popup per item
-// (which browsers block after the first anyway).
+// Print shelf tags for many items at once — one print job, one label per
+// physical page, so a bulk selection prints as a single job instead of one
+// popup per item (which browsers block after the first anyway).
 export function printShelfTagsBatch(items: InventoryItem[], opts: { storeName?: string } = {}): boolean {
   if (items.length === 0) return false;
   const store = opts.storeName || 'FlipThatTech';
-  const win = window.open('', '_blank', 'width=420,height=640');
+  const win = window.open('', '_blank', 'width=380,height=260');
   if (!win) return false;
-  const pages = items.map(i => `<div class="tag">${tagBody(i, store)}</div>`).join('');
-  win.document.write(`<html><head><title>Shelf Tags (${items.length})</title>
-    <style>${TAG_STYLE}
-      body{margin:0;padding:0;}
-      .tag{width:300px;margin:0 auto;padding:14px;page-break-after:always;}
-      .tag:last-child{page-break-after:auto;}
-    </style></head>
-    <body>${pages}
-      <script>window.onload=function(){window.print();setTimeout(function(){window.close();},300);};</script>
-    </body></html>`);
+  win.document.write(printDoc(`Shelf Tags (${items.length})`, items.map(i => tagBody(i, store))));
   win.document.close();
   return true;
 }

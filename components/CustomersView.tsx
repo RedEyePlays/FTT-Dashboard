@@ -10,7 +10,7 @@ import {
   passesFilter, sortCustomers, findDuplicateGroups, planMerge,
   CustomerSort, CustomerFilter, CustomerData, CustomerStats, MergePlan,
 } from '../domain/customers';
-import { REPAIR_STATUS_CELL, REPAIR_STATUS_LABEL } from '../domain/repairs';
+import { REPAIR_STATUS_CELL, REPAIR_STATUS_LABEL, partName } from '../domain/repairs';
 import { printRetailReceipt } from '../services/repairPrint';
 import { printSalesReceipt } from '../services/salesReceipt';
 import { getStoreProfile } from './SettingsModal';
@@ -558,7 +558,24 @@ const TicketModal: React.FC<{ repair: Repair; tech?: string; customer: Customer;
       {r.warrantyUntil && <Row label="Warranty until" value={r.warrantyUntil} />}
       {r.diagnostics && <div className="pt-2"><p className="text-[11px] uppercase text-slate-400">Diagnostics</p><p className="text-slate-600 dark:text-slate-300 whitespace-pre-wrap">{r.diagnostics}</p></div>}
       {r.workPerformed && <div className="pt-1"><p className="text-[11px] uppercase text-slate-400">Work performed</p><p className="text-slate-600 dark:text-slate-300 whitespace-pre-wrap">{r.workPerformed}</p></div>}
-      {r.partsUsed && <div className="pt-1"><p className="text-[11px] uppercase text-slate-400">Parts used</p><p className="text-slate-600 dark:text-slate-300 whitespace-pre-wrap">{r.partsUsed}</p></div>}
+      {r.parts && r.parts.length > 0 ? (
+        <div className="pt-1">
+          <p className="text-[11px] uppercase text-slate-400 mb-1">Parts used</p>
+          <table className="w-full text-xs">
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+              {r.parts.map(p => (
+                <tr key={p.id}>
+                  <td className="py-1 text-slate-600 dark:text-slate-300">{partName(p)}</td>
+                  <td className="py-1 text-right text-slate-400">×{p.quantity || 1}</td>
+                  <td className="py-1 text-right text-slate-700 dark:text-slate-200">{money((p.unitCost || 0) * (p.quantity || 1))}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : r.partsUsed ? (
+        <div className="pt-1"><p className="text-[11px] uppercase text-slate-400">Parts used</p><p className="text-slate-600 dark:text-slate-300 whitespace-pre-wrap">{r.partsUsed}</p></div>
+      ) : null}
     </div>
   </Modal>
 );
