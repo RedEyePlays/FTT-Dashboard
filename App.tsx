@@ -268,10 +268,16 @@ const App: React.FC = () => {
   // reconciliations for anyone who can handle cash the moment they're on POS —
   // and on Reports. Without this the drawer summary is blank and Open Drawer /
   // cash-log writes have no live record to read-modify-write against.
+  // Drop-Off is included too: settling a runner in cash writes a cashOut entry
+  // to today's drawer record (handleSettleRunner, via commitDrawerRecord) —
+  // without cashReconciliations already loaded, commitDrawerRecord's merge
+  // would build off an empty local record and overwrite the real one (opening
+  // float and all) with a stripped-down doc containing only that one entry.
   const canLogCash = allow('cash.log');
+  const canManageDropoffs = allow('dropoffs.manage');
   useEffect(() => {
-    if (view === 'reports' || (view === 'pos' && canLogCash)) enableCashData();
-  }, [view, canLogCash, enableCashData]);
+    if (view === 'reports' || (view === 'pos' && canLogCash) || (view === 'dropoff' && canManageDropoffs)) enableCashData();
+  }, [view, canLogCash, canManageDropoffs, enableCashData]);
 
   // Write an activity entry to Firestore (Recent Activity is generated from DB changes)
   const logActivity = (text: string) => { if (uid) logActivityDoc(uid, mkActivity(text)).catch(() => {}); };
