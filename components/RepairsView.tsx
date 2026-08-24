@@ -1,13 +1,13 @@
 import React, { useState, useMemo, useEffect, lazy, Suspense } from 'react';
 import {
   Wrench, Plus, Search, X, Trash2, Printer, FileText, Receipt, History as HistoryIcon,
-  ArrowLeft, DollarSign, ChevronRight, Building2, ClipboardCheck, PackageCheck, ScrollText, QrCode,
+  ArrowLeft, DollarSign, ChevronRight, Building2, ClipboardCheck, PackageCheck, ScrollText, QrCode, BarChart3,
 } from 'lucide-react';
-import { Repair, RepairBatch, Customer, AuditEntry, RepairStatus, RepairType, DeviceType, RepairPart } from '../types';
+import { Repair, RepairBatch, Customer, AuditEntry, RepairStatus, RepairType, DeviceType, RepairPart, AppUser } from '../types';
 import {
   REPAIR_STATUSES, REPAIR_STATUS_CELL,
   balanceOwing, batchTotals, matchesRepair, matchesBatch, canSaveRepair,
-  partsTotal, repairPartsCost, repairLabor, completeRepair, isRepairOpen,
+  partsTotal, repairPartsCost, repairLabor, completeRepair, isRepairOpen, technicianPerformance,
 } from '../domain/repairs';
 import { newId } from '../domain/ids';
 import { printRetailReceipt, printBatchIntake, printBatchInvoice, printBatchSummary, printDeviceSheet } from '../services/repairPrint';
@@ -36,6 +36,9 @@ interface Props {
   // Check out a retail repair through Quick Sale (so its revenue/profit land in
   // the sales P&L, cash reconciliation and dashboard totals like any other sale).
   onCheckoutViaSale?: (r: Repair) => void;
+  // Owner/manager only: per-technician performance tab (gated by repairs.performance).
+  users?: AppUser[];
+  canViewPerformance?: boolean;
 }
 
 const DEVICE_TYPES: DeviceType[] = ['Phone', 'Tablet', 'Laptop', 'Console', 'Watch', 'Other'];
@@ -79,13 +82,39 @@ const SummaryCard: React.FC<{ icon: React.ReactNode; accent: string; label: stri
 export const RepairsView: React.FC<Props> = (props) => {
   const { repairs, batches, auditLogs, canDelete, onSaveRepair, onDeleteRepair, onSaveBatch, onDeleteBatch, onRecordPayment, onPrintAudit } = props;
   type Filter = 'all' | 'active' | 'overdue' | RepairStatus;
-  const [tab, setTab] = useState<'tickets' | 'batches'>('tickets');
+  const { users = [], canViewPerformance = false } = props;
+  const [tab, setTab] = useState<'tickets' | 'batches' | 'performance'>('tickets');
   const [query, setQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<Filter>('all');
   const [drawer, setDrawer] = useState<{ repair: Repair; isNew: boolean } | null>(null);
   const [openBatchId, setOpenBatchId] = useState<string | null>(null);
   const [batchForm, setBatchForm] = useState<{ batch: RepairBatch; isNew: boolean } | null>(null);
   const [labelTarget, setLabelTarget] = useState<{ repair: Repair; context?: { batchNumber?: string; lineNumber?: number } } | null>(null);
+  // Performance tab date range — defaults to the last 30 days (inclusive of today).
+  const [perfFrom, setPerfFrom] = useState(() => { const d = new Date(); d.setDate(d.getDate() - 29); return d.toISOString().split('T')[0]; });
+  const [perfTo, setPerfTo] = useState(() => today());
+
+  // If the caller loses performance access (role change), never leave the tab stuck open.
+  useEffect(() => { if (tab === 'performance' && !canViewPerformance) setTab('tickets'); }, [tab, canViewPerformance]);
+
+  const userName = (uid: string) => {
+    if (!uid) return 'Unattributed';
+    const u = users.find(x => x.id === uid);
+    return u ? (u.email?.split('@')[0] || u.email || 'Unknown user') : 'Unknown user';
+  };
+  const perfRows = useMemo(() => {
+    if (!canViewPerformance) return [];
+    const startMs = new Date(`${perfFrom}T00:00:00`).getTime();
+    const endMs = new Date(`${perfTo}T23:59:59.999`).getTime();
+    return technicianPerformance(repairs, startMs, endMs);
+  }, [repairs, perfFrom, perfTo, canViewPerformance]);
+  const fmtDuration = (ms: number) => {
+    if (ms <= 0) return '—';
+    const h = ms / 3_600_000;
+    if (h < 1) return `${Math.round(ms / 60_000)}m`;
+    if (h < 48) return `${h.toFixed(1)}h`;
+    return `${(h / 24).toFixed(1)}d`;
+  };
 
   const isOverdue = (r: Repair) => r.status !== 'completed' && r.status !== 'cancelled' && !!r.estimatedCompletion && r.estimatedCompletion < today();
   const matchFilter = (r: Repair): boolean => {
@@ -199,25 +228,26 @@ export const RepairsView: React.FC<Props> = (props) => {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h2 className="text-2xl font-bold text-slate-900 dark:text-white flex items-center gap-2"><Wrench className="w-6 h-6 text-indigo-500" /> Repairs</h2>
             <div className="flex items-center gap-2">
-              {tab === 'tickets'
-                ? <button onClick={() => setDrawer({ repair: newRetail(), isNew: true })} className="flex items-center gap-2 px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium"><Plus className="w-4 h-4" /> New Ticket</button>
-                : <button onClick={() => setBatchForm({ batch: newBatch(), isNew: true })} className="flex items-center gap-2 px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium"><Plus className="w-4 h-4" /> New Batch</button>}
+              {tab === 'tickets' && <button onClick={() => setDrawer({ repair: newRetail(), isNew: true })} className="flex items-center gap-2 px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium"><Plus className="w-4 h-4" /> New Ticket</button>}
+              {tab === 'batches' && <button onClick={() => setBatchForm({ batch: newBatch(), isNew: true })} className="flex items-center gap-2 px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium"><Plus className="w-4 h-4" /> New Batch</button>}
             </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
             <div className="flex bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 p-0.5">
-              {(['tickets', 'batches'] as const).map(t => (
-                <button key={t} onClick={() => setTab(t)} className={`px-3 py-1.5 rounded-md text-sm font-medium capitalize ${tab === t ? 'bg-indigo-100 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300' : 'text-slate-500 dark:text-slate-400'}`}>
-                  {t === 'tickets' ? 'Retail Tickets' : 'Wholesale Batches'}
+              {([['tickets', 'Retail Tickets'], ['batches', 'Wholesale Batches'], ...(canViewPerformance ? [['performance', 'Performance'] as const] : [])] as const).map(([t, label]) => (
+                <button key={t} onClick={() => setTab(t)} className={`px-3 py-1.5 rounded-md text-sm font-medium ${tab === t ? 'bg-indigo-100 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300' : 'text-slate-500 dark:text-slate-400'}`}>
+                  {label}
                 </button>
               ))}
             </div>
-            <div className="relative flex-1 min-w-[220px]">
-              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-              <input value={query} onChange={e => setQuery(e.target.value)} placeholder={tab === 'tickets' ? 'Search repair #, customer, phone, IMEI/serial, model, issue…' : 'Search batch #, company, contact, phone, email…'}
-                className="w-full pl-9 pr-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-            </div>
+            {tab !== 'performance' && (
+              <div className="relative flex-1 min-w-[220px]">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input value={query} onChange={e => setQuery(e.target.value)} placeholder={tab === 'tickets' ? 'Search repair #, customer, phone, IMEI/serial, model, issue…' : 'Search batch #, company, contact, phone, email…'}
+                  className="w-full pl-9 pr-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+              </div>
+            )}
             {tab === 'tickets' && (
               <select value={REPAIR_STATUSES.some(s => s.value === statusFilter) ? statusFilter : 'all'} onChange={e => setStatusFilter(e.target.value as any)} className="px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-700 dark:text-slate-200">
                 <option value="all">Any status…</option>
@@ -236,13 +266,63 @@ export const RepairsView: React.FC<Props> = (props) => {
           )}
 
           {/* Summary cards */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <SummaryCard icon={<Wrench className="w-4 h-4" />} accent="blue" label="Active Repairs" value={summary.active} />
-            <SummaryCard icon={<PackageCheck className="w-4 h-4" />} accent="emerald" label="Ready for Pickup" value={summary.ready} />
-            <SummaryCard icon={<ClipboardCheck className="w-4 h-4" />} accent="amber" label="Waiting Approval" value={summary.approval} />
-            <SummaryCard icon={<Building2 className="w-4 h-4" />} accent="violet" label="Active Batches" value={summary.batchesActive} />
-          </div>
+          {tab !== 'performance' && (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <SummaryCard icon={<Wrench className="w-4 h-4" />} accent="blue" label="Active Repairs" value={summary.active} />
+              <SummaryCard icon={<PackageCheck className="w-4 h-4" />} accent="emerald" label="Ready for Pickup" value={summary.ready} />
+              <SummaryCard icon={<ClipboardCheck className="w-4 h-4" />} accent="amber" label="Waiting Approval" value={summary.approval} />
+              <SummaryCard icon={<Building2 className="w-4 h-4" />} accent="violet" label="Active Batches" value={summary.batchesActive} />
+            </div>
+          )}
         </>
+      )}
+
+      {/* Technician performance (owner/manager only) */}
+      {!openBatch && tab === 'performance' && canViewPerformance && (
+        <div className="flex flex-col gap-4">
+          <div className="flex flex-wrap items-end gap-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-4">
+            <Field label="From"><input type="date" value={perfFrom} max={perfTo} onChange={e => setPerfFrom(e.target.value)} className={inputCls} /></Field>
+            <Field label="To"><input type="date" value={perfTo} min={perfFrom} max={today()} onChange={e => setPerfTo(e.target.value)} className={inputCls} /></Field>
+            <div className="flex gap-1.5">
+              {(([[7, '7d'], [30, '30d'], [90, '90d']]) as [number, string][]).map(([days, label]) => (
+                <button key={days} onClick={() => { const d = new Date(); d.setDate(d.getDate() - (days - 1)); setPerfFrom(d.toISOString().split('T')[0]); setPerfTo(today()); }}
+                  className="px-2.5 py-1.5 rounded-md text-xs font-medium border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-indigo-400">Last {label}</button>
+              ))}
+            </div>
+          </div>
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl overflow-hidden">
+            <div className="px-4 py-3 border-b border-slate-100 dark:border-slate-800 flex items-center gap-2">
+              <BarChart3 className="w-4 h-4 text-indigo-500" />
+              <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100">Repairs completed by technician</h3>
+              <span className="text-xs text-slate-400">· intake → completed</span>
+            </div>
+            {perfRows.length === 0 ? (
+              <p className="text-sm text-slate-400 text-center py-12">No repairs completed in this date range.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-[11px] uppercase tracking-wide text-slate-400 border-b border-slate-100 dark:border-slate-800">
+                      <th className="px-4 py-2 font-medium">Technician</th>
+                      <th className="px-4 py-2 font-medium text-right">Completed</th>
+                      <th className="px-4 py-2 font-medium text-right">Avg turnaround</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                    {perfRows.map(row => (
+                      <tr key={row.userId || '_unattributed'} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                        <td className="px-4 py-2.5 font-medium text-slate-800 dark:text-slate-100">{userName(row.userId)}</td>
+                        <td className="px-4 py-2.5 text-right tabular-nums text-slate-900 dark:text-slate-100">{row.completed}</td>
+                        <td className="px-4 py-2.5 text-right tabular-nums text-slate-600 dark:text-slate-300">{fmtDuration(row.avgTurnaroundMs)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+          <p className="text-xs text-slate-400">Attribution is by who marked each repair complete. Repairs completed before this was tracked show as “Unattributed.”</p>
+        </div>
       )}
 
       {/* Retail tickets list */}
