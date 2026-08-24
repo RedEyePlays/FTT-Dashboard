@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { kindOf, isDevice, isAccessory, collectionFor, stockChange, isOversold, getDeviceDisplayName, applyDirectSale } from './inventory';
+import { kindOf, isDevice, isAccessory, collectionFor, stockChange, isOversold, getDeviceDisplayName, applyDirectSale, suggestedSalePrice } from './inventory';
 import { InventoryItem } from '../types';
 
 const base: InventoryItem =
@@ -164,5 +164,52 @@ describe('getDeviceDisplayName', () => {
   it('works on a full InventoryItem', () => {
     const d: InventoryItem = { ...base, brand: 'Apple', model: 'iPhone 13', item: '' };
     expect(getDeviceDisplayName(d)).toBe('Apple iPhone 13');
+  });
+});
+
+describe('suggestedSalePrice', () => {
+  const sold = (p: Partial<InventoryItem>): InventoryItem => ({ ...base, kind: 'device', ...p });
+  const stock: InventoryItem[] = [
+    sold({ id: 'a', model: 'iPhone 13', storage: '128GB', condition: 'Good', soldDate: '2026-08-01', salePrice: 500 }),
+    sold({ id: 'b', model: 'iPhone 13', storage: '128GB', condition: 'Good', soldDate: '2026-08-10', salePrice: 540 }),
+    sold({ id: 'c', model: 'iPhone 13', storage: '128GB', condition: 'Fair', soldDate: '2026-08-12', salePrice: 400 }),
+    sold({ id: 'd', model: 'iPhone 13', storage: '256GB', condition: 'Good', soldDate: '2026-08-05', salePrice: 650 }),
+    sold({ id: 'e', model: 'iPhone 14', storage: '128GB', condition: 'Good', soldDate: '2026-08-06', salePrice: 800 }),
+    sold({ id: 'unsold', model: 'iPhone 13', storage: '128GB', condition: 'Good', soldDate: '', salePrice: 999 }), // not sold
+    sold({ id: 'free', model: 'iPhone 13', storage: '128GB', condition: 'Good', soldDate: '2026-08-02', salePrice: 0 }), // no price
+  ];
+
+  it('returns null when the item has no model to match on', () => {
+    expect(suggestedSalePrice({ model: '', storage: '128GB', condition: 'Good' }, stock)).toBeNull();
+  });
+
+  it('returns null when nothing comparable has sold', () => {
+    expect(suggestedSalePrice({ model: 'Pixel 8', storage: '128GB', condition: 'Good' }, stock)).toBeNull();
+  });
+
+  it('matches on model + storage + condition, ignoring unsold and $0 rows', () => {
+    const s = suggestedSalePrice({ model: 'iPhone 13', storage: '128GB', condition: 'Good' }, stock);
+    expect(s).toEqual({ price: 520, sampleSize: 2, basis: 'model + storage + condition' });
+  });
+
+  it('relaxes to model + storage when the tight match is too thin', () => {
+    // 256GB Good has only 1 sale -> falls back to model+storage (still 1) ... but
+    // model+storage also has 1, so it relaxes to model. Force a storage with 2 sales.
+    const s = suggestedSalePrice({ model: 'iPhone 13', storage: '128GB', condition: 'Mint' }, stock);
+    // No Mint sales -> relax to model+storage (128GB: a,b,c,free[excluded]) = 3 sales.
+    expect(s?.basis).toBe('model + storage');
+    expect(s?.sampleSize).toBe(3);
+    expect(s?.price).toBe(500); // median of [400,500,540]
+  });
+
+  it('relaxes all the way to model when storage does not match', () => {
+    const s = suggestedSalePrice({ model: 'iPhone 13', storage: '512GB', condition: 'Good' }, stock);
+    expect(s?.basis).toBe('model');
+    expect(s?.sampleSize).toBe(4); // a,b,c,d
+  });
+
+  it('is case-insensitive on the match fields', () => {
+    const s = suggestedSalePrice({ model: 'IPHONE 13', storage: '128gb', condition: 'GOOD' }, stock);
+    expect(s?.sampleSize).toBe(2);
   });
 });
