@@ -10,9 +10,10 @@ interface Props {
   onSelect: (c: Customer) => void;
   placeholder?: string;
   kind?: 'retail' | 'wholesale'; // optionally limit suggestions
+  autoFocus?: boolean; // focus on mount — only when this is genuinely the first field of a freshly-opened form
 }
 
-export const CustomerSearchInput: React.FC<Props> = ({ customers, onSelect, placeholder, kind }) => {
+export const CustomerSearchInput: React.FC<Props> = ({ customers, onSelect, placeholder, kind, autoFocus }) => {
   const [q, setQ] = useState('');
   const [open, setOpen] = useState(false);
   const boxRef = useRef<HTMLDivElement>(null);
@@ -31,6 +32,7 @@ export const CustomerSearchInput: React.FC<Props> = ({ customers, onSelect, plac
     <div className="relative" ref={boxRef}>
       <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
       <input
+        autoFocus={autoFocus}
         value={q}
         onChange={e => { setQ(e.target.value); setOpen(true); }}
         onFocus={() => setOpen(true)}
