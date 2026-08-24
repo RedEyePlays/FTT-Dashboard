@@ -150,11 +150,20 @@ export const repairCheckoutSummary = (r: Repair): RepairCheckoutSummary => {
   return { partsCost, labor: round2(Math.max(0, repairPrice - partsCost)), repairPrice, deposit, balanceDue: Math.max(0, round2(repairPrice - deposit)) };
 };
 
+// Turns a YYYY-MM-DD date (e.g. a backdated completion or sale date picked in
+// the UI) into an epoch ms usable anywhere a `now`-shaped timestamp is needed
+// (completeRepair, completeRepairSale). Anchored at local noon so the derived
+// calendar date can never shift a day either way regardless of timezone —
+// unlike parsing the bare date string, which JS treats as UTC midnight.
+export const dateToEpochMs = (dateISO: string): number => new Date(`${dateISO}T12:00:00`).getTime();
+
 /**
  * Complete a repair in one step (the streamlined checkout): stamp the terminal
  * status + completion time, denormalize the parts cost onto `partsCost` so
  * downstream reports read one consistent number, and compute the warranty expiry.
- * Pure — the app persists the returned record.
+ * Pure — the app persists the returned record. `now` may be backdated (e.g. a
+ * repair that was already finished/picked up before it got entered) — pass a
+ * timestamp built via dateToEpochMs for that.
  */
 export const completeRepair = (r: Repair, now: number = Date.now(), status: 'completed' | 'picked_up' = 'completed'): Repair => {
   const completedDate = new Date(now).toISOString().split('T')[0];

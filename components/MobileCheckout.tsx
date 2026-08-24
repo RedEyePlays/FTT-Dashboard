@@ -276,6 +276,9 @@ export const MobileCheckout: React.FC<Props> = (props) => {
       {/* STEP 4: payment */}
       {step === 3 && (
         <div className="space-y-3">
+          <label className="block text-sm text-slate-500 dark:text-slate-400">Sale Date
+            <input type="date" max={new Date().toISOString().split('T')[0]} value={cx.soldDate} onChange={e => cx.setSoldDate(e.target.value)} className={input} />
+          </label>
           <div className="grid grid-cols-2 gap-2">
             <PayBig active={payChoice === 'cash'} onClick={() => choosePay('cash')} icon={<Banknote className="w-6 h-6" />} label="Cash" />
             <PayBig active={payChoice === 'card'} onClick={() => choosePay('card')} icon={<CreditCard className="w-6 h-6" />} label="Card" />

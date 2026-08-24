@@ -353,7 +353,7 @@ export const CartSaleView: React.FC<Props> = (props) => {
           </select>
           <div className="grid grid-cols-2 gap-3">
             <div><label className={labelCls}>Fee %</label><input type="number" className={inputCls} value={platformFeePercent} onChange={e => setPlatformFeePercent(e.target.value)} /></div>
-            <div><label className={labelCls}>Sale Date</label><input type="date" className={inputCls} value={soldDate} onChange={e => setSoldDate(e.target.value)} /></div>
+            <div><label className={labelCls}>Sale Date</label><input type="date" max={new Date().toISOString().split('T')[0]} className={inputCls} value={soldDate} onChange={e => setSoldDate(e.target.value)} /></div>
           </div>
         </div>
 

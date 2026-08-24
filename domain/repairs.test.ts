@@ -5,7 +5,7 @@ import {
   applyTechEdit, repairAgeDays, TECH_STATUSES,
   repairNeedsCustomer, isInternalRepair, canSaveRepair, linkedRepairFor,
   partsTotal, repairPartsCost, repairLabor, repairCheckoutSummary, completeRepair,
-  repairSalePrefill, completeRepairSale, technicianPerformance, partName,
+  repairSalePrefill, completeRepairSale, technicianPerformance, partName, dateToEpochMs,
 } from './repairs';
 import { Repair, RepairBatch } from '../types';
 
@@ -263,6 +263,22 @@ describe('completeRepair', () => {
     const done = completeRepair(repair({ repairPrice: 100 }), NOW, 'picked_up');
     expect(done.status).toBe('picked_up');
     expect(done.warrantyUntil).toBe('');
+  });
+  it('backdates cleanly via dateToEpochMs — a repair logged today but finished earlier', () => {
+    const done = completeRepair(repair({ repairPrice: 100, warrantyDays: 10 }), dateToEpochMs('2026-06-01'), 'picked_up');
+    expect(new Date(done.completedAt).toISOString().split('T')[0]).toBe('2026-06-01');
+    expect(done.warrantyUntil).toBe('2026-06-11');
+  });
+});
+
+describe('dateToEpochMs', () => {
+  it('round-trips a YYYY-MM-DD date back to the same calendar date', () => {
+    for (const d of ['2026-01-01', '2026-06-15', '2026-12-31']) {
+      expect(new Date(dateToEpochMs(d)).toISOString().split('T')[0]).toBe(d);
+    }
+  });
+  it('produces a valid, finite timestamp', () => {
+    expect(Number.isFinite(dateToEpochMs('2026-03-15'))).toBe(true);
   });
 });
 

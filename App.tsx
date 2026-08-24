@@ -33,7 +33,7 @@ const TimeClockView = lazy(() => import('./components/TimeClockView').then(m => 
 const CloseOutView = lazy(() => import('./components/CloseOutView').then(m => ({ default: m.CloseOutView })));
 import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, Runner, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission, Repair, RepairBatch, TimeEntry, PayPeriodPaid, BreakReason, SalesTransaction, CashReconciliation, StaffNote } from './types';
 import { skuPrefix, nextSku } from './services/sku';
-import { REPAIR_PREFIX, BATCH_PREFIX, computeWarrantyUntil, applyTechEdit, TECH_EDITABLE_FIELDS, repairSalePrefill, completeRepairSale } from './domain/repairs';
+import { REPAIR_PREFIX, BATCH_PREFIX, computeWarrantyUntil, applyTechEdit, TECH_EDITABLE_FIELDS, repairSalePrefill, completeRepairSale, dateToEpochMs } from './domain/repairs';
 import { MergePlan } from './domain/customers';
 import { can } from './services/rbac';
 import { downloadJson, toCSV, triggerDownload } from './services/backup';
@@ -566,7 +566,10 @@ const App: React.FC = () => {
       const rep = repairsRef.current.find(r => r.id === repairId);
       if (rep) {
         const terminal = rep.type === 'retail' ? 'picked_up' : 'completed';
-        const done = { ...completeRepairSale(rep, payload.transaction.id, Date.now(), terminal), completedBy: appUser.id };
+        // Backdated the same way the sale itself was — a repair checked out
+        // through a backdated Quick Sale reflects that same completion date,
+        // not the moment it was actually entered.
+        const done = { ...completeRepairSale(rep, payload.transaction.id, dateToEpochMs(payload.transaction.date), terminal), completedBy: appUser.id };
         saveItem(uid, 'repairs', done);
         logActivity(`${done.repairNumber} checked out (${payload.transaction.customerName || 'customer'})`);
         audit('repair.status_change', 'repair', done.id, { status: rep.status }, { status: terminal });
