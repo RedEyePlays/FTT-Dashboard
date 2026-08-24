@@ -57,7 +57,7 @@ import { useWorkspaceData } from './hooks/useWorkspaceData';
 import { newId, mkActivity } from './domain/ids';
 import { collectionFor, stockChange, applyDirectSale } from './domain/inventory';
 import { canVoidSale, canReturnSale, returnRefund, saleAccessoryRestock } from './domain/pos';
-import { expectedCashForDate, expectedEndingCash, sumDrawerEntries, cashDrawerSummary, ReconciliationInput } from './domain/reports';
+import { expectedCashForDate, expectedEndingCash, sumDrawerEntries, cashDrawerSummary, openDrawerPatch, ReconciliationInput } from './domain/reports';
 import type { CashMovementKind } from './components/LogCashMovementModal';
 const OpenDrawerModal = lazy(() => import('./components/OpenDrawerModal').then(m => ({ default: m.OpenDrawerModal })));
 const CloseDrawerModal = lazy(() => import('./components/CloseDrawerModal').then(m => ({ default: m.CloseDrawerModal })));
@@ -694,16 +694,15 @@ const App: React.FC = () => {
 
   // Open the drawer for the day — record the actual starting float explicitly
   // (no silent default). Available to anyone who runs the register (cash.log).
+  // Always leaves the day in an active/open state (see domain/reports.ts's
+  // openDrawerPatch) — including clearing a prior close/reconcile for today, so
+  // a day that was already closed once can actually be resumed instead of
+  // staying stuck showing "Closed today" with no way back.
   const handleOpenDrawer = (openingFloat: number) => {
     if (!uid || !appUser || !allow('cash.log')) return;
     const date = new Date().toISOString().split('T')[0];
     const existing = cashReconciliations.find(r => r.date === date);
-    commitDrawerRecord(date, {
-      openingFloat: Math.max(0, openingFloat),
-      openedAt: existing?.openedAt ?? Date.now(),
-      openedBy: existing?.openedBy ?? appUser.id,
-      openedByEmail: existing?.openedByEmail ?? appUser.email,
-    });
+    commitDrawerRecord(date, openDrawerPatch(openingFloat, { id: appUser.id, email: appUser.email }, existing));
     logActivity(`Drawer opened with $${openingFloat.toFixed(2)}`);
     audit('cash.log', 'cashReconciliation', date, undefined, { kind: 'open', openingFloat });
   };

@@ -112,6 +112,36 @@ export const cashDrawerSummary = (recon: CashReconciliation | undefined, cashSal
   };
 };
 
+// The patch to apply when the drawer is (re-)opened for the day — the ONE write
+// path for the "Open Drawer" / "Float" action. Opening always leaves the day in
+// an active/open state: it stamps openedAt/By the first time (preserved on later
+// re-opens/float-adjustments, never bumped), and — critically — explicitly clears
+// any prior reconciledAt/reconciledBy/reconciledByEmail/countedCash for the day.
+// Without that clear, a day that was already closed once (deliberately or by
+// mistake, e.g. a manager testing "Close drawer" earlier in the day) stays stuck
+// showing "Closed today" forever after, with no action able to resume it —
+// opening it again silently no-ops on the reconciled fields instead of reopening.
+// Reconciling/closing stays exclusively the job of the explicit close/reconcile
+// action (handleCloseDrawer / handleSaveReconciliation) — this function never
+// sets those fields, only clears them.
+export function openDrawerPatch(
+  openingFloat: number,
+  user: { id: string; email: string },
+  existing: Pick<CashReconciliation, 'openedAt' | 'openedBy' | 'openedByEmail'> | undefined,
+  now: number = Date.now(),
+): Pick<CashReconciliation, 'openingFloat' | 'openedAt' | 'openedBy' | 'openedByEmail' | 'reconciledAt' | 'reconciledBy' | 'reconciledByEmail' | 'countedCash'> {
+  return {
+    openingFloat: Math.max(0, openingFloat),
+    openedAt: existing?.openedAt ?? now,
+    openedBy: existing?.openedBy ?? user.id,
+    openedByEmail: existing?.openedByEmail ?? user.email,
+    reconciledAt: undefined,
+    reconciledBy: undefined,
+    reconciledByEmail: undefined,
+    countedCash: undefined,
+  };
+}
+
 // --- Part 2: sales-tax remittance -----------------------------------------
 
 export type TaxGrouping = 'month' | 'quarter';
