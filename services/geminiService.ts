@@ -30,19 +30,30 @@ export const parseBulkInventory = async (text: string): Promise<InventoryItem[]>
     const { items } = (result.data ?? {}) as { items?: any[] };
 
     // Ensure IDs are generated and defaults are applied (unchanged from before).
+    // A real sale always has BOTH a sale price and a sold date — the model's
+    // JSON schema forces it to fill in a numeric salePrice for every item even
+    // when the text never mentions a sale, and it sometimes hallucinates a
+    // guessed resale value instead of a literal 0. Since domain/inventory.ts's
+    // applyDirectSale marks any device with a positive salePrice as sold the
+    // moment it's saved, that hallucination silently sold every freshly-added
+    // item. Requiring soldDate too (which the model has far less reason to
+    // invent) is a cheap, reliable guard against a lone stray salePrice.
     return Array.isArray(items)
-      ? items.map((item: any) => ({
-          ...item,
-          id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
-          repairCost: item.repairCost || 0,
-          purchaseCost: item.purchaseCost || 0,
-          salePrice: item.salePrice || 0,
-          boughtFrom: item.boughtFrom || "",
-          imei: item.imei || "",
-          soldDate: item.soldDate || "",
-          soldTo: item.soldTo || "",
-          notes: item.notes || "",
-        }))
+      ? items.map((item: any) => {
+          const soldDate = item.soldDate || "";
+          return {
+            ...item,
+            id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
+            repairCost: item.repairCost || 0,
+            purchaseCost: item.purchaseCost || 0,
+            salePrice: soldDate ? (item.salePrice || 0) : 0,
+            boughtFrom: item.boughtFrom || "",
+            imei: item.imei || "",
+            soldDate,
+            soldTo: item.soldTo || "",
+            notes: item.notes || "",
+          };
+        })
       : [];
   } catch (error) {
     console.error("Error parsing bulk inventory:", error);
