@@ -2,11 +2,11 @@ import React, { useEffect, useState, lazy, Suspense } from 'react';
 import {
   ScanLine, Search, Plus, Minus, Trash2, Smartphone, Package, Sparkles, ShoppingCart,
   User, Phone, Mail, ChevronLeft, CheckCircle, Banknote, CreditCard, Blend, Send,
-  Printer, RotateCcw, Eye, X, AlertTriangle, FileText, Wrench,
+  Printer, RotateCcw, Eye, X, AlertTriangle, FileText, Wrench, History,
 } from 'lucide-react';
 import { InventoryItem, Customer, DeviceType, Repair } from '../types';
 import { RepairSalePrefill } from '../domain/repairs';
-import { getDeviceDisplayName } from '../domain/inventory';
+import { getDeviceDisplayName, suggestedSalePrice, PriceSuggestion } from '../domain/inventory';
 import { useCheckout, CartCheckout, CustomCategory, CUSTOM_DEVICE_TYPES } from '../hooks/useCheckout';
 import { CustomerSearchInput } from './CustomerSearchInput';
 // Lazy: defers jsPDF (~390 kB) until a label is actually printed.
@@ -37,6 +37,19 @@ export const MobileCheckout: React.FC<Props> = (props) => {
   const [showCustom, setShowCustom] = useState(false);
   const [payChoice, setPayChoice] = useState<'cash' | 'card' | 'etransfer' | 'mixed'>('cash');
   const [txModal, setTxModal] = useState(false);
+
+  // "Similar past sale" price hints per device line — suggestion only, applied on tap.
+  const priceHints = React.useMemo(() => {
+    const map = new Map<string, PriceSuggestion>();
+    for (const l of cx.cart) {
+      if (l.kind !== 'device' || l.isCustom || !l.inventoryId) continue;
+      const item = props.inventory.find(i => i.id === l.inventoryId);
+      if (!item) continue;
+      const s = suggestedSalePrice(item, props.inventory);
+      if (s) map.set(l.key, s);
+    }
+    return map;
+  }, [cx.cart, props.inventory]);
 
   // E-Transfer maps to the existing 'mixed' record with the full total in the
   // e-transfer bucket (no schema change); tax uses the rate-based figure so it
@@ -226,6 +239,12 @@ export const MobileCheckout: React.FC<Props> = (props) => {
                 <label className="text-xs text-slate-400">Price<input type="number" step="0.01" inputMode="decimal" value={l.unitPrice} onChange={e => cx.updateLine(l.key, { unitPrice: cx.num(e.target.value) })} className={input} /></label>
                 <label className="text-xs text-slate-400">Discount<input type="number" step="0.01" inputMode="decimal" value={l.discount} onChange={e => cx.updateLine(l.key, { discount: cx.num(e.target.value) })} className={input} /></label>
               </div>
+              {priceHints.has(l.key) && (() => { const s = priceHints.get(l.key)!; return (
+                <button type="button" onClick={() => cx.updateLine(l.key, { unitPrice: s.price })}
+                  className="mt-2 inline-flex items-center gap-1 text-[11px] text-indigo-600 dark:text-indigo-400">
+                  <History className="w-3 h-3" /> Similar sold for ${s.price.toFixed(2)} <span className="text-slate-400">· {s.sampleSize} sale{s.sampleSize !== 1 ? 's' : ''} · tap to use</span>
+                </button>
+              ); })()}
             </div>
           );})}
           {cx.cart.length > 0 && (

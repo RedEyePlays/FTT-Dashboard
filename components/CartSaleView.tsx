@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import { InventoryItem, Customer, DeviceType, Repair } from '../types';
 import { RepairSalePrefill } from '../domain/repairs';
-import { getDeviceDisplayName } from '../domain/inventory';
+import { getDeviceDisplayName, suggestedSalePrice, PriceSuggestion } from '../domain/inventory';
 // Lazy: the label modal pulls in jsPDF (~390 kB). Load it only when a label is
 // actually printed, not on every Quick Sale.
 const LabelModal = lazy(() => import('./LabelModal').then(m => ({ default: m.LabelModal })));
@@ -54,6 +54,21 @@ export const CartSaleView: React.FC<Props> = (props) => {
 
   const inputCls = 'w-full px-2 py-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500';
   const labelCls = 'block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1';
+
+  // "Similar past sale" price hint per device line — a suggestion only. Derived
+  // from what comparable devices actually sold for; never changes the price on
+  // its own (the cashier clicks to apply). Keyed by the source inventory item.
+  const priceHints = React.useMemo(() => {
+    const map = new Map<string, PriceSuggestion>();
+    for (const l of cart) {
+      if (l.kind !== 'device' || l.isCustom || !l.inventoryId) continue;
+      const item = props.inventory.find(i => i.id === l.inventoryId);
+      if (!item) continue;
+      const s = suggestedSalePrice(item, props.inventory);
+      if (s) map.set(l.key, s);
+    }
+    return map;
+  }, [cart, props.inventory]);
 
   if (confirmed && lastTx) {
     return (
@@ -211,7 +226,14 @@ export const CartSaleView: React.FC<Props> = (props) => {
                           onChange={e => updateLine(l.key, { quantity: Math.min(l.maxQty, Math.max(1, Math.round(num(e.target.value)))) })} /></div>
                     )}
                     <div><label className={labelCls}>Unit Price</label>
-                      <input type="number" step="0.01" className={inputCls} value={l.unitPrice} onChange={e => updateLine(l.key, { unitPrice: num(e.target.value) })} /></div>
+                      <input type="number" step="0.01" className={inputCls} value={l.unitPrice} onChange={e => updateLine(l.key, { unitPrice: num(e.target.value) })} />
+                      {priceHints.has(l.key) && (() => { const s = priceHints.get(l.key)!; return (
+                        <button type="button" onClick={() => updateLine(l.key, { unitPrice: s.price })} title={`Median of ${s.sampleSize} recent sale${s.sampleSize !== 1 ? 's' : ''} matching ${s.basis}. Click to use — you can still edit.`}
+                          className="mt-1 inline-flex items-center gap-1 text-[11px] text-indigo-600 dark:text-indigo-400 hover:underline">
+                          <History className="w-3 h-3" /> Similar sold for ${s.price.toFixed(2)} <span className="text-slate-400">· {s.sampleSize} sale{s.sampleSize !== 1 ? 's' : ''}</span>
+                        </button>
+                      ); })()}
+                    </div>
                     <div><label className={labelCls}>Discount</label>
                       <input type="number" step="0.01" className={inputCls} value={l.discount} onChange={e => updateLine(l.key, { discount: num(e.target.value) })} /></div>
                     <div className="flex items-end">
