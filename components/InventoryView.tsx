@@ -69,7 +69,23 @@ const ActualCell: React.FC<{ item: InventoryItem; onCommit: (v: number) => void;
   const stored = item.salePrice || 0;
   const [val, setVal] = useState(stored ? String(stored) : '');
   useEffect(() => { setVal(stored ? String(stored) : ''); }, [stored, item.soldDate]);
-  const commit = () => { const n = parseFloat(val) || 0; if (n !== stored) onCommit(n); };
+  const commit = () => {
+    const n = parseFloat(val) || 0;
+    if (n === stored) return;
+    // Entering an Actual price marks the device sold immediately on save (see
+    // domain/inventory.ts's applyDirectSale) — this narrow "Target"/"Actual"
+    // column pair sits adjacent in the grid and is easy to fat-finger, so guard
+    // the one transition that actually does something irreversible-feeling: a
+    // not-yet-sold item (no prior salePrice, no soldDate) getting its first
+    // nonzero Actual price. Editing an already-sold item's price back and forth
+    // needs no extra confirmation.
+    const firstTimeMarkingSold = stored === 0 && !item.soldDate && n > 0;
+    if (firstTimeMarkingSold && !window.confirm(`Mark "${item.item || item.sku || 'this item'}" as SOLD for $${n.toFixed(2)}? It will move out of active inventory into Sold.`)) {
+      setVal(stored ? String(stored) : '');
+      return;
+    }
+    onCommit(n);
+  };
   return (
     <input type="number" inputMode="decimal" value={val}
       placeholder={!item.soldDate && !val ? '—' : undefined}
