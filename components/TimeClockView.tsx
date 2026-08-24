@@ -4,9 +4,9 @@ import {
 } from 'lucide-react';
 import { AppUser, TimeEntry, PayPeriodPaid, BreakReason } from '../types';
 import {
-  BREAK_REASONS, breakReasonLabel, openEntryFor, isOnBreak, workedHours,
+  BREAK_REASONS, breakReasonLabel, openEntryFor, isOnBreak, workedHours, isClockedIn,
   hoursInRange, dayRange, weekRange, recentPayPeriods, periodPayFor, paidKey,
-  toISODate, periodEndInclusive, PayPeriod,
+  toISODate, periodEndInclusive, entriesOnDate, PayPeriod,
 } from '../domain/timeclock';
 
 interface Props {
@@ -124,6 +124,9 @@ export const TimeClockView: React.FC<Props> = ({
         <StatCard label="This week" value={fmtHours(weekHours)} />
       </div>
 
+      {/* --- Daily hours (owner/manager) ---------------------------------- */}
+      {canManagePayroll && <DailyHours users={users} entries={entries} now={now} />}
+
       {/* --- Payroll summary (owner/manager) ------------------------------ */}
       {canManagePayroll && (
         <PayrollSummary
@@ -233,6 +236,92 @@ const BreakPickerModal: React.FC<{ onClose: () => void; onPick: (r: BreakReason,
           </div>
         )}
       </div>
+    </div>
+  );
+};
+
+// --- Daily hours (owner/manager) --------------------------------------------
+// Per-employee hours for a chosen day (or date range), from the existing
+// timeEntries — clock-in, clock-out and worked total per shift, plus a per-person
+// total. Bucketed by clock-in day (same rule as the payroll math). Owner/manager
+// only (rendered behind canManagePayroll).
+const fmtTime = (ms: number): string => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+const DailyHours: React.FC<{ users: AppUser[]; entries: TimeEntry[]; now: number }> = ({ users, entries, now }) => {
+  const today = toISODate(now);
+  const [from, setFrom] = useState(today);
+  const [to, setTo] = useState(today);
+  // Normalize an inverted range so From ≤ To either way it's typed.
+  const [lo, hi] = from <= to ? [from, to] : [to, from];
+
+  const nameById = useMemo(() => new Map(users.map(u => [u.id, nameOf(u)])), [users]);
+
+  // Shifts whose clock-in day falls in [lo, hi], grouped by employee, each with
+  // its own day total; sorted by employee name.
+  const groups = useMemo(() => {
+    const inRange = entries.filter(e => e.clockIn != null && toISODate(e.clockIn) >= lo && toISODate(e.clockIn) <= hi);
+    const byUser = new Map<string, TimeEntry[]>();
+    for (const e of inRange) { const list = byUser.get(e.userId) || []; list.push(e); byUser.set(e.userId, list); }
+    return [...byUser.entries()]
+      .map(([userId, list]) => ({
+        userId,
+        name: nameById.get(userId) || userId,
+        shifts: [...list].sort((a, b) => a.clockIn - b.clockIn),
+        totalHours: list.reduce((s, e) => s + workedHours(e, now), 0),
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [entries, lo, hi, nameById, now]);
+
+  const grandTotal = groups.reduce((s, g) => s + g.totalHours, 0);
+  const singleDay = lo === hi;
+
+  const dInput = 'px-2.5 py-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:[color-scheme:dark]';
+
+  return (
+    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl overflow-hidden">
+      <div className="px-4 py-3 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between gap-3 flex-wrap">
+        <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200 flex items-center gap-2"><CalendarDays className="w-4 h-4 text-indigo-500" /> Daily hours</h3>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button onClick={() => { setFrom(today); setTo(today); }} className={`px-2.5 py-1.5 rounded-lg text-xs font-medium border ${singleDay && lo === today ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'}`}>Today</button>
+          <label className="text-xs text-slate-400 flex items-center gap-1">From <input type="date" max={today} value={from} onChange={e => setFrom(e.target.value)} className={dInput} /></label>
+          <label className="text-xs text-slate-400 flex items-center gap-1">To <input type="date" max={today} value={to} onChange={e => setTo(e.target.value)} className={dInput} /></label>
+        </div>
+      </div>
+
+      {groups.length === 0 ? (
+        <p className="text-sm text-slate-400 py-8 text-center">No shifts {singleDay ? 'on this day' : 'in this range'}.</p>
+      ) : (
+        <div className="divide-y divide-slate-100 dark:divide-slate-800">
+          {groups.map(g => (
+            <div key={g.userId} className="px-4 py-3">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-sm font-semibold text-slate-800 dark:text-slate-100 capitalize">{g.name}</span>
+                <span className="text-sm font-bold text-slate-900 dark:text-white tabular-nums">{fmtHours(g.totalHours)}</span>
+              </div>
+              <div className="overflow-x-auto"><table className="w-full text-sm whitespace-nowrap">
+                <thead className="text-[10px] uppercase tracking-wider text-slate-400"><tr>
+                  {!singleDay && <th className="text-left py-1 pr-4">Date</th>}
+                  <th className="text-left py-1 pr-4">Clock in</th><th className="text-left py-1 pr-4">Clock out</th><th className="text-right py-1">Hours</th>
+                </tr></thead>
+                <tbody className="divide-y divide-slate-50 dark:divide-slate-800/60">
+                  {g.shifts.map(e => (
+                    <tr key={e.id}>
+                      {!singleDay && <td className="py-1 pr-4 text-slate-500 dark:text-slate-400">{toISODate(e.clockIn)}</td>}
+                      <td className="py-1 pr-4 text-slate-600 dark:text-slate-300 tabular-nums">{fmtTime(e.clockIn)}</td>
+                      <td className="py-1 pr-4 text-slate-600 dark:text-slate-300 tabular-nums">{isClockedIn(e) ? <span className="text-emerald-600 dark:text-emerald-400">On the clock</span> : fmtTime(e.clockOut!)}</td>
+                      <td className="py-1 text-right text-slate-700 dark:text-slate-200 tabular-nums">{fmtHours(workedHours(e, now))}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table></div>
+            </div>
+          ))}
+          <div className="px-4 py-2.5 flex items-center justify-between bg-slate-50 dark:bg-slate-800/40">
+            <span className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">{singleDay ? 'Day total' : 'Range total'}</span>
+            <span className="text-sm font-bold text-slate-900 dark:text-white tabular-nums">{fmtHours(grandTotal)}</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

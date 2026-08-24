@@ -187,6 +187,16 @@ export const hoursInRange = (
   return msToHours(ms);
 };
 
+/**
+ * Shifts whose CLOCK-IN falls on the given local date (YYYY-MM-DD) — the same
+ * clock-in bucketing used by hoursInRange, so a shift that crosses midnight is
+ * counted whole against its start day. Sorted earliest clock-in first.
+ */
+export const entriesOnDate = (entries: TimeEntry[], dateISO: string): TimeEntry[] =>
+  entries
+    .filter(e => e.clockIn != null && toISODate(e.clockIn) === dateISO)
+    .sort((a, b) => a.clockIn - b.clockIn);
+
 // --- Pay --------------------------------------------------------------------
 
 /** Gross pay = hours × rate, rounded to cents, never negative. */

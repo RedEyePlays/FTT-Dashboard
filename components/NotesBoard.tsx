@@ -197,7 +197,7 @@ export const NotesBoard: React.FC<NotesBoardProps> = ({ notes, tasks, onUpdateNo
                     value={activeNote.content}
                     onChange={(e) => handleUpdateNote(activeNote.id, 'content', e.target.value)}
                     placeholder="Type '/' for commands"
-                    className="w-full h-full resize-none border-none outline-none bg-transparent text-base leading-7 text-slate-700 dark:text-slate-300 placeholder:text-slate-300 dark:placeholder:text-slate-700"
+                    className="w-full h-full resize-none border-none outline-none bg-transparent text-lg md:text-xl leading-8 md:leading-9 text-slate-700 dark:text-slate-300 placeholder:text-slate-300 dark:placeholder:text-slate-700"
                     spellCheck={false}
                  />
               </div>

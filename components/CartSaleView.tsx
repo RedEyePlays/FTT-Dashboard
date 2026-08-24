@@ -293,10 +293,9 @@ export const CartSaleView: React.FC<Props> = (props) => {
           {paymentMethod === 'cash' && (
             <div>
               <label className={labelCls}>Cash Sale Tax Status</label>
-              <select className={inputCls} value={cashTaxStatus} onChange={e => setCashTaxStatus(e.target.value as any)}>
-                <option value="none">No tax charged</option>
-                <option value="separate">Tax paid separately</option>
-                <option value="included">Tax included in cash amount</option>
+              <select className={inputCls} value={cashTaxStatus === 'none' ? 'none' : 'separate'} onChange={e => setCashTaxStatus(e.target.value as any)}>
+                <option value="separate">Charge tax</option>
+                <option value="none">No tax</option>
               </select>
             </div>
           )}

@@ -264,10 +264,9 @@ export const MobileCheckout: React.FC<Props> = (props) => {
           </div>
           {payChoice === 'cash' && (
             <label className="block text-sm text-slate-500 dark:text-slate-400">Cash tax status
-              <select value={cx.cashTaxStatus} onChange={e => cx.setCashTaxStatus(e.target.value as any)} className={input}>
-                <option value="none">No tax charged</option>
-                <option value="separate">Tax paid separately</option>
-                <option value="included">Tax included in cash</option>
+              <select value={cx.cashTaxStatus === 'none' ? 'none' : 'separate'} onChange={e => cx.setCashTaxStatus(e.target.value as any)} className={input}>
+                <option value="separate">Charge tax</option>
+                <option value="none">No tax</option>
               </select>
             </label>
           )}

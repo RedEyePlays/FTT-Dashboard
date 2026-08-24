@@ -4,7 +4,7 @@ import {
   isClockedIn, isOnBreak, openEntryFor,
   msToHours, HOUR_MS, grossPay, round2,
   payPeriodFor, recentPayPeriods, periodEndInclusive, PAY_PERIOD_DAYS,
-  dayRange, weekRange, hoursInRange, periodPayFor, paidKey,
+  dayRange, weekRange, hoursInRange, periodPayFor, paidKey, entriesOnDate, toISODate,
 } from './timeclock';
 import { TimeEntry, TimeBreak } from '../types';
 
@@ -170,6 +170,16 @@ describe('hoursInRange', () => {
     const tuesday = dayRange(at(2024, 5, 11, 12));
     expect(hoursInRange([overnight], 'u1', monday.start, monday.end, now)).toBe(3); // counted on Monday
     expect(hoursInRange([overnight], 'u1', tuesday.start, tuesday.end, now)).toBe(0); // not on Tuesday
+  });
+
+  it('entriesOnDate returns the clock-in-day shifts, earliest first', () => {
+    const day = toISODate(at(2024, 5, 12, 0));
+    const rows = entriesOnDate(entries, day);
+    expect(rows.map(e => e.id)).toEqual(['wed', 'other']); // both u1 + u2 shifts that day, sorted by clock-in
+    // an overnight shift is listed on its clock-in day, not the day it ends
+    const overnight = entry({ id: 'ov', userId: 'u1', clockIn: at(2024, 5, 10, 23), clockOut: at(2024, 5, 11, 2) });
+    expect(entriesOnDate([overnight], toISODate(at(2024, 5, 10, 0))).map(e => e.id)).toEqual(['ov']);
+    expect(entriesOnDate([overnight], toISODate(at(2024, 5, 11, 0)))).toEqual([]);
   });
 });
 
