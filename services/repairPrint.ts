@@ -1,5 +1,5 @@
 import { Repair, RepairBatch } from '../types';
-import { REPAIR_STATUS_LABEL, balanceOwing, batchTotals } from '../domain/repairs';
+import { REPAIR_STATUS_LABEL, balanceOwing, batchTotals, repairPartsCost, repairLabor } from '../domain/repairs';
 
 // Reuses the app's print pattern: open a window, write inline-styled HTML, print.
 const SHOP = 'FlipThatTech';
@@ -22,6 +22,7 @@ const openPrint = (title: string, width: number, body: string) => {
       .tot{border-top:1px dashed #999;margin-top:6px;padding-top:4px;}
       .disc{font-size:9px;color:#777;margin-top:10px;line-height:1.3;}
       .foot{text-align:center;font-size:11px;color:#555;margin-top:12px;}
+      .estamp{text-align:center;font-weight:800;font-size:18px;letter-spacing:3px;color:#b45309;border:2px solid #b45309;border-radius:6px;padding:4px 0;margin:8px 0 4px;}
     </style></head><body>${body}
     <script>window.onload=function(){window.print();setTimeout(function(){window.close();},300);};</script>
     </body></html>`);
@@ -60,6 +61,41 @@ export const printRetailReceipt = (r: Repair, kind: 'intake' | 'repair' | 'picku
     ${kind === 'intake' ? '<p class="disc">The shop is not responsible for data loss. Devices not collected within 90 days may be sold to recover costs. Diagnostic fees may apply if repair is declined.</p>' : ''}
     <p class="foot">Thank you!</p>`;
   openPrint(`${title} ${r.repairNumber}`, 280, body);
+};
+
+// --- Repair estimate / quote (pre-work) ---
+// A customer-facing quote produced BEFORE parts are committed or work begins —
+// deliberately separate from the intake/repair/pickup receipts and the final
+// invoice. Itemizes estimated parts + labor, is clearly marked ESTIMATE, and
+// carries a "not a final bill" disclaimer so it can never be mistaken for one.
+export const printRepairEstimate = (r: Repair, opts?: { validDays?: number }) => {
+  const parts = r.parts && r.parts.length ? r.parts : [];
+  const partsCost = repairPartsCost(r);
+  const labor = repairLabor(r);
+  const validDays = opts?.validDays ?? 14;
+  const partRows = parts.length
+    ? parts.map(p => `<tr><td>${esc(p.name) || 'Part'}</td><td class="r">${p.quantity || 1}</td><td class="r">${money((p.unitCost || 0) * (p.quantity || 1))}</td></tr>`).join('')
+    : `<tr><td>Parts (estimated)</td><td class="r"></td><td class="r">${money(partsCost)}</td></tr>`;
+  const body = `
+    <h2>${SHOP}</h2><div class="sub">REPAIR ESTIMATE — not a final bill<br/>${esc(r.repairNumber)} · ${esc(r.date)}</div>
+    <div class="estamp">ESTIMATE</div>
+    <h3>Customer</h3>${row('Name', r.customerName)}${row('Phone', r.customerPhone)}${row('Email', r.customerEmail)}
+    ${deviceBlock(r)}
+    <h3>Reported Issue</h3><div class="row"><span>${esc(r.issue) || '—'}</span></div>
+    ${cosmeticBlock(r)}
+    <h3>Estimated Charges</h3>
+    <table><thead><tr><th>Item</th><th class="r">Qty</th><th class="r">Amount</th></tr></thead><tbody>
+      ${partRows}
+      <tr><td>Labor (estimated)</td><td class="r"></td><td class="r">${money(labor)}</td></tr>
+    </tbody></table>
+    <div class="tot"></div>
+    <div class="row"><span class="k">Estimated Parts</span><span>${money(partsCost)}</span></div>
+    <div class="row"><span class="k">Estimated Labor</span><span>${money(labor)}</span></div>
+    <div class="row b tot"><span>Estimated Total</span><span>${money(r.repairPrice)}</span></div>
+    ${r.estimatedCompletion ? row('Est. Completion', r.estimatedCompletion) : ''}
+    <p class="disc"><strong>This is an estimate, not a final bill.</strong> Prices are approximate and may change once the device is fully diagnosed or if additional parts/work are required. We will contact you for approval before exceeding this estimate. Estimate valid for ${validDays} days from the date above. No work has been authorized or performed by this document.</p>
+    <p class="foot">Questions? Contact ${SHOP}.</p>`;
+  openPrint(`Estimate ${r.repairNumber}`, 300, body);
 };
 
 // --- Wholesale documents ---
