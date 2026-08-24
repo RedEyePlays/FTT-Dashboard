@@ -52,6 +52,8 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   onOpenSettings, onOpenBulk, onStartAdd, onLock, activity = [],
   alerts = [], notifSeenTs = 0, onMarkNotificationsSeen = () => {},
 }) => {
+  // Keyboard hint for the global-search bar (⌘K on Mac, Ctrl K elsewhere).
+  const modKey = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl ';
   const primary: NavItem[] = ([
     { key: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard className="w-4 h-4" />, view: 'dashboard', show: true },
     { key: 'grid', label: 'Inventory', icon: <Table className="w-4 h-4" />, view: 'grid', show: true },
@@ -197,8 +199,17 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             </div>
 
             {/* Right actions — present at every width. */}
-            <div className="ml-auto flex items-center gap-1 shrink-0">
-              <button onClick={onOpenFinder} aria-label="Search" title="Search" className={iconBtn}>
+            <div className="ml-auto flex items-center gap-1.5 shrink-0">
+              {/* Global search — one bar across Inventory, Repairs, Customers &
+                  Sales (opens the finder; ⌘/Ctrl-K also works). Shown as a bar on
+                  ≥lg, icon-only below to save room. */}
+              <button onClick={onOpenFinder} title="Search everything" aria-label="Search everything"
+                className="hidden lg:flex items-center gap-2 h-10 w-56 xl:w-72 px-3 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/60 text-slate-400 hover:border-indigo-400 hover:text-slate-500 dark:hover:text-slate-300 text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500">
+                <Search className="w-4 h-4 shrink-0" />
+                <span className="flex-1 text-left truncate">Search everything…</span>
+                <kbd className="hidden xl:inline text-[10px] font-mono px-1.5 py-0.5 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700">{modKey}K</kbd>
+              </button>
+              <button onClick={onOpenFinder} aria-label="Search" title="Search" className={`lg:hidden ${iconBtn}`}>
                 <Search className="w-5 h-5" />
               </button>
 
