@@ -199,7 +199,8 @@ export type Permission =
   | 'timeclock.use'   // clock in/out & take breaks (every active staff member)
   | 'payroll.manage'  // view the biweekly pay-period summary (owner + manager)
   | 'closeout.view'   // end-of-day close-out summary (owner + manager)
-  | 'audit.view' | 'backup.export' | 'settings.manage';
+  | 'audit.view' | 'backup.export' | 'settings.manage'
+  | 'staffNotes.manage'; // owner-only internal staff shoutout/notes log
 
 export interface AppUser {
   id: string;            // Firebase Auth uid
@@ -242,6 +243,17 @@ export interface AuditEntry {
   entityId?: string;
   before?: any;
   after?: any;
+}
+
+// Internal-only, owner-visible running log of quick notes about staff (e.g. a
+// shoutout for handling a tough situation well). Free text + timestamp only —
+// deliberately no rating, category, or approval workflow.
+export interface StaffNote {
+  id: string;
+  ts: number;             // epoch ms
+  text: string;
+  authorId: string;
+  authorEmail: string;
 }
 
 export interface SalesLine {

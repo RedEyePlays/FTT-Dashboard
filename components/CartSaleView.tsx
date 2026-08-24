@@ -11,6 +11,7 @@ import { getDeviceDisplayName, suggestedSalePrice, PriceSuggestion } from '../do
 // actually printed, not on every Quick Sale.
 const LabelModal = lazy(() => import('./LabelModal').then(m => ({ default: m.LabelModal })));
 import { PLATFORMS } from '../domain/pos';
+import { formatPhoneInput } from '../domain/phone';
 import { CustomerSearchInput } from './CustomerSearchInput';
 import { useCheckout, CustomCategory, CUSTOM_DEVICE_TYPES } from '../hooks/useCheckout';
 
@@ -291,7 +292,7 @@ export const CartSaleView: React.FC<Props> = (props) => {
               onSelect={c => { setCustomerName(c.name); setCustomerPhone(c.phone || ''); setCustomerEmail(c.email || ''); setSelectedCustomerId(c.id); }} />
           )}
           <IconInput icon={<User className="w-4 h-4" />} placeholder="Customer name (optional — defaults to Walk-in)" value={customerName} onChange={v => { setCustomerName(v); setSelectedCustomerId(undefined); }} />
-          <IconInput icon={<Phone className="w-4 h-4" />} placeholder="Phone number" value={customerPhone} onChange={setCustomerPhone} />
+          <IconInput icon={<Phone className="w-4 h-4" />} placeholder="Phone number" value={customerPhone} onChange={v => setCustomerPhone(formatPhoneInput(v))} />
           <IconInput icon={<Mail className="w-4 h-4" />} placeholder="Email (optional)" value={customerEmail} onChange={setCustomerEmail} />
           <IconInput icon={<FileText className="w-4 h-4" />} placeholder="Customer notes" value={customerNotes} onChange={setCustomerNotes} />
           {previousPurchases.length > 0 && (

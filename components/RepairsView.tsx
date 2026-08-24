@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect, lazy, Suspense } from 'react';
 import {
   Wrench, Plus, Search, X, Trash2, Printer, FileText, Receipt, History as HistoryIcon,
-  ArrowLeft, DollarSign, ChevronRight, Building2, ClipboardCheck, PackageCheck, ScrollText, QrCode, BarChart3,
+  ArrowLeft, DollarSign, ChevronRight, Building2, ClipboardCheck, PackageCheck, ScrollText, QrCode, BarChart3, Link as LinkIcon, Check,
 } from 'lucide-react';
 import { Repair, RepairBatch, Customer, AuditEntry, RepairStatus, RepairType, DeviceType, RepairPart, AppUser } from '../types';
 import {
@@ -11,6 +11,9 @@ import {
 } from '../domain/repairs';
 import { newId } from '../domain/ids';
 import { printRetailReceipt, printBatchIntake, printBatchInvoice, printBatchSummary, printDeviceSheet, printRepairEstimate } from '../services/repairPrint';
+import { statusPageUrl } from '../domain/statusLink';
+import { formatPhoneInput } from '../domain/phone';
+import { usePersistedFilter } from '../hooks/usePersistedFilter';
 // Lazy: the repair label modal pulls in jsPDF (~390 kB); load it on demand.
 const RepairLabelModal = lazy(() => import('./RepairLabelModal').then(m => ({ default: m.RepairLabelModal })));
 import { CustomerSearchInput } from './CustomerSearchInput';
@@ -21,6 +24,7 @@ interface Props {
   customers: Customer[];
   auditLogs: AuditEntry[];
   canDelete: boolean;
+  userId?: string; // signed-in user's uid — scopes the remembered status filter so it never leaks between accounts
   onGenerateRepairNumber: () => Promise<string>;
   onGenerateBatchNumber: () => Promise<string>;
   onSaveRepair: (r: Repair, prev?: Repair) => void;
@@ -80,12 +84,12 @@ const SummaryCard: React.FC<{ icon: React.ReactNode; accent: string; label: stri
 );
 
 export const RepairsView: React.FC<Props> = (props) => {
-  const { repairs, batches, auditLogs, canDelete, onSaveRepair, onDeleteRepair, onSaveBatch, onDeleteBatch, onRecordPayment, onPrintAudit } = props;
+  const { repairs, batches, auditLogs, canDelete, userId, onSaveRepair, onDeleteRepair, onSaveBatch, onDeleteBatch, onRecordPayment, onPrintAudit } = props;
   type Filter = 'all' | 'active' | 'overdue' | RepairStatus;
   const { users = [], canViewPerformance = false } = props;
   const [tab, setTab] = useState<'tickets' | 'batches' | 'performance'>('tickets');
   const [query, setQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState<Filter>('all');
+  const [statusFilter, setStatusFilter] = usePersistedFilter<Filter>('repairs_status_filter', userId, 'all');
   const [drawer, setDrawer] = useState<{ repair: Repair; isNew: boolean } | null>(null);
   const [openBatchId, setOpenBatchId] = useState<string | null>(null);
   const [batchForm, setBatchForm] = useState<{ batch: RepairBatch; isNew: boolean } | null>(null);
@@ -535,6 +539,7 @@ const RepairDrawer: React.FC<{
   onClose: () => void; onSave: (r: Repair) => void; onCheckoutViaSale?: (r: Repair) => void; onDelete: () => void; onPrint: (doc: 'intake' | 'repair' | 'pickup') => void; onPrintSheet: () => void; onPrintLabel: () => void; onPrintEstimate: () => void;
 }> = ({ initial, isNew, canDelete, auditLogs, customers, onClose, onSave, onCheckoutViaSale, onDelete, onPrint, onPrintSheet, onPrintLabel, onPrintEstimate }) => {
   const [f, setF] = useState<Repair>(initial);
+  const [linkCopied, setLinkCopied] = useState(false);
   // Snapshot the form state at mount for a dirty check, so a stray backdrop/X
   // click doesn't silently discard typed changes.
   const [snapshot] = useState(() => JSON.stringify(initial));
@@ -572,7 +577,18 @@ const RepairDrawer: React.FC<{
             <h2 className="text-sm font-bold text-slate-800 dark:text-slate-100">{isNew ? (isInternal ? 'New Internal Repair' : isRetail ? 'New Repair Ticket' : 'Add Device') : (isInternal ? 'Internal Repair' : isRetail ? 'Repair Ticket' : 'Device')}{f.repairNumber && <span className="font-mono text-xs text-slate-400 ml-2">{f.repairNumber}</span>}</h2>
             <StatusPill value={f.status} onChange={s => set({ status: s })} />
           </div>
-          <button onClick={requestClose} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"><X className="w-4 h-4" /></button>
+          <div className="flex items-center gap-3">
+            {isRetail && f.repairNumber && (
+              <button
+                onClick={() => { navigator.clipboard.writeText(statusPageUrl(f.repairNumber)); setLinkCopied(true); setTimeout(() => setLinkCopied(false), 1500); }}
+                title="Copy the customer status-lookup link for this ticket"
+                className="flex items-center gap-1 text-xs text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400"
+              >
+                {linkCopied ? <><Check className="w-3.5 h-3.5" /> Copied</> : <><LinkIcon className="w-3.5 h-3.5" /> Copy Link</>}
+              </button>
+            )}
+            <button onClick={requestClose} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"><X className="w-4 h-4" /></button>
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto custom-scrollbar p-5 space-y-5">
@@ -592,7 +608,7 @@ const RepairDrawer: React.FC<{
               )}
               <div className="grid grid-cols-2 gap-3">
                 <Field label="Customer (required)"><input autoFocus={isNew && customers.length === 0} className={inputCls} value={f.customerName || ''} onChange={e => set({ customerName: e.target.value, customerId: undefined })} /></Field>
-                <Field label="Phone"><input className={inputCls} value={f.customerPhone || ''} onChange={e => set({ customerPhone: e.target.value })} /></Field>
+                <Field label="Phone"><input type="tel" className={inputCls} value={f.customerPhone || ''} onChange={e => set({ customerPhone: formatPhoneInput(e.target.value) })} /></Field>
                 <Field label="Email (optional)" className="col-span-2"><input className={inputCls} value={f.customerEmail || ''} onChange={e => set({ customerEmail: e.target.value })} /></Field>
               </div>
             </Section>
@@ -711,7 +727,7 @@ const BatchForm: React.FC<{ initial: RepairBatch; isNew: boolean; onClose: () =>
           <Field label="Company Name"><input autoFocus className={inputCls} value={f.companyName} onChange={e => set({ companyName: e.target.value })} /></Field>
           <div className="grid grid-cols-2 gap-3">
             <Field label="Contact Person"><input className={inputCls} value={f.contactPerson || ''} onChange={e => set({ contactPerson: e.target.value })} /></Field>
-            <Field label="Phone"><input className={inputCls} value={f.phone || ''} onChange={e => set({ phone: e.target.value })} /></Field>
+            <Field label="Phone"><input type="tel" className={inputCls} value={f.phone || ''} onChange={e => set({ phone: formatPhoneInput(e.target.value) })} /></Field>
             <Field label="Email"><input className={inputCls} value={f.email || ''} onChange={e => set({ email: e.target.value })} /></Field>
             <Field label="Date Received"><input type="date" className={inputCls} value={f.dateReceived} onChange={e => set({ dateReceived: e.target.value })} /></Field>
           </div>

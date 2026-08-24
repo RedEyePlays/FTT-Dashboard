@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { Runner, DropOff, DropOffStatus, PaidBy, Settlement, InventoryItem } from '../types';
 import { runnerBalance, settleableDropOffs, settlementTotals } from '../domain/dropoffs';
+import { formatPhoneInput } from '../domain/phone';
 
 interface Props {
   runners: Runner[];
@@ -297,7 +298,7 @@ const RunnersTab: React.FC<{
           </div>
           <div className="relative">
             <Phone className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-            <input className={`${inp} pl-9`} placeholder="Phone number" value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} />
+            <input type="tel" className={`${inp} pl-9`} placeholder="Phone number" value={form.phone} onChange={e => setForm(f => ({ ...f, phone: formatPhoneInput(e.target.value) }))} />
           </div>
           <textarea className={inp} rows={2} placeholder="Notes" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} />
           <div className="flex gap-2">

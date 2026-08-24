@@ -31,7 +31,7 @@ const UsersView = lazy(() => import('./components/UsersView').then(m => ({ defau
 const AuditLogView = lazy(() => import('./components/AuditLogView').then(m => ({ default: m.AuditLogView })));
 const TimeClockView = lazy(() => import('./components/TimeClockView').then(m => ({ default: m.TimeClockView })));
 const CloseOutView = lazy(() => import('./components/CloseOutView').then(m => ({ default: m.CloseOutView })));
-import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, Runner, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission, Repair, RepairBatch, TimeEntry, PayPeriodPaid, BreakReason, SalesTransaction, CashReconciliation } from './types';
+import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, Runner, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission, Repair, RepairBatch, TimeEntry, PayPeriodPaid, BreakReason, SalesTransaction, CashReconciliation, StaffNote } from './types';
 import { skuPrefix, nextSku } from './services/sku';
 import { REPAIR_PREFIX, BATCH_PREFIX, computeWarrantyUntil, applyTechEdit, TECH_EDITABLE_FIELDS, repairSalePrefill, completeRepairSale } from './domain/repairs';
 import { MergePlan } from './domain/customers';
@@ -49,6 +49,7 @@ import {
   updateUserDoc, setInvite, deleteInvite,
   logAudit, exportWorkspaceData, recordBackup, saveSettings,
   saveTimeEntry, savePayPeriodPaid, deletePayPeriodPaid,
+  saveStaffNote, deleteStaffNote,
 } from './services/firestoreDb';
 import { AppSettings } from './domain/settings';
 import { listWorkspaceBackups, getBackupDownloadUrl } from './services/backupStorage';
@@ -96,7 +97,7 @@ const App: React.FC = () => {
     appUser, roleLoading, workspaceId, workspaceUsers, invites, auditLogs, loadMoreAuditLogs, auditHasMore,
     data, notes, setNotes, tasks, setTasks,
     runners, dropOffs, settlements, salesTransactions, customers, repairs, repairBatches,
-    timeEntries, payPeriods, cashReconciliations,
+    timeEntries, payPeriods, cashReconciliations, staffNotes,
     skuCounters, setSkuCounters, activityLog, lastBackup, settings,
     dbLoading, dbError, reconnect, enableExtendedData, enableCashData,
     runnersRef, dropOffsRef, settlementsRef, customersRef, salesTransactionsRef,
@@ -830,6 +831,19 @@ const App: React.FC = () => {
     audit('user.set_rate', 'user', targetUid, { hourlyRate: before }, { hourlyRate: rate });
   };
 
+  // --- Staff notes (owner-only shoutout/notes log) ---
+  // Deliberately not routed through audit() — the audit log is also readable
+  // by managers (audit.view), and this note's text must stay owner-only.
+  const handleAddStaffNote = (text: string) => {
+    if (!uid || !appUser || !allow('staffNotes.manage')) return;
+    const note: StaffNote = { id: newId(), ts: Date.now(), text, authorId: appUser.id, authorEmail: appUser.email };
+    saveStaffNote(uid, note).catch(() => {});
+  };
+  const handleDeleteStaffNote = (id: string) => {
+    if (!uid || !allow('staffNotes.manage')) return;
+    deleteStaffNote(uid, id).catch(() => {});
+  };
+
   // --- Time clock ---
   // Every active staff member may clock in/out & take breaks (timeclock.use).
   // Each action mutates the caller's own open shift only.
@@ -1263,6 +1277,7 @@ const App: React.FC = () => {
               customers={customers}
               auditLogs={auditLogs}
               canDelete={appUser.role === 'owner'}
+              userId={appUser.id}
               initialCustomer={prefillCustomer}
               initialRepairId={focusRepairId}
               initialNewRepair={prefillRepair}
@@ -1294,6 +1309,7 @@ const App: React.FC = () => {
               activity={activityLog}
               auditLogs={auditLogs}
               canViewCost={allow('reports.profit.detailed')}
+              userId={appUser.id}
               section={invSection}
               onSelectSection={goInventory}
               onSave={handleSaveInventoryItem}
@@ -1367,6 +1383,10 @@ const App: React.FC = () => {
               canManageSecurity={allow('security.manage')}
               autoLockMinutes={settings.operations.autoLockMinutes}
               onSetAutoLockMinutes={allow('security.manage') ? handleSetAutoLockMinutes : undefined}
+              staffNotes={staffNotes}
+              canManageStaffNotes={allow('staffNotes.manage')}
+              onAddStaffNote={allow('staffNotes.manage') ? handleAddStaffNote : undefined}
+              onDeleteStaffNote={allow('staffNotes.manage') ? handleDeleteStaffNote : undefined}
             />
           )}
           {view === 'timeclock' && allow('timeclock.use') && (

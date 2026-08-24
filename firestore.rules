@@ -104,6 +104,13 @@ service cloud.firestore {
         allow delete: if isOwnerOf(ws);
       }
 
+      // Staff notes: an internal, owner-only shoutout/notes log about staff.
+      // Owner reads/writes; nobody else (managers/employees/technicians) may
+      // even read it, matching services/rbac.ts's staffNotes.manage.
+      match /staffNotes/{id} {
+        allow read, write: if isOwnerOf(ws);
+      }
+
       // Everything else in the workspace (customers, sales, settings, dropoffs,
       // payPeriods…): active staff read/write; technicians read-only.
       match /{document=**} {

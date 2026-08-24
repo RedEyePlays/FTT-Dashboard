@@ -11,6 +11,9 @@ import {
   CustomerSort, CustomerFilter, CustomerData, CustomerStats, MergePlan,
 } from '../domain/customers';
 import { REPAIR_STATUS_CELL, REPAIR_STATUS_LABEL, partName } from '../domain/repairs';
+import { statusPageUrl } from '../domain/statusLink';
+import { formatPhoneInput } from '../domain/phone';
+import { PRINT_PREVIEW_BAR_STYLE, PRINT_PREVIEW_BAR_HTML } from '../services/printPreview';
 import { printRetailReceipt } from '../services/repairPrint';
 import { printSalesReceipt } from '../services/salesReceipt';
 import { getStoreProfile } from './SettingsModal';
@@ -545,7 +548,7 @@ const ReturnSection: React.FC<{ total: number; onReturn: (opts: { restockingFee?
 
 /* ---------------- Repair ticket modal ---------------- */
 const TicketModal: React.FC<{ repair: Repair; tech?: string; customer: Customer; onClose: () => void }> = ({ repair: r, tech, customer, onClose }) => (
-  <Modal title={`Repair ${r.repairNumber}`} onClose={onClose} onPrint={() => printRetailReceipt(r, 'repair')}>
+  <Modal title={`Repair ${r.repairNumber}`} onClose={onClose} onPrint={() => printRetailReceipt(r, 'repair')} onCopyLink={() => navigator.clipboard.writeText(statusPageUrl(r.repairNumber))}>
     <div className="space-y-1.5 text-sm">
       <Row label="Device" value={[r.brand, r.model].filter(Boolean).join(' ') || r.deviceType || 'Device'} />
       <Row label="IMEI / Serial" value={r.imei || '—'} />
@@ -580,20 +583,28 @@ const TicketModal: React.FC<{ repair: Repair; tech?: string; customer: Customer;
   </Modal>
 );
 
-const Modal: React.FC<{ title: string; onClose: () => void; onPrint?: () => void; children: React.ReactNode }> = ({ title, onClose, onPrint, children }) => (
-  <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4" onClick={onClose}>
-    <div className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-700 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-      <div className="px-5 py-3.5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between sticky top-0 bg-white dark:bg-slate-900">
-        <h2 className="text-sm font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2"><FileText className="w-4 h-4 text-indigo-500" />{title}</h2>
-        <div className="flex items-center gap-1">
-          {onPrint && <button onClick={onPrint} className="p-1.5 rounded-lg text-slate-500 hover:text-indigo-600"><Printer className="w-4 h-4" /></button>}
-          <button onClick={onClose} className="p-1.5 text-slate-400 hover:text-slate-600"><X className="w-4 h-4" /></button>
+const Modal: React.FC<{ title: string; onClose: () => void; onPrint?: () => void; onCopyLink?: () => void; children: React.ReactNode }> = ({ title, onClose, onPrint, onCopyLink, children }) => {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4" onClick={onClose}>
+      <div className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-700 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <div className="px-5 py-3.5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between sticky top-0 bg-white dark:bg-slate-900">
+          <h2 className="text-sm font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2"><FileText className="w-4 h-4 text-indigo-500" />{title}</h2>
+          <div className="flex items-center gap-1">
+            {onCopyLink && (
+              <button onClick={() => { onCopyLink(); setCopied(true); setTimeout(() => setCopied(false), 1500); }} title="Copy customer status-lookup link" className="p-1.5 rounded-lg text-slate-500 hover:text-indigo-600">
+                {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+              </button>
+            )}
+            {onPrint && <button onClick={onPrint} className="p-1.5 rounded-lg text-slate-500 hover:text-indigo-600"><Printer className="w-4 h-4" /></button>}
+            <button onClick={onClose} className="p-1.5 text-slate-400 hover:text-slate-600"><X className="w-4 h-4" /></button>
+          </div>
         </div>
+        <div className="p-5">{children}</div>
       </div>
-      <div className="p-5">{children}</div>
     </div>
-  </div>
-);
+  );
+};
 
 /* ---------------- Merge modal ---------------- */
 const MergeModal: React.FC<{ group: Customer[]; data: CustomerData; onClose: () => void; onMerge?: (plan: MergePlan) => void }> = ({ group, data, onClose, onMerge }) => {
@@ -635,8 +646,9 @@ const printDoc = (title: string, body: string) => {
   const win = window.open('', '_blank', 'width=420,height=640');
   if (!win) return;
   win.document.write(`<!DOCTYPE html><html><head><title>${title}</title>
-    <style>body{font-family:-apple-system,Arial,sans-serif;color:#111;margin:24px;font-size:13px}h1{font-size:18px;margin:0 0 2px}h2{font-size:13px;margin:16px 0 4px;text-transform:uppercase;letter-spacing:.5px;color:#555}table{width:100%;border-collapse:collapse}td{padding:3px 0}.r{text-align:right}.tot{font-weight:700;border-top:1px solid #000;padding-top:6px}.muted{color:#666}</style>
-    </head><body>${body}<script>window.onload=function(){window.print();setTimeout(function(){window.close()},300)}</script></body></html>`);
+    <style>body{font-family:-apple-system,Arial,sans-serif;color:#111;margin:24px;font-size:13px}h1{font-size:18px;margin:0 0 2px}h2{font-size:13px;margin:16px 0 4px;text-transform:uppercase;letter-spacing:.5px;color:#555}table{width:100%;border-collapse:collapse}td{padding:3px 0}.r{text-align:right}.tot{font-weight:700;border-top:1px solid #000;padding-top:6px}.muted{color:#666}
+    ${PRINT_PREVIEW_BAR_STYLE}</style>
+    </head><body>${PRINT_PREVIEW_BAR_HTML}${body}</body></html>`);
   win.document.close();
 };
 const esc = (s?: string) => (s || '').replace(/[<>&]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c] as string));
@@ -683,7 +695,7 @@ const EditModal: React.FC<{ customer: Customer; onClose: () => void; onSave: (c:
         <div className="p-5 space-y-3">
           <div className="grid grid-cols-2 gap-3">
             <label className="block"><span className="text-[11px] font-medium text-slate-500 dark:text-slate-400">Name</span><input className={inputCls} value={f.name} onChange={e => set({ name: e.target.value })} /></label>
-            <label className="block"><span className="text-[11px] font-medium text-slate-500 dark:text-slate-400">Phone</span><input className={inputCls} value={f.phone} onChange={e => set({ phone: e.target.value })} /></label>
+            <label className="block"><span className="text-[11px] font-medium text-slate-500 dark:text-slate-400">Phone</span><input className={inputCls} type="tel" value={f.phone} onChange={e => set({ phone: formatPhoneInput(e.target.value) })} /></label>
             <label className="block col-span-2"><span className="text-[11px] font-medium text-slate-500 dark:text-slate-400">Email</span><input className={inputCls} value={f.email || ''} onChange={e => set({ email: e.target.value })} /></label>
           </div>
           <label className="block"><span className="text-[11px] font-medium text-slate-500 dark:text-slate-400">Preferred contact method</span>

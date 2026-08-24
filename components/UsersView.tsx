@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Users, UserPlus, ShieldCheck, Ban, CheckCircle2, Trash2, Mail, Eye, DollarSign, KeyRound, X, Lock } from 'lucide-react';
-import { AppUser, WorkspaceInvite, Role } from '../types';
+import { Users, UserPlus, ShieldCheck, Ban, CheckCircle2, Trash2, Mail, Eye, DollarSign, KeyRound, X, Lock, MessageSquarePlus } from 'lucide-react';
+import { AppUser, WorkspaceInvite, Role, StaffNote } from '../types';
 import { ROLE_LABEL } from '../services/rbac';
 import { canAssignPin, isValidPinFormat, PIN_MAX_LENGTH } from '../domain/pin';
+import { sortStaffNotes, canAddStaffNote } from '../domain/staffNotes';
 
 interface Props {
   me: AppUser;
@@ -22,6 +23,11 @@ interface Props {
   canManageSecurity?: boolean;
   autoLockMinutes?: number;
   onSetAutoLockMinutes?: (minutes: number) => void;
+  // Owner-only internal staff shoutout/notes log (services/rbac.ts's staffNotes.manage).
+  staffNotes?: StaffNote[];
+  canManageStaffNotes?: boolean;
+  onAddStaffNote?: (text: string) => void;
+  onDeleteStaffNote?: (id: string) => void;
 }
 
 const AUTO_LOCK_OPTIONS = [1, 2, 4, 5, 10, 15, 30];
@@ -113,10 +119,12 @@ const PinModal: React.FC<{ email: string; onClose: () => void; onSave: (pin: str
 export const UsersView: React.FC<Props> = ({
   me, users, invites, canManageAll = true, onSetRole, onSetDisabled, onSetAllowProfit, onSetHourlyRate, onInvite, onDeleteInvite,
   onSetPin, canManageSecurity, autoLockMinutes, onSetAutoLockMinutes,
+  staffNotes = [], canManageStaffNotes = false, onAddStaffNote, onDeleteStaffNote,
 }) => {
   const [email, setEmail] = useState('');
   const [role, setRole] = useState<Role>(canManageAll ? 'employee' : 'technician');
   const [pinTarget, setPinTarget] = useState<AppUser | null>(null);
+  const [noteText, setNoteText] = useState('');
 
   // Managers may only invite/manage technicians; owners manage every role.
   const inviteRoles: Role[] = canManageAll ? ['manager', 'employee', 'technician'] : ['technician'];
@@ -248,6 +256,46 @@ export const UsersView: React.FC<Props> = ({
           })}
         </div>
       </div>
+
+      {/* Staff notes — owner-only internal shoutout/notes log */}
+      {canManageStaffNotes && onAddStaffNote && (
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl p-5">
+          <h3 className="font-semibold text-slate-800 dark:text-slate-100 mb-1 flex items-center gap-2"><MessageSquarePlus className="w-4 h-4 text-indigo-500" /> Staff Notes</h3>
+          <p className="text-xs text-slate-400 mb-3">Internal-only quick notes about staff — visible to owners only. Not a performance review.</p>
+          <div className="flex flex-wrap gap-2 items-end mb-4">
+            <div className="flex-1 min-w-[240px]">
+              <textarea
+                value={noteText}
+                onChange={e => setNoteText(e.target.value)}
+                placeholder="e.g. Jordan handled a tough return well today."
+                rows={2}
+                className="w-full p-2.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md text-sm"
+              />
+            </div>
+            <button
+              onClick={() => { if (canAddStaffNote(noteText)) { onAddStaffNote(noteText.trim()); setNoteText(''); } }}
+              disabled={!canAddStaffNote(noteText)}
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white rounded-lg text-sm font-medium"
+            >
+              Add Note
+            </button>
+          </div>
+          <div className="space-y-2">
+            {sortStaffNotes(staffNotes).length === 0 && <p className="text-sm text-slate-400">No notes yet.</p>}
+            {sortStaffNotes(staffNotes).map(n => (
+              <div key={n.id} className="flex items-start justify-between gap-3 text-sm bg-slate-50 dark:bg-slate-800/50 rounded-md px-3 py-2">
+                <div>
+                  <p className="text-slate-700 dark:text-slate-200 whitespace-pre-wrap">{n.text}</p>
+                  <p className="text-xs text-slate-400 mt-0.5">{new Date(n.ts).toLocaleString()} · {n.authorEmail}</p>
+                </div>
+                {onDeleteStaffNote && (
+                  <button onClick={() => onDeleteStaffNote(n.id)} className="text-slate-400 hover:text-rose-500 shrink-0"><Trash2 className="w-4 h-4" /></button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {pinTarget && onSetPin && (
         <PinModal email={pinTarget.email} onClose={() => setPinTarget(null)} onSave={pin => onSetPin(pinTarget.id, pin)} />

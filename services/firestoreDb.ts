@@ -4,7 +4,7 @@ import {
 import { db } from './firebase';
 import {
   InventoryItem, Runner, DropOff, Settlement, Customer, SalesTransaction, ActivityEntry, Note, Task,
-  AppUser, WorkspaceInvite, AuditEntry, TimeEntry, PayPeriodPaid, CashReconciliation,
+  AppUser, WorkspaceInvite, AuditEntry, TimeEntry, PayPeriodPaid, CashReconciliation, StaffNote,
 } from '../types';
 import { collectionFor } from '../domain/inventory';
 import { AppSettings } from '../domain/settings';
@@ -15,7 +15,7 @@ import { allocateSkuInTxn } from './sku';
 export const COLLECTIONS = [
   'inventory', 'accessories', 'salesTransactions', 'customers',
   'dropOffs', 'runners', 'settlements', 'activityLog', 'auditLogs',
-  'repairs', 'repairBatches', 'timeEntries', 'payPeriods', 'cashReconciliations',
+  'repairs', 'repairBatches', 'timeEntries', 'payPeriods', 'cashReconciliations', 'staffNotes',
 ] as const;
 export type CollName = typeof COLLECTIONS[number];
 
@@ -200,6 +200,12 @@ export async function migrateLegacyIfNeeded(uid: string, legacy: {
 // Shifts and pay-period sign-offs live under the workspace like any other shop
 // data (generic saveItem/deleteItem). Thin named wrappers keep the App handlers
 // readable and the collection names in one place.
+// Owner-only staff shoutout/notes log (see domain/staffNotes.ts + services/rbac.ts's
+// staffNotes.manage). Same generic saveItem/deleteItem path as every other
+// collection — access is enforced by firestore.rules, not by this file.
+export const saveStaffNote = (uid: string, n: StaffNote) => saveItem(uid, 'staffNotes', n);
+export const deleteStaffNote = (uid: string, id: string) => deleteItem(uid, 'staffNotes', id);
+
 export const saveTimeEntry = (uid: string, e: TimeEntry) => saveItem(uid, 'timeEntries', e);
 export const deleteTimeEntry = (uid: string, id: string) => deleteItem(uid, 'timeEntries', id);
 export const savePayPeriodPaid = (uid: string, p: PayPeriodPaid) => saveItem(uid, 'payPeriods', p);
