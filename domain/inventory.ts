@@ -18,6 +18,12 @@ export interface StockItem extends InventoryItem { kind: 'accessory'; quantity?:
 export const isAccessory = (i: InventoryItem): i is StockItem => kindOf(i) === 'accessory';
 export const isDevice = (i: InventoryItem): i is SerializedDevice => kindOf(i) === 'device';
 
+// The field that represents an item's shelf/listing price — devices ask via
+// targetSalePrice, accessories via sellingPrice. Shared so shelf tags and bulk
+// price updates agree on which field a "price" bulk action actually writes.
+export const priceFieldFor = (i: Pick<InventoryItem, 'kind'>): 'targetSalePrice' | 'sellingPrice' =>
+  kindOf(i) === 'accessory' ? 'sellingPrice' : 'targetSalePrice';
+
 // The two Firestore collections that inventory items live in. Kept as a plain
 // string-literal type here so `domain/` stays free of Firebase imports.
 export type InventoryCollection = 'inventory' | 'accessories';

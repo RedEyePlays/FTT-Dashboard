@@ -36,6 +36,7 @@ export interface InventoryItem {
   purchaseSource?: string; // channel: Marketplace, Runner, Trade-in, etc.
   targetSalePrice?: number;
   deviceStatus?: DeviceStatus;
+  listed?: boolean; // posted for sale (marketplace/storefront) — independent of deviceStatus
 
   // --- Accessory attributes (stock) ---
   quantity?: number;
