@@ -64,7 +64,7 @@ const CloseDrawerModal = lazy(() => import('./components/CloseDrawerModal').then
 import { openEntryFor, isOnBreak, periodPayFor, paidKey, toISODate, PayPeriod, correctClockOut, isValidClockOutCorrection } from './domain/timeclock';
 import { buildAlerts } from './domain/alerts';
 import { changedSettingsSections } from './domain/audit';
-import { dropOffPurchaseCost } from './domain/dropoffs';
+import { dropOffPurchaseCost, settlementDrawerEffect } from './domain/dropoffs';
 import { InvSection, DEFAULT_INV_SECTION, invPath, parseInvPath } from './domain/inventoryNav';
 import { viewPath, parseViewPath, isRoutableView } from './domain/appNav';
 import { AppHeader } from './components/AppHeader';
@@ -775,7 +775,26 @@ const App: React.FC = () => {
   const saveTasks = (t: Task[]) => { setTasks(t); if (uid) saveMeta(uid, { tasks: t }); };
   const saveRunners = (r: Runner[]) => { if (uid && allow('dropoffs.manage')) { syncArray(uid, 'runners', r, runnersRef.current); audit('runner.edit', 'runner'); } };
   const saveDropOffs = (d: DropOff[]) => { if (uid && allow('dropoffs.manage')) { syncArray(uid, 'dropOffs', d, dropOffsRef.current); audit('dropoff.edit', 'dropOff'); } };
-  const saveSettlements = (s: Settlement[]) => { if (uid && allow('dropoffs.manage')) { syncArray(uid, 'settlements', s, settlementsRef.current); audit('dropoff.settle', 'settlement'); } };
+  // Record one completed runner settlement. Only a 'cash' payment method ever
+  // touches the cash drawer — e-transfer/other never do (domain/dropoffs.ts's
+  // settlementDrawerEffect is the single source of that decision). Writes
+  // through the same commitDrawerRecord path as every other drawer movement,
+  // so the register's live total and the reconciliation screen can't drift.
+  const handleSettleRunner = (settlement: Settlement) => {
+    if (!uid || !allow('dropoffs.manage')) return;
+    saveItem(uid, 'settlements', settlement);
+    audit('dropoff.settle', 'settlement', settlement.id, undefined, {
+      runnerId: settlement.runnerId, amountPaid: settlement.amountPaid, paymentMethod: settlement.paymentMethod,
+    });
+    const effect = settlementDrawerEffect(settlement);
+    if (effect) {
+      const date = new Date().toISOString().split('T')[0];
+      const existing = cashReconciliations.find(r => r.date === date);
+      const listKey: 'cashIn' | 'cashOut' = effect.kind;
+      const entry = { id: newId(), amount: effect.amount, note: `Runner settlement — ${settlement.id}` };
+      commitDrawerRecord(date, { [listKey]: [...(existing?.[listKey] || []), entry] });
+    }
+  };
 
   // --- Users / roles management ---
   // Owners manage everyone (users.manage). Managers (users.tech) may manage only
@@ -1347,7 +1366,7 @@ const App: React.FC = () => {
               settlements={settlements}
               onRunnersChange={saveRunners}
               onDropOffsChange={saveDropOffs}
-              onSettlementsChange={saveSettlements}
+              onSettle={handleSettleRunner}
               onAddToInventory={handleAddDropOffToInventory}
             />
           )}
