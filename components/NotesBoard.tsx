@@ -95,8 +95,8 @@ export const NotesBoard: React.FC<NotesBoardProps> = ({ notes, tasks, onUpdateNo
   return (
     <div className="grid grid-cols-1 md:grid-cols-12 h-[calc(100vh-140px)] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-sm overflow-hidden">
       
-      {/* 1. LEFT SIDEBAR: Note List (Spans 3 cols on md, full width on sm) */}
-      <div className="md:col-span-3 border-r border-slate-200 dark:border-slate-800 flex flex-col bg-slate-50/50 dark:bg-slate-950/50">
+      {/* 1. LEFT SIDEBAR: Note List (Spans 2 cols on md, full width on sm) */}
+      <div className="md:col-span-2 border-r border-slate-200 dark:border-slate-800 flex flex-col bg-slate-50/50 dark:bg-slate-950/50">
         
         <div className="p-4 border-b border-slate-100 dark:border-slate-800">
            <div className="flex items-center justify-between mb-4">
@@ -153,11 +153,11 @@ export const NotesBoard: React.FC<NotesBoardProps> = ({ notes, tasks, onUpdateNo
         </div>
       </div>
 
-      {/* 2. CENTER PANEL: Editor (Spans 6 cols on md) */}
-      <div className="md:col-span-6 flex flex-col bg-white dark:bg-slate-900 relative">
+      {/* 2. CENTER PANEL: Editor (Spans 7 cols on md) */}
+      <div className="md:col-span-7 flex flex-col bg-white dark:bg-slate-900 relative">
          {activeNote ? (
            <div className="flex-1 flex flex-col h-full overflow-hidden animate-fadeIn">
-              <div className="pt-12 px-8 md:px-12 max-w-4xl mx-auto w-full flex-shrink-0">
+              <div className="pt-12 px-8 md:px-12 max-w-6xl mx-auto w-full flex-shrink-0">
                  <div className="group relative mb-6">
                     <button 
                       onClick={() => cycleColor(activeNote.id, activeNote.color)}
@@ -192,7 +192,7 @@ export const NotesBoard: React.FC<NotesBoardProps> = ({ notes, tasks, onUpdateNo
                  </div>
               </div>
 
-              <div className="flex-1 overflow-y-auto px-8 md:px-12 pb-12 max-w-4xl mx-auto w-full custom-scrollbar">
+              <div className="flex-1 overflow-y-auto px-8 md:px-12 pb-12 max-w-6xl mx-auto w-full custom-scrollbar">
                  <textarea
                     value={activeNote.content}
                     onChange={(e) => handleUpdateNote(activeNote.id, 'content', e.target.value)}
