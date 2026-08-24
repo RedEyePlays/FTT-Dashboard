@@ -475,7 +475,7 @@ const App: React.FC = () => {
       const rep = repairsRef.current.find(r => r.id === repairId);
       if (rep) {
         const terminal = rep.type === 'retail' ? 'picked_up' : 'completed';
-        const done = completeRepairSale(rep, payload.transaction.id, Date.now(), terminal);
+        const done = { ...completeRepairSale(rep, payload.transaction.id, Date.now(), terminal), completedBy: appUser.id };
         saveItem(uid, 'repairs', done);
         logActivity(`${done.repairNumber} checked out (${payload.transaction.customerName || 'customer'})`);
         audit('repair.status_change', 'repair', done.id, { status: rep.status }, { status: terminal });
@@ -826,7 +826,7 @@ const App: React.FC = () => {
     // Stamp completion + warranty when moving into completed.
     if (next.status === 'completed' && !next.completedAt) {
       const completedDate = new Date().toISOString().split('T')[0];
-      next = { ...next, completedAt: Date.now(), warrantyUntil: computeWarrantyUntil(completedDate, next.warrantyDays) || undefined };
+      next = { ...next, completedAt: Date.now(), completedBy: appUser.id, warrantyUntil: computeWarrantyUntil(completedDate, next.warrantyDays) || undefined };
     }
     saveItem(uid, 'repairs', next);
     if (isNew) {
@@ -852,7 +852,7 @@ const App: React.FC = () => {
     // Stamp completion + warranty when the device is picked up (terminal).
     if ((next.status === 'picked_up' || next.status === 'completed') && !next.completedAt) {
       const completedDate = new Date().toISOString().split('T')[0];
-      next = { ...next, completedAt: Date.now(), warrantyUntil: computeWarrantyUntil(completedDate, next.warrantyDays) || undefined };
+      next = { ...next, completedAt: Date.now(), completedBy: appUser.id, warrantyUntil: computeWarrantyUntil(completedDate, next.warrantyDays) || undefined };
     }
     saveItem(uid, 'repairs', next);
     if (stored.status !== next.status) {
@@ -1146,6 +1146,8 @@ const App: React.FC = () => {
               onDeleteBatch={handleDeleteBatch}
               onRecordPayment={handleRecordBatchPayment}
               onPrintAudit={handleRepairPrintAudit}
+              users={workspaceUsers}
+              canViewPerformance={allow('repairs.performance')}
             />
           )}
           {(view === 'entry' || view === 'edit') && (

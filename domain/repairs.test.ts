@@ -5,7 +5,7 @@ import {
   applyTechEdit, repairAgeDays, TECH_STATUSES,
   repairNeedsCustomer, isInternalRepair, canSaveRepair, linkedRepairFor,
   partsTotal, repairPartsCost, repairLabor, repairCheckoutSummary, completeRepair,
-  repairSalePrefill, completeRepairSale,
+  repairSalePrefill, completeRepairSale, technicianPerformance,
 } from './repairs';
 import { Repair, RepairBatch } from '../types';
 
@@ -273,5 +273,37 @@ describe('completeRepairSale', () => {
     expect(done.completedAt).toBe(NOW);
     expect(done.salesTransactionId).toBe('tx-123');
     expect(done.warrantyUntil).toBe('2026-10-18'); // 2026-07-20 + 90d
+  });
+});
+
+describe('technicianPerformance()', () => {
+  it('aggregates completed repairs and average turnaround per technician within range', () => {
+    const day = 24 * 60 * 60 * 1000;
+    const start = 1_000_000;
+    const end = start + 30 * day;
+    const rows = technicianPerformance([
+      // Ann: two completed, turnarounds 2d and 4d -> avg 3d
+      repair({ id: '1', completedBy: 'ann', createdAt: start, completedAt: start + 2 * day, status: 'completed' }),
+      repair({ id: '2', completedBy: 'ann', createdAt: start, completedAt: start + 4 * day, status: 'completed' }),
+      // Bob: one completed, turnaround 1d
+      repair({ id: '3', completedBy: 'bob', createdAt: start, completedAt: start + 1 * day, status: 'completed' }),
+      // cancelled — ignored
+      repair({ id: '4', completedBy: 'ann', createdAt: start, completedAt: start + 1 * day, status: 'cancelled' }),
+      // no completedAt — ignored
+      repair({ id: '5', completedBy: 'bob', createdAt: start, status: 'received' }),
+      // out of range — ignored
+      repair({ id: '6', completedBy: 'ann', createdAt: start, completedAt: end + day, status: 'completed' }),
+    ], start, end);
+    expect(rows).toHaveLength(2);
+    // Sorted by completed desc: Ann (2) first
+    expect(rows[0]).toEqual({ userId: 'ann', completed: 2, avgTurnaroundMs: 3 * day });
+    expect(rows[1]).toEqual({ userId: 'bob', completed: 1, avgTurnaroundMs: 1 * day });
+  });
+
+  it('buckets repairs with no completedBy under an empty user id', () => {
+    const rows = technicianPerformance([
+      repair({ id: '1', createdAt: 500, completedAt: 600, status: 'completed' }),
+    ], 0, 1000);
+    expect(rows).toEqual([{ userId: '', completed: 1, avgTurnaroundMs: 100 }]);
   });
 });

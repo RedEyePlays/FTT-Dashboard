@@ -3,7 +3,7 @@ import { Role, Permission } from '../types';
 // Pure role/permission logic — no Firebase imports, so it's cheap and testable.
 const ALL: Permission[] = [
   'inventory.add', 'inventory.edit', 'inventory.delete',
-  'sales.complete', 'sales.void', 'sales.return', 'dropoffs.manage', 'repairs.manage', 'repairs.tech',
+  'sales.complete', 'sales.void', 'sales.return', 'dropoffs.manage', 'repairs.manage', 'repairs.tech', 'repairs.performance',
   'cash.log', 'cash.reconcile',
   'reports.view', 'reports.profit.summary', 'reports.profit.detailed',
   'users.manage', 'users.tech', 'timeclock.use', 'payroll.manage',
@@ -14,7 +14,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   owner: ALL,
   manager: [
     'inventory.add', 'inventory.edit',
-    'sales.complete', 'sales.void', 'sales.return', 'dropoffs.manage', 'repairs.manage', 'repairs.tech',
+    'sales.complete', 'sales.void', 'sales.return', 'dropoffs.manage', 'repairs.manage', 'repairs.tech', 'repairs.performance',
     'cash.log', 'cash.reconcile',
     'reports.view', 'audit.view', 'users.tech',
     'timeclock.use', 'payroll.manage',

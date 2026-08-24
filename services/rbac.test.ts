@@ -37,6 +37,13 @@ describe('can()', () => {
     expect(can('technician', 'reports.profit.detailed', { allowProfit: true })).toBe(false);
   });
 
+  it('repair technician performance is owner + manager only', () => {
+    expect(can('owner', 'repairs.performance')).toBe(true);
+    expect(can('manager', 'repairs.performance')).toBe(true);
+    expect(can('employee', 'repairs.performance')).toBe(false);
+    expect(can('technician', 'repairs.performance')).toBe(false);
+  });
+
   it('the two profit tiers are independent — summary access does not imply detailed', () => {
     // A manager (summary by default, no override) sees period totals but not
     // the deep historical/cost breakdowns.

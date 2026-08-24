@@ -197,6 +197,36 @@ export const repairSalePrefill = (r: Repair): RepairSalePrefill => {
 export const completeRepairSale = (r: Repair, salesTransactionId: string, now: number = Date.now(), status: 'completed' | 'picked_up' = 'completed'): Repair =>
   ({ ...completeRepair(r, now, status), salesTransactionId });
 
+// --- Technician performance ---
+export interface TechPerformance {
+  userId: string;          // completedBy uid ('' = unattributed / legacy)
+  completed: number;       // repairs completed in the window
+  avgTurnaroundMs: number; // mean (completedAt − createdAt) over those repairs
+}
+
+/**
+ * Per-technician repair performance over the window [startMs, endMs], bucketed by
+ * completion time: how many repairs each person completed and their average
+ * turnaround (intake → completed). Attribution uses `completedBy`, stamped when a
+ * repair is marked complete; cancelled repairs are excluded, and completions with
+ * no `completedBy` (legacy rows) collapse under userId '' so the caller can label
+ * or drop them. Sorted by most completed first. Pure/testable.
+ */
+export const technicianPerformance = (repairs: Repair[], startMs: number, endMs: number): TechPerformance[] => {
+  const byUser = new Map<string, { count: number; turnaround: number }>();
+  for (const r of repairs) {
+    if (r.status === 'cancelled' || !r.completedAt || r.completedAt < startMs || r.completedAt > endMs) continue;
+    const uid = r.completedBy || '';
+    const turnaround = Math.max(0, r.completedAt - (r.createdAt || r.completedAt));
+    const cur = byUser.get(uid) || { count: 0, turnaround: 0 };
+    cur.count += 1; cur.turnaround += turnaround;
+    byUser.set(uid, cur);
+  }
+  return [...byUser.entries()]
+    .map(([userId, v]) => ({ userId, completed: v.count, avgTurnaroundMs: v.count ? Math.round(v.turnaround / v.count) : 0 }))
+    .sort((a, b) => b.completed - a.completed);
+};
+
 // --- Money ---
 export const balanceOwing = (r: Repair): number => Math.max(0, (r.repairPrice || 0) - (r.deposit || 0));
 

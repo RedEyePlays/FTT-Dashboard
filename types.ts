@@ -187,6 +187,7 @@ export type Permission =
   | 'dropoffs.manage'
   | 'repairs.manage'  // full repair management: create/delete, price, batches, customer
   | 'repairs.tech'    // technician-scoped: view + update repair work fields & status
+  | 'repairs.performance' // view per-technician repair performance (owner + manager)
   | 'reports.view'
   | 'reports.profit.summary'    // period totals (Dashboard revenue/profit cards) — manager default
   | 'reports.profit.detailed'   // full historical breakdowns + per-record cost/profit — owner default
@@ -462,6 +463,7 @@ export interface Repair {
   status: RepairStatus;
   photos?: string[];            // reserved for future uploads
   completedAt?: number;
+  completedBy?: string;         // uid of who marked it complete (technician performance)
   // Set when the repair was checked out through Quick Sale — links to the
   // SalesTransaction that recognized its revenue/profit. Analytics reads this to
   // count the repair's money once (via the sale) instead of twice.
