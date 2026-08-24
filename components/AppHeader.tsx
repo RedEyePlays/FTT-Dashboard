@@ -1,7 +1,7 @@
 import React from 'react';
 import {
   LayoutDashboard, Table, ShoppingCart, Wrench, Contact, Activity, BarChart3, StickyNote,
-  Truck, ScrollText, Users as UsersIcon, Settings, Bot, Sparkles, MessageCircle, Calculator,
+  Truck, ScrollText, Users as UsersIcon, Settings, Bot, Sparkles, MessageCircle,
   Search, PlusCircle, Moon, Sun, Menu, MoreHorizontal, ChevronDown, LogOut, Clock, Receipt,
 } from 'lucide-react';
 import { ViewState, Permission, ActivityEntry } from '../types';
@@ -27,7 +27,6 @@ interface AppHeaderProps {
   darkMode: boolean;
   onToggleTheme: () => void;
   onToggleAiSidebar: () => void;
-  onToggleCalculator: () => void;
   onOpenFinder: () => void;
   onOpenSettings: () => void;
   onOpenBulk: () => void;
@@ -49,7 +48,7 @@ const iconBtn =
 
 export const AppHeader: React.FC<AppHeaderProps> = ({
   view, onNavigate, allow, isTech, pageTitle, onOpenDrawer, userEmail, userRole,
-  darkMode, onToggleTheme, onToggleAiSidebar, onToggleCalculator, onOpenFinder,
+  darkMode, onToggleTheme, onToggleAiSidebar, onOpenFinder,
   onOpenSettings, onOpenBulk, onStartAdd, onLock, activity = [],
   alerts = [], notifSeenTs = 0, onMarkNotificationsSeen = () => {},
 }) => {
@@ -59,13 +58,13 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     { key: 'repairs', label: 'Repairs', icon: <Wrench className="w-4 h-4" />, view: 'repairs', show: allow('repairs.tech') },
     { key: 'customers', label: 'Customers', icon: <Contact className="w-4 h-4" />, view: 'customers', show: allow('reports.view') },
     { key: 'pos', label: 'Quick Sale', icon: <ShoppingCart className="w-4 h-4" />, view: 'pos', show: true },
+    { key: 'notes', label: 'Notes', icon: <StickyNote className="w-4 h-4" />, view: 'notes', show: true },
   ] as NavItem[]).filter(i => i.show);
 
   const more: NavItem[] = ([
     { key: 'analytics', label: 'Analytics', icon: <BarChart3 className="w-4 h-4" />, view: 'analytics', show: (userRole === 'owner' || userRole === 'manager') && allow('reports.profit.detailed') },
     { key: 'reports', label: 'Reports', icon: <Receipt className="w-4 h-4" />, view: 'reports', show: allow('cash.reconcile') },
     { key: 'timeclock', label: 'Time Clock', icon: <Clock className="w-4 h-4" />, view: 'timeclock', show: allow('timeclock.use') },
-    { key: 'notes', label: 'Notes', icon: <StickyNote className="w-4 h-4" />, view: 'notes', show: true },
     { key: 'dropoff', label: 'Drop-Offs', icon: <Truck className="w-4 h-4" />, view: 'dropoff', show: allow('dropoffs.manage') },
     { key: 'audit', label: 'Audit', icon: <ScrollText className="w-4 h-4" />, view: 'audit', show: allow('audit.view') },
     { key: 'users', label: 'Users', icon: <UsersIcon className="w-4 h-4" />, view: 'users', show: allow('users.tech') },
@@ -112,8 +111,6 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
         {moreItems.map(i => (
           <MenuItem key={i.key} icon={i.icon} label={i.label} active={i.view === view} onClick={() => { onNavigate(i.view); close(); }} />
         ))}
-        <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
-        <MenuItem icon={<Calculator className="w-4 h-4" />} label="Profit Calculator" onClick={() => { onToggleCalculator(); close(); }} />
       </>)}
     </HeaderMenu>
   );

@@ -64,6 +64,8 @@ import { viewPath, parseViewPath, isRoutableView } from './domain/appNav';
 import { AppHeader } from './components/AppHeader';
 import { MobileNav } from './components/MobileNav';
 import { MobileDrawer } from './components/MobileDrawer';
+import { Calculator } from 'lucide-react';
+import { useIsMobile } from './hooks/useMediaQuery';
 
 // Page titles for the mobile header bar.
 const PAGE_TITLES: Record<ViewState, string> = {
@@ -133,6 +135,7 @@ const App: React.FC = () => {
   const [showBulkModal, setShowBulkModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showCalculator, setShowCalculator] = useState(false);
+  const isMobile = useIsMobile();
   // Cash drawer UI: which movement kind to log (null = closed), and the
   // open-drawer modal. Both live on the POS screen where cash is handled.
   const [cashLogKind, setCashLogKind] = useState<CashMovementKind | null>(null);
@@ -995,7 +998,6 @@ const App: React.FC = () => {
           darkMode={darkMode}
           onToggleTheme={() => setDarkMode(!darkMode)}
           onToggleAiSidebar={() => {}}
-          onToggleCalculator={() => {}}
           onOpenFinder={() => {}}
           onOpenSettings={() => {}}
           onOpenBulk={() => {}}
@@ -1029,7 +1031,6 @@ const App: React.FC = () => {
         darkMode={darkMode}
         onToggleTheme={() => setDarkMode(!darkMode)}
         onToggleAiSidebar={() => setIsAiSidebarOpen(!isAiSidebarOpen)}
-        onToggleCalculator={() => setShowCalculator(!showCalculator)}
         onOpenFinder={() => setShowFinder(true)}
         onOpenSettings={() => navigate('settings')}
         onOpenBulk={() => setShowBulkModal(true)}
@@ -1060,6 +1061,19 @@ const App: React.FC = () => {
 
       {/* Mobile bottom navigation (top 5 destinations) */}
       <MobileNav view={view} onNavigate={navigate} allow={allow} onOpenMore={() => setDrawerOpen(true)} />
+
+      {/* Floating calculator button — persistent on every page. Sits above the
+          mobile bottom nav (bottom-0), and is hidden only on the mobile Quick
+          Sale screen, whose own fixed action bar would otherwise clash with it. */}
+      {!(isMobile && view === 'pos') && !showCalculator && (
+        <button
+          onClick={() => setShowCalculator(true)}
+          aria-label="Open calculator" title="Calculator"
+          className="fixed right-4 bottom-20 md:right-6 md:bottom-6 z-40 w-14 h-14 rounded-full bg-indigo-600 hover:bg-indigo-700 text-white shadow-lg shadow-indigo-600/30 flex items-center justify-center transition-transform hover:scale-105 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400"
+        >
+          <Calculator className="w-6 h-6" />
+        </button>
+      )}
 
       {/* Main Content */}
       <main className={`mx-auto px-3 sm:px-6 lg:px-8 py-6 sm:py-8 flex-1 w-full flex flex-col ${view === 'grid' || view === 'ai' ? 'max-w-[98%]' : 'max-w-7xl'}`}>
