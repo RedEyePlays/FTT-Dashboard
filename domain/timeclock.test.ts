@@ -5,6 +5,7 @@ import {
   msToHours, HOUR_MS, grossPay, round2,
   payPeriodFor, recentPayPeriods, periodEndInclusive, PAY_PERIOD_DAYS,
   dayRange, weekRange, hoursInRange, periodPayFor, paidKey, entriesOnDate, toISODate,
+  isMissedClockOut, missedClockOuts, isValidClockOutCorrection, correctClockOut,
 } from './timeclock';
 import { TimeEntry, TimeBreak } from '../types';
 
@@ -258,5 +259,56 @@ describe('msToHours', () => {
   it('converts exactly', () => {
     expect(msToHours(HOUR_MS)).toBe(1);
     expect(msToHours(90 * 60_000)).toBe(1.5);
+  });
+});
+
+describe('missed clock-out', () => {
+  const yesterday930 = at(2024, 5, 10, 9, 30);
+  const today = at(2024, 5, 11, 14, 0);
+
+  it('isMissedClockOut flags an open shift whose clock-in was on an earlier day', () => {
+    expect(isMissedClockOut(entry({ clockIn: yesterday930 }), today)).toBe(true); // still open, from yesterday
+    expect(isMissedClockOut(entry({ clockIn: at(2024, 5, 11, 9) }), today)).toBe(false); // open, but today
+    expect(isMissedClockOut(entry({ clockIn: yesterday930, clockOut: at(2024, 5, 10, 17) }), today)).toBe(false); // already closed
+  });
+
+  it('missedClockOuts collects only the stale open shifts, oldest first', () => {
+    const entries = [
+      entry({ id: 'a', userId: 'u1', clockIn: at(2024, 5, 9, 9) }),   // 2 days stale
+      entry({ id: 'b', userId: 'u2', clockIn: at(2024, 5, 11, 8) }),  // today, not missed
+      entry({ id: 'c', userId: 'u3', clockIn: yesterday930 }),         // 1 day stale
+      entry({ id: 'd', userId: 'u4', clockIn: at(2024, 5, 9, 10), clockOut: at(2024, 5, 9, 18) }), // closed
+    ];
+    const missed = missedClockOuts(entries, today);
+    expect(missed.map(e => e.id)).toEqual(['a', 'c']);
+  });
+
+  it('isValidClockOutCorrection requires the new time to be after clock-in and not in the future', () => {
+    const e = entry({ clockIn: yesterday930 });
+    expect(isValidClockOutCorrection(e, at(2024, 5, 10, 17), today)).toBe(true);
+    expect(isValidClockOutCorrection(e, yesterday930 - 1000, today)).toBe(false); // before clock-in
+    expect(isValidClockOutCorrection(e, today + HOUR_MS, today)).toBe(false); // in the future
+  });
+
+  it('correctClockOut appends a correction record instead of silently overwriting', () => {
+    const e = entry({ id: 'e1', clockIn: yesterday930 }); // still open
+    const corrected = correctClockOut(e, at(2024, 5, 10, 17), 'owner-uid', today, { correctedByEmail: 'owner@shop.com', note: 'forgot to clock out' });
+    expect(corrected.clockOut).toBe(at(2024, 5, 10, 17));
+    expect(corrected.corrections).toHaveLength(1);
+    expect(corrected.corrections![0]).toEqual({
+      correctedBy: 'owner-uid', correctedByEmail: 'owner@shop.com', correctedAt: today,
+      fromClockOut: undefined, toClockOut: at(2024, 5, 10, 17), note: 'forgot to clock out',
+    });
+    // The original entry object is untouched (pure function).
+    expect(e.clockOut).toBeUndefined();
+    expect(e.corrections).toBeUndefined();
+  });
+
+  it('a second correction appends onto the history rather than replacing it', () => {
+    const once = correctClockOut(entry({ clockIn: yesterday930 }), at(2024, 5, 10, 17), 'owner1', at(2024, 5, 11, 9));
+    const twice = correctClockOut(once, at(2024, 5, 10, 18), 'owner2', at(2024, 5, 11, 10));
+    expect(twice.corrections).toHaveLength(2);
+    expect(twice.corrections![1].fromClockOut).toBe(at(2024, 5, 10, 17)); // previous corrected value, not the original undefined
+    expect(twice.corrections![1].toClockOut).toBe(at(2024, 5, 10, 18));
   });
 });

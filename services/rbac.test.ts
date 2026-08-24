@@ -44,6 +44,13 @@ describe('can()', () => {
     expect(can('technician', 'repairs.performance')).toBe(false);
   });
 
+  it('the end-of-day close-out summary is owner + manager only', () => {
+    expect(can('owner', 'closeout.view')).toBe(true);
+    expect(can('manager', 'closeout.view')).toBe(true);
+    expect(can('employee', 'closeout.view')).toBe(false);
+    expect(can('technician', 'closeout.view')).toBe(false);
+  });
+
   it('the two profit tiers are independent — summary access does not imply detailed', () => {
     // A manager (summary by default, no override) sees period totals but not
     // the deep historical/cost breakdowns.

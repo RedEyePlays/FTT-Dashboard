@@ -30,6 +30,7 @@ const DropOffView = lazy(() => import('./components/DropOffView').then(m => ({ d
 const UsersView = lazy(() => import('./components/UsersView').then(m => ({ default: m.UsersView })));
 const AuditLogView = lazy(() => import('./components/AuditLogView').then(m => ({ default: m.AuditLogView })));
 const TimeClockView = lazy(() => import('./components/TimeClockView').then(m => ({ default: m.TimeClockView })));
+const CloseOutView = lazy(() => import('./components/CloseOutView').then(m => ({ default: m.CloseOutView })));
 import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, Runner, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission, Repair, RepairBatch, TimeEntry, PayPeriodPaid, BreakReason, SalesTransaction, CashReconciliation } from './types';
 import { skuPrefix, nextSku } from './services/sku';
 import { REPAIR_PREFIX, BATCH_PREFIX, computeWarrantyUntil, applyTechEdit, TECH_EDITABLE_FIELDS, repairSalePrefill, completeRepairSale } from './domain/repairs';
@@ -55,7 +56,7 @@ import { canVoidSale, canReturnSale, returnRefund, saleAccessoryRestock } from '
 import { expectedCashForDate, expectedEndingCash, sumDrawerEntries, cashDrawerSummary, ReconciliationInput } from './domain/reports';
 import type { CashMovementKind } from './components/LogCashMovementModal';
 const OpenDrawerModal = lazy(() => import('./components/OpenDrawerModal').then(m => ({ default: m.OpenDrawerModal })));
-import { openEntryFor, isOnBreak, periodPayFor, paidKey, toISODate, PayPeriod } from './domain/timeclock';
+import { openEntryFor, isOnBreak, periodPayFor, paidKey, toISODate, PayPeriod, correctClockOut, isValidClockOutCorrection } from './domain/timeclock';
 import { buildAlerts } from './domain/alerts';
 import { changedSettingsSections } from './domain/audit';
 import { dropOffPurchaseCost } from './domain/dropoffs';
@@ -72,7 +73,7 @@ const PAGE_TITLES: Record<ViewState, string> = {
   dashboard: 'Dashboard', analytics: 'Analytics', reports: 'Reports', entry: 'Add Item', edit: 'Edit Item',
   grid: 'Inventory', notes: 'Notes', ai: 'AI Assistant', pos: 'Checkout', dropoff: 'Drop-Offs',
   repairs: 'Repairs', customers: 'Customers', users: 'Users', audit: 'Audit Log',
-  settings: 'Settings', timeclock: 'Time Clock',
+  settings: 'Settings', timeclock: 'Time Clock', closeout: 'Close Out',
 };
 import { LoadingScreen, DbErrorScreen } from './components/StatusScreens';
 
@@ -203,6 +204,7 @@ const App: React.FC = () => {
     p.push({ id: 'pos', label: 'Checkout', keywords: 'sell quick sale pos sales', view: 'pos' });
     if (allow('repairs.tech')) p.push({ id: 'repairs', label: 'Repairs', keywords: 'tickets', view: 'repairs' });
     if (allow('timeclock.use')) p.push({ id: 'timeclock', label: 'Time Clock', keywords: 'clock in out hours shift break payroll pay', view: 'timeclock' });
+    if (allow('closeout.view')) p.push({ id: 'closeout', label: 'Close Out', keywords: 'end of day summary lock up reconcile', view: 'closeout' });
     if (allow('reports.view')) p.push({ id: 'customers', label: 'Customers', keywords: 'crm clients', view: 'customers' });
     if (allow('dropoffs.manage')) p.push({ id: 'dropoff', label: 'Drop-Offs', view: 'dropoff' });
     if (allow('audit.view')) p.push({ id: 'audit', label: 'Audit Log', view: 'audit' });
@@ -760,6 +762,18 @@ const App: React.FC = () => {
     saveTimeEntry(uid, { ...open, breaks }).catch(() => {});
     audit('timeclock.break_end', 'timeEntry', open.id);
   };
+  // Owner/manager correction of a missed clock-out (gated the same as the rest
+  // of Daily Hours / Payroll, via payroll.manage). Appends to the entry's
+  // correction history rather than overwriting, and records a matching audit
+  // entry (before/after) so the change is visible in the Audit Log too.
+  const handleCorrectClockOut = (entryId: string, newClockOut: number) => {
+    if (!uid || !appUser || !allow('payroll.manage')) return;
+    const target = timeEntries.find(e => e.id === entryId);
+    if (!target || !isValidClockOutCorrection(target, newClockOut, Date.now())) return;
+    const next = correctClockOut(target, newClockOut, appUser.id, Date.now(), { correctedByEmail: appUser.email });
+    saveTimeEntry(uid, next).catch(() => {});
+    audit('timeclock.correct_clock_out', 'timeEntry', entryId, { clockOut: target.clockOut }, { clockOut: newClockOut });
+  };
   // Owner-only pay-period sign-off. Records that a period was reviewed/paid — it
   // moves no money. Snapshots the numbers so the acknowledgment stays accurate.
   const handleMarkPaid = (targetUid: string, period: PayPeriod) => {
@@ -1247,6 +1261,23 @@ const App: React.FC = () => {
               onEndBreak={handleEndBreak}
               onMarkPaid={handleMarkPaid}
               onUnmarkPaid={handleUnmarkPaid}
+              onCorrectClockOut={handleCorrectClockOut}
+            />
+          )}
+          {view === 'closeout' && allow('closeout.view') && (
+            <CloseOutView
+              salesTransactions={salesTransactions}
+              repairs={repairs}
+              inventory={data}
+              customers={customers}
+              auditLogs={auditLogs}
+              activity={activityLog}
+              timeEntries={timeEntries}
+              users={workspaceUsers}
+              alerts={alerts}
+              todayDrawer={todayDrawer}
+              todayRecon={todayRecon}
+              onNavigate={navigate}
             />
           )}
           {view === 'audit' && allow('audit.view') && (

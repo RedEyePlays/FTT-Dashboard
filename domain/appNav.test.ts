@@ -11,6 +11,7 @@ describe('viewPath', () => {
     expect(viewPath('pos')).toBe('/checkout');
     expect(viewPath('dropoff')).toBe('/drop-offs');
     expect(viewPath('timeclock')).toBe('/time-clock');
+    expect(viewPath('closeout')).toBe('/close-out');
     expect(viewPath('audit')).toBe('/audit');
   });
 
@@ -33,6 +34,7 @@ describe('parseViewPath', () => {
     expect(parseViewPath('/checkout')).toBe('pos');
     expect(parseViewPath('/drop-offs')).toBe('dropoff');
     expect(parseViewPath('/time-clock')).toBe('timeclock');
+    expect(parseViewPath('/close-out')).toBe('closeout');
   });
 
   it('maps any inventory path to grid', () => {
@@ -51,7 +53,7 @@ describe('parseViewPath', () => {
   });
 
   it('round-trips every routable view through its path', () => {
-    const views: ViewState[] = ['dashboard', 'analytics', 'pos', 'repairs', 'customers', 'dropoff', 'notes', 'ai', 'audit', 'users', 'settings', 'timeclock', 'grid'];
+    const views: ViewState[] = ['dashboard', 'analytics', 'pos', 'repairs', 'customers', 'dropoff', 'notes', 'ai', 'audit', 'users', 'settings', 'timeclock', 'closeout', 'grid'];
     for (const v of views) {
       expect(parseViewPath(viewPath(v))).toBe(v);
     }

@@ -2,7 +2,7 @@ import React from 'react';
 import {
   LayoutDashboard, Table, ShoppingCart, Wrench, Contact, Activity, BarChart3, StickyNote,
   Truck, ScrollText, Users as UsersIcon, Settings, Bot, Sparkles, MessageCircle,
-  Search, PlusCircle, Moon, Sun, Menu, MoreHorizontal, ChevronDown, LogOut, Clock, Receipt,
+  Search, PlusCircle, Moon, Sun, Menu, MoreHorizontal, ChevronDown, LogOut, Clock, Receipt, ClipboardCheck,
 } from 'lucide-react';
 import { ViewState, Permission, ActivityEntry } from '../types';
 import { Alert } from '../domain/alerts';
@@ -67,6 +67,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     { key: 'analytics', label: 'Analytics', icon: <BarChart3 className="w-4 h-4" />, view: 'analytics', show: (userRole === 'owner' || userRole === 'manager') && allow('reports.profit.detailed') },
     { key: 'reports', label: 'Reports', icon: <Receipt className="w-4 h-4" />, view: 'reports', show: allow('cash.reconcile') },
     { key: 'timeclock', label: 'Time Clock', icon: <Clock className="w-4 h-4" />, view: 'timeclock', show: allow('timeclock.use') },
+    { key: 'closeout', label: 'Close Out', icon: <ClipboardCheck className="w-4 h-4" />, view: 'closeout', show: allow('closeout.view') },
     { key: 'dropoff', label: 'Drop-Offs', icon: <Truck className="w-4 h-4" />, view: 'dropoff', show: allow('dropoffs.manage') },
     { key: 'audit', label: 'Audit', icon: <ScrollText className="w-4 h-4" />, view: 'audit', show: allow('audit.view') },
     { key: 'users', label: 'Users', icon: <UsersIcon className="w-4 h-4" />, view: 'users', show: allow('users.tech') },
