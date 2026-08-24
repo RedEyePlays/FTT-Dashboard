@@ -1,0 +1,13 @@
+{
+  "indexes": [
+    {
+      "comment": "Collection-group index for the public repair-status lookup (repairStatusLookup Cloud Function): query repairs across all workspaces by exact ticket number.",
+      "collectionGroup": "repairs",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "repairNumber", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

@@ -29,6 +29,8 @@ const openPrint = (title: string, width: number, body: string) => {
 };
 
 const row = (k: string, v?: string) => (v ? `<div class="row"><span class="k">${esc(k)}</span><span>${esc(v)}</span></div>` : '');
+// Public customer-facing repair-status page (see index.tsx / RepairStatusLookup).
+const trackUrl = (): string => `${typeof window !== 'undefined' ? window.location.origin : ''}/status`;
 const deviceBlock = (r: Repair) => {
   const name = [r.brand, r.model].filter(Boolean).join(' ') || r.deviceType || 'Device';
   return `<h3>Device</h3>${row('Device', name)}${row('Type', r.deviceType)}${row('Storage', r.storage)}${row('Color', r.color)}${row('IMEI / Serial', r.imei)}${row('Carrier', r.carrier)}`;
@@ -54,6 +56,7 @@ export const printRetailReceipt = (r: Repair, kind: 'intake' | 'repair' | 'picku
     ${row('Status', REPAIR_STATUS_LABEL[r.status])}${row('Est. Completion', r.estimatedCompletion)}
     ${money$}
     ${warranty}
+    ${kind !== 'pickup' ? `<h3>Track Your Repair</h3><div class="row"><span class="k">Check status online anytime — no account needed:</span></div><div class="row b"><span>${esc(trackUrl())}</span></div><div class="row"><span class="k">Ticket ${esc(r.repairNumber)} + the name/phone on this ticket.</span></div>` : ''}
     ${kind === 'intake' ? '<p class="disc">The shop is not responsible for data loss. Devices not collected within 90 days may be sold to recover costs. Diagnostic fees may apply if repair is declined.</p>' : ''}
     <p class="foot">Thank you!</p>`;
   openPrint(`${title} ${r.repairNumber}`, 280, body);
