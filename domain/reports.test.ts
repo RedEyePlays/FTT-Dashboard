@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { SalesTransaction, InventoryItem, PayPeriodPaid, CashReconciliation, Settlement, Runner } from '../types';
 import {
   cashCollectedOnTx, expectedCashForDate, reconcileCash,
-  expectedEndingCash, sumDrawerEntries, cashDrawerSummary,
+  expectedEndingCash, sumDrawerEntries, cashDrawerSummary, openDrawerPatch,
   taxRemittance, taxReportCsvRows,
   profitAndLoss, profitLossCsvRows, settlementHistory, yearEndSummary, ProfitLossInput,
 } from './reports';
@@ -109,6 +109,47 @@ describe('cashDrawerSummary', () => {
     expect(s.opened).toBe(false);
     expect(s.openingFloat).toBe(0);
     expect(s.expected).toBe(120); // just the day's cash sales
+  });
+});
+
+describe('openDrawerPatch', () => {
+  const user = { id: 'u1', email: 'staff@shop.com' };
+
+  it('opens a fresh day active — stamps openedAt/By and leaves it un-reconciled', () => {
+    const patch = openDrawerPatch(100, user, undefined, 1000);
+    expect(patch).toMatchObject({
+      openingFloat: 100, openedAt: 1000, openedBy: 'u1', openedByEmail: 'staff@shop.com',
+      reconciledAt: undefined, reconciledBy: undefined, reconciledByEmail: undefined, countedCash: undefined,
+    });
+  });
+
+  it('preserves the original openedAt/By on a later float adjustment (does not re-stamp)', () => {
+    const existing = recon({ openingFloat: 50, openedAt: 500, openedBy: 'owner1', openedByEmail: 'owner@shop.com' });
+    const patch = openDrawerPatch(75, user, existing, 2000);
+    expect(patch.openingFloat).toBe(75);
+    expect(patch.openedAt).toBe(500);
+    expect(patch.openedBy).toBe('owner1');
+    expect(patch.openedByEmail).toBe('owner@shop.com');
+  });
+
+  it('clears a prior close/reconcile for the day — opening always resumes an active state', () => {
+    const closedToday = recon({
+      openingFloat: 100, openedAt: 500, openedBy: 'owner1', openedByEmail: 'owner@shop.com',
+      countedCash: 150, variance: 10,
+      reconciledAt: 900, reconciledBy: 'owner1', reconciledByEmail: 'owner@shop.com',
+    });
+    const patch = openDrawerPatch(100, user, closedToday, 2000);
+    expect(patch.reconciledAt).toBeUndefined();
+    expect(patch.reconciledBy).toBeUndefined();
+    expect(patch.reconciledByEmail).toBeUndefined();
+    expect(patch.countedCash).toBeUndefined();
+    // The open-session markers still carry through unchanged.
+    expect(patch.openedAt).toBe(500);
+  });
+
+  it('floors a negative float to zero, like the rest of the drawer math', () => {
+    const patch = openDrawerPatch(-20, user, undefined, 1000);
+    expect(patch.openingFloat).toBe(0);
   });
 });
 
