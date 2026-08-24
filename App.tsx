@@ -39,7 +39,10 @@ import { can } from './services/rbac';
 import { downloadJson, toCSV, triggerDownload } from './services/backup';
 import { INITIAL_DATA } from './constants';
 import { auth } from './services/firebase';
-import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from 'firebase/auth';
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, reauthenticateWithCredential, EmailAuthProvider } from 'firebase/auth';
+import { LockScreen } from './components/LockScreen';
+import { useInactivityTimer } from './hooks/useInactivityTimer';
+import { hashPin, verifyPin, canAssignPin, isValidPinFormat } from './domain/pin';
 import {
   saveMeta, saveItem, deleteItem, syncArray, allocateSku,
   logActivityDoc, commitSale, voidSale, returnSale, saveCashReconciliation, seedSampleData,
@@ -170,7 +173,88 @@ const App: React.FC = () => {
   };
 
   const handleLock = async () => {
+    setAppLocked(false); // signing out fully — nothing to stay "locked" over
     try { await signOut(auth); } catch (e) { console.error("Error signing out: ", e); }
+  };
+
+  // --- AUTO-LOCK (inactivity) ------------------------------------------------
+  // A lock OVERLAY, not a sign-out: the authenticated session stays intact, the
+  // rest of the app just isn't rendered while `appLocked` is true (see the
+  // early return near the bottom). Persisted to sessionStorage so a refresh (or
+  // the browser back button, which only changes in-app view state) can't drop
+  // back into the app without re-entering the PIN/password — the locked flag is
+  // read back out BEFORE the first paint via the lazy useState initializer.
+  const APP_LOCK_KEY = 'bizTrackAppLocked';
+  const [appLocked, setAppLocked] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    try { return sessionStorage.getItem(APP_LOCK_KEY) === '1'; } catch { return false; }
+  });
+  useEffect(() => {
+    try {
+      if (appLocked) sessionStorage.setItem(APP_LOCK_KEY, '1');
+      else sessionStorage.removeItem(APP_LOCK_KEY);
+    } catch { /* storage unavailable (e.g. private mode) — lock still works in-memory */ }
+  }, [appLocked]);
+  // A signed-out session should never resurrect a stale lock on the next login.
+  useEffect(() => { if (!user) setAppLocked(false); }, [user]);
+
+  useInactivityTimer(
+    settings.operations.autoLockMinutes,
+    !!appUser && !appLocked,
+    () => setAppLocked(true),
+  );
+
+  // PIN unlock: verify client-side against the user's own stored hash+salt
+  // (already synced locally — this is the account's own doc, always self-
+  // readable). No network round trip, no plaintext PIN ever leaves the device.
+  const handleUnlockWithPin = async (pin: string): Promise<boolean> => {
+    if (!appUser?.pinHash || !appUser.pinSalt) return false;
+    const ok = await verifyPin(pin, { hash: appUser.pinHash, salt: appUser.pinSalt, iterations: appUser.pinIterations || 0 });
+    if (ok) setAppLocked(false);
+    return ok;
+  };
+
+  // Fallback unlock when no PIN is set: re-verify the real Firebase Auth
+  // credential (reauthenticate, not sign in) so the session/token are
+  // untouched — this only proves "still you", it doesn't start a new session.
+  const handleUnlockWithPassword = async (password: string): Promise<boolean> => {
+    if (!auth.currentUser || !appUser) return false;
+    try {
+      await reauthenticateWithCredential(auth.currentUser, EmailAuthProvider.credential(appUser.email, password));
+      setAppLocked(false);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  // Owner/manager sets or updates a PIN for a user strictly below their role
+  // rank (never a peer or above — see domain/pin.ts canAssignPin). Hashed
+  // client-side before it ever touches the network; the plaintext PIN is
+  // discarded the moment this returns.
+  const handleSetPin = async (targetUid: string, pin: string): Promise<boolean> => {
+    if (!appUser || !allow('users.pin') || !isValidPinFormat(pin)) return false;
+    const target = workspaceUsers.find(u => u.id === targetUid);
+    if (!target || !canAssignPin(appUser.role, target.role)) return false;
+    const { hash, salt, iterations } = await hashPin(pin);
+    await updateUserDoc(targetUid, {
+      pinHash: hash, pinSalt: salt, pinIterations: iterations,
+      pinUpdatedAt: Date.now(), pinUpdatedBy: appUser.id, pinUpdatedByEmail: appUser.email,
+    }).catch(() => { throw new Error('save-failed'); });
+    audit('user.set_pin', 'user', targetUid, undefined, { email: target.email });
+    return true;
+  };
+
+  // Gated by security.manage (owner + manager) rather than routed through
+  // handleSaveSettings, which is owner-only (settings.manage) — a manager may
+  // change this one operational field without unlocking the rest of Settings.
+  const handleSetAutoLockMinutes = (minutes: number) => {
+    if (!uid || !allow('security.manage')) return;
+    const before = settings.operations.autoLockMinutes;
+    const after = Math.max(0, Math.round(minutes));
+    const next: AppSettings = { ...settings, operations: { ...settings.operations, autoLockMinutes: after } };
+    saveSettings(uid, next).catch(() => {});
+    audit('settings.update', 'settings', 'app', { autoLockMinutes: before }, { autoLockMinutes: after });
   };
 
   // All shop writes target the workspace (owner's uid), so staff share one dataset.
@@ -1031,6 +1115,14 @@ const App: React.FC = () => {
     return <LoadingScreen message={roleLoading || !appUser ? 'Signing you in…' : 'Loading your inventory…'} />;
   }
 
+  // --- AUTO-LOCK: nothing else renders while locked (app-wide, every role) ---
+  // Not an overlay hiding content behind it — an early return, so there is
+  // nothing in the DOM to inspect/bypass. Browser back only changes `view`
+  // state underneath, which this replaces outright regardless of its value.
+  if (appLocked) {
+    return <LockScreen me={appUser} onUnlockWithPin={handleUnlockWithPin} onUnlockWithPassword={handleUnlockWithPassword} onSignOut={handleLock} />;
+  }
+
   // --- Technician: simplified, repair-only experience (same workspace) ---
   if (appUser.role === 'technician') {
     return (
@@ -1271,6 +1363,10 @@ const App: React.FC = () => {
               onSetHourlyRate={allow('users.manage') ? handleSetHourlyRate : undefined}
               onInvite={handleInvite}
               onDeleteInvite={handleDeleteInvite}
+              onSetPin={allow('users.pin') ? handleSetPin : undefined}
+              canManageSecurity={allow('security.manage')}
+              autoLockMinutes={settings.operations.autoLockMinutes}
+              onSetAutoLockMinutes={allow('security.manage') ? handleSetAutoLockMinutes : undefined}
             />
           )}
           {view === 'timeclock' && allow('timeclock.use') && (

@@ -576,12 +576,12 @@ const RepairDrawer: React.FC<{
             <Section title="Customer">
               {customers.length > 0 && (
                 <div className="mb-3">
-                  <CustomerSearchInput customers={customers} kind="retail" placeholder="Find existing customer…"
+                  <CustomerSearchInput customers={customers} kind="retail" placeholder="Find existing customer…" autoFocus={isNew}
                     onSelect={c => set({ customerId: c.id, customerName: c.name, customerPhone: c.phone || '', customerEmail: c.email || '' })} />
                 </div>
               )}
               <div className="grid grid-cols-2 gap-3">
-                <Field label="Customer (required)"><input className={inputCls} value={f.customerName || ''} onChange={e => set({ customerName: e.target.value, customerId: undefined })} /></Field>
+                <Field label="Customer (required)"><input autoFocus={isNew && customers.length === 0} className={inputCls} value={f.customerName || ''} onChange={e => set({ customerName: e.target.value, customerId: undefined })} /></Field>
                 <Field label="Phone"><input className={inputCls} value={f.customerPhone || ''} onChange={e => set({ customerPhone: e.target.value })} /></Field>
                 <Field label="Email (optional)" className="col-span-2"><input className={inputCls} value={f.customerEmail || ''} onChange={e => set({ customerEmail: e.target.value })} /></Field>
               </div>
@@ -590,7 +590,7 @@ const RepairDrawer: React.FC<{
 
           <Section title="Device">
             <div className="grid grid-cols-2 gap-3">
-              <Field label="Device Type"><select className={inputCls} value={f.deviceType || ''} onChange={e => set({ deviceType: e.target.value as DeviceType })}><option value="">—</option>{DEVICE_TYPES.map(d => <option key={d} value={d}>{d}</option>)}</select></Field>
+              <Field label="Device Type"><select autoFocus={isNew && !isRetail} className={inputCls} value={f.deviceType || ''} onChange={e => set({ deviceType: e.target.value as DeviceType })}><option value="">—</option>{DEVICE_TYPES.map(d => <option key={d} value={d}>{d}</option>)}</select></Field>
               <Field label="IMEI / Serial"><input className={inputCls} value={f.imei || ''} onChange={e => set({ imei: e.target.value })} /></Field>
               <Field label="Brand / Model" className="col-span-2"><input className={inputCls} placeholder="e.g. Apple iPhone 14 Pro" value={[f.brand, f.model].filter(Boolean).join(' ')} onChange={e => set({ brand: '', model: e.target.value })} /></Field>
               {showDeviceDetail && <>
@@ -697,7 +697,7 @@ const BatchForm: React.FC<{ initial: RepairBatch; isNew: boolean; onClose: () =>
           <button onClick={requestClose} className="text-slate-400 hover:text-slate-600"><X className="w-4 h-4" /></button>
         </div>
         <div className="p-5 space-y-3">
-          <Field label="Company Name"><input className={inputCls} value={f.companyName} onChange={e => set({ companyName: e.target.value })} /></Field>
+          <Field label="Company Name"><input autoFocus className={inputCls} value={f.companyName} onChange={e => set({ companyName: e.target.value })} /></Field>
           <div className="grid grid-cols-2 gap-3">
             <Field label="Contact Person"><input className={inputCls} value={f.contactPerson || ''} onChange={e => set({ contactPerson: e.target.value })} /></Field>
             <Field label="Phone"><input className={inputCls} value={f.phone || ''} onChange={e => set({ phone: e.target.value })} /></Field>

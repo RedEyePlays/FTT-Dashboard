@@ -69,6 +69,7 @@ export const BulkEntryModal: React.FC<BulkEntryModalProps> = ({ onClose, onImpor
                 <p>Paste informal text below (e.g., invoices, chat messages, or rough notes). our AI will extract item details, prices, dates, and people automatically.</p>
               </div>
               <textarea
+                autoFocus
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
                 placeholder={`Example:\nBought 3 iPhone 13s from Mike yesterday for $400 each. Sold one to Sarah today for $600.\nAlso repaired a Samsung S22 screen for $50, bought for $200 from OfferUp.`}

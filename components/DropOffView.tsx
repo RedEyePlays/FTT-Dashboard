@@ -205,7 +205,7 @@ const EntriesTab: React.FC<{
             <div className="p-5 grid grid-cols-2 gap-3">
               <div className="col-span-2">
                 <label className={lbl}>Runner *</label>
-                <select className={inp} value={form.runnerId} onChange={e => set('runnerId', e.target.value)}>
+                <select autoFocus className={inp} value={form.runnerId} onChange={e => set('runnerId', e.target.value)}>
                   {runners.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
                 </select>
               </div>

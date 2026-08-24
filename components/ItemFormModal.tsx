@@ -119,7 +119,7 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, runners, 
             <div>
               <label className={lbl}>Internal SKU</label>
               <div className="flex gap-2">
-                <input className={inp} value={f.sku ?? ''} onChange={e => set('sku', e.target.value)} placeholder="Auto or manual" />
+                <input autoFocus className={inp} value={f.sku ?? ''} onChange={e => set('sku', e.target.value)} placeholder="Auto or manual" />
                 <button onClick={genSku} title="Generate SKU" className="shrink-0 px-3 rounded-md bg-indigo-600 hover:bg-indigo-700 text-white"><Wand2 className="w-4 h-4" /></button>
               </div>
             </div>
