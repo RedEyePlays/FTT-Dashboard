@@ -121,6 +121,12 @@ async function runBulkParse(ai: GoogleGenAI, text: string): Promise<unknown[]> {
       Extract inventory items from the following text.
       The text may contain multiple items, prices, dates, and descriptions mixed together.
 
+      IMPORTANT: Most items mentioned are only being PURCHASED/added to stock, not
+      sold. Only set salePrice/soldDate/soldTo when the text explicitly says that
+      specific item was already sold to someone (e.g. "sold X to Y for $Z"). Never
+      guess or estimate a resale value for an item the text doesn't say was sold —
+      leave salePrice at 0 and soldDate empty for it.
+
       Text to parse:
       "${text}"
     `;
@@ -157,11 +163,11 @@ async function runBulkParse(ai: GoogleGenAI, text: string): Promise<unknown[]> {
             },
             salePrice: {
               type: Type.NUMBER,
-              description: "How much it was sold for (0 if not sold).",
+              description: "How much it was ALREADY sold for. Use exactly 0 unless the text explicitly says this item was sold — never a guessed/estimated resale value.",
             },
             soldDate: {
               type: Type.STRING,
-              description: "Sale date (YYYY-MM-DD).",
+              description: "Sale date (YYYY-MM-DD). Leave this an empty string unless the text explicitly says this item was already sold.",
             },
             soldTo: {
               type: Type.STRING,
