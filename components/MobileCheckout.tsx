@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, lazy, Suspense } from 'react';
 import {
   ScanLine, Search, Plus, Minus, Trash2, Smartphone, Package, Sparkles, ShoppingCart,
   User, Phone, Mail, ChevronLeft, CheckCircle, Banknote, CreditCard, Blend, Send,
@@ -9,7 +9,8 @@ import { RepairSalePrefill } from '../domain/repairs';
 import { getDeviceDisplayName } from '../domain/inventory';
 import { useCheckout, CartCheckout, CustomCategory, CUSTOM_DEVICE_TYPES } from '../hooks/useCheckout';
 import { CustomerSearchInput } from './CustomerSearchInput';
-import { LabelModal } from './LabelModal';
+// Lazy: defers jsPDF (~390 kB) until a label is actually printed.
+const LabelModal = lazy(() => import('./LabelModal').then(m => ({ default: m.LabelModal })));
 import { ResponsiveDialog, EmptyState } from './responsive';
 
 interface Props {
@@ -94,7 +95,7 @@ export const MobileCheckout: React.FC<Props> = (props) => {
           </div>
           {cx.soldDeviceRows[0] && <button onClick={() => cx.setLabelItem(cx.soldDeviceRows[0])} className="text-xs text-indigo-600 dark:text-indigo-400 py-1">Print device label</button>}
         </div>
-        {cx.labelItem && <LabelModal item={cx.labelItem} onClose={() => cx.setLabelItem(null)} />}
+        {cx.labelItem && <Suspense fallback={null}><LabelModal item={cx.labelItem} onClose={() => cx.setLabelItem(null)} /></Suspense>}
         <ResponsiveDialog open={txModal} onClose={() => setTxModal(false)} title={`Sale ${t.id.slice(0, 8)}`}>
           <div className="space-y-2 text-sm">
             <p className="text-slate-500 dark:text-slate-400">{t.date} · {t.customerName || 'Walk-in'}</p>

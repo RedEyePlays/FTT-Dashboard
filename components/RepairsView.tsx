@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, lazy, Suspense } from 'react';
 import {
   Wrench, Plus, Search, X, Trash2, Printer, FileText, Receipt, History as HistoryIcon,
   ArrowLeft, DollarSign, ChevronRight, Building2, ClipboardCheck, PackageCheck, ScrollText, QrCode,
@@ -11,7 +11,8 @@ import {
 } from '../domain/repairs';
 import { newId } from '../domain/ids';
 import { printRetailReceipt, printBatchIntake, printBatchInvoice, printBatchSummary, printDeviceSheet } from '../services/repairPrint';
-import { RepairLabelModal } from './RepairLabelModal';
+// Lazy: the repair label modal pulls in jsPDF (~390 kB); load it on demand.
+const RepairLabelModal = lazy(() => import('./RepairLabelModal').then(m => ({ default: m.RepairLabelModal })));
 import { CustomerSearchInput } from './CustomerSearchInput';
 
 interface Props {
@@ -336,9 +337,11 @@ export const RepairsView: React.FC<Props> = (props) => {
 
       {/* Repair QR label */}
       {labelTarget && (
-        <RepairLabelModal repair={labelTarget.repair} context={labelTarget.context}
-          onClose={() => setLabelTarget(null)}
-          onPrinted={() => onPrintAudit('repair', labelTarget.repair.id, 'qr_label')} />
+        <Suspense fallback={null}>
+          <RepairLabelModal repair={labelTarget.repair} context={labelTarget.context}
+            onClose={() => setLabelTarget(null)}
+            onPrinted={() => onPrintAudit('repair', labelTarget.repair.id, 'qr_label')} />
+        </Suspense>
       )}
     </div>
   );

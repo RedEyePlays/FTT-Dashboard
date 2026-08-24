@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { User, signOut } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
 import {
@@ -70,6 +70,13 @@ export function useWorkspaceData() {
   const [dbLoading, setDbLoading] = useState(true);
   const [dbError, setDbError] = useState<string | null>(null);
   const [reconnectKey, setReconnectKey] = useState(0);
+  // Deferred collections: time entries, pay periods, cash reconciliations,
+  // drop-offs and settlements are read only by the Time Clock, Reports and
+  // Drop-off views (and the write handlers those views invoke) — never by the
+  // Dashboard or the other everyday pages. So they don't subscribe on login;
+  // App flips this on the first visit to one of those views, and it stays on
+  // afterwards (no tear-down, no re-fetch churn, real-time from then on).
+  const [extendedEnabled, setExtendedEnabled] = useState(false);
   // Audit log is unbounded over the shop's lifetime, so it's fetched newest-first
   // in bounded pages (server-side limit) with a load-older control, rather than
   // downloaded in full on every session.
@@ -103,7 +110,7 @@ export function useWorkspaceData() {
         setDevices([]); setAccessories([]); setNotes([]); setTasks([]);
         setRunners([]); setDropOffs([]); setSettlements([]); setCustomers([]);
         setSalesTransactions([]); setRepairs([]); setRepairBatches([]); setTimeEntries([]); setPayPeriods([]); setActivityLog([]); setSkuCounters({});
-        setAppUser(null); setWorkspaceUsers([]); setInvites([]); setAuditLogs([]);
+        setAppUser(null); setWorkspaceUsers([]); setInvites([]); setAuditLogs([]); setExtendedEnabled(false);
         setDbLoading(false); setRoleLoading(false);
       }
       setIsLoadingAuth(false);
@@ -171,15 +178,10 @@ export function useWorkspaceData() {
       subscribeCollection<InventoryItem>(wsId, 'inventory', rows => { setDevices(rows); setDbLoading(false); }, onErr),
       subscribeCollection<InventoryItem>(wsId, 'accessories', setAccessories, onErr),
       subscribeCollection<Runner>(wsId, 'runners', setRunners, onErr),
-      subscribeCollection<DropOff>(wsId, 'dropOffs', setDropOffs, onErr),
-      subscribeCollection<Settlement>(wsId, 'settlements', setSettlements, onErr),
       subscribeCollection<Customer>(wsId, 'customers', setCustomers, onErr),
       subscribeCollection<SalesTransaction>(wsId, 'salesTransactions', setSalesTransactions, onErr),
       subscribeCollection<Repair>(wsId, 'repairs', setRepairs, onErr),
       subscribeCollection<RepairBatch>(wsId, 'repairBatches', setRepairBatches, onErr),
-      subscribeCollection<TimeEntry>(wsId, 'timeEntries', setTimeEntries, onErr),
-      subscribeCollection<PayPeriodPaid>(wsId, 'payPeriods', setPayPeriods, onErr),
-      subscribeCollection<CashReconciliation>(wsId, 'cashReconciliations', setCashReconciliations, onErr),
       subscribeCollection<ActivityEntry>(wsId, 'activityLog', rows => setActivityLog(rows.sort((a, b) => b.ts - a.ts)), onErr, { orderByField: 'ts', limitTo: ACTIVITY_LIMIT }),
       subscribeMeta(wsId, m => { setNotes(m.notes || []); setTasks(m.tasks || []); setSkuCounters(m.skuCounters || {}); setLastBackup(m.lastBackup); setSettings(mergeSettings(m.settings)); }, onErr),
     ];
@@ -194,6 +196,23 @@ export function useWorkspaceData() {
     return () => subs.forEach(u => u());
   }, [user, appUser, workspaceId, reconnectKey]);
 
+  // Deferred subscriptions — only started once App enables them (first visit to
+  // Time Clock / Reports / Drop-offs). Kept in their own effect so enabling them
+  // doesn't tear down and re-fetch the core collections. Once on they stay on for
+  // the session, so navigating back and forth never re-subscribes.
+  useEffect(() => {
+    if (!user || !appUser || !workspaceId || !extendedEnabled) return;
+    const onErr = (e: Error) => { console.error('Firestore error (extended):', e); setDbError(e.message || 'Failed to load data'); };
+    const subs = [
+      subscribeCollection<DropOff>(workspaceId, 'dropOffs', setDropOffs, onErr),
+      subscribeCollection<Settlement>(workspaceId, 'settlements', setSettlements, onErr),
+      subscribeCollection<TimeEntry>(workspaceId, 'timeEntries', setTimeEntries, onErr),
+      subscribeCollection<PayPeriodPaid>(workspaceId, 'payPeriods', setPayPeriods, onErr),
+      subscribeCollection<CashReconciliation>(workspaceId, 'cashReconciliations', setCashReconciliations, onErr),
+    ];
+    return () => subs.forEach(u => u());
+  }, [user, appUser, workspaceId, reconnectKey, extendedEnabled]);
+
   // Audit log subscription is separate so "load older" can widen the page limit
   // without tearing down and re-subscribing every other collection.
   useEffect(() => {
@@ -206,6 +225,9 @@ export function useWorkspaceData() {
 
   // Retry a failed connection (used by the DB-error screen's Retry button).
   const reconnect = () => { setDbError(null); setDbLoading(true); setReconnectKey(k => k + 1); };
+
+  // Stable so App's per-view effect doesn't re-run every render.
+  const enableExtendedData = useCallback(() => setExtendedEnabled(true), []);
 
   return {
     // auth
@@ -222,6 +244,9 @@ export function useWorkspaceData() {
     skuCounters, setSkuCounters, activityLog, lastBackup, settings,
     // connection status
     dbLoading, dbError, setDbError, reconnect,
+    // Start the deferred subscriptions (time clock / reports / drop-offs data).
+    // Idempotent — safe to call on every render of those views.
+    enableExtendedData,
     // latest-snapshot refs
     runnersRef, dropOffsRef, settlementsRef, customersRef, salesTransactionsRef,
     repairsRef, repairBatchesRef, skuRef, dataRef,
