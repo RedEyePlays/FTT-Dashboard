@@ -7,7 +7,7 @@ import { Repair, RepairBatch, Customer, AuditEntry, RepairStatus, RepairType, De
 import {
   REPAIR_STATUSES, REPAIR_STATUS_CELL,
   balanceOwing, batchTotals, matchesRepair, matchesBatch, canSaveRepair,
-  partsTotal, repairPartsCost, repairLabor, completeRepair, isRepairOpen, technicianPerformance,
+  partsTotal, repairPartsCost, repairLabor, completeRepair, isRepairOpen, technicianPerformance, dateToEpochMs,
 } from '../domain/repairs';
 import { newId } from '../domain/ids';
 import { printRetailReceipt, printBatchIntake, printBatchInvoice, printBatchSummary, printDeviceSheet, printRepairEstimate } from '../services/repairPrint';
@@ -563,10 +563,16 @@ const RepairDrawer: React.FC<{
   // — the app links the sale back and marks the repair complete on commit).
   // Internal refurbs and wholesale devices have no customer sale here, so they're
   // simply stamped complete.
+  // Backdatable completion date for the direct-complete path (internal/wholesale
+  // — no customer sale here to carry a date of its own). Retail completion date
+  // instead comes from the Quick Sale's own Sale Date field (see App.tsx's
+  // handleSellCart), since that's what recognizes the money.
+  const [completionDate, setCompletionDate] = useState(today());
+
   const checkOut = () => {
     if (!canSave) return;
     if (isRetail && onCheckoutViaSale) { onSave(f); onCheckoutViaSale(f); }
-    else onSave(completeRepair(f, Date.now(), 'completed'));
+    else onSave(completeRepair(f, dateToEpochMs(completionDate), 'completed'));
   };
 
   return (
@@ -616,6 +622,10 @@ const RepairDrawer: React.FC<{
 
           <Section title="Device">
             <div className="grid grid-cols-2 gap-3">
+              <Field label="Intake Date" className="col-span-2">
+                <input type="date" max={today()} className={inputCls} value={f.date}
+                  onChange={e => set({ date: e.target.value, createdAt: dateToEpochMs(e.target.value) })} />
+              </Field>
               <Field label="Device Type"><select autoFocus={isNew && !isRetail} className={inputCls} value={f.deviceType || ''} onChange={e => set({ deviceType: e.target.value as DeviceType })}><option value="">—</option>{DEVICE_TYPES.map(d => <option key={d} value={d}>{d}</option>)}</select></Field>
               <Field label="IMEI / Serial"><input className={inputCls} value={f.imei || ''} onChange={e => set({ imei: e.target.value })} /></Field>
               <Field label="Brand / Model" className="col-span-2"><input className={inputCls} placeholder="e.g. Apple iPhone 14 Pro" value={[f.brand, f.model].filter(Boolean).join(' ')} onChange={e => set({ brand: '', model: e.target.value })} /></Field>
@@ -686,7 +696,14 @@ const RepairDrawer: React.FC<{
           <button onClick={() => canSave && onSave(f)} disabled={!canSave}
             title={canSave ? undefined : (f.parts || []).some(p => !p.name?.trim()) ? 'Name every part before saving' : 'Enter a customer name first'}
             className="flex-1 min-w-[110px] px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg text-sm font-medium">Save</button>
-          {!isNew && !isTerminal && (
+          {!isTerminal && !isRetail && (
+            <label className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400" title="Backdate if this repair was already finished before it got entered">
+              Completed
+              <input type="date" max={today()} value={completionDate} onChange={e => setCompletionDate(e.target.value)}
+                className="px-2 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md text-xs" />
+            </label>
+          )}
+          {!isTerminal && (
             <button onClick={checkOut} disabled={!canSave}
               className="flex-1 min-w-[110px] px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white rounded-lg text-sm font-medium flex items-center justify-center gap-1.5"><ClipboardCheck className="w-4 h-4" /> {isRetail && onCheckoutViaSale ? 'Check Out' : 'Mark Complete'}</button>
           )}
