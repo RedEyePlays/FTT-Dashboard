@@ -1,5 +1,61 @@
+/* Follows the visitor's OS/browser dark-light preference automatically — no
+   theme toggle, no stored preference, just prefers-color-scheme. */
 :root {
-  color-scheme: light;
+  color-scheme: light dark;
+
+  --bg: #f1f5f9;
+  --text: #0f172a;
+  --text-muted: #64748b;
+  --text-faint: #94a3b8;
+  --card-bg: #ffffff;
+  --card-border: #e2e8f0;
+  --card-shadow: rgba(15, 23, 42, 0.04);
+  --input-bg: #ffffff;
+  --input-border: #cbd5e1;
+  --accent: #4f46e5;
+  --accent-hover: #4338ca;
+  --accent-ring: rgba(99, 102, 241, 0.4);
+  --error: #e11d48;
+
+  --pill-progress-bg: #e0e7ff;
+  --pill-progress-text: #4338ca;
+  --pill-ready-bg: #d1fae5;
+  --pill-ready-text: #047857;
+  --pill-done-bg: #ccfbf1;
+  --pill-done-text: #0f766e;
+  --pill-cancelled-bg: #ffe4e6;
+  --pill-cancelled-text: #be123c;
+  --pill-none-bg: #f1f5f9;
+  --pill-none-text: #475569;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0b1120;
+    --text: #e2e8f0;
+    --text-muted: #94a3b8;
+    --text-faint: #64748b;
+    --card-bg: #111827;
+    --card-border: #1f2937;
+    --card-shadow: rgba(0, 0, 0, 0.35);
+    --input-bg: #1e293b;
+    --input-border: #334155;
+    --accent: #818cf8;
+    --accent-hover: #6366f1;
+    --accent-ring: rgba(129, 140, 248, 0.45);
+    --error: #fb7185;
+
+    --pill-progress-bg: rgba(99, 102, 241, 0.18);
+    --pill-progress-text: #a5b4fc;
+    --pill-ready-bg: rgba(16, 185, 129, 0.18);
+    --pill-ready-text: #6ee7b7;
+    --pill-done-bg: rgba(20, 184, 166, 0.18);
+    --pill-done-text: #5eead4;
+    --pill-cancelled-bg: rgba(244, 63, 94, 0.18);
+    --pill-cancelled-text: #fda4af;
+    --pill-none-bg: rgba(148, 163, 184, 0.14);
+    --pill-none-text: #cbd5e1;
+  }
 }
 
 * {
@@ -9,8 +65,8 @@
 body {
   margin: 0;
   min-height: 100vh;
-  background: #f1f5f9;
-  color: #0f172a;
+  background: var(--bg);
+  color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   display: flex;
   justify-content: center;
@@ -34,7 +90,7 @@ body {
   width: 2.25rem;
   height: 2.25rem;
   border-radius: 0.5rem;
-  background: #4f46e5;
+  background: var(--accent);
   color: #fff;
   display: flex;
   align-items: center;
@@ -49,16 +105,16 @@ body {
 }
 
 .card {
-  background: #fff;
-  border: 1px solid #e2e8f0;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
   border-radius: 1rem;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  box-shadow: 0 1px 2px var(--card-shadow);
   padding: 1.25rem;
 }
 
 .hint {
   font-size: 0.875rem;
-  color: #64748b;
+  color: var(--text-muted);
   margin: 0 0 1rem;
 }
 
@@ -70,24 +126,24 @@ body {
   display: block;
   font-size: 0.75rem;
   font-weight: 500;
-  color: #64748b;
+  color: var(--text-muted);
   margin-bottom: 0.25rem;
 }
 
 .field input {
   width: 100%;
   padding: 0.625rem 0.75rem;
-  background: #fff;
-  border: 1px solid #cbd5e1;
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
   border-radius: 0.5rem;
   font-size: 0.9375rem;
-  color: #0f172a;
+  color: var(--text);
 }
 
 .field input:focus {
   outline: none;
-  border-color: #6366f1;
-  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.4);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-ring);
 }
 
 .submit-btn {
@@ -98,7 +154,7 @@ body {
   gap: 0.5rem;
   padding: 0.625rem;
   margin-top: 0.25rem;
-  background: #4f46e5;
+  background: var(--accent);
   color: #fff;
   border: none;
   border-radius: 0.5rem;
@@ -113,12 +169,12 @@ body {
 }
 
 .submit-btn:not(:disabled):hover {
-  background: #4338ca;
+  background: var(--accent-hover);
 }
 
 .error-text {
   font-size: 0.875rem;
-  color: #e11d48;
+  color: var(--error);
   margin: 0.5rem 0 0;
 }
 
@@ -137,11 +193,11 @@ body {
   font-weight: 600;
 }
 
-.status-pill.tone-progress { background: #e0e7ff; color: #4338ca; }
-.status-pill.tone-ready { background: #d1fae5; color: #047857; }
-.status-pill.tone-done { background: #ccfbf1; color: #0f766e; }
-.status-pill.tone-cancelled { background: #ffe4e6; color: #be123c; }
-.status-pill.tone-none { background: #f1f5f9; color: #475569; }
+.status-pill.tone-progress { background: var(--pill-progress-bg); color: var(--pill-progress-text); }
+.status-pill.tone-ready { background: var(--pill-ready-bg); color: var(--pill-ready-text); }
+.status-pill.tone-done { background: var(--pill-done-bg); color: var(--pill-done-text); }
+.status-pill.tone-cancelled { background: var(--pill-cancelled-bg); color: var(--pill-cancelled-text); }
+.status-pill.tone-none { background: var(--pill-none-bg); color: var(--pill-none-text); }
 
 .result .device {
   font-size: 1.125rem;
@@ -151,19 +207,19 @@ body {
 
 .result .ticket {
   font-size: 0.875rem;
-  color: #64748b;
+  color: var(--text-muted);
   margin: 0;
 }
 
 .result .detail {
   font-size: 0.875rem;
-  color: #334155;
+  color: var(--text);
   margin: 0.75rem 0 0;
 }
 
 .result .footnote {
   font-size: 0.75rem;
-  color: #94a3b8;
+  color: var(--text-faint);
   margin: 1rem 0 0;
 }
 
@@ -171,7 +227,7 @@ body {
   margin-top: 1.25rem;
   background: none;
   border: none;
-  color: #4f46e5;
+  color: var(--accent);
   font-size: 0.875rem;
   font-weight: 500;
   cursor: pointer;

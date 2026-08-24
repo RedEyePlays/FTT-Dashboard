@@ -113,6 +113,7 @@ export interface AppSettings {
     voidWindowDays: number;            // how many days after a sale it can still be voided (0 = same day only)
     returnRestockingFeePercent: number;// default restocking fee % pre-filled when processing a return (0 = none)
     agingInventoryDays: number;        // unsold-device age (days) that triggers the aging-inventory alert
+    autoLockMinutes: number;           // idle minutes before the auto-lock screen appears; 0 = never (must be chosen explicitly)
   };
 }
 
@@ -141,7 +142,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   dashboard: { widgets: Object.fromEntries(DASHBOARD_WIDGETS.map(w => [w, true])), landingView: 'dashboard', analyticsRange: 'today' },
   appearance: { theme: 'system' },
   backups: { enabled: false, frequency: 'daily', retention: 14 },
-  operations: { openingFloatDefault: 0, voidWindowDays: 0, returnRestockingFeePercent: 0, agingInventoryDays: 30 },
+  operations: { openingFloatDefault: 0, voidWindowDays: 0, returnRestockingFeePercent: 0, agingInventoryDays: 30, autoLockMinutes: 4 },
 };
 
 // Deep-merge a stored partial over the defaults (one level per section is enough).
