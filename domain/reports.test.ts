@@ -43,6 +43,9 @@ describe('cashCollectedOnTx', () => {
     expect(cashCollectedOnTx(tx({ paymentMethod: 'cash', totalPaid: 100, status: 'voided' }))).toBe(0);
     expect(cashCollectedOnTx(tx({ paymentMethod: 'cash', totalPaid: 100, status: 'returned' }))).toBe(0);
   });
+  it('counts nothing for an e-transfer sale — no physical cash ever changed hands', () => {
+    expect(cashCollectedOnTx(tx({ paymentMethod: 'etransfer', totalPaid: 250 }))).toBe(0);
+  });
 });
 
 describe('expectedCashForDate', () => {
@@ -52,12 +55,17 @@ describe('expectedCashForDate', () => {
     tx({ id: 'c', date: '2026-07-20', paymentMethod: 'card', totalPaid: 80 }),   // no cash
     tx({ id: 'd', date: '2026-07-19', paymentMethod: 'cash', totalPaid: 999 }),   // other day
     tx({ id: 'e', date: '2026-07-20', paymentMethod: 'cash', totalPaid: 300, status: 'voided' }), // reversed
+    tx({ id: 'f', date: '2026-07-20', paymentMethod: 'etransfer', totalPaid: 400 }), // no cash either
   ];
   it('sums the cash portion of the given day only', () => {
-    expect(expectedCashForDate(txns, '2026-07-20')).toBe(150); // 100 + 50
+    expect(expectedCashForDate(txns, '2026-07-20')).toBe(150); // 100 + 50 — etransfer's 400 never counted
   });
   it('is zero for a day with no cash sales', () => {
     expect(expectedCashForDate(txns, '2026-01-01')).toBe(0);
+  });
+  it('a day of ONLY e-transfer sales has zero expected cash', () => {
+    const etransferOnly = [tx({ id: 'g', date: '2026-08-01', paymentMethod: 'etransfer', totalPaid: 999 })];
+    expect(expectedCashForDate(etransferOnly, '2026-08-01')).toBe(0);
   });
 });
 

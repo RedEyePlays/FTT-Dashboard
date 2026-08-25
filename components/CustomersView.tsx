@@ -49,7 +49,7 @@ export type ReturnDisposition = 'resell' | 'defective';
 const money = (n: number) => `$${(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const money0 = (n: number) => `$${Math.round(n || 0).toLocaleString()}`;
 const fmtDate = (ms: number) => (ms ? new Date(ms).toLocaleDateString() : '—');
-const PAYMENT_LABEL: Record<string, string> = { cash: 'Cash', card: 'Card', mixed: 'Mixed' };
+const PAYMENT_LABEL: Record<string, string> = { cash: 'Cash', card: 'Card', mixed: 'Mixed', etransfer: 'E-Transfer' };
 const TAG_SUGGESTIONS = ['VIP', 'Wholesale', 'Business', 'Student', 'Repeat Customer', 'Walk-In', 'Referral'];
 const FILTERS: { id: CustomerFilter; label: string }[] = [
   { id: 'all', label: 'All' },

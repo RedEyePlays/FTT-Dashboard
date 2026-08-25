@@ -112,6 +112,21 @@ describe('computeAnalytics overview + payments', () => {
   });
 });
 
+describe('a standalone e-transfer sale (no explicit cash/card/etransfer amounts) buckets under payments.etransfer', () => {
+  const input: AnalyticsInput = {
+    ...base,
+    salesTransactions: [
+      tx({ id: 't1', date: '2026-07-20', subtotal: 500, totalPaid: 500, netProfit: 200, paymentMethod: 'etransfer', lines: [{ kind: 'device', name: 'Pixel 8', quantity: 1, unitPrice: 500 } as any] }),
+    ],
+  };
+  const a = computeAnalytics(presetRange('today', NOW), input, NOW);
+
+  it('lands in payments.etransfer, not payments.other', () => {
+    expect(a.payments.etransfer).toBe(500);
+    expect(a.payments.other).toBe(0);
+  });
+});
+
 describe('device category from the sales line (custom device sales)', () => {
   it('buckets a device line by its own deviceType when it has no inventory match', () => {
     // A custom device sale: no inventoryId, no resolvable sku — analytics must use

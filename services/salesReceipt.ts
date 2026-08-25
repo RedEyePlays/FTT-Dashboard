@@ -5,6 +5,10 @@ import { PRINT_PREVIEW_BAR_STYLE, PRINT_PREVIEW_BAR_HTML } from './printPreview'
 // whether printed at checkout (hooks/useCheckout) or reprinted later from a
 // sales-history list — the same transaction in, the same receipt out.
 //
+// Payment method labels shown on receipts/invoices — kept in one place so
+// "E-Transfer" (rather than the raw 'etransfer' value) is used everywhere.
+export const PAYMENT_METHOD_LABEL: Record<string, string> = { cash: 'Cash', card: 'Card', mixed: 'Mixed', etransfer: 'E-Transfer' };
+
 // Pure DOM/print side effect: opens a small window, writes the receipt, and
 // triggers the browser print dialog. Returns false if the popup was blocked.
 export function printSalesReceipt(tx: SalesTransaction, opts: { storeName?: string } = {}): boolean {
@@ -16,7 +20,7 @@ export function printSalesReceipt(tx: SalesTransaction, opts: { storeName?: stri
   const payParts = tx.paymentMethod === 'mixed'
     ? [['Cash', tx.cashAmount], ['Card', tx.cardAmount], ['E-transfer', tx.etransferAmount]]
         .filter(([, v]) => v).map(([k, v]) => `${k}: ${money(Number(v))}`).join(' · ')
-    : (tx.paymentMethod || '');
+    : (PAYMENT_METHOD_LABEL[tx.paymentMethod || ''] || tx.paymentMethod || '');
   const win = window.open('', '_blank', 'width=320,height=640');
   if (!win) return false;
   // Real physical 80mm thermal paper sizing via @page (not a CSS px guess):

@@ -3,10 +3,10 @@ import { InventoryItem, ItemKind, DeviceType, SalesTransaction, Customer, Repair
 import { getPOSSettings, getStoreProfile } from '../components/SettingsModal';
 import { newId } from '../domain/ids';
 import { kindOf, getDeviceDisplayName } from '../domain/inventory';
-import { isZeroPricedDevice as isZeroPricedLine, cartHasZeroPricedDevice, searchCheckoutInventory, salesBalanceOwing, mixedPaymentMismatch as computeMixedPaymentMismatch } from '../domain/pos';
+import { isZeroPricedDevice as isZeroPricedLine, cartHasZeroPricedDevice, searchCheckoutInventory, salesBalanceOwing, mixedPaymentMismatch as computeMixedPaymentMismatch, taxAppliesForSale } from '../domain/pos';
 import { hasListedElsewhere } from '../domain/listing';
 import { RepairSalePrefill, repairSalePrefill, isRepairOpen, matchesRepair } from '../domain/repairs';
-import { printSalesReceipt } from '../services/salesReceipt';
+import { printSalesReceipt, PAYMENT_METHOD_LABEL } from '../services/salesReceipt';
 import { PRINT_PREVIEW_BAR_STYLE, PRINT_PREVIEW_BAR_HTML } from '../services/printPreview';
 
 // All Quick Sale / checkout state, pricing math and the commit-payload builder
@@ -154,8 +154,12 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialRepair?.repairId]);
 
-  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'mixed'>('cash');
+  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'mixed' | 'etransfer'>('cash');
   const [cashTaxStatus, setCashTaxStatus] = useState<'none' | 'separate' | 'included'>('none');
+  // Same "was tax charged" decision as cashTaxStatus, for a standalone
+  // e-transfer sale — mixed sales already have their own explicit Tax
+  // Collected field, so this only matters for paymentMethod === 'etransfer'.
+  const [etransferTaxStatus, setEtransferTaxStatus] = useState<'none' | 'separate'>('none');
   const [paymentNotes, setPaymentNotes] = useState('');
 
   const [cashAmount, setCashAmount] = useState('');
@@ -223,7 +227,7 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
   const repairCostTotal = cart.reduce((s, l) => s + lineRepair(l), 0);
   const totalCost = purchaseCostTotal + repairCostTotal;
   const taxableBase = cart.filter(l => l.taxable).reduce((s, l) => s + lineSubtotal(l), 0);
-  const taxApplies = !(paymentMethod === 'cash' && cashTaxStatus === 'none');
+  const taxApplies = taxAppliesForSale(paymentMethod, cashTaxStatus, etransferTaxStatus);
   const tax = paymentMethod === 'mixed'
     ? (parseFloat(taxCollected) || 0)
     : (taxApplies ? taxableBase * taxRate / 100 : 0);
@@ -394,6 +398,7 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
         customerName: effectiveName, customerPhone, customerEmail, customerNotes,
         paymentMethod, taxCollected: taxShare,
         cashTaxStatus: paymentMethod === 'cash' ? cashTaxStatus : undefined,
+        etransferTaxStatus: paymentMethod === 'etransfer' ? etransferTaxStatus : undefined,
         paymentNotes: paymentNotes || undefined,
         platformName, platformFeePercent: feePercent, platformFees: feeShare,
       };
@@ -489,7 +494,7 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
 
   const reset = () => {
     setCart([]); setLinkedRepairId(undefined); setCustomerName(''); setCustomerPhone(''); setCustomerEmail(''); setCustomerNotes(''); setSelectedCustomerId(undefined);
-    setPaymentNotes(''); setPaymentMethod('cash'); setCashTaxStatus('none');
+    setPaymentNotes(''); setPaymentMethod('cash'); setCashTaxStatus('none'); setEtransferTaxStatus('none');
     setCashAmount(''); setCardAmount(''); setEtransferAmount(''); setTaxCollected(''); setDeposit('');
     setPlatformName('None / In-Store'); setPlatformFeePercent('0');
     setLastTx(null); setShowTx(false); setConfirmed(false);
@@ -523,7 +528,7 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
       </tr>`).join('');
     const payParts = lastTx.paymentMethod === 'mixed'
       ? [['Cash', lastTx.cashAmount], ['Card', lastTx.cardAmount], ['E-transfer', lastTx.etransferAmount]].filter(([, v]) => v).map(([k, v]) => `${k}: ${money(Number(v))}`).join(' · ')
-      : (lastTx.paymentMethod || '');
+      : (PAYMENT_METHOD_LABEL[lastTx.paymentMethod || ''] || lastTx.paymentMethod || '');
     const contact = [store.address, store.phone, store.email, store.website, store.businessNumber && `Business #: ${store.businessNumber}`]
       .filter(Boolean).map(v => `<div>${esc(String(v))}</div>`).join('');
     const win = window.open('', '_blank', 'width=800,height=1000');
@@ -616,7 +621,7 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
     platformName, setPlatformName, platformFeePercent, setPlatformFeePercent, soldDate, setSoldDate,
     customerName, setCustomerName, customerPhone, setCustomerPhone, customerEmail, setCustomerEmail,
     customerNotes, setCustomerNotes, selectedCustomerId, setSelectedCustomerId,
-    paymentMethod, setPaymentMethod, cashTaxStatus, setCashTaxStatus, paymentNotes, setPaymentNotes,
+    paymentMethod, setPaymentMethod, cashTaxStatus, setCashTaxStatus, etransferTaxStatus, setEtransferTaxStatus, paymentNotes, setPaymentNotes,
     cashAmount, setCashAmount, cardAmount, setCardAmount, etransferAmount, setEtransferAmount, taxCollected, setTaxCollected,
     deposit, setDeposit, depositAmount, balanceOwing, isLayaway, effectiveName,
     mixedPaymentTotal, mixedPaymentMismatch,
