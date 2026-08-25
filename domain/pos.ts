@@ -1,4 +1,4 @@
-import { InventoryItem, SalesTransaction } from '../types';
+import { InventoryItem, SalesTransaction, ListingPlatform } from '../types';
 import { kindOf } from './inventory';
 import { DrawerEffect } from './dropoffs';
 
@@ -128,6 +128,19 @@ export const saleAccessoryRestock = (tx: Pick<SalesTransaction, 'lines'>): { id:
     if (l.kind === 'accessory' && l.inventoryId) byId.set(l.inventoryId, (byId.get(l.inventoryId) || 0) + (l.quantity || 0));
   }
   return [...byId].map(([id, delta]) => ({ id, delta }));
+};
+
+// Device listedPlatforms snapshots captured at sale time (SalesLine.listedPlatforms,
+// set by hooks/useCheckout.ts before the live field is cleared) — keyed by
+// inventoryId. voidSale/returnSale use this to restore the flag on reversal
+// instead of leaving it cleared, so a device that was flagged listed elsewhere
+// when it sold doesn't silently lose that fact if the sale is undone.
+export const saleDeviceListedPlatforms = (tx: Pick<SalesTransaction, 'lines'>): Map<string, ListingPlatform[] | undefined> => {
+  const byId = new Map<string, ListingPlatform[] | undefined>();
+  for (const l of tx.lines) {
+    if (l.kind === 'device' && l.inventoryId) byId.set(l.inventoryId, l.listedPlatforms);
+  }
+  return byId;
 };
 
 // --- Layaway / deposit -----------------------------------------------------

@@ -30,6 +30,14 @@ export type InventoryCollection = 'inventory' | 'accessories';
 export const collectionFor = (i: InventoryItem): InventoryCollection =>
   isAccessory(i) ? 'accessories' : 'inventory';
 
+// Inventory-table column keys that reveal purchase cost or profit margin —
+// gated behind reports.profit.detailed, same as the mobile card's "Purchase
+// cost" row (InventoryView.tsx's InvCard). InventoryView filters every column
+// through this before it reaches the desktop table OR the CSV export, so an
+// unauthorized role can't see or export cost data through either path.
+const COST_REVEALING_COLUMN_KEYS: readonly string[] = ['purchaseCost', 'repairCost', '__total', '__profit', 'costPerUnit'];
+export const isCostRevealingColumn = (key: string): boolean => COST_REVEALING_COLUMN_KEYS.includes(key);
+
 // The signed change to an accessory's on-hand quantity when `sold` units leave
 // stock — always a decrement (you can't sell a negative quantity). This delta is
 // applied atomically server-side via Firestore's increment(), so concurrent sales

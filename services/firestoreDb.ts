@@ -4,7 +4,7 @@ import {
 import { db } from './firebase';
 import {
   InventoryItem, Runner, DropOff, Settlement, Customer, SalesTransaction, ActivityEntry, Note, Task,
-  AppUser, WorkspaceInvite, AuditEntry, TimeEntry, PayPeriodPaid, CashReconciliation, StaffNote,
+  AppUser, WorkspaceInvite, AuditEntry, TimeEntry, PayPeriodPaid, CashReconciliation, StaffNote, ListingPlatform,
 } from '../types';
 import { collectionFor } from '../domain/inventory';
 import { AppSettings } from '../domain/settings';
@@ -162,14 +162,18 @@ export async function commitSale(uid: string, payload: {
 // audit history, not deleted). Activity is logged in the same batch.
 export async function voidSale(uid: string, payload: {
   transactionId: string;
-  deviceIds: string[];                               // device inventory rows to return to unsold
+  // Device inventory rows to return to unsold, each carrying the
+  // listedPlatforms snapshot (SalesLine.listedPlatforms) taken at sale time so
+  // it can be restored — never silently dropped — if the device was flagged
+  // listed elsewhere when it sold.
+  devices: { id: string; listedPlatforms?: ListingPlatform[] }[];
   accessoryUpdates: { id: string; delta: number }[]; // positive deltas to restock
   voided: { voidedAt: number; voidedBy: string; voidedByEmail?: string };
   activity: ActivityEntry[];
 }) {
   const batch = writeBatch(db);
-  payload.deviceIds.forEach(id => batch.set(docRef(uid, 'inventory', id),
-    { soldDate: '', soldTo: '', salePrice: 0, deviceStatus: 'ready', transactionId: '' }, { merge: true } as any));
+  payload.devices.forEach(d => batch.set(docRef(uid, 'inventory', d.id),
+    { soldDate: '', soldTo: '', salePrice: 0, deviceStatus: 'ready', transactionId: '', listedPlatforms: d.listedPlatforms || [] }, { merge: true } as any));
   payload.accessoryUpdates.forEach(a => batch.set(docRef(uid, 'accessories', a.id),
     { quantity: increment(a.delta) }, { merge: true } as any));
   batch.set(docRef(uid, 'salesTransactions', payload.transactionId),
@@ -185,17 +189,20 @@ export async function voidSale(uid: string, payload: {
 // transaction 'returned' with the refund + restocking fee (kept for history).
 export async function returnSale(uid: string, payload: {
   transactionId: string;
-  resellDeviceIds: string[];                         // devices going back to sellable stock
-  defectiveDeviceIds: string[];                      // devices pulled from sale (not-for-resale)
+  // Devices going back to sellable stock / pulled from sale, each carrying the
+  // listedPlatforms snapshot taken at sale time (see voidSale) so it's restored
+  // rather than silently dropped either way.
+  resellDevices: { id: string; listedPlatforms?: ListingPlatform[] }[];
+  defectiveDevices: { id: string; listedPlatforms?: ListingPlatform[] }[];
   accessoryUpdates: { id: string; delta: number }[]; // positive deltas to restock
   returned: { returnedAt: number; returnedBy: string; returnedByEmail?: string; restockingFee?: number; refundAmount: number };
   activity: ActivityEntry[];
 }) {
   const batch = writeBatch(db);
-  payload.resellDeviceIds.forEach(id => batch.set(docRef(uid, 'inventory', id),
-    { soldDate: '', soldTo: '', salePrice: 0, deviceStatus: 'ready', transactionId: '' }, { merge: true } as any));
-  payload.defectiveDeviceIds.forEach(id => batch.set(docRef(uid, 'inventory', id),
-    { soldDate: '', soldTo: '', salePrice: 0, deviceStatus: 'returned', transactionId: '' }, { merge: true } as any));
+  payload.resellDevices.forEach(d => batch.set(docRef(uid, 'inventory', d.id),
+    { soldDate: '', soldTo: '', salePrice: 0, deviceStatus: 'ready', transactionId: '', listedPlatforms: d.listedPlatforms || [] }, { merge: true } as any));
+  payload.defectiveDevices.forEach(d => batch.set(docRef(uid, 'inventory', d.id),
+    { soldDate: '', soldTo: '', salePrice: 0, deviceStatus: 'returned', transactionId: '', listedPlatforms: d.listedPlatforms || [] }, { merge: true } as any));
   payload.accessoryUpdates.forEach(a => batch.set(docRef(uid, 'accessories', a.id),
     { quantity: increment(a.delta) }, { merge: true } as any));
   batch.set(docRef(uid, 'salesTransactions', payload.transactionId),

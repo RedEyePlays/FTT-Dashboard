@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { platformFeeAmount, isZeroPricedDevice, cartHasZeroPricedDevice, PricedLine, salesBalanceOwing, isLayaway, searchCheckoutInventory, canVoidSale, isVoided, isReturned, isReversed, canReturnSale, returnRefund, saleAccessoryRestock, collectedOnSale, cashCollectedOnSale, saleRefundDrawerEffect, mixedPaymentMismatch } from './pos';
+import { platformFeeAmount, isZeroPricedDevice, cartHasZeroPricedDevice, PricedLine, salesBalanceOwing, isLayaway, searchCheckoutInventory, canVoidSale, isVoided, isReturned, isReversed, canReturnSale, returnRefund, saleAccessoryRestock, saleDeviceListedPlatforms, collectedOnSale, cashCollectedOnSale, saleRefundDrawerEffect, mixedPaymentMismatch } from './pos';
 import { InventoryItem, SalesTransaction } from '../types';
 
 const item = (p: Partial<InventoryItem>): InventoryItem => ({
@@ -271,5 +271,28 @@ describe('saleRefundDrawerEffect', () => {
   it('produces no entry for a zero or near-zero amount (a card/e-transfer refund)', () => {
     expect(saleRefundDrawerEffect(0)).toBeNull();
     expect(saleRefundDrawerEffect(0.001)).toBeNull();
+  });
+});
+
+describe('saleDeviceListedPlatforms', () => {
+  it('maps each device line to its listedPlatforms snapshot, keyed by inventoryId', () => {
+    const tx: Pick<SalesTransaction, 'lines'> = {
+      lines: [
+        { inventoryId: 'd1', kind: 'device', name: 'Phone A', quantity: 1, unitPrice: 500, listedPlatforms: ['kijiji', 'facebook'] },
+        { inventoryId: 'd2', kind: 'device', name: 'Phone B', quantity: 1, unitPrice: 300 }, // never listed elsewhere
+        { inventoryId: 'a1', kind: 'accessory', name: 'Case', quantity: 1, unitPrice: 10 },
+      ],
+    };
+    const byId = saleDeviceListedPlatforms(tx);
+    expect(byId.get('d1')).toEqual(['kijiji', 'facebook']);
+    expect(byId.get('d2')).toBeUndefined();
+    expect(byId.has('a1')).toBe(false); // accessory lines are irrelevant here
+  });
+
+  it('ignores custom device lines with no inventoryId', () => {
+    const tx: Pick<SalesTransaction, 'lines'> = {
+      lines: [{ kind: 'device', name: 'Custom device', quantity: 1, unitPrice: 200, listedPlatforms: ['ebay'] }],
+    };
+    expect(saleDeviceListedPlatforms(tx).size).toBe(0);
   });
 });

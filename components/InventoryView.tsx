@@ -15,7 +15,7 @@ const LabelModal = lazy(() => import('./LabelModal').then(m => ({ default: m.Lab
 import { useIsMobile } from '../hooks/useMediaQuery';
 import { ResponsiveDialog, EmptyState } from './responsive';
 import { InvSection, INV_SECTIONS } from '../domain/inventoryNav';
-import { getDeviceDisplayName, priceFieldFor } from '../domain/inventory';
+import { getDeviceDisplayName, priceFieldFor, isCostRevealingColumn } from '../domain/inventory';
 import { listingPlatformsLabel } from '../domain/listing';
 import { clampWidth, fitWidths } from '../domain/columnLayout';
 import { usePersistedFilter } from '../hooks/usePersistedFilter';
@@ -228,6 +228,12 @@ type ColWidths = Record<'device' | 'accessory', Record<string, number>>;
 const MIN_COL_W = 40; // absolute floor for a stored width (per-column mins clamp further)
 const loadLS = <T,>(k: string, fb: T): T => { try { const r = localStorage.getItem(k); return r ? JSON.parse(r) : fb; } catch { return fb; } };
 
+// Filtered out of activeCols before the table renders or CSV exports it, so
+// an unauthorized role can't see or export cost data through either path
+// (see domain/inventory.ts's isCostRevealingColumn).
+const visibleCols = (cols: Col[], canViewCost: boolean): Col[] =>
+  canViewCost ? cols : cols.filter(c => !isCostRevealingColumn(c.key));
+
 // --- CSV helpers ---
 const toCSV = (rows: InventoryItem[], cols: Col[]): string => {
   const headers = ['kind', ...cols.filter(c => c.type !== 'computed').map(c => c.key)];
@@ -341,7 +347,7 @@ export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, a
 
   // Rows/columns/kind for the currently open sub-page (a single table per page).
   const activeKind: 'device' | 'accessory' = (page === 'accessories' || page === 'lowstock') ? 'accessory' : 'device';
-  const activeCols = activeKind === 'device' ? DEVICE_COLS : ACCESSORY_COLS;
+  const activeCols = visibleCols(activeKind === 'device' ? DEVICE_COLS : ACCESSORY_COLS, canViewCost);
   const activeRows =
     page === 'devices' ? devices :
     page === 'sold' ? soldDevices :
@@ -423,7 +429,7 @@ export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, a
     const blob = new Blob([toCSV(rows, cols)], { type: 'text/csv;charset=utf-8;' });
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `${name}_${today()}.csv`; a.click();
   };
-  const exportAll = () => exportCSV(inventory, [...DEVICE_COLS, ...ACCESSORY_COLS], 'inventory');
+  const exportAll = () => exportCSV(inventory, visibleCols([...DEVICE_COLS, ...ACCESSORY_COLS], canViewCost), 'inventory');
   const importCSV = (file: File) => {
     const reader = new FileReader();
     reader.onload = async e => {

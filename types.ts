@@ -307,6 +307,11 @@ export interface SalesLine {
   deviceType?: DeviceType; // for device lines — used by analytics categorization
                            // when the line can't be resolved to an inventory item
                            // (e.g. a custom device sale)
+  // Snapshot of the device's InventoryItem.listedPlatforms at the moment it sold
+  // (before the sale clears the live field to []) — lets voidSale/returnSale
+  // restore it if the sale is reversed, instead of silently losing the fact
+  // that the device might still be listed live elsewhere.
+  listedPlatforms?: ListingPlatform[];
 }
 
 export interface SalesTransaction {
