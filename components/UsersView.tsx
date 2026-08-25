@@ -5,6 +5,7 @@ import { ROLE_LABEL } from '../services/rbac';
 import { canAssignPin, isValidPinFormat, PIN_MAX_LENGTH } from '../domain/pin';
 import { sortStaffNotes, canAddStaffNote } from '../domain/staffNotes';
 import { useEscapeKey } from '../hooks/useEscapeKey';
+import { selectOnFocus } from '../hooks/selectOnFocus';
 
 interface Props {
   me: AppUser;
@@ -53,6 +54,7 @@ const RateInput: React.FC<{ rate?: number; onCommit: (rate: number) => void }> =
         type="number" min={0} step="0.25" inputMode="decimal"
         value={val}
         onChange={e => setVal(e.target.value)}
+        onFocus={selectOnFocus}
         onBlur={commit}
         onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
         placeholder="0.00"

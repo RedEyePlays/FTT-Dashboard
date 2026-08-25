@@ -5,6 +5,7 @@ import { InventoryItem } from '../types';
 import { QRScanner } from './QRScanner';
 import { QRLabel } from './QRLabel';
 import { ImeiScanner } from './ImeiScanner';
+import { selectOnFocus } from '../hooks/selectOnFocus';
 
 interface DataEntryFormProps {
   initialData?: InventoryItem;
@@ -129,7 +130,7 @@ export const DataEntryForm: React.FC<DataEntryFormProps> = ({ initialData, onSav
               </div>
               <div>
                 <label htmlFor="purchaseCost" className="block text-sm font-medium text-slate-600 dark:text-slate-300 mb-1">Purchase Cost ($)</label>
-                <input type="number" step="0.01" name="purchaseCost" id="purchaseCost" value={formData.purchaseCost} onChange={handleChange} required className="w-full p-2 bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-600 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500"/>
+                <input type="number" step="0.01" name="purchaseCost" id="purchaseCost" value={formData.purchaseCost} onChange={handleChange} onFocus={selectOnFocus} required className="w-full p-2 bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-600 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500"/>
               </div>
             </div>
         </div>
@@ -148,7 +149,7 @@ export const DataEntryForm: React.FC<DataEntryFormProps> = ({ initialData, onSav
               </div>
               <div>
                 <label htmlFor="salePrice" className="block text-sm font-medium text-slate-600 dark:text-slate-300 mb-1">Sale Price ($)</label>
-                <input type="number" step="0.01" name="salePrice" id="salePrice" value={formData.salePrice} onChange={handleChange} className="w-full p-2 bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-600 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500"/>
+                <input type="number" step="0.01" name="salePrice" id="salePrice" value={formData.salePrice} onChange={handleChange} onFocus={selectOnFocus} className="w-full p-2 bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-600 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500"/>
               </div>
             </div>
         </div>
@@ -159,15 +160,15 @@ export const DataEntryForm: React.FC<DataEntryFormProps> = ({ initialData, onSav
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                <div>
                   <label htmlFor="repairCost" className="block text-sm font-medium text-slate-600 dark:text-slate-300 mb-1">Repair Costs ($)</label>
-                  <input type="number" step="0.01" name="repairCost" id="repairCost" value={formData.repairCost} onChange={handleChange} className="w-full p-2 bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-600 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500"/>
+                  <input type="number" step="0.01" name="repairCost" id="repairCost" value={formData.repairCost} onChange={handleChange} onFocus={selectOnFocus} className="w-full p-2 bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-600 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500"/>
                 </div>
                 <div>
                   <label htmlFor="shippingCost" className="block text-sm font-medium text-slate-600 dark:text-slate-300 mb-1">Shipping Costs ($)</label>
-                  <input type="number" step="0.01" name="shippingCost" id="shippingCost" value={formData.shippingCost} onChange={handleChange} className="w-full p-2 bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-600 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500"/>
+                  <input type="number" step="0.01" name="shippingCost" id="shippingCost" value={formData.shippingCost} onChange={handleChange} onFocus={selectOnFocus} className="w-full p-2 bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-600 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500"/>
                 </div>
                 <div className="md:col-span-2">
                   <label htmlFor="platformFees" className="block text-sm font-medium text-slate-600 dark:text-slate-300 mb-1">Platform Fees ($)</label>
-                  <input type="number" step="0.01" name="platformFees" id="platformFees" value={formData.platformFees} onChange={handleChange} className="w-full p-2 bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-600 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500"/>
+                  <input type="number" step="0.01" name="platformFees" id="platformFees" value={formData.platformFees} onChange={handleChange} onFocus={selectOnFocus} className="w-full p-2 bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-600 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500"/>
                 </div>
               <div className="md:col-span-2">
                 <label htmlFor="notes" className="block text-sm font-medium text-slate-600 dark:text-slate-300 mb-1">Notes</label>

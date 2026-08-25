@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { X, Lock, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { CashDrawerSummary, reconcileCash } from '../domain/reports';
 import { useEscapeKey } from '../hooks/useEscapeKey';
+import { selectOnFocus } from '../hooks/selectOnFocus';
 
 interface Props {
   onClose: () => void;
@@ -66,6 +67,7 @@ export const CloseDrawerModal: React.FC<Props> = ({ onClose, onCloseDrawer, summ
           <div>
             <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Counted cash in till ($)</label>
             <input autoFocus type="number" min="0" step="0.01" value={counted} onChange={e => setCounted(e.target.value)}
+              onFocus={selectOnFocus}
               onKeyDown={e => { if (e.key === 'Enter' && canSave) submit(); }} placeholder="0.00" className={input} />
           </div>
 

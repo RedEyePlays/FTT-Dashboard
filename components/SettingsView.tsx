@@ -15,6 +15,7 @@ import { formatPhoneInput } from '../domain/phone';
 import { STATUS_PAGE_ORIGIN } from '../domain/statusLink';
 import { useIsMobile } from '../hooks/useMediaQuery';
 import { SettingsSection, SettingsCard, SettingsToggle, SettingsSelect, SettingsTextField } from './settingsPrimitives';
+import { selectOnFocus } from '../hooks/selectOnFocus';
 import { BackupFileMeta } from '../services/backupStorage';
 
 // The centralized Settings module. Owners configure the whole business here —
@@ -376,7 +377,8 @@ const OperationsSection: React.FC<{ draft: AppSettings; patch: PatchFn }> = ({ d
       <SettingsTextField label="Default opening cash float ($)" type="number" min={0} step={0.01}
         hint="Pre-filled as the starting drawer cash on the daily reconciliation screen."
         value={draft.operations.openingFloatDefault}
-        onChange={v => patch('operations', { openingFloatDefault: Math.max(0, parseFloat(v) || 0) })} />
+        onChange={v => patch('operations', { openingFloatDefault: Math.max(0, parseFloat(v) || 0) })}
+        onFocus={selectOnFocus} />
       <SettingsTextField label="Void window (days)" type="number" min={0} max={365} step={1}
         hint="How long after a sale it can still be voided. 0 = same calendar day only. Returns handle anything after this."
         value={draft.operations.voidWindowDays}

@@ -16,6 +16,7 @@ import { formatPhoneInput } from '../domain/phone';
 import { PRINT_PREVIEW_BAR_STYLE, PRINT_PREVIEW_BAR_HTML } from '../services/printPreview';
 import { printRetailReceipt } from '../services/repairPrint';
 import { printSalesReceipt } from '../services/salesReceipt';
+import { selectOnFocus } from '../hooks/selectOnFocus';
 import { getStoreProfile } from './SettingsModal';
 import { useIsMobile } from '../hooks/useMediaQuery';
 import { useEscapeKey } from '../hooks/useEscapeKey';
@@ -527,7 +528,7 @@ const ReturnSection: React.FC<{ total: number; onReturn: (opts: { restockingFee?
       <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Process Return</p>
       <label className="flex items-center justify-between gap-3 text-sm text-slate-600 dark:text-slate-300">
         <span>Restocking fee (optional)</span>
-        <span className="flex items-center gap-1">$<input type="number" min="0" step="0.01" value={fee} onChange={e => setFee(e.target.value)} placeholder="0.00"
+        <span className="flex items-center gap-1">$<input type="number" min="0" step="0.01" value={fee} onChange={e => setFee(e.target.value)} onFocus={selectOnFocus} placeholder="0.00"
           className="w-24 px-2 py-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md text-right text-sm focus:outline-none focus:ring-2 focus:ring-amber-500" /></span>
       </label>
       <div className="flex items-center justify-between text-sm"><span className="text-slate-400">Refund amount</span><span className="font-bold text-slate-800 dark:text-slate-100">{money(refund)}</span></div>

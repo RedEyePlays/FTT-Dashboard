@@ -16,6 +16,7 @@ import { formatPhoneInput } from '../domain/phone';
 import { CustomerSearchInput } from './CustomerSearchInput';
 import { useCheckout, CustomCategory, CUSTOM_DEVICE_TYPES } from '../hooks/useCheckout';
 import { useEscapeKey } from '../hooks/useEscapeKey';
+import { selectOnFocus } from '../hooks/selectOnFocus';
 
 export type { CartCheckout } from '../hooks/useCheckout';
 
@@ -248,7 +249,7 @@ export const CartSaleView: React.FC<Props> = (props) => {
                           onChange={e => updateLine(l.key, { quantity: Math.min(l.maxQty, Math.max(1, Math.round(num(e.target.value)))) })} /></div>
                     )}
                     <div><label className={labelCls}>Unit Price</label>
-                      <input type="number" step="0.01" className={inputCls} value={l.unitPrice} onChange={e => updateLine(l.key, { unitPrice: num(e.target.value) })} />
+                      <input type="number" step="0.01" className={inputCls} value={l.unitPrice} onChange={e => updateLine(l.key, { unitPrice: num(e.target.value) })} onFocus={selectOnFocus} />
                       {priceHints.has(l.key) && (() => { const s = priceHints.get(l.key)!; return (
                         <button type="button" onClick={() => updateLine(l.key, { unitPrice: s.price })} title={`Median of ${s.sampleSize} recent sale${s.sampleSize !== 1 ? 's' : ''} matching ${s.basis}. Click to use — you can still edit.`}
                           className="mt-1 inline-flex items-center gap-1 text-[11px] text-indigo-600 dark:text-indigo-400 hover:underline">
@@ -257,7 +258,7 @@ export const CartSaleView: React.FC<Props> = (props) => {
                       ); })()}
                     </div>
                     <div><label className={labelCls}>Discount</label>
-                      <input type="number" step="0.01" className={inputCls} value={l.discount} onChange={e => updateLine(l.key, { discount: num(e.target.value) })} /></div>
+                      <input type="number" step="0.01" className={inputCls} value={l.discount} onChange={e => updateLine(l.key, { discount: num(e.target.value) })} onFocus={selectOnFocus} /></div>
                     <div className="flex items-end">
                       <label className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300 cursor-pointer">
                         <input type="checkbox" checked={l.taxable} onChange={e => updateLine(l.key, { taxable: e.target.checked })} className="rounded" /> Taxable
@@ -345,10 +346,10 @@ export const CartSaleView: React.FC<Props> = (props) => {
           )}
           {paymentMethod === 'mixed' && (
             <div className="grid grid-cols-2 gap-2">
-              <div><label className={labelCls}>Cash Amount</label><input type="number" step="0.01" className={inputCls} value={cashAmount} onChange={e => setCashAmount(e.target.value)} placeholder="0.00" /></div>
-              <div><label className={labelCls}>Card Amount</label><input type="number" step="0.01" className={inputCls} value={cardAmount} onChange={e => setCardAmount(e.target.value)} placeholder="0.00" /></div>
-              <div><label className={labelCls}>E-transfer</label><input type="number" step="0.01" className={inputCls} value={etransferAmount} onChange={e => setEtransferAmount(e.target.value)} placeholder="0.00" /></div>
-              <div><label className={labelCls}>Tax Collected</label><input type="number" step="0.01" className={inputCls} value={taxCollected} onChange={e => setTaxCollected(e.target.value)} placeholder="0.00" /></div>
+              <div><label className={labelCls}>Cash Amount</label><input type="number" step="0.01" className={inputCls} value={cashAmount} onChange={e => setCashAmount(e.target.value)} onFocus={selectOnFocus} placeholder="0.00" /></div>
+              <div><label className={labelCls}>Card Amount</label><input type="number" step="0.01" className={inputCls} value={cardAmount} onChange={e => setCardAmount(e.target.value)} onFocus={selectOnFocus} placeholder="0.00" /></div>
+              <div><label className={labelCls}>E-transfer</label><input type="number" step="0.01" className={inputCls} value={etransferAmount} onChange={e => setEtransferAmount(e.target.value)} onFocus={selectOnFocus} placeholder="0.00" /></div>
+              <div><label className={labelCls}>Tax Collected</label><input type="number" step="0.01" className={inputCls} value={taxCollected} onChange={e => setTaxCollected(e.target.value)} onFocus={selectOnFocus} placeholder="0.00" /></div>
             </div>
           )}
           {mixedPaymentMismatch && (
@@ -359,7 +360,7 @@ export const CartSaleView: React.FC<Props> = (props) => {
           <IconInput icon={<FileText className="w-4 h-4" />} placeholder="Payment notes, e.g. $200 cash + $15 tax" value={paymentNotes} onChange={setPaymentNotes} />
           <div>
             <label className={labelCls}>Deposit / partial payment (optional)</label>
-            <input type="number" step="0.01" min="0" className={inputCls} value={deposit} onChange={e => setDeposit(e.target.value)} placeholder={`Leave blank if paying in full (${money(totalPaid)})`} />
+            <input type="number" step="0.01" min="0" className={inputCls} value={deposit} onChange={e => setDeposit(e.target.value)} onFocus={selectOnFocus} placeholder={`Leave blank if paying in full (${money(totalPaid)})`} />
             {isLayaway && (
               <div className="mt-2 flex items-center justify-between rounded-lg bg-sky-50 dark:bg-sky-900/20 border border-sky-200 dark:border-sky-500/30 px-3 py-2 text-sm">
                 <span className="font-semibold text-sky-700 dark:text-sky-300">Balance owing (layaway)</span>
@@ -477,9 +478,9 @@ export const CartSaleView: React.FC<Props> = (props) => {
               <div><label className={labelCls}>Quantity</label>
                 <input type="number" min="1" className={inputCls} value={custom.quantity} onChange={e => setCustom(c => ({ ...c, quantity: e.target.value }))} /></div>
               <div><label className={labelCls}>Unit Price</label>
-                <input type="number" step="0.01" className={inputCls} value={custom.unitPrice} onChange={e => setCustom(c => ({ ...c, unitPrice: e.target.value }))} placeholder="0.00 (negative = discount)" /></div>
+                <input type="number" step="0.01" className={inputCls} value={custom.unitPrice} onChange={e => setCustom(c => ({ ...c, unitPrice: e.target.value }))} onFocus={selectOnFocus} placeholder="0.00 (negative = discount)" /></div>
               <div><label className={labelCls}>Cost Estimate (optional)</label>
-                <input type="number" step="0.01" className={inputCls} value={custom.costEstimate} onChange={e => setCustom(c => ({ ...c, costEstimate: e.target.value }))} placeholder="0.00" /></div>
+                <input type="number" step="0.01" className={inputCls} value={custom.costEstimate} onChange={e => setCustom(c => ({ ...c, costEstimate: e.target.value }))} onFocus={selectOnFocus} placeholder="0.00" /></div>
               {custom.category === 'device' && (
                 <div className="col-span-2"><label className={labelCls}>IMEI / Serial (optional)</label>
                   <input className={inputCls} value={custom.imei} onChange={e => setCustom(c => ({ ...c, imei: e.target.value }))} /></div>

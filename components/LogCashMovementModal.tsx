@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { X, Wallet, ArrowUpFromLine, ArrowDownToLine, Banknote } from 'lucide-react';
 import { useEscapeKey } from '../hooks/useEscapeKey';
+import { selectOnFocus } from '../hooks/selectOnFocus';
 
 export type CashMovementKind = 'cashIn' | 'cashOut' | 'withdrawal';
 
@@ -67,6 +68,7 @@ export const LogCashMovementModal: React.FC<Props> = ({ onClose, onLog, initialK
           <div>
             <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Amount ($)</label>
             <input autoFocus type="number" min="0" step="0.01" value={amount} onChange={e => setAmount(e.target.value)}
+              onFocus={selectOnFocus}
               onKeyDown={e => { if (e.key === 'Enter') submit(); }} placeholder="0.00" className={input} />
           </div>
           <div>

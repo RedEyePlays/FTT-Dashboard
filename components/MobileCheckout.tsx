@@ -11,6 +11,7 @@ import { formatPhoneInput } from '../domain/phone';
 import { listingPlatformsLabel } from '../domain/listing';
 import { useCheckout, CartCheckout, CustomCategory, CUSTOM_DEVICE_TYPES } from '../hooks/useCheckout';
 import { CustomerSearchInput } from './CustomerSearchInput';
+import { selectOnFocus } from '../hooks/selectOnFocus';
 // Lazy: defers jsPDF (~390 kB) until a label is actually printed.
 const LabelModal = lazy(() => import('./LabelModal').then(m => ({ default: m.LabelModal })));
 import { ResponsiveDialog, EmptyState } from './responsive';
@@ -249,8 +250,8 @@ export const MobileCheckout: React.FC<Props> = (props) => {
                 <span className="font-bold text-slate-800 dark:text-slate-100">{money(cx.lineSubtotal(l))}</span>
               </div>
               <div className="grid grid-cols-2 gap-2 mt-2">
-                <label className="text-xs text-slate-400">Price<input type="number" step="0.01" inputMode="decimal" value={l.unitPrice} onChange={e => cx.updateLine(l.key, { unitPrice: cx.num(e.target.value) })} className={input} /></label>
-                <label className="text-xs text-slate-400">Discount<input type="number" step="0.01" inputMode="decimal" value={l.discount} onChange={e => cx.updateLine(l.key, { discount: cx.num(e.target.value) })} className={input} /></label>
+                <label className="text-xs text-slate-400">Price<input type="number" step="0.01" inputMode="decimal" value={l.unitPrice} onChange={e => cx.updateLine(l.key, { unitPrice: cx.num(e.target.value) })} onFocus={selectOnFocus} className={input} /></label>
+                <label className="text-xs text-slate-400">Discount<input type="number" step="0.01" inputMode="decimal" value={l.discount} onChange={e => cx.updateLine(l.key, { discount: cx.num(e.target.value) })} onFocus={selectOnFocus} className={input} /></label>
               </div>
               {priceHints.has(l.key) && (() => { const s = priceHints.get(l.key)!; return (
                 <button type="button" onClick={() => cx.updateLine(l.key, { unitPrice: s.price })}
@@ -307,10 +308,10 @@ export const MobileCheckout: React.FC<Props> = (props) => {
           )}
           {payChoice === 'mixed' && (
             <div className="grid grid-cols-2 gap-2">
-              <label className="text-xs text-slate-400">Cash<input type="number" inputMode="decimal" value={cx.cashAmount} onChange={e => cx.setCashAmount(e.target.value)} className={input} placeholder="0.00" /></label>
-              <label className="text-xs text-slate-400">Card<input type="number" inputMode="decimal" value={cx.cardAmount} onChange={e => cx.setCardAmount(e.target.value)} className={input} placeholder="0.00" /></label>
-              <label className="text-xs text-slate-400">E-Transfer<input type="number" inputMode="decimal" value={cx.etransferAmount} onChange={e => cx.setEtransferAmount(e.target.value)} className={input} placeholder="0.00" /></label>
-              <label className="text-xs text-slate-400">Tax collected<input type="number" inputMode="decimal" value={cx.taxCollected} onChange={e => cx.setTaxCollected(e.target.value)} className={input} placeholder="0.00" /></label>
+              <label className="text-xs text-slate-400">Cash<input type="number" inputMode="decimal" value={cx.cashAmount} onChange={e => cx.setCashAmount(e.target.value)} onFocus={selectOnFocus} className={input} placeholder="0.00" /></label>
+              <label className="text-xs text-slate-400">Card<input type="number" inputMode="decimal" value={cx.cardAmount} onChange={e => cx.setCardAmount(e.target.value)} onFocus={selectOnFocus} className={input} placeholder="0.00" /></label>
+              <label className="text-xs text-slate-400">E-Transfer<input type="number" inputMode="decimal" value={cx.etransferAmount} onChange={e => cx.setEtransferAmount(e.target.value)} onFocus={selectOnFocus} className={input} placeholder="0.00" /></label>
+              <label className="text-xs text-slate-400">Tax collected<input type="number" inputMode="decimal" value={cx.taxCollected} onChange={e => cx.setTaxCollected(e.target.value)} onFocus={selectOnFocus} className={input} placeholder="0.00" /></label>
             </div>
           )}
           {cx.mixedPaymentMismatch && (
@@ -320,7 +321,7 @@ export const MobileCheckout: React.FC<Props> = (props) => {
           )}
           <input value={cx.paymentNotes} onChange={e => cx.setPaymentNotes(e.target.value)} placeholder="Payment notes (optional)" className={input} />
           <label className="block text-sm text-slate-500 dark:text-slate-400">Deposit / partial payment (optional)
-            <input type="number" inputMode="decimal" min="0" value={cx.deposit} onChange={e => cx.setDeposit(e.target.value)} placeholder={`Blank if paying in full (${money(cx.totalPaid)})`} className={input} />
+            <input type="number" inputMode="decimal" min="0" value={cx.deposit} onChange={e => cx.setDeposit(e.target.value)} onFocus={selectOnFocus} placeholder={`Blank if paying in full (${money(cx.totalPaid)})`} className={input} />
           </label>
           {cx.hasZeroPricedDevice && (
             <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-500/40 rounded-xl p-3 text-sm">
@@ -409,7 +410,7 @@ export const MobileCheckout: React.FC<Props> = (props) => {
             )}
           </div>
           <div className="grid grid-cols-2 gap-2">
-            <input type="number" inputMode="decimal" value={cx.custom.unitPrice} onChange={e => cx.setCustom(c => ({ ...c, unitPrice: e.target.value }))} placeholder="Unit price" className={input} />
+            <input type="number" inputMode="decimal" value={cx.custom.unitPrice} onChange={e => cx.setCustom(c => ({ ...c, unitPrice: e.target.value }))} onFocus={selectOnFocus} placeholder="Unit price" className={input} />
             <input type="number" inputMode="numeric" value={cx.custom.quantity} onChange={e => cx.setCustom(c => ({ ...c, quantity: e.target.value }))} placeholder="Qty" className={input} />
           </div>
           <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300"><input type="checkbox" checked={cx.custom.taxable} onChange={e => cx.setCustom(c => ({ ...c, taxable: e.target.checked }))} className="rounded" /> Taxable</label>
