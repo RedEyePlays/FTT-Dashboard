@@ -3,6 +3,11 @@ export type ItemKind = 'device' | 'accessory';
 
 export type DeviceType = 'Phone' | 'Tablet' | 'Laptop' | 'Console' | 'Watch' | 'Other';
 
+// External marketplaces an item might ALSO be listed on while in-store —
+// see domain/listing.ts (labels, warning/reminder logic) and
+// InventoryItem.listedPlatforms.
+export type ListingPlatform = 'bestbuy' | 'kijiji' | 'facebook' | 'ebay' | 'other';
+
 // 'pending_repair' doubles as auto-inventory's "In Repair" (a device with an
 // open ticket under an auto_inventory batch — domain/autoInventory.ts) and
 // 'ready' as its "Available for sale" once that ticket completes, rather than
@@ -41,6 +46,14 @@ export interface InventoryItem {
   targetSalePrice?: number;
   deviceStatus?: DeviceStatus;
   listed?: boolean; // posted for sale (marketplace/storefront) — independent of deviceStatus
+  // Which external platform(s) this item is ALSO currently listed on (multiple
+  // allowed) — see domain/listing.ts. Distinct from `listed` (a generic
+  // "posted somewhere" flag) and from a sale's `platformName` (which platform
+  // a completed sale went through): this is "still live elsewhere right now,"
+  // the double-sell risk a Quick Sale warns about. Cleared automatically the
+  // moment the item sells in-store (see hooks/useCheckout.ts's handleCheckout)
+  // since it's no longer available anywhere at that point.
+  listedPlatforms?: ListingPlatform[];
 
   // --- Auto-inventory (domain/autoInventory.ts) ---
   // Normalized identity used for IMEI/serial matching — always kept in sync

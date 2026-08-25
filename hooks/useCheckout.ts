@@ -1,9 +1,10 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
-import { InventoryItem, ItemKind, DeviceType, SalesTransaction, Customer, Repair } from '../types';
+import { InventoryItem, ItemKind, DeviceType, SalesTransaction, Customer, Repair, ListingPlatform } from '../types';
 import { getPOSSettings, getStoreProfile } from '../components/SettingsModal';
 import { newId } from '../domain/ids';
 import { kindOf, getDeviceDisplayName } from '../domain/inventory';
 import { isZeroPricedDevice as isZeroPricedLine, cartHasZeroPricedDevice, searchCheckoutInventory, salesBalanceOwing } from '../domain/pos';
+import { hasListedElsewhere } from '../domain/listing';
 import { RepairSalePrefill, repairSalePrefill, isRepairOpen, matchesRepair } from '../domain/repairs';
 import { printSalesReceipt } from '../services/salesReceipt';
 import { PRINT_PREVIEW_BAR_STYLE, PRINT_PREVIEW_BAR_HTML } from '../services/printPreview';
@@ -45,7 +46,14 @@ export interface CartLine {
   imei?: string;
   notes?: string;
   addToInventory?: boolean;
+  // Snapshot of the source item's InventoryItem.listedPlatforms at add-to-cart
+  // time (domain/listing.ts) — drives the pre-checkout double-sell warning.
+  listedPlatforms?: ListingPlatform[];
 }
+
+// A device sold that was flagged listed elsewhere — surfaced on the post-sale
+// confirmation screen as a delist reminder (see handleCheckout).
+export interface DelistReminder { name: string; platforms: ListingPlatform[] }
 
 interface Args {
   inventory: InventoryItem[];
@@ -76,6 +84,14 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
   const [confirmed, setConfirmed] = useState(false);
   // Explicit override to allow completing a sale that has a $0 device line.
   const [allowZeroPrice, setAllowZeroPrice] = useState(false);
+  // Explicit override to allow completing a sale that has a device flagged
+  // listed elsewhere (domain/listing.ts) — same non-blocking-but-acknowledged
+  // pattern as the $0-price safeguard above.
+  const [allowListedElsewhereSale, setAllowListedElsewhereSale] = useState(false);
+  // Sold devices that were flagged listed elsewhere, captured at the moment of
+  // checkout so the confirmation screen can remind the seller to delist them —
+  // guaranteed to surface at least once, independent of the Firestore write.
+  const [delistReminders, setDelistReminders] = useState<DelistReminder[]>([]);
 
   const [platformName, setPlatformName] = useState('None / In-Store');
   const [platformFeePercent, setPlatformFeePercent] = useState('0');
@@ -233,13 +249,19 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
   const hasZeroPricedDevice = cartHasZeroPricedDevice(cart);
   const blockedByZeroPrice = hasZeroPricedDevice && !allowZeroPrice;
 
+  // Listed-elsewhere safeguard: any device line flagged as also listed on an
+  // external platform (domain/listing.ts) blocks checkout until acknowledged —
+  // guards against selling something that's actually already sold there.
+  const hasListedElsewhereDevice = hasListedElsewhere(cart.filter(l => l.kind === 'device'));
+  const blockedByListedElsewhere = hasListedElsewhereDevice && !allowListedElsewhereSale;
+
   // ---- mutations ----
   const addDevice = (i: InventoryItem) => {
     setCart(c => [...c, {
       key: uid(), inventoryId: i.id, kind: 'device', name: getDeviceDisplayName(i),
       code: i.sku || i.imei, quantity: 1, maxQty: 1, deviceType: i.deviceType,
       unitPrice: i.targetSalePrice || 0, purchaseCost: i.purchaseCost, repairCost: i.repairCost || 0,
-      taxable: true, discount: 0,
+      taxable: true, discount: 0, listedPlatforms: i.listedPlatforms,
     }]);
     setPicker(null); setSearch('');
   };
@@ -344,11 +366,12 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
 
   // ---- checkout ----
   const handleCheckout = async () => {
-    if (cart.length === 0 || blockedByZeroPrice) return;
+    if (cart.length === 0 || blockedByZeroPrice || blockedByListedElsewhere) return;
     const transactionId = uid();
     const soldRows: InventoryItem[] = [];
     const accessoryQtys: Record<string, number> = {};
     const newInventoryItems: InventoryItem[] = [];
+    const delistReminders: DelistReminder[] = [];
 
     for (const l of cart) {
       const saleShare = lineSubtotal(l);
@@ -397,11 +420,19 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
       } else {
         const existing = inventory.find(i => i.id === l.inventoryId);
         // Layaway: mark the device reserved and leave its sale date empty so it
-        // isn't recognized as a completed sale until the balance is paid.
+        // isn't recognized as a completed sale until the balance is paid — the
+        // device isn't actually sold yet, so its listed-elsewhere flag (if any)
+        // stays untouched until the balance is paid off and it really sells.
+        const soldNow = !isLayaway && (existing?.listedPlatforms?.length || 0) > 0;
+        if (soldNow) delistReminders.push({ name: existing!.item || existing!.sku || l.name, platforms: existing!.listedPlatforms! });
         if (existing) soldRows.push({
           ...existing, ...common, salePrice: saleShare,
           deviceStatus: isLayaway ? 'reserved' : 'sold',
           soldDate: isLayaway ? '' : soldDate,
+          // Sold in-store: no longer listed anywhere, clear the flag (see
+          // domain/listing.ts). The delist reminder captured above is what
+          // surfaces the platforms it needs manually taking down from.
+          listedPlatforms: soldNow ? [] : existing.listedPlatforms,
         });
       }
     }
@@ -429,6 +460,7 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
 
     onComplete({ soldRows, accessoryQtys, transaction, customer, newInventoryItems });
     setLastTx(transaction);
+    setDelistReminders(delistReminders);
     setConfirmed(true);
     // Opt-in auto-print: only when the tech ticked "Print receipt" at checkout.
     // Prints the just-built transaction (state's lastTx isn't set yet this tick).
@@ -442,6 +474,7 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
     setPlatformName('None / In-Store'); setPlatformFeePercent('0');
     setLastTx(null); setShowTx(false); setConfirmed(false);
     setCustom(emptyCustom()); setShowCustom(false); setAllowZeroPrice(false);
+    setAllowListedElsewhereSale(false); setDelistReminders([]);
     setTimeout(() => scanRef.current?.focus(), 0);
   };
 
@@ -571,6 +604,7 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
     taxRate, feePercent, previousPurchases, availableDevices, availableAccessories,
     lineSubtotal, subtotal, discountTotal, purchaseCostTotal, repairCostTotal, totalCost, taxableBase, taxApplies, tax, platformFee, totalPaid, netProfit,
     isZeroPricedDevice, hasZeroPricedDevice, allowZeroPrice, setAllowZeroPrice, blockedByZeroPrice,
+    hasListedElsewhereDevice, allowListedElsewhereSale, setAllowListedElsewhereSale, blockedByListedElsewhere, delistReminders,
     addDevice, addAccessory, updateLine, removeLine, num, addCustomItem, handleScan, handleCheckout, reset, printReceipt, printInvoice, emailReceipt, soldDeviceRows,
     scanResults, addScanResult,
     eligibleRepairs, repairMatches, addRepair,

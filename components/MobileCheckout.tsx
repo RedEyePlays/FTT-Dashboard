@@ -8,6 +8,7 @@ import { InventoryItem, Customer, DeviceType, Repair } from '../types';
 import { RepairSalePrefill } from '../domain/repairs';
 import { getDeviceDisplayName, suggestedSalePrice, PriceSuggestion } from '../domain/inventory';
 import { formatPhoneInput } from '../domain/phone';
+import { listingPlatformsLabel } from '../domain/listing';
 import { useCheckout, CartCheckout, CustomCategory, CUSTOM_DEVICE_TYPES } from '../hooks/useCheckout';
 import { CustomerSearchInput } from './CustomerSearchInput';
 // Lazy: defers jsPDF (~390 kB) until a label is actually printed.
@@ -99,6 +100,14 @@ export const MobileCheckout: React.FC<Props> = (props) => {
             </>
           ) : null}
         </div>
+        {cx.delistReminders.length > 0 && (
+          <div className="w-full max-w-sm bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-500/40 rounded-2xl p-4 text-left text-sm">
+            <p className="flex items-center gap-2 font-semibold text-amber-800 dark:text-amber-300"><AlertTriangle className="w-4 h-4" /> Remember to delist</p>
+            <ul className="mt-1.5 space-y-1 text-amber-700/90 dark:text-amber-300/90">
+              {cx.delistReminders.map((r, i) => <li key={i}>{r.name} — {listingPlatformsLabel(r.platforms)}</li>)}
+            </ul>
+          </div>
+        )}
         <div className="grid grid-cols-1 gap-2 w-full max-w-sm">
           <button onClick={() => cx.printReceipt()} className="flex items-center justify-center gap-2 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold"><Printer className="w-4 h-4" /> Print Receipt</button>
           <button onClick={cx.printInvoice} className="flex items-center justify-center gap-2 py-3 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-sm font-medium"><FileText className="w-4 h-4" /> Print Invoice</button>
@@ -312,6 +321,17 @@ export const MobileCheckout: React.FC<Props> = (props) => {
               <label className="flex items-center gap-2 mt-2 text-amber-800 dark:text-amber-300"><input type="checkbox" checked={cx.allowZeroPrice} onChange={e => cx.setAllowZeroPrice(e.target.checked)} className="rounded" /> Sell the $0 device anyway</label>
             </div>
           )}
+          {cx.hasListedElsewhereDevice && (
+            <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-500/40 rounded-xl p-3 text-sm">
+              <p className="flex items-center gap-2 font-semibold text-amber-800 dark:text-amber-300"><AlertTriangle className="w-4 h-4" /> Listed elsewhere</p>
+              {cx.cart.filter(l => l.kind === 'device' && (l.listedPlatforms?.length || 0) > 0).map(l => (
+                <p key={l.key} className="text-xs text-amber-700/80 dark:text-amber-300/80 mt-1">
+                  {l.name} is listed on {listingPlatformsLabel(l.listedPlatforms)}. Confirm it's not already sold there before completing this sale.
+                </p>
+              ))}
+              <label className="flex items-center gap-2 mt-2 text-amber-800 dark:text-amber-300"><input type="checkbox" checked={cx.allowListedElsewhereSale} onChange={e => cx.setAllowListedElsewhereSale(e.target.checked)} className="rounded" /> Confirmed — not already sold elsewhere</label>
+            </div>
+          )}
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-4 space-y-1.5 text-sm">
             <div className="flex justify-between"><span className="text-slate-500 dark:text-slate-400">Subtotal</span><span className="text-slate-800 dark:text-slate-100">{money(cx.subtotal)}</span></div>
             <div className="flex justify-between"><span className="text-slate-500 dark:text-slate-400">Tax</span><span className="text-slate-600 dark:text-slate-300">{money(cx.tax)}</span></div>
@@ -339,7 +359,7 @@ export const MobileCheckout: React.FC<Props> = (props) => {
         {step < 3 ? (
           <button onClick={next} disabled={!canNext} className="ml-auto px-6 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white rounded-xl text-sm font-semibold">Next</button>
         ) : (
-          <button onClick={cx.handleCheckout} disabled={cx.cart.length === 0 || cx.blockedByZeroPrice} className="ml-auto px-6 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white rounded-xl text-sm font-semibold flex items-center gap-2"><CheckCircle className="w-4 h-4" /> {cx.isLayaway ? 'Take Deposit' : 'Complete Sale'}</button>
+          <button onClick={cx.handleCheckout} disabled={cx.cart.length === 0 || cx.blockedByZeroPrice || cx.blockedByListedElsewhere} className="ml-auto px-6 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white rounded-xl text-sm font-semibold flex items-center gap-2"><CheckCircle className="w-4 h-4" /> {cx.isLayaway ? 'Take Deposit' : 'Complete Sale'}</button>
         )}
       </div>
 
