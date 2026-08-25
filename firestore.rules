@@ -70,6 +70,16 @@ service cloud.firestore {
         allow create, update: if isStaffOf(ws);
         allow delete: if isOwnerOf(ws);
       }
+      // Auto-inventory identity index (domain/autoInventory.ts /
+      // commitAutoInventory): one doc per normalized IMEI/serial, written only
+      // from inside that transaction alongside the inventory record it points
+      // at. Same access as inventory itself — staff write, owner-only delete
+      // (matches "never hard-delete inventory records from a ticket action").
+      match /inventoryImeiIndex/{id} {
+        allow read: if activeMemberOf(ws);
+        allow create, update: if isStaffOf(ws);
+        allow delete: if isOwnerOf(ws);
+      }
 
       // Audit logs are append-only: any active member (incl. technicians) may
       // create; no update/delete from clients.

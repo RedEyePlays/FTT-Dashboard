@@ -1,4 +1,4 @@
-import { InventoryItem, RepairBatch } from '../types';
+import { DeviceStatus, InventoryItem, RepairBatch } from '../types';
 
 // Auto-inventory: when a device repair ticket is created under a batch with
 // `autoInventory = true` (e.g. an "FTT Personal" batch — never hardcoded by
@@ -94,3 +94,13 @@ export function decideAutoInventory(
   const match = findAutoInventoryMatch(normalized, inventory);
   return match ? { action: 'attach', match, normalized } : { action: 'create', normalized };
 }
+
+/** UI-facing summary of what a save just did, for RepairsView to surface as a
+ *  blocking alert ('blocked') or a save-succeeded notice ('warning' /
+ *  'created' / 'attached'). Built by the App-level save handler, which is the
+ *  only place with both the decision and the transaction's real outcome. */
+export type AutoInventoryNotice =
+  | { kind: 'blocked'; message: string }
+  | { kind: 'warning'; message: string }
+  | { kind: 'created'; sku: string }
+  | { kind: 'attached'; sku: string; previousStatus?: DeviceStatus };
