@@ -8,7 +8,7 @@ import { REPAIR_STATUS_LABEL } from '../domain/repairs';
 import { Dpi, buildZpl } from '../services/zpl';
 import { detectZebra, sendZpl, ZebraDetect } from '../services/zebra';
 import { LabelContent, labelPreview, labelPrintDoc, mmOf } from '../services/labelLayout';
-import { getLabelSizes } from './SettingsModal';
+import { getLabelSizes, getStoreProfile } from './SettingsModal';
 
 interface Props {
   repair: Repair;
@@ -96,8 +96,9 @@ export const RepairLabelModal: React.FC<Props> = ({ repair: r, context, onClose,
     });
   };
 
+  const storeName = getStoreProfile().storeName;
   const content: LabelContent = {
-    org: 'FlipThatTech',
+    org: storeName,
     code: repairId,
     device,
     sub: repairType || undefined,
@@ -119,8 +120,13 @@ export const RepairLabelModal: React.FC<Props> = ({ repair: r, context, onClose,
     setStatus(null);
     const dev = selectedDevice;
     if (!zebra.host || !dev) { setStatus({ kind: 'err', msg: 'No Zebra printer selected.' }); return; }
+    // Status only goes on the label when the toggle is on — same rule the
+    // Browser Print / PDF paths already follow (settings.showStatus gates
+    // `opts.showStatus` for those). Previously this always included statusLabel
+    // whenever one existed, ignoring the toggle entirely.
+    const issueLine = settings.showStatus ? (statusLabel || r.issue) : r.issue;
     const zpl = buildZpl(
-      { org: 'FlipThatTech', idLine: repairId, device, imei: r.imei, issue: statusLabel || r.issue, qrData: barcodeValue },
+      { org: storeName, idLine: repairId, device, imei: r.imei, issue: issueLine, qrData: barcodeValue },
       media, settings.dpi, settings.density === '' ? undefined : settings.density,
     );
     try {
@@ -137,7 +143,7 @@ export const RepairLabelModal: React.FC<Props> = ({ repair: r, context, onClose,
     const pdf = new jsPDF({ unit: 'mm', format: [w, h], orientation: w > h ? 'landscape' : 'portrait' });
     const pad = media.dymo ? 1.3 : 1.6;
     const qrS = media.dymo ? h - pad * 2 - (settings.showBarcode ? 6.5 : 0) : Math.min(w, h) * (media.h >= 3 ? 0.42 : 0.6);
-    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(7); pdf.text('FlipThatTech', pad, pad + 2.6);
+    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(7); pdf.text(storeName, pad, pad + 2.6);
     pdf.setFont('courier', 'bold'); pdf.setFontSize(media.dymo ? 20 : 14); pdf.text(repairId.slice(0, 22), pad, pad + 9);
     pdf.setFont('helvetica', 'bold'); pdf.setFontSize(media.dymo ? 12 : 10); pdf.text(device.slice(0, 30), pad, pad + 14.5);
     pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8);

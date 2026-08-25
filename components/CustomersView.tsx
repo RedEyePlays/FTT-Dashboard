@@ -548,7 +548,7 @@ const ReturnSection: React.FC<{ total: number; onReturn: (opts: { restockingFee?
 
 /* ---------------- Repair ticket modal ---------------- */
 const TicketModal: React.FC<{ repair: Repair; tech?: string; customer: Customer; onClose: () => void }> = ({ repair: r, tech, customer, onClose }) => (
-  <Modal title={`Repair ${r.repairNumber}`} onClose={onClose} onPrint={() => printRetailReceipt(r, 'repair')} onCopyLink={() => navigator.clipboard.writeText(statusPageUrl(r.repairNumber))}>
+  <Modal title={`Repair ${r.repairNumber}`} onClose={onClose} onPrint={() => printRetailReceipt(r, 'repair', { storeName: getStoreProfile().storeName })} onCopyLink={() => navigator.clipboard.writeText(statusPageUrl(r.repairNumber))}>
     <div className="space-y-1.5 text-sm">
       <Row label="Device" value={[r.brand, r.model].filter(Boolean).join(' ') || r.deviceType || 'Device'} />
       <Row label="IMEI / Serial" value={r.imei || '—'} />

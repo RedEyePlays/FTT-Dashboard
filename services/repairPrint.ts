@@ -3,9 +3,13 @@ import { REPAIR_STATUS_LABEL, balanceOwing, batchTotals, repairPartsCost, repair
 import { PRINT_PREVIEW_BAR_STYLE, PRINT_PREVIEW_BAR_HTML } from './printPreview';
 
 // Reuses the app's print pattern: open a window, write inline-styled HTML, print.
-const SHOP = 'FlipThatTech';
 const money = (n?: number) => `$${(n || 0).toFixed(2)}`;
 const esc = (s?: string) => (s || '').replace(/[<>&]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c] as string));
+// Store name shown as the header on every document below — falls back to the
+// app default when the caller doesn't pass the workspace's configured Store
+// Profile name (see components/SettingsModal.tsx's getStoreProfile), the same
+// opts.storeName pattern used by salesReceipt/shelfTag/settlementInvoice.
+const shopName = (storeName?: string) => esc(storeName || 'FlipThatTech');
 
 // Regular-paper documents (wholesale batch intake/invoice/summary, device
 // sheet) — NOT thermal, no forced @page size; the browser's normal print
@@ -85,13 +89,13 @@ const cosmeticBlock = (r: Repair) => {
 };
 
 // --- Retail receipts ---
-export const printRetailReceipt = (r: Repair, kind: 'intake' | 'repair' | 'pickup') => {
+export const printRetailReceipt = (r: Repair, kind: 'intake' | 'repair' | 'pickup', opts: { storeName?: string } = {}) => {
   const title = kind === 'intake' ? 'Repair Intake' : kind === 'repair' ? 'Repair Receipt' : 'Pickup Receipt';
   const bal = balanceOwing(r);
   const money$ = `<h3>Charges</h3>${row('Repair Price', money(r.repairPrice))}${r.deposit ? row('Deposit', money(r.deposit)) : ''}<div class="row b tot"><span>Balance Owing</span><span>${money(bal)}</span></div>`;
   const warranty = kind === 'pickup' && r.warrantyUntil ? `<h3>Warranty</h3>${row('Covered until', r.warrantyUntil)}${r.warrantyDays ? row('Period', `${r.warrantyDays} days`) : ''}` : '';
   const body = `
-    <h2>${SHOP}</h2><div class="sub">${title}<br/>${esc(r.repairNumber)} · ${esc(r.date)}</div>
+    <h2>${shopName(opts.storeName)}</h2><div class="sub">${title}<br/>${esc(r.repairNumber)} · ${esc(r.date)}</div>
     <h3>Customer</h3>${row('Name', r.customerName)}${row('Phone', r.customerPhone)}${row('Email', r.customerEmail)}
     ${deviceBlock(r)}
     <h3>Issue</h3><div class="row"><span>${esc(r.issue) || '—'}</span></div>
@@ -110,7 +114,7 @@ export const printRetailReceipt = (r: Repair, kind: 'intake' | 'repair' | 'picku
 // deliberately separate from the intake/repair/pickup receipts and the final
 // invoice. Itemizes estimated parts + labor, is clearly marked ESTIMATE, and
 // carries a "not a final bill" disclaimer so it can never be mistaken for one.
-export const printRepairEstimate = (r: Repair, opts?: { validDays?: number }) => {
+export const printRepairEstimate = (r: Repair, opts?: { validDays?: number; storeName?: string }) => {
   const parts = r.parts && r.parts.length ? r.parts : [];
   const partsCost = repairPartsCost(r);
   const labor = repairLabor(r);
@@ -119,7 +123,7 @@ export const printRepairEstimate = (r: Repair, opts?: { validDays?: number }) =>
     ? parts.map(p => `<tr><td>${esc(partName(p))}</td><td class="r">${p.quantity || 1}</td><td class="r">${money((p.unitCost || 0) * (p.quantity || 1))}</td></tr>`).join('')
     : `<tr><td>Parts (estimated)</td><td class="r"></td><td class="r">${money(partsCost)}</td></tr>`;
   const body = `
-    <h2>${SHOP}</h2><div class="sub">REPAIR ESTIMATE — not a final bill<br/>${esc(r.repairNumber)} · ${esc(r.date)}</div>
+    <h2>${shopName(opts?.storeName)}</h2><div class="sub">REPAIR ESTIMATE — not a final bill<br/>${esc(r.repairNumber)} · ${esc(r.date)}</div>
     <div class="estamp">ESTIMATE</div>
     <h3>Customer</h3>${row('Name', r.customerName)}${row('Phone', r.customerPhone)}${row('Email', r.customerEmail)}
     ${deviceBlock(r)}
@@ -136,29 +140,29 @@ export const printRepairEstimate = (r: Repair, opts?: { validDays?: number }) =>
     <div class="row b tot"><span>Estimated Total</span><span>${money(r.repairPrice)}</span></div>
     ${r.estimatedCompletion ? row('Est. Completion', r.estimatedCompletion) : ''}
     <p class="disc"><strong>This is an estimate, not a final bill.</strong> Prices are approximate and may change once the device is fully diagnosed or if additional parts/work are required. We will contact you for approval before exceeding this estimate. Estimate valid for ${validDays} days from the date above. No work has been authorized or performed by this document.</p>
-    <p class="foot">Questions? Contact ${SHOP}.</p>`;
+    <p class="foot">Questions? Contact ${shopName(opts?.storeName)}.</p>`;
   openThermalPrint(`Estimate ${r.repairNumber}`, body);
 };
 
 // --- Wholesale documents ---
-export const printBatchIntake = (batch: RepairBatch, devices: Repair[]) => {
+export const printBatchIntake = (batch: RepairBatch, devices: Repair[], opts: { storeName?: string } = {}) => {
   const rows = devices.map((r, i) => `<tr><td>${i + 1}</td><td>${esc([r.brand, r.model].filter(Boolean).join(' ') || r.deviceType || '')}</td><td>${esc(r.imei)}</td><td>${esc(r.issue)}</td></tr>`).join('');
   const body = `
-    <h2>${SHOP}</h2><div class="sub">Batch Intake Sheet<br/>${esc(batch.batchNumber)} · ${esc(batch.dateReceived)}</div>
+    <h2>${shopName(opts.storeName)}</h2><div class="sub">Batch Intake Sheet<br/>${esc(batch.batchNumber)} · ${esc(batch.dateReceived)}</div>
     <h3>Business</h3>${row('Company', batch.companyName)}${row('Contact', batch.contactPerson)}${row('Phone', batch.phone)}${row('Email', batch.email)}
     <h3>Devices Received (${devices.length})</h3>
     <table><thead><tr><th>#</th><th>Device</th><th>IMEI/Serial</th><th>Issue</th></tr></thead><tbody>${rows}</tbody></table>
     ${batch.notes ? `<h3>Notes</h3><div class="row"><span>${esc(batch.notes)}</span></div>` : ''}
-    <p class="foot">Received by ${SHOP}</p>`;
+    <p class="foot">Received by ${shopName(opts.storeName)}</p>`;
   openPrint(`Batch Intake ${batch.batchNumber}`, 640, body);
 };
 
-export const printBatchInvoice = (batch: RepairBatch, devices: Repair[]) => {
+export const printBatchInvoice = (batch: RepairBatch, devices: Repair[], opts: { storeName?: string } = {}) => {
   const t = batchTotals(batch, devices);
   const rows = devices.filter(r => r.status !== 'cancelled').map((r, i) =>
     `<tr><td>${i + 1}</td><td>${esc([r.brand, r.model].filter(Boolean).join(' ') || r.deviceType || '')}</td><td>${esc(r.imei)}</td><td>${esc(r.issue)}</td><td class="r">${money(r.repairPrice)}</td></tr>`).join('');
   const body = `
-    <h2>${SHOP}</h2><div class="sub">Batch Invoice<br/>${esc(batch.batchNumber)} · ${esc(batch.dateReceived)}</div>
+    <h2>${shopName(opts.storeName)}</h2><div class="sub">Batch Invoice<br/>${esc(batch.batchNumber)} · ${esc(batch.dateReceived)}</div>
     <h3>Bill To</h3>${row('Company', batch.companyName)}${row('Contact', batch.contactPerson)}${row('Phone', batch.phone)}
     <h3>Repairs (${t.count})</h3>
     <table><thead><tr><th>#</th><th>Device</th><th>IMEI/Serial</th><th>Repair</th><th class="r">Price</th></tr></thead><tbody>${rows}</tbody></table>
@@ -173,7 +177,7 @@ export const printBatchInvoice = (batch: RepairBatch, devices: Repair[]) => {
 
 // --- Per-device repair sheet (retail ticket or wholesale device) ---
 // Clean, printable on normal paper; compact enough to fold as a device label.
-export const printDeviceSheet = (r: Repair, ctx?: { companyName?: string; batchNumber?: string }) => {
+export const printDeviceSheet = (r: Repair, ctx?: { companyName?: string; batchNumber?: string; storeName?: string }) => {
   const isRetail = r.type === 'retail';
   const who = isRetail ? (r.customerName || 'Walk-in') : (ctx?.companyName || 'Wholesale');
   const num = isRetail ? r.repairNumber : (ctx?.batchNumber ? `${ctx.batchNumber} · ${r.repairNumber}` : r.repairNumber);
@@ -182,7 +186,7 @@ export const printDeviceSheet = (r: Repair, ctx?: { companyName?: string; batchN
     ? `${row('Repair Price', money(r.repairPrice))}${r.deposit ? row('Deposit', money(r.deposit)) : ''}<div class="row b"><span>Balance Owing</span><span>${money(balanceOwing(r))}</span></div>`
     : row('Repair Price', money(r.repairPrice));
   const body = `
-    <h2>${SHOP}</h2><div class="sub">Repair Device Sheet</div>
+    <h2>${shopName(ctx?.storeName)}</h2><div class="sub">Repair Device Sheet</div>
     <div class="row b" style="font-size:15px;margin-top:4px"><span>${esc(num)}</span><span>${esc(REPAIR_STATUS_LABEL[r.status])}</span></div>
     <div class="row"><span class="k">${isRetail ? 'Customer' : 'Company / Store'}</span><span>${esc(who)}</span></div>
     ${isRetail && r.customerPhone ? row('Phone', r.customerPhone) : ''}
@@ -198,13 +202,13 @@ export const printDeviceSheet = (r: Repair, ctx?: { companyName?: string; batchN
   openPrint(`Device Sheet ${r.repairNumber}`, 300, body);
 };
 
-export const printBatchSummary = (batch: RepairBatch, devices: Repair[]) => {
+export const printBatchSummary = (batch: RepairBatch, devices: Repair[], opts: { storeName?: string } = {}) => {
   const rows = devices.map((r, i) => `<tr><td>${i + 1}</td><td>${esc([r.brand, r.model].filter(Boolean).join(' ') || r.deviceType || '')}</td><td>${esc(r.imei)}</td><td>${esc(REPAIR_STATUS_LABEL[r.status])}</td><td class="r">${money(r.repairPrice)}</td></tr>`).join('');
   const body = `
-    <h2>${SHOP}</h2><div class="sub">Completed Repair Summary<br/>${esc(batch.batchNumber)}</div>
+    <h2>${shopName(opts.storeName)}</h2><div class="sub">Completed Repair Summary<br/>${esc(batch.batchNumber)}</div>
     <h3>Business</h3>${row('Company', batch.companyName)}${row('Contact', batch.contactPerson)}
     <h3>Devices (${devices.length})</h3>
     <table><thead><tr><th>#</th><th>Device</th><th>IMEI/Serial</th><th>Status</th><th class="r">Price</th></tr></thead><tbody>${rows}</tbody></table>
-    <p class="foot">${SHOP}</p>`;
+    <p class="foot">${shopName(opts.storeName)}</p>`;
   openPrint(`Batch Summary ${batch.batchNumber}`, 640, body);
 };

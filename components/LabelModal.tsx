@@ -6,7 +6,7 @@ import { jsPDF } from 'jspdf';
 import { InventoryItem, DeviceStatus } from '../types';
 import { getDeviceDisplayName, kindOf } from '../domain/inventory';
 import { LabelContent, labelPreview, labelPrintDoc, mmOf } from '../services/labelLayout';
-import { getLabelSizes } from './SettingsModal';
+import { getLabelSizes, getStoreProfile } from './SettingsModal';
 
 interface Props {
   item: InventoryItem;
@@ -109,8 +109,9 @@ export const LabelModal: React.FC<Props> = ({ item, onClose }) => {
     });
   };
 
+  const storeName = getStoreProfile().storeName;
   const content: LabelContent = {
-    org: 'FlipThatTech',
+    org: storeName,
     code: isAccessory ? (upc || sku) : sku,
     device: name,
     sub: [item.storage, item.color].filter(Boolean).join(' · ') || undefined,
@@ -150,7 +151,7 @@ export const LabelModal: React.FC<Props> = ({ item, onClose }) => {
 
     const pad = media.dymo ? 1.3 : 1.6;
     const qrS = media.dymo ? h - pad * 2 - (prefs.showBarcode ? 6.5 : 0) : Math.min(w, h) * (media.h >= 3 ? 0.42 : 0.6);
-    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(7); pdf.text('FlipThatTech', pad, pad + 2.6);
+    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(7); pdf.text(storeName, pad, pad + 2.6);
     pdf.setFont('courier', 'bold'); pdf.setFontSize(media.dymo ? 20 : 14); pdf.text(sku, pad, pad + 9);
     pdf.setFont('helvetica', 'bold'); pdf.setFontSize(media.dymo ? 12 : 10); pdf.text(name.slice(0, 30), pad, pad + 14.5);
     pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8);
