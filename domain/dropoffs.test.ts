@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { runnerBalance, settleableDropOffs, settlementTotals, dropOffPurchaseCost, settlementDrawerEffect } from './dropoffs';
+import { runnerBalance, settleableDropOffs, settlementTotals, dropOffPurchaseCost, settlementDrawerEffect, dropOffAcceptDrawerEffect } from './dropoffs';
 import { DropOff, DropOffStatus, PaidBy, Settlement } from '../types';
 
 const d = (p: Partial<DropOff>): DropOff => ({
@@ -101,5 +101,24 @@ describe('settlementDrawerEffect', () => {
   it('produces no entry for a zero (or near-zero) amount', () => {
     expect(settlementDrawerEffect({ paymentMethod: 'cash', amountPaid: 0 })).toBeNull();
     expect(settlementDrawerEffect({ paymentMethod: 'cash', amountPaid: 0.001 })).toBeNull();
+  });
+});
+
+describe('dropOffAcceptDrawerEffect', () => {
+  it('a store-paid drop-off reduces expected drawer cash by the purchase price on accept', () => {
+    expect(dropOffAcceptDrawerEffect({ paidBy: 'store', purchasePrice: 275 })).toEqual({ kind: 'cashOut', amount: 275 });
+  });
+
+  it('a runner-paid drop-off never touches the drawer at accept — reimbursed later at settlement', () => {
+    expect(dropOffAcceptDrawerEffect({ paidBy: 'runner', purchasePrice: 275 })).toBeNull();
+  });
+
+  it('produces no entry for a zero (or near-zero) store-paid purchase price', () => {
+    expect(dropOffAcceptDrawerEffect({ paidBy: 'store', purchasePrice: 0 })).toBeNull();
+    expect(dropOffAcceptDrawerEffect({ paidBy: 'store', purchasePrice: 0.001 })).toBeNull();
+  });
+
+  it('treats a missing purchase price as zero', () => {
+    expect(dropOffAcceptDrawerEffect({ paidBy: 'store', purchasePrice: undefined as any })).toBeNull();
   });
 });

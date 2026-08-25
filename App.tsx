@@ -65,7 +65,7 @@ const CloseDrawerModal = lazy(() => import('./components/CloseDrawerModal').then
 import { openEntryFor, isOnBreak, periodPayFor, paidKey, toISODate, PayPeriod, correctClockOut, isValidClockOutCorrection } from './domain/timeclock';
 import { buildAlerts } from './domain/alerts';
 import { changedSettingsSections } from './domain/audit';
-import { dropOffPurchaseCost, settlementDrawerEffect } from './domain/dropoffs';
+import { dropOffPurchaseCost, settlementDrawerEffect, dropOffAcceptDrawerEffect } from './domain/dropoffs';
 import { InvSection, DEFAULT_INV_SECTION, invPath, parseInvPath } from './domain/inventoryNav';
 import { viewPath, parseViewPath, isRoutableView } from './domain/appNav';
 import { AppHeader } from './components/AppHeader';
@@ -761,7 +761,10 @@ const App: React.FC = () => {
     await saveMeta(uid, { notes: restoredData.notes || [], tasks: restoredData.tasks || [], skuCounters: restoredData.skuCounters || {} });
   };
 
-  // Add an accepted drop-off into inventory, carrying runner + cost across
+  // Add an accepted drop-off into inventory, carrying runner + cost across.
+  // No cash-drawer effect here — a store-paid purchase already hit the drawer
+  // at Accept (see saveDropOffs' dropOffAcceptDrawerEffect call); logging it
+  // again here would double-count the same cash.
   const handleAddDropOffToInventory = (d: DropOff) => {
     if (!uid || !allow('dropoffs.manage')) return;
     const runner = runnersRef.current.find(r => r.id === d.runnerId);
@@ -784,7 +787,34 @@ const App: React.FC = () => {
   const saveNotes = (n: Note[]) => { setNotes(n); if (uid) saveMeta(uid, { notes: n }); };
   const saveTasks = (t: Task[]) => { setTasks(t); if (uid) saveMeta(uid, { tasks: t }); };
   const saveRunners = (r: Runner[]) => { if (uid && allow('dropoffs.manage')) { syncArray(uid, 'runners', r, runnersRef.current); audit('runner.edit', 'runner'); } };
-  const saveDropOffs = (d: DropOff[]) => { if (uid && allow('dropoffs.manage')) { syncArray(uid, 'dropOffs', d, dropOffsRef.current); audit('dropoff.edit', 'dropOff'); } };
+  // Save the drop-off list (any status change or field edit routes through
+  // here, since DropOffView diffs against one shared array). A drop-off that
+  // just transitioned pending → accepted may hand real cash to the seller
+  // right now (paidBy 'store') — see dropOffAcceptDrawerEffect's contract at
+  // the top of domain/dropoffs.ts: any cash-moving action must log its effect
+  // through a function like it, via commitDrawerRecord, or the till silently
+  // drifts from what's actually in the drawer. Comparing against the previous
+  // array (not just "is accepted now") means this only ever fires once per
+  // drop-off, on the actual transition — editing an already-accepted drop-off
+  // later never re-logs the same cash.
+  const saveDropOffs = (next: DropOff[]) => {
+    if (!uid || !allow('dropoffs.manage')) return;
+    const prev = dropOffsRef.current;
+    const date = new Date().toISOString().split('T')[0];
+    next.forEach(d => {
+      const before = prev.find(p => p.id === d.id);
+      if (before?.status === 'accepted' || d.status !== 'accepted') return; // not a fresh accept
+      const effect = dropOffAcceptDrawerEffect(d);
+      if (!effect) return;
+      const existing = cashReconciliations.find(r => r.date === date);
+      const listKey: 'cashIn' | 'cashOut' = effect.kind;
+      const entry = { id: newId(), amount: effect.amount, note: `Drop-off accepted — ${d.item || d.id}` };
+      commitDrawerRecord(date, { [listKey]: [...(existing?.[listKey] || []), entry] });
+      logActivity(`Cash paid out $${effect.amount.toFixed(2)} — drop-off accepted (${d.item || d.id})`);
+    });
+    syncArray(uid, 'dropOffs', next, prev);
+    audit('dropoff.edit', 'dropOff');
+  };
   // Record one completed runner settlement. Only a 'cash' payment method ever
   // touches the cash drawer — e-transfer/other never do (domain/dropoffs.ts's
   // settlementDrawerEffect is the single source of that decision). Writes
