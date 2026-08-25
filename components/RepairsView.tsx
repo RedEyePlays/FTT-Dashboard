@@ -3,7 +3,7 @@ import {
   Wrench, Plus, Search, X, Trash2, Printer, FileText, Receipt, History as HistoryIcon,
   ArrowLeft, DollarSign, ChevronRight, Building2, ClipboardCheck, PackageCheck, ScrollText, QrCode, BarChart3, Link as LinkIcon, Check,
 } from 'lucide-react';
-import { Repair, RepairBatch, Customer, AuditEntry, RepairStatus, RepairType, DeviceType, RepairPart, AppUser } from '../types';
+import { Repair, RepairBatch, Customer, AuditEntry, RepairStatus, RepairType, DeviceType, RepairPart, AppUser, RepairPurchasePaidBy } from '../types';
 import {
   REPAIR_STATUSES, REPAIR_STATUS_CELL,
   balanceOwing, batchTotals, matchesRepair, matchesBatch, canSaveRepair,
@@ -420,6 +420,7 @@ export const RepairsView: React.FC<Props> = (props) => {
       {drawer && (
         <RepairDrawer key={drawer.repair.id} initial={drawer.repair} isNew={drawer.isNew} canDelete={canDelete}
           auditLogs={auditLogs} customers={props.customers}
+          autoInventoryBatch={!!(drawer.repair.batchId && batches.find(b => b.id === drawer.repair.batchId)?.autoInventory)}
           onClose={() => setDrawer(null)}
           onSave={saveDrawer}
           onCheckoutViaSale={props.onCheckoutViaSale}
@@ -549,8 +550,12 @@ const BatchDetail: React.FC<{
 /* ---------------- Repair drawer ---------------- */
 const RepairDrawer: React.FC<{
   initial: Repair; isNew: boolean; canDelete: boolean; auditLogs: AuditEntry[]; customers: Customer[];
+  // Whether this ticket's wholesale batch has auto_inventory on — gates the
+  // Purchase Cost / Paid By fields, only meaningful while this ticket is the
+  // one about to auto-create its inventory record (see App.tsx's handleSaveRepair).
+  autoInventoryBatch: boolean;
   onClose: () => void; onSave: (r: Repair) => void; onCheckoutViaSale?: (r: Repair) => void; onDelete: () => void; onPrint: (doc: 'intake' | 'repair' | 'pickup') => void; onPrintSheet: () => void; onPrintLabel: () => void; onPrintEstimate: () => void;
-}> = ({ initial, isNew, canDelete, auditLogs, customers, onClose, onSave, onCheckoutViaSale, onDelete, onPrint, onPrintSheet, onPrintLabel, onPrintEstimate }) => {
+}> = ({ initial, isNew, canDelete, auditLogs, customers, autoInventoryBatch, onClose, onSave, onCheckoutViaSale, onDelete, onPrint, onPrintSheet, onPrintLabel, onPrintEstimate }) => {
   const [f, setF] = useState<Repair>(initial);
   const [linkCopied, setLinkCopied] = useState(false);
   // Snapshot the form state at mount for a dirty check, so a stray backdrop/X
@@ -666,6 +671,23 @@ const RepairDrawer: React.FC<{
               {isRetail && <Field label="Warranty (days)"><input type="number" min="0" className={inputCls} value={f.warrantyDays ?? 0} onChange={e => set({ warrantyDays: num(e.target.value) })} /></Field>}
               {isRetail && <Field label="Est. Completion" className="col-span-2"><input type="date" className={inputCls} value={f.estimatedCompletion || ''} onChange={e => set({ estimatedCompletion: e.target.value })} /></Field>}
             </div>
+            {isNew && autoInventoryBatch && (
+              <div className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-800">
+                <p className="text-xs text-slate-400 mb-2">This batch auto-adds devices to inventory — what this device cost flows into its inventory record so profit reflects the real cost, not just $0.</p>
+                <div className="grid grid-cols-2 gap-3">
+                  <Field label="Purchase Cost (optional)"><input type="number" min="0" step="0.01" placeholder="0.00" className={inputCls} value={f.purchaseCost ?? ''} onChange={e => set({ purchaseCost: e.target.value === '' ? undefined : num(e.target.value) })} /></Field>
+                  <Field label="Paid From">
+                    <select className={inputCls} value={f.purchasePaidBy || 'personal'} onChange={e => set({ purchasePaidBy: e.target.value as RepairPurchasePaidBy })}>
+                      <option value="personal">Paid personally / outside store cash</option>
+                      <option value="store">Paid from store cash</option>
+                    </select>
+                  </Field>
+                </div>
+                {!!f.purchaseCost && f.purchasePaidBy === 'store' && (
+                  <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-1.5">Saving will log a ${f.purchaseCost.toFixed(2)} cash-out against today's drawer.</p>
+                )}
+              </div>
+            )}
           </Section>
 
           <Section title="Parts & Labor">

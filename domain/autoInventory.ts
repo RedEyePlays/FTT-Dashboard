@@ -1,4 +1,5 @@
-import { DeviceStatus, InventoryItem, RepairBatch } from '../types';
+import { DeviceStatus, InventoryItem, Repair, RepairBatch } from '../types';
+import { DrawerEffect } from './dropoffs';
 
 // Auto-inventory: when a device repair ticket is created under a batch with
 // `autoInventory = true` (e.g. an "FTT Personal" batch — never hardcoded by
@@ -93,6 +94,29 @@ export function decideAutoInventory(
 
   const match = findAutoInventoryMatch(normalized, inventory);
   return match ? { action: 'attach', match, normalized } : { action: 'create', normalized };
+}
+
+/**
+ * A wholesale device ticket's effect on today's cash drawer when it auto-
+ * creates its inventory record — the ONE place that decides whether entering
+ * a device's purchase cost touches the till. Only 'store' does: that's the
+ * shop paying for the device out of the register right now, the same "cash
+ * actually moved, log it" contract as domain/dropoffs.ts's
+ * dropOffAcceptDrawerEffect and settlementDrawerEffect. 'personal' (paid
+ * outside store cash) never touches the drawer — purchaseCost still applies
+ * to the inventory record's cost basis, it just didn't come out of the till.
+ *
+ * Only relevant when THIS ticket is the one auto-creating the inventory
+ * record (see decideAutoInventory's 'create' outcome) — a ticket that merely
+ * attaches to an existing auto-inventory record never re-spends this cash.
+ */
+export function autoInventoryPurchaseDrawerEffect(
+  r: Pick<Repair, 'purchaseCost' | 'purchasePaidBy'>,
+): DrawerEffect | null {
+  if (r.purchasePaidBy !== 'store') return null;
+  const amount = Math.round((r.purchaseCost || 0) * 100) / 100;
+  if (amount < 0.005) return null;
+  return { kind: 'cashOut', amount };
 }
 
 /** UI-facing summary of what a save just did, for RepairsView to surface as a
