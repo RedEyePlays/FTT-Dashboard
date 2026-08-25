@@ -3,6 +3,10 @@ export type ItemKind = 'device' | 'accessory';
 
 export type DeviceType = 'Phone' | 'Tablet' | 'Laptop' | 'Console' | 'Watch' | 'Other';
 
+// 'pending_repair' doubles as auto-inventory's "In Repair" (a device with an
+// open ticket under an auto_inventory batch — domain/autoInventory.ts) and
+// 'ready' as its "Available for sale" once that ticket completes, rather than
+// adding parallel status values for the same two states.
 export type DeviceStatus =
   | 'pending_purchase'
   | 'pending_repair'
@@ -37,6 +41,21 @@ export interface InventoryItem {
   targetSalePrice?: number;
   deviceStatus?: DeviceStatus;
   listed?: boolean; // posted for sale (marketplace/storefront) — independent of deviceStatus
+
+  // --- Auto-inventory (domain/autoInventory.ts) ---
+  // Normalized identity used for IMEI/serial matching — always kept in sync
+  // with `imei` on every write (never computed only at query/match time), so
+  // matching is a plain equality check against this field. IMEI (15 digits,
+  // Luhn-valid) normalizes to digits-only; anything else is treated as a
+  // serial and normalizes to trimmed/uppercased text.
+  imeiNormalized?: string;
+  autoCreated?: boolean;    // this record was auto-created by a repair ticket, not entered by hand
+  sourceTicketId?: string;  // the repair ticket that created (or most recently attached to) this record
+  batchId?: string;         // the wholesale batch whose auto_inventory ticket created this record
+  // Set when an auto-created record's originating ticket was voided/deleted
+  // and no other ticket references it — flagged instead of hard-deleted so
+  // nothing about inventory ever silently disappears from a ticket action.
+  flaggedForReview?: boolean;
 
   // --- Accessory attributes (stock) ---
   quantity?: number;
@@ -466,7 +485,18 @@ export interface Repair {
   repairNumber: string;         // e.g. RPR-000123
   type: RepairType;
   batchId?: string;             // set for wholesale devices → repairBatches/{id}
-  inventoryId?: string;         // set for internal repairs → inventory/{id} (the device being refurbished)
+  // → inventory/{id}. Set for internal repairs (the device being refurbished),
+  // AND for a wholesale device ticket created under an auto_inventory batch
+  // (see domain/autoInventory.ts) — either a freshly auto-created record, or an
+  // existing one this ticket got attached to by IMEI/serial match.
+  inventoryId?: string;
+  // Auto-inventory bookkeeping (only set when inventoryId was resolved via
+  // domain/autoInventory.ts, not for a manually-linked internal repair):
+  // whether THIS ticket is the one that auto-created inventoryId (vs attached
+  // to an existing record), and the matched record's status just before this
+  // ticket touched it — kept so a manual revert is always possible.
+  inventoryAutoCreated?: boolean;
+  inventoryPreviousStatus?: DeviceStatus;
   createdAt: number;            // epoch ms
   date: string;                 // YYYY-MM-DD (date created)
 
@@ -534,4 +564,10 @@ export interface RepairBatch {
   amountPaid: number;           // the only stored money fact; totals are computed
   invoicedAt?: number;
   completedAt?: number;
+  // When true, creating a device ticket under this batch auto-adds the device
+  // to inventory (or attaches to an existing IMEI/serial match) — see
+  // domain/autoInventory.ts. Off by default; the shop turns it on per batch
+  // (e.g. an "FTT Personal" batch for the owner's own devices) rather than
+  // this ever being keyed off a hardcoded batch name.
+  autoInventory?: boolean;
 }
