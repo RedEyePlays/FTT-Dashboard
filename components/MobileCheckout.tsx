@@ -28,12 +28,15 @@ interface Props {
   // cost/profit figures, so there is nothing to mask here.
   canViewProfit?: boolean;
   onGenerateSku?: (deviceType?: DeviceType) => Promise<string>;
+  onDirtyChange?: (dirty: boolean) => void; // reports whether the cart has unsaved items
 }
 
 const STEPS = ['Items', 'Cart', 'Customer', 'Payment', 'Done'];
 
 export const MobileCheckout: React.FC<Props> = (props) => {
   const cx = useCheckout(props);
+  const { onDirtyChange } = props;
+  useEffect(() => { onDirtyChange?.(cx.cart.length > 0); }, [cx.cart.length, onDirtyChange]);
   const [step, setStep] = useState(0); // 0..4
   const [pick, setPick] = useState<null | 'device' | 'accessory'>(null);
   const [showCustom, setShowCustom] = useState(false);
@@ -179,7 +182,7 @@ export const MobileCheckout: React.FC<Props> = (props) => {
                       <Wrench className="w-4 h-4 text-emerald-500 shrink-0" />
                       <span className="min-w-0">
                         <span className="block text-sm text-slate-800 dark:text-slate-100 truncate">{r.repairNumber || 'Repair'}{r.customerName ? ` · ${r.customerName}` : ''}</span>
-                        <span className="block text-[11px] text-slate-400 truncate">{[r.brand, r.model].filter(Boolean).join(' ') || r.deviceType || 'Device'}{r.issue ? ` — ${r.issue}` : ''} · ${(r.repairPrice || 0).toFixed(2)}</span>
+                        <span className="block text-[11px] text-slate-400 truncate">{[r.brand, r.model].filter(Boolean).join(' ') || r.deviceType || 'Device'}{r.issue ? ` — ${r.issue}` : ''} · {money(r.repairPrice || 0)}</span>
                       </span>
                     </span>
                     <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded shrink-0 bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400">Repair</span>
@@ -252,7 +255,7 @@ export const MobileCheckout: React.FC<Props> = (props) => {
               {priceHints.has(l.key) && (() => { const s = priceHints.get(l.key)!; return (
                 <button type="button" onClick={() => cx.updateLine(l.key, { unitPrice: s.price })}
                   className="mt-2 inline-flex items-center gap-1 text-[11px] text-indigo-600 dark:text-indigo-400">
-                  <History className="w-3 h-3" /> Similar sold for ${s.price.toFixed(2)} <span className="text-slate-400">· {s.sampleSize} sale{s.sampleSize !== 1 ? 's' : ''} · tap to use</span>
+                  <History className="w-3 h-3" /> Similar sold for {money(s.price)} <span className="text-slate-400">· {s.sampleSize} sale{s.sampleSize !== 1 ? 's' : ''} · tap to use</span>
                 </button>
               ); })()}
             </div>

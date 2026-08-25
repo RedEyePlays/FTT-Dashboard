@@ -98,7 +98,8 @@ export const SettingsTextField: React.FC<{
   max?: number;
   step?: number;
   disabled?: boolean;
-}> = ({ label, hint, value, onChange, placeholder, type = 'text', min, max, step, disabled }) => (
+  onFocus?: React.FocusEventHandler<HTMLInputElement>;
+}> = ({ label, hint, value, onChange, placeholder, type = 'text', min, max, step, disabled, onFocus }) => (
   <label className="block py-2">
     <span className={labelCls}>{label}</span>
     {hint && <span className={`block ${hintCls} mb-1`}>{hint}</span>}
@@ -111,6 +112,7 @@ export const SettingsTextField: React.FC<{
       max={max}
       step={step}
       onChange={e => onChange(e.target.value)}
+      onFocus={onFocus}
       className={`${inputCls} mt-1 disabled:opacity-50`}
     />
   </label>

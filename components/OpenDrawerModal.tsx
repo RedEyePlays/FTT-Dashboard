@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { X, DoorOpen } from 'lucide-react';
+import { useEscapeKey } from '../hooks/useEscapeKey';
 
 interface Props {
   onClose: () => void;
@@ -19,6 +20,7 @@ export const OpenDrawerModal: React.FC<Props> = ({ onClose, onOpen, defaultFloat
   const [amount, setAmount] = useState(alreadyOpen ? String(currentFloat ?? '') : (defaultFloat ? String(defaultFloat) : ''));
   const amountNum = parseFloat(amount) || 0;
   const submit = () => { onOpen(Math.round(amountNum * 100) / 100); onClose(); };
+  useEscapeKey(onClose);
 
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={onClose}>

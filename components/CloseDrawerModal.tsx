@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { X, Lock, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { CashDrawerSummary, reconcileCash } from '../domain/reports';
+import { useEscapeKey } from '../hooks/useEscapeKey';
 
 interface Props {
   onClose: () => void;
@@ -25,6 +26,8 @@ export const CloseDrawerModal: React.FC<Props> = ({ onClose, onCloseDrawer, summ
   const { variance, direction } = reconcileCash(hasCount ? countedNum : 0, summary.expected);
   const needsNote = hasCount && direction !== 'balanced' && !note.trim();
   const canSave = hasCount && !needsNote;
+
+  useEscapeKey(onClose);
 
   const submit = () => {
     if (!canSave) return;

@@ -7,6 +7,7 @@ import { REPAIR_STATUS_LABEL } from '../domain/repairs';
 import { LISTING_PLATFORMS } from '../domain/listing';
 import { ImeiScanner } from './ImeiScanner';
 import { Wrench } from 'lucide-react';
+import { useEscapeKey } from '../hooks/useEscapeKey';
 
 interface Props {
   initial?: InventoryItem;
@@ -75,6 +76,7 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, runners, 
   const [snapshot] = useState(() => JSON.stringify({ kind, f }));
   const dirty = JSON.stringify({ kind, f }) !== snapshot;
   const requestClose = () => { if (!dirty || window.confirm('Discard unsaved changes to this item?')) onClose(); };
+  useEscapeKey(requestClose);
 
   const genSku = async () => set('sku', await onGenerateSku(kind, f.deviceType));
 

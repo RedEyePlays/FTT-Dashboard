@@ -4,6 +4,7 @@ import { AppUser, WorkspaceInvite, Role, StaffNote } from '../types';
 import { ROLE_LABEL } from '../services/rbac';
 import { canAssignPin, isValidPinFormat, PIN_MAX_LENGTH } from '../domain/pin';
 import { sortStaffNotes, canAddStaffNote } from '../domain/staffNotes';
+import { useEscapeKey } from '../hooks/useEscapeKey';
 
 interface Props {
   me: AppUser;
@@ -73,6 +74,8 @@ const PinModal: React.FC<{ email: string; onClose: () => void; onSave: (pin: str
   const valid = isValidPinFormat(pin);
   const matches = pin.length > 0 && pin === confirmPin;
   const canSave = valid && matches && !busy;
+
+  useEscapeKey(onClose);
 
   const save = async () => {
     if (!canSave) return;

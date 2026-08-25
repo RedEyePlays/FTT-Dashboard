@@ -7,6 +7,7 @@ import { Runner, DropOff, DropOffStatus, PaidBy, Settlement, SettlementPaymentMe
 import { runnerBalance, settleableDropOffs, settlementTotals } from '../domain/dropoffs';
 import { formatPhoneInput } from '../domain/phone';
 import { printSettlementInvoice } from '../services/settlementInvoice';
+import { useEscapeKey } from '../hooks/useEscapeKey';
 
 interface Props {
   runners: Runner[];
@@ -22,6 +23,7 @@ interface Props {
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 const today = () => new Date().toISOString().split('T')[0];
+const money = (n: number) => `$${n.toFixed(2)}`;
 
 const STATUS_META: Record<DropOffStatus, { label: string; cls: string }> = {
   pending:  { label: 'Pending review', cls: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400' },
@@ -87,6 +89,8 @@ const EntriesTab: React.FC<{
 }> = ({ runners, dropOffs, onDropOffsChange, onAddToInventory }) => {
   const [showForm, setShowForm] = useState(false);
   const [filter, setFilter] = useState<DropOffStatus | 'all'>('all');
+
+  useEscapeKey(() => setShowForm(false), showForm);
 
   const blank = (): DropOff => ({
     id: uid(), runnerId: runners[0]?.id || '', item: '', imei: '',
@@ -155,9 +159,9 @@ const EntriesTab: React.FC<{
                   {d.sellerName && ` · seller: ${d.sellerName}`}
                 </p>
                 <div className="flex gap-4 mt-2 text-xs">
-                  <span className="text-slate-500 dark:text-slate-400">Purchase: <b className="text-slate-700 dark:text-slate-200">${d.purchasePrice.toFixed(2)}</b></span>
+                  <span className="text-slate-500 dark:text-slate-400">Purchase: <b className="text-slate-700 dark:text-slate-200">{money(d.purchasePrice)}</b></span>
                   <span className="text-slate-500 dark:text-slate-400">Paid by: <b className="text-slate-700 dark:text-slate-200">{d.paidBy === 'runner' ? 'Runner' : 'Store'}</b></span>
-                  <span className="text-slate-500 dark:text-slate-400">Fee: <b className="text-emerald-600">${d.dropOffFee.toFixed(2)}</b></span>
+                  <span className="text-slate-500 dark:text-slate-400">Fee: <b className="text-emerald-600">{money(d.dropOffFee)}</b></span>
                 </div>
                 {d.notes && <p className="text-xs text-slate-400 mt-1 italic">{d.notes}</p>}
               </div>
@@ -330,9 +334,9 @@ const RunnersTab: React.FC<{
                 </div>
               </div>
               <div className="grid grid-cols-3 gap-2 mt-3 pt-3 border-t border-slate-100 dark:border-slate-800 text-center">
-                <div><p className="text-[10px] text-slate-400 uppercase">Cash Fronted</p><p className="font-bold text-slate-700 dark:text-slate-200 text-sm">${bal.cashFronted.toFixed(2)}</p></div>
-                <div><p className="text-[10px] text-slate-400 uppercase">Fees Owed</p><p className="font-bold text-emerald-600 text-sm">${bal.feesOwed.toFixed(2)}</p></div>
-                <div><p className="text-[10px] text-slate-400 uppercase">Net Owed</p><p className="font-bold text-indigo-600 dark:text-indigo-400 text-sm">${bal.net.toFixed(2)}</p></div>
+                <div><p className="text-[10px] text-slate-400 uppercase">Cash Fronted</p><p className="font-bold text-slate-700 dark:text-slate-200 text-sm">{money(bal.cashFronted)}</p></div>
+                <div><p className="text-[10px] text-slate-400 uppercase">Fees Owed</p><p className="font-bold text-emerald-600 text-sm">{money(bal.feesOwed)}</p></div>
+                <div><p className="text-[10px] text-slate-400 uppercase">Net Owed</p><p className="font-bold text-indigo-600 dark:text-indigo-400 text-sm">{money(bal.net)}</p></div>
               </div>
             </div>
           );
@@ -404,9 +408,9 @@ const SettlementTab: React.FC<{
             <div key={d.id} className="flex items-center justify-between px-3 py-2 text-sm">
               <div className="min-w-0">
                 <p className="text-slate-700 dark:text-slate-200 truncate">{d.item}</p>
-                <p className="text-[11px] text-slate-400">{d.paidBy === 'runner' ? 'Runner paid' : 'Store paid'} · fee ${d.dropOffFee.toFixed(2)}</p>
+                <p className="text-[11px] text-slate-400">{d.paidBy === 'runner' ? 'Runner paid' : 'Store paid'} · fee {money(d.dropOffFee)}</p>
               </div>
-              <span className="text-slate-500 dark:text-slate-400">${d.purchasePrice.toFixed(2)}</span>
+              <span className="text-slate-500 dark:text-slate-400">{money(d.purchasePrice)}</span>
             </div>
           ))}
         </div>
@@ -418,7 +422,7 @@ const SettlementTab: React.FC<{
           <div className="border-t border-slate-100 dark:border-slate-800 my-1" />
           <div className="flex items-center justify-between">
             <span className="font-semibold text-slate-700 dark:text-slate-200 flex items-center gap-1"><Wallet className="w-4 h-4" /> Total to pay runner</span>
-            <span className="text-lg font-bold text-indigo-600 dark:text-indigo-400">${amountToPay.toFixed(2)}</span>
+            <span className="text-lg font-bold text-indigo-600 dark:text-indigo-400">{money(amountToPay)}</span>
           </div>
         </div>
 
@@ -455,10 +459,10 @@ const SettlementTab: React.FC<{
             <div key={s.id} className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-4">
               <div className="flex items-center justify-between">
                 <p className="text-sm font-medium text-slate-700 dark:text-slate-200">{s.date}</p>
-                <span className="font-bold text-emerald-600">${s.amountPaid.toFixed(2)}</span>
+                <span className="font-bold text-emerald-600">{money(s.amountPaid)}</span>
               </div>
               <p className="text-xs text-slate-400 mt-1">
-                {s.dropOffIds.length} device{s.dropOffIds.length !== 1 ? 's' : ''} · fronted ${s.totalPurchaseFronted.toFixed(2)} · fees ${s.totalFees.toFixed(2)} · {PAYMENT_METHODS.find(m => m.value === (s.paymentMethod || 'cash'))?.label}
+                {s.dropOffIds.length} device{s.dropOffIds.length !== 1 ? 's' : ''} · fronted {money(s.totalPurchaseFronted)} · fees {money(s.totalFees)} · {PAYMENT_METHODS.find(m => m.value === (s.paymentMethod || 'cash'))?.label}
               </p>
               {s.notes && <p className="text-xs text-slate-400 mt-1 italic">{s.notes}</p>}
               <button onClick={() => printSettlementInvoice(s, runners.find(r => r.id === s.runnerId), dropOffs)}
@@ -476,6 +480,6 @@ const SettlementTab: React.FC<{
 const Row: React.FC<{ label: string; value: number | string; raw?: boolean }> = ({ label, value, raw }) => (
   <div className="flex items-center justify-between">
     <span className="text-slate-500 dark:text-slate-400">{label}</span>
-    <span className="text-slate-700 dark:text-slate-200 font-medium">{raw ? value : `$${(value as number).toFixed(2)}`}</span>
+    <span className="text-slate-700 dark:text-slate-200 font-medium">{raw ? value : money(value as number)}</span>
   </div>
 );

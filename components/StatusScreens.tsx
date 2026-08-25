@@ -11,6 +11,32 @@ export const LoadingScreen: React.FC<{ message: string }> = ({ message }) => (
   </div>
 );
 
+const pulse = 'animate-pulse bg-slate-200 dark:bg-slate-800 rounded';
+
+// Shown instead of the plain spinner while the workspace's Firestore data is
+// first loading — gives a sense of the dashboard shape rather than a blank
+// screen for the second or two that takes.
+export const LoadingSkeleton: React.FC<{ message: string }> = ({ message }) => (
+  <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
+    <div className="h-14 border-b border-slate-200 dark:border-slate-800 flex items-center px-4 gap-3">
+      <div className={`w-8 h-8 ${pulse}`} />
+      <div className={`w-32 h-4 ${pulse}`} />
+    </div>
+    <div className="max-w-6xl mx-auto px-4 py-6 space-y-6">
+      <div className="flex items-center gap-2 text-slate-500 text-sm mb-2">
+        <div className="w-4 h-4 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+        {message}
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        {Array.from({ length: 4 }).map((_, i) => <div key={i} className={`h-24 ${pulse}`} />)}
+      </div>
+      <div className="space-y-2">
+        {Array.from({ length: 6 }).map((_, i) => <div key={i} className={`h-10 ${pulse}`} />)}
+      </div>
+    </div>
+  </div>
+);
+
 export const DbErrorScreen: React.FC<{
   message: string;
   onRetry: () => void;

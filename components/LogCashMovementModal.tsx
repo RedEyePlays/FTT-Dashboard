@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { X, Wallet, ArrowUpFromLine, ArrowDownToLine, Banknote } from 'lucide-react';
+import { useEscapeKey } from '../hooks/useEscapeKey';
 
 export type CashMovementKind = 'cashIn' | 'cashOut' | 'withdrawal';
 
@@ -37,6 +38,8 @@ export const LogCashMovementModal: React.FC<Props> = ({ onClose, onLog, initialK
   const amountNum = parseFloat(amount) || 0;
   const active = KINDS.find(k => k.value === kind)!;
   const expectedAfter = expectedBefore != null ? expectedBefore + active.sign * amountNum : undefined;
+
+  useEscapeKey(onClose);
 
   const submit = () => {
     if (amountNum <= 0) return;

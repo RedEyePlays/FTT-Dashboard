@@ -18,6 +18,7 @@ import { printRetailReceipt } from '../services/repairPrint';
 import { printSalesReceipt } from '../services/salesReceipt';
 import { getStoreProfile } from './SettingsModal';
 import { useIsMobile } from '../hooks/useMediaQuery';
+import { useEscapeKey } from '../hooks/useEscapeKey';
 import { MobileDataCard, CardRow, EmptyState } from './responsive';
 
 interface Props {
@@ -585,6 +586,7 @@ const TicketModal: React.FC<{ repair: Repair; tech?: string; customer: Customer;
 
 const Modal: React.FC<{ title: string; onClose: () => void; onPrint?: () => void; onCopyLink?: () => void; children: React.ReactNode }> = ({ title, onClose, onPrint, onCopyLink, children }) => {
   const [copied, setCopied] = useState(false);
+  useEscapeKey(onClose);
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4" onClick={onClose}>
       <div className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-700 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
@@ -592,8 +594,8 @@ const Modal: React.FC<{ title: string; onClose: () => void; onPrint?: () => void
           <h2 className="text-sm font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2"><FileText className="w-4 h-4 text-indigo-500" />{title}</h2>
           <div className="flex items-center gap-1">
             {onCopyLink && (
-              <button onClick={() => { onCopyLink(); setCopied(true); setTimeout(() => setCopied(false), 1500); }} title="Copy customer status-lookup link" className="p-1.5 rounded-lg text-slate-500 hover:text-indigo-600">
-                {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+              <button onClick={() => { onCopyLink(); setCopied(true); setTimeout(() => setCopied(false), 1500); }} title="Copy customer status-lookup link" className="flex items-center gap-1 p-1.5 rounded-lg text-slate-500 hover:text-indigo-600 text-xs">
+                {copied ? <><Check className="w-4 h-4" /> Copied</> : <Copy className="w-4 h-4" />}
               </button>
             )}
             {onPrint && <button onClick={onPrint} className="p-1.5 rounded-lg text-slate-500 hover:text-indigo-600"><Printer className="w-4 h-4" /></button>}
@@ -613,6 +615,8 @@ const MergeModal: React.FC<{ group: Customer[]; data: CustomerData; onClose: () 
   const dups = group.filter(c => c.id !== primaryId);
   const plan = useMemo(() => planMerge(primary, dups, data), [primary, dups, data]);
   const linked = plan.reassignSales.length + plan.reassignRepairs.length + plan.reassignBatches.length;
+
+  useEscapeKey(onClose);
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4" onClick={onClose}>
@@ -681,6 +685,7 @@ const EditModal: React.FC<{ customer: Customer; onClose: () => void; onSave: (c:
   const [snapshot] = useState(() => JSON.stringify(customer));
   const dirty = JSON.stringify(f) !== snapshot;
   const requestClose = () => { if (!dirty || window.confirm('Discard unsaved changes to this customer?')) onClose(); };
+  useEscapeKey(requestClose);
   const inputCls = 'w-full px-2.5 py-1.5 text-sm bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md outline-none focus:ring-2 focus:ring-indigo-500 text-slate-900 dark:text-slate-100';
   const tags = f.tags || [];
   const addTag = (t: string) => { const v = t.trim(); if (v && !tags.includes(v)) set({ tags: [...tags, v] }); setTagInput(''); };

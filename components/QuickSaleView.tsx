@@ -29,14 +29,15 @@ interface Props {
   // no close action they don't have permission to complete.
   onCloseDrawer?: () => void;
   reconciledToday?: boolean;
+  onCartDirtyChange?: (dirty: boolean) => void; // reports whether the Quick Sale cart has unsaved items
 }
 
 // Quick Sale = the desktop split-screen cart on ≥md, a step-based flow on phones.
 // Both share the same checkout logic (hooks/useCheckout) — no duplicated business
 // logic; only the presentation differs, and only one renders at a time.
-export const QuickSaleView: React.FC<Props> = ({ inventory, customers, repairs, initialCustomer, onConsumeInitial, initialRepair, onConsumeInitialRepair, onSellCart, canViewProfit = true, onGenerateSku, cashDrawer, onOpenDrawer, onLogCash, onCloseDrawer, reconciledToday }) => {
+export const QuickSaleView: React.FC<Props> = ({ inventory, customers, repairs, initialCustomer, onConsumeInitial, initialRepair, onConsumeInitialRepair, onSellCart, canViewProfit = true, onGenerateSku, cashDrawer, onOpenDrawer, onLogCash, onCloseDrawer, reconciledToday, onCartDirtyChange }) => {
   const isMobile = useIsMobile();
-  const common = { inventory, customers, repairs, initialCustomer, onConsumeInitial, initialRepair, onConsumeInitialRepair, canViewProfit, onGenerateSku } as const;
+  const common = { inventory, customers, repairs, initialCustomer, onConsumeInitial, initialRepair, onConsumeInitialRepair, canViewProfit, onGenerateSku, onDirtyChange: onCartDirtyChange } as const;
   const checkout = isMobile
     ? <MobileCheckout {...common} onComplete={onSellCart} />
     : <CartSaleView {...common} onComplete={onSellCart} />;

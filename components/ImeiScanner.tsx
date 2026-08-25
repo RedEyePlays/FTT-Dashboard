@@ -1,6 +1,7 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { Camera, X, Loader2, Zap } from 'lucide-react';
 import { extractImeiFromImage } from '../services/geminiService';
+import { useEscapeKey } from '../hooks/useEscapeKey';
 
 interface ImeiScannerProps {
   onScan: (imei: string) => void;
@@ -44,6 +45,10 @@ export const ImeiScanner: React.FC<ImeiScannerProps> = ({ onScan, onClose }) => 
       setIsStreaming(false);
     }
   };
+
+  const handleClose = () => { stopCamera(); onClose(); };
+
+  useEscapeKey(handleClose);
 
   const handleCapture = async () => {
     if (!videoRef.current || !canvasRef.current) return;
@@ -90,7 +95,7 @@ export const ImeiScanner: React.FC<ImeiScannerProps> = ({ onScan, onClose }) => 
             <Camera className="w-5 h-5 text-indigo-400" />
             <span>Scan IMEI/Serial</span>
           </div>
-          <button onClick={onClose} className="text-white/80 hover:text-white bg-black/40 p-1.5 rounded-full">
+          <button onClick={handleClose} className="text-white/80 hover:text-white bg-black/40 p-1.5 rounded-full">
             <X className="w-6 h-6" />
           </button>
         </div>

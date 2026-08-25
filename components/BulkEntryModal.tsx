@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { InventoryItem } from '../types';
 import { parseBulkInventory } from '../services/geminiService';
 import { Sparkles, X, Loader2, CheckCircle, AlertCircle } from 'lucide-react';
+import { useEscapeKey } from '../hooks/useEscapeKey';
 
 interface BulkEntryModalProps {
   onClose: () => void;
@@ -14,6 +15,8 @@ export const BulkEntryModal: React.FC<BulkEntryModalProps> = ({ onClose, onImpor
   const [parsedItems, setParsedItems] = useState<InventoryItem[]>([]);
   const [step, setStep] = useState<'input' | 'preview'>('input');
   const [error, setError] = useState<string | null>(null);
+
+  useEscapeKey(onClose);
 
   const handleProcess = async () => {
     if (!inputText.trim()) return;

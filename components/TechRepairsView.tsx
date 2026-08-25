@@ -6,6 +6,7 @@ import {
   repairAgeDays, balanceOwing, matchesRepair,
 } from '../domain/repairs';
 import { RepairLabelModal } from './RepairLabelModal';
+import { useEscapeKey } from '../hooks/useEscapeKey';
 
 interface Props {
   repairs: Repair[];
@@ -26,6 +27,8 @@ const SECTIONS: { key: string; label: string; statuses: RepairStatus[] }[] = [
   { key: 'testing', label: 'Testing', statuses: ['testing'] },
   { key: 'ready_pickup', label: 'Ready for Pickup', statuses: ['ready_pickup'] },
 ];
+
+const money = (n: number) => `$${n.toFixed(2)}`;
 
 const TEST_CHECKLIST = [
   'Powers on', 'Touchscreen', 'Charging', 'Rear camera', 'Front camera',
@@ -184,6 +187,8 @@ const TechRepairDrawer: React.FC<{
     JSON.stringify(testChecks) !== JSON.stringify(r.testChecks || []);
   const requestClose = () => { if (!dirty || window.confirm('Discard unsaved changes to this repair?')) onClose(); };
 
+  useEscapeKey(requestClose);
+
   const history = auditLogs
     .filter(a => a.entityId === r.id)
     .sort((a, b) => b.ts - a.ts)
@@ -227,9 +232,9 @@ const TechRepairDrawer: React.FC<{
 
           <section className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4 grid grid-cols-2 gap-3">
             <div className="col-span-2 text-[11px] font-semibold text-slate-400 uppercase tracking-wide">Approved repair details</div>
-            <Field label="Repair price" value={`$${(r.repairPrice || 0).toFixed(2)}`} />
-            <Field label="Deposit" value={`$${(r.deposit || 0).toFixed(2)}`} />
-            <Field label="Balance owing" value={`$${balanceOwing(r).toFixed(2)}`} />
+            <Field label="Repair price" value={money(r.repairPrice || 0)} />
+            <Field label="Deposit" value={money(r.deposit || 0)} />
+            <Field label="Balance owing" value={money(balanceOwing(r))} />
             <Field label="Est. completion" value={r.estimatedCompletion || '—'} />
             {r.warrantyDays ? <Field label="Warranty" value={`${r.warrantyDays} days`} /> : null}
             {r.cosmetic?.checks?.length ? <div className="col-span-2"><Field label="Cosmetic" value={r.cosmetic.checks.join(', ')} /></div> : null}

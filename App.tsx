@@ -82,7 +82,7 @@ const PAGE_TITLES: Record<ViewState, string> = {
   repairs: 'Repairs', customers: 'Customers', users: 'Users', audit: 'Audit Log',
   settings: 'Settings', timeclock: 'Time Clock', closeout: 'Close Out',
 };
-import { LoadingScreen, DbErrorScreen } from './components/StatusScreens';
+import { LoadingScreen, LoadingSkeleton, DbErrorScreen } from './components/StatusScreens';
 
 // Suspense fallback for lazily-loaded views — reuses LoadingScreen's spinner
 // style, but sized to sit inside the content area rather than full-screen.
@@ -407,6 +407,17 @@ const App: React.FC = () => {
     } catch { /* ignore */ }
   }, [settings.labels.qrContent]);
 
+  // Whether the Quick Sale cart currently has unsold items — kept as a ref
+  // (not state) since it's only read inside navigate()/beforeunload, not rendered.
+  const cartDirtyRef = useRef(false);
+  useEffect(() => {
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (view === 'pos' && cartDirtyRef.current) { e.preventDefault(); e.returnValue = ''; }
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [view]);
+
   // Apply the configured default landing page once, on first load.
   const landingAppliedRef = useRef(false);
   useEffect(() => {
@@ -426,7 +437,11 @@ const App: React.FC = () => {
   };
   // Navigation wrapper for every nav surface: clicking Inventory opens Devices;
   // every other page pushes its own path so a refresh / shared link restores it.
+  // Leaving Quick Sale with items still in the cart (never rung up) warns first,
+  // same pattern as ItemFormModal's unsaved-changes guard.
   const navigate = (v: ViewState) => {
+    if (view === 'pos' && v !== 'pos' && cartDirtyRef.current
+      && !window.confirm('You have items in the Quick Sale cart that haven\'t been sold yet. Leave anyway?')) return;
     if (v === 'grid') { goInventory(DEFAULT_INV_SECTION); return; }
     const path = viewPath(v);
     if (isRoutableView(v) && window.location.pathname !== path) window.history.pushState(null, '', path);
@@ -1328,7 +1343,9 @@ const App: React.FC = () => {
     return <DbErrorScreen message={dbError} onRetry={reconnect} onSignOut={handleLock} />;
   }
   if (roleLoading || dbLoading || !appUser) {
-    return <LoadingScreen message={roleLoading || !appUser ? 'Signing you in…' : 'Loading your inventory…'} />;
+    return roleLoading || !appUser
+      ? <LoadingScreen message="Signing you in…" />
+      : <LoadingSkeleton message="Loading your inventory…" />;
   }
 
   // --- AUTO-LOCK: nothing else renders while locked (app-wide, every role) ---
@@ -1542,6 +1559,7 @@ const App: React.FC = () => {
               onLogCash={allow('cash.log') ? (kind) => setCashLogKind(kind) : undefined}
               onCloseDrawer={allow('cash.reconcile') ? () => setShowCloseDrawer(true) : undefined}
               reconciledToday={!!todayRecon?.reconciledAt}
+              onCartDirtyChange={(d) => { cartDirtyRef.current = d; }}
             />
           )}
           {view === 'dropoff' && (

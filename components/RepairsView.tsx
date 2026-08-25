@@ -15,6 +15,7 @@ import { getStoreProfile } from './SettingsModal';
 import { statusPageUrl } from '../domain/statusLink';
 import { formatPhoneInput } from '../domain/phone';
 import { usePersistedFilter } from '../hooks/usePersistedFilter';
+import { useEscapeKey } from '../hooks/useEscapeKey';
 import { AutoInventoryNotice } from '../domain/autoInventory';
 // Lazy: the repair label modal pulls in jsPDF (~390 kB); load it on demand.
 const RepairLabelModal = lazy(() => import('./RepairLabelModal').then(m => ({ default: m.RepairLabelModal })));
@@ -575,6 +576,7 @@ const RepairDrawer: React.FC<{
   const isTerminal = f.status === 'completed' || f.status === 'picked_up' || f.status === 'cancelled';
   const dirty = JSON.stringify(f) !== snapshot;
   const requestClose = () => { if (!dirty || window.confirm('Discard unsaved changes to this repair?')) onClose(); };
+  useEscapeKey(requestClose);
 
   // Check out: retail repairs go through the shared Quick Sale flow (so the money
   // lands in the sales P&L / cash reconciliation / dashboard totals like any sale
@@ -768,6 +770,7 @@ const BatchForm: React.FC<{ initial: RepairBatch; isNew: boolean; onClose: () =>
   const set = (patch: Partial<RepairBatch>) => setF(prev => ({ ...prev, ...patch }));
   const dirty = JSON.stringify(f) !== snapshot;
   const requestClose = () => { if (!dirty || window.confirm('Discard unsaved changes to this batch?')) onClose(); };
+  useEscapeKey(requestClose);
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4" onClick={requestClose}>
       <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-700" onClick={e => e.stopPropagation()}>
