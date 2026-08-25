@@ -12,6 +12,10 @@ export { scheduledBackups } from "./backups";
 // Public, no-auth repair-status lookup for customers (see repairLookup.ts).
 export { repairStatusLookup } from "./repairLookup";
 
+// The only write path a technician has for completedAt/warrantyUntil now
+// that firestore.rules excludes them from direct client writes (see repairs.ts).
+export { techUpdateRepair } from "./repairs";
+
 // The Gemini API key lives in Firebase's server-side Secret Manager — it is
 // NEVER shipped to the client. Set it before deploy with:
 //   firebase functions:secrets:set GEMINI_API_KEY

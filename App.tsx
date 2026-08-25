@@ -33,7 +33,7 @@ const TimeClockView = lazy(() => import('./components/TimeClockView').then(m => 
 const CloseOutView = lazy(() => import('./components/CloseOutView').then(m => ({ default: m.CloseOutView })));
 import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, Runner, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission, Repair, RepairBatch, TimeEntry, PayPeriodPaid, BreakReason, SalesTransaction, CashReconciliation, StaffNote } from './types';
 import { skuPrefix, nextSku } from './services/sku';
-import { REPAIR_PREFIX, BATCH_PREFIX, computeWarrantyUntil, applyTechEdit, TECH_EDITABLE_FIELDS, repairSalePrefill, completeRepair, completeRepairSale, dateToEpochMs } from './domain/repairs';
+import { REPAIR_PREFIX, BATCH_PREFIX, applyTechEdit, TECH_EDITABLE_FIELDS, repairSalePrefill, completeRepair, completeRepairSale, dateToEpochMs } from './domain/repairs';
 import { MergePlan } from './domain/customers';
 import { can } from './services/rbac';
 import { downloadJson, toCSV, triggerDownload } from './services/backup';
@@ -55,6 +55,7 @@ import { decideAutoInventory, autoInventoryPurchaseDrawerEffect, AutoInventoryNo
 import { listingPlatformsLabel } from './domain/listing';
 import { AppSettings } from './domain/settings';
 import { listWorkspaceBackups, getBackupDownloadUrl } from './services/backupStorage';
+import { techUpdateRepair } from './services/repairFunctions';
 import { useWorkspaceData } from './hooks/useWorkspaceData';
 import { newId, mkActivity } from './domain/ids';
 import { collectionFor, stockChange, applyDirectSale } from './domain/inventory';
@@ -1205,22 +1206,25 @@ const App: React.FC = () => {
   };
 
   // Technician-scoped update: only the whitelisted work fields + status are
-  // persisted (applyTechEdit), and each change is audited. Used by TechRepairsView.
+  // persisted, and each change is audited. Used by TechRepairsView. The actual
+  // write goes through the techUpdateRepair Cloud Function, not a direct
+  // Firestore write — firestore.rules no longer lets a technician set
+  // completedAt/warrantyUntil directly (a technician could otherwise backdate
+  // completion via dev tools to inflate their own turnaround stats, or set an
+  // arbitrary warranty date), so that callable re-derives both server-side and
+  // applies the same TECH_EDITABLE_FIELDS whitelist as applyTechEdit below.
+  // `next` here is only a local, immediate view for the auto-inventory/audit
+  // logic that follows — it never carries completedAt/warrantyUntil itself.
   const handleTechUpdateRepair = (stored: Repair, draft: Partial<Repair>) => {
     if (!uid || !allow('repairs.tech')) return;
-    let next = applyTechEdit(stored, draft);
-    // Stamp completion + warranty when the device is picked up (terminal).
-    if ((next.status === 'picked_up' || next.status === 'completed') && !next.completedAt) {
-      const completedDate = new Date().toISOString().split('T')[0];
-      next = { ...next, completedAt: Date.now(), completedBy: appUser.id, warrantyUntil: computeWarrantyUntil(completedDate, next.warrantyDays) || undefined };
-    }
+    const next = applyTechEdit(stored, draft);
+    techUpdateRepair(stored.id, draft).catch(e => console.error('Tech repair update failed', e));
     // Auto-inventory devices become sellable once their ticket completes (same
     // rule as handleSaveRepair — see spec point 5).
     if ((next.status === 'picked_up' || next.status === 'completed') && next.inventoryAutoCreated !== undefined && next.inventoryId) {
       const invItem = dataRef.current.find(i => i.id === next.inventoryId);
       if (invItem && invItem.deviceStatus !== 'ready') saveItem(uid, 'inventory', { ...invItem, deviceStatus: 'ready' });
     }
-    saveItem(uid, 'repairs', next);
     if (stored.status !== next.status) {
       logActivity(`${next.repairNumber} → ${next.status.replace(/_/g, ' ')}`);
       audit('repair.status_change', 'repair', next.id, { status: stored.status }, { status: next.status });
