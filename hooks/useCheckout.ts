@@ -465,7 +465,12 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
       totalCost, totalPaid, netProfit,
       deposit: isLayaway ? depositAmount : undefined,
       balanceOwing: isLayaway ? balanceOwing : undefined,
-      lines: cart.map(l => ({ inventoryId: l.inventoryId, kind: l.kind, name: l.name, sku: l.code, quantity: l.quantity, unitPrice: l.unitPrice, deviceType: l.kind === 'device' ? l.deviceType : undefined })),
+      lines: cart.map(l => ({
+        inventoryId: l.inventoryId, kind: l.kind, name: l.name, sku: l.code, quantity: l.quantity, unitPrice: l.unitPrice,
+        deviceType: l.kind === 'device' ? l.deviceType : undefined,
+        // Snapshot (not the just-cleared live value) so a later void/return can restore it.
+        listedPlatforms: l.kind === 'device' ? l.listedPlatforms : undefined,
+      })),
       notes: paymentNotes || undefined,
       repairId: linkedRepairId,
     };

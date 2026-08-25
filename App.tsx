@@ -58,7 +58,7 @@ import { listWorkspaceBackups, getBackupDownloadUrl } from './services/backupSto
 import { useWorkspaceData } from './hooks/useWorkspaceData';
 import { newId, mkActivity } from './domain/ids';
 import { collectionFor, stockChange, applyDirectSale } from './domain/inventory';
-import { canVoidSale, canReturnSale, returnRefund, saleAccessoryRestock, collectedOnSale, cashCollectedOnSale, saleRefundDrawerEffect } from './domain/pos';
+import { canVoidSale, canReturnSale, returnRefund, saleAccessoryRestock, saleDeviceListedPlatforms, collectedOnSale, cashCollectedOnSale, saleRefundDrawerEffect } from './domain/pos';
 import { expectedCashForDate, expectedEndingCash, sumDrawerEntries, cashDrawerSummary, openDrawerPatch, ReconciliationInput } from './domain/reports';
 import type { CashMovementKind } from './components/LogCashMovementModal';
 const OpenDrawerModal = lazy(() => import('./components/OpenDrawerModal').then(m => ({ default: m.OpenDrawerModal })));
@@ -638,19 +638,24 @@ const App: React.FC = () => {
     if (!canVoidSale(tx, new Date().toISOString().split('T')[0], settings.operations.voidWindowDays)) return;
 
     // Device lines are the actual sold inventory rows (still carrying this txn id).
-    const deviceIds = dataRef.current
+    // Restore each device's listedPlatforms snapshot (SalesLine.listedPlatforms,
+    // taken at sale time) rather than leaving it cleared — a voided/returned sale
+    // shouldn't silently drop the fact that a device might still be listed live
+    // elsewhere.
+    const listedPlatformsByInvId = saleDeviceListedPlatforms(tx);
+    const devices = dataRef.current
       .filter(i => (i.kind ?? 'device') === 'device' && i.transactionId === tx.id)
-      .map(i => i.id);
+      .map(i => ({ id: i.id, listedPlatforms: listedPlatformsByInvId.get(i.id) }));
     // Restock accessories by the quantity sold on each accessory line.
     const accessoryUpdates = saleAccessoryRestock(tx);
 
     const activity: ActivityEntry[] = [mkActivity(`Sale ${tx.id.slice(0, 8)} voided (${tx.customerName || 'customer'})`)];
     voidSale(uid, {
-      transactionId: tx.id, deviceIds, accessoryUpdates,
+      transactionId: tx.id, devices, accessoryUpdates,
       voided: { voidedAt: Date.now(), voidedBy: appUser.id, voidedByEmail: appUser.email },
       activity,
     }).catch(e => console.error('Void failed', e));
-    audit('sale.void', 'sale', tx.id, { totalPaid: tx.totalPaid }, { devices: deviceIds.length, accessories: accessoryUpdates.length });
+    audit('sale.void', 'sale', tx.id, { totalPaid: tx.totalPaid }, { devices: devices.length, accessories: accessoryUpdates.length });
 
     // Cash actually leaves the till right now (the day the void is processed),
     // never retroactively against the original sale's date (already reconciled
@@ -676,11 +681,14 @@ const App: React.FC = () => {
     if (!uid || !appUser || !allow('sales.return')) return;
     if (!canReturnSale(tx, new Date().toISOString().split('T')[0], settings.operations.voidWindowDays)) return;
 
-    const deviceIds = dataRef.current
+    // Restore each device's listedPlatforms snapshot (see handleVoidSale) rather
+    // than leaving it cleared.
+    const listedPlatformsByInvId = saleDeviceListedPlatforms(tx);
+    const devices = dataRef.current
       .filter(i => (i.kind ?? 'device') === 'device' && i.transactionId === tx.id)
-      .map(i => i.id);
-    const resellDeviceIds = opts.disposition === 'resell' ? deviceIds : [];
-    const defectiveDeviceIds = opts.disposition === 'defective' ? deviceIds : [];
+      .map(i => ({ id: i.id, listedPlatforms: listedPlatformsByInvId.get(i.id) }));
+    const resellDevices = opts.disposition === 'resell' ? devices : [];
+    const defectiveDevices = opts.disposition === 'defective' ? devices : [];
     const accessoryUpdates = saleAccessoryRestock(tx);
     const restockingFee = opts.restockingFee && opts.restockingFee > 0 ? opts.restockingFee : undefined;
     // Refund base is what was actually COLLECTED, not the grand total due — a
@@ -690,12 +698,12 @@ const App: React.FC = () => {
 
     const activity: ActivityEntry[] = [mkActivity(`Sale ${tx.id.slice(0, 8)} returned — refunded ${refundAmount.toFixed(2)} (${tx.customerName || 'customer'})`)];
     returnSale(uid, {
-      transactionId: tx.id, resellDeviceIds, defectiveDeviceIds, accessoryUpdates,
+      transactionId: tx.id, resellDevices, defectiveDevices, accessoryUpdates,
       returned: { returnedAt: Date.now(), returnedBy: appUser.id, returnedByEmail: appUser.email, restockingFee, refundAmount },
       activity,
     }).catch(e => console.error('Return failed', e));
     audit('sale.return', 'sale', tx.id, { totalPaid: tx.totalPaid },
-      { refundAmount, restockingFee: restockingFee || 0, disposition: opts.disposition, devices: deviceIds.length, accessories: accessoryUpdates.length });
+      { refundAmount, restockingFee: restockingFee || 0, disposition: opts.disposition, devices: devices.length, accessories: accessoryUpdates.length });
 
     // Same today's-date cash-out rule as Void (see handleVoidSale) — the
     // restocking fee comes out of the cash portion first (returnRefund's usual

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { kindOf, isDevice, isAccessory, collectionFor, stockChange, isOversold, getDeviceDisplayName, applyDirectSale, suggestedSalePrice, priceFieldFor } from './inventory';
+import { kindOf, isDevice, isAccessory, collectionFor, stockChange, isOversold, getDeviceDisplayName, applyDirectSale, suggestedSalePrice, priceFieldFor, isCostRevealingColumn } from './inventory';
 import { InventoryItem } from '../types';
 
 const base: InventoryItem =
@@ -219,5 +219,22 @@ describe('priceFieldFor', () => {
     expect(priceFieldFor({ kind: 'device' })).toBe('targetSalePrice');
     expect(priceFieldFor({})).toBe('targetSalePrice'); // legacy rows default to device
     expect(priceFieldFor({ kind: 'accessory' })).toBe('sellingPrice');
+  });
+});
+
+describe('isCostRevealingColumn', () => {
+  it('flags purchase cost, repair cost, and derived total/profit columns', () => {
+    expect(isCostRevealingColumn('purchaseCost')).toBe(true);
+    expect(isCostRevealingColumn('repairCost')).toBe(true);
+    expect(isCostRevealingColumn('__total')).toBe(true);
+    expect(isCostRevealingColumn('__profit')).toBe(true);
+    expect(isCostRevealingColumn('costPerUnit')).toBe(true);
+  });
+  it('does not flag sale-price or non-financial columns — an employee-role render must keep these visible', () => {
+    expect(isCostRevealingColumn('salePrice')).toBe(false);
+    expect(isCostRevealingColumn('targetSalePrice')).toBe(false);
+    expect(isCostRevealingColumn('sellingPrice')).toBe(false);
+    expect(isCostRevealingColumn('sku')).toBe(false);
+    expect(isCostRevealingColumn('notes')).toBe(false);
   });
 });
