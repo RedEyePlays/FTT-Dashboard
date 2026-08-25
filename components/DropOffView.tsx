@@ -71,8 +71,7 @@ export const DropOffView: React.FC<Props> = ({
         <RunnersTab runners={runners} dropOffs={dropOffs} onRunnersChange={onRunnersChange} />
       )}
       {tab === 'settlement' && (
-        <SettlementTab runners={runners} dropOffs={dropOffs} settlements={settlements}
-          onDropOffsChange={onDropOffsChange} onSettle={onSettle} />
+        <SettlementTab runners={runners} dropOffs={dropOffs} settlements={settlements} onSettle={onSettle} />
       )}
     </div>
   );
@@ -350,9 +349,8 @@ const PAYMENT_METHODS: { value: SettlementPaymentMethod; label: string }[] = [
 
 const SettlementTab: React.FC<{
   runners: Runner[]; dropOffs: DropOff[]; settlements: Settlement[];
-  onDropOffsChange: (d: DropOff[]) => void;
   onSettle: (settlement: Settlement) => void;
-}> = ({ runners, dropOffs, settlements, onDropOffsChange, onSettle }) => {
+}> = ({ runners, dropOffs, settlements, onSettle }) => {
   const [runnerId, setRunnerId] = useState(runners[0]?.id || '');
   const [notes, setNotes] = useState('');
   const [paymentMethod, setPaymentMethod] = useState<SettlementPaymentMethod>('cash');
@@ -368,10 +366,14 @@ const SettlementTab: React.FC<{
       dropOffIds: pending.map(d => d.id),
       totalPurchaseFronted: cashFronted, totalFees, amountPaid: amountToPay, paymentMethod, notes,
     };
+    // onSettle (App.tsx's handleSettleRunner → services/firestoreDb.ts's
+    // settleRunner) saves the settlement AND flags every drop-off in
+    // dropOffIds 'settled' in one atomic batch — a separate onDropOffsChange
+    // call here would be a second, untracked write racing the same status
+    // transition, exactly the gap that let a runner's drop-offs stay eligible
+    // for a second settlement. The live subscription refreshes `dropOffs` once
+    // the batch commits, same as every other write in this app.
     onSettle(settlement);
-    onDropOffsChange(dropOffs.map(d =>
-      pending.some(p => p.id === d.id) ? { ...d, status: 'settled', settlementId: settlement.id } : d
-    ));
     setNotes('');
   };
 

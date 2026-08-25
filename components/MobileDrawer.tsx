@@ -57,11 +57,15 @@ export const MobileDrawer: React.FC<Props> = ({
     { label: 'Drop-Offs', icon: <Truck className="w-5 h-5" />, on: () => go('dropoff'), active: view === 'dropoff', show: allow('dropoffs.manage') },
     { label: 'Audit', icon: <ScrollText className="w-5 h-5" />, on: () => go('audit'), active: view === 'audit', show: allow('audit.view') },
     { label: 'Users', icon: <UsersIcon className="w-5 h-5" />, on: () => go('users'), active: view === 'users', show: allow('users.tech') },
-    { label: 'AI Assistant', icon: <Bot className="w-5 h-5" />, on: () => go('ai'), active: view === 'ai', show: true },
+    // AI Assistant can surface real profit/margin figures (sends the full
+    // inventory to Gemini) — gated the same as every other profit-surfacing
+    // view (also enforced server-side, see functions/src/index.ts).
+    { label: 'AI Assistant', icon: <Bot className="w-5 h-5" />, on: () => go('ai'), active: view === 'ai', show: allow('reports.profit.summary') },
   ];
   const actions: Item[] = [
     { label: 'Find item', icon: <Search className="w-5 h-5" />, on: () => act(onOpenFinder), show: true },
-    { label: 'AI Bulk Add', icon: <Sparkles className="w-5 h-5" />, on: () => act(onOpenBulk), show: true },
+    // AI Bulk Add only adds inventory items and never touches profit data.
+    { label: 'AI Bulk Add', icon: <Sparkles className="w-5 h-5" />, on: () => act(onOpenBulk), show: allow('inventory.add') },
     { label: 'Settings', icon: <Settings className="w-5 h-5" />, on: () => act(onOpenSettings), show: allow('settings.manage') },
     { label: darkMode ? 'Light theme' : 'Dark theme', icon: darkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />, on: () => onToggleTheme(), show: true },
     { label: 'Lock app', icon: <Lock className="w-5 h-5" />, on: () => act(onLock), show: true },

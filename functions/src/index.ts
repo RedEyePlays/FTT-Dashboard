@@ -1,6 +1,10 @@
 import { onCall, HttpsError, CallableRequest } from "firebase-functions/v2/https";
 import { defineSecret } from "firebase-functions/params";
 import { GoogleGenAI, Type } from "@google/genai";
+import * as admin from "firebase-admin";
+import { Role, hasProfitVisibility } from "./permissions";
+
+if (!admin.apps.length) admin.initializeApp();
 
 // Scheduled automated Firestore→Storage backups (see backups.ts).
 export { scheduledBackups } from "./backups";
@@ -35,6 +39,23 @@ type AiRequest =
   | { op: "imeiExtract"; base64Image: string }
   | { op: "chat"; inventory: InventoryRow[]; history: ChatTurn[] };
 
+// insights/chat send the full inventory — including purchaseCost, salePrice,
+// repairCost — to Gemini and can return real profit/margin figures, so they
+// need the same server-side gate reports.profit.summary already enforces for
+// every other profit-surfacing view. The frontend menu gate (App.tsx/
+// AppHeader) is UX only; this is what actually stops a technician/employee
+// from calling aiGenerate directly and getting profit data back regardless.
+async function requireProfitVisibility(uid: string): Promise<void> {
+  const snap = await admin.firestore().collection("users").doc(uid).get();
+  const data = snap.data() as { role?: Role; disabled?: boolean; allowProfit?: boolean } | undefined;
+  if (!data || data.disabled || !hasProfitVisibility(data.role, data.allowProfit)) {
+    throw new HttpsError(
+      "permission-denied",
+      "This AI feature surfaces profit/margin figures your account doesn't have access to."
+    );
+  }
+}
+
 /**
  * Single HTTPS callable that proxies every Gemini interaction the dashboard
  * needs. The client sends `{ op, ...payload }`; we read the API key from Secret
@@ -67,12 +88,14 @@ export const aiGenerate = onCall(
 
     switch (body.op) {
       case "insights":
+        await requireProfitVisibility(request.auth.uid);
         return { text: await runInsights(ai, body.data ?? []) };
       case "bulkParse":
         return { items: await runBulkParse(ai, body.text ?? "") };
       case "imeiExtract":
         return { text: await runImeiExtract(ai, body.base64Image ?? "") };
       case "chat":
+        await requireProfitVisibility(request.auth.uid);
         return {
           text: await runChat(ai, body.inventory ?? [], body.history ?? []),
         };
