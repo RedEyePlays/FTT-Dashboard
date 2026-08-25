@@ -16,6 +16,7 @@ import { useIsMobile } from '../hooks/useMediaQuery';
 import { ResponsiveDialog, EmptyState } from './responsive';
 import { InvSection, INV_SECTIONS } from '../domain/inventoryNav';
 import { getDeviceDisplayName, priceFieldFor } from '../domain/inventory';
+import { listingPlatformsLabel } from '../domain/listing';
 import { clampWidth, fitWidths } from '../domain/columnLayout';
 import { usePersistedFilter } from '../hooks/usePersistedFilter';
 
@@ -1191,6 +1192,11 @@ const InvCard: React.FC<{
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-semibold text-slate-800 dark:text-slate-100 truncate">{nameOf(i)}</span>
             {i.listed && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">Listed</span>}
+            {(i.listedPlatforms?.length || 0) > 0 && (
+              <span title="Also listed elsewhere — Quick Sale will warn before selling this in-store" className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
+                {listingPlatformsLabel(i.listedPlatforms)}
+              </span>
+            )}
             {/* Devices no longer show a status badge here (status removed from the
                 device view); accessories still flag low stock. */}
             {!isDevice && (i.quantity ?? 0) <= (i.lowStockThreshold ?? 0) && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300">Low · {i.quantity ?? 0}</span>}

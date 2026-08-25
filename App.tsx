@@ -52,6 +52,7 @@ import {
   saveStaffNote, deleteStaffNote, commitAutoInventory,
 } from './services/firestoreDb';
 import { decideAutoInventory, autoInventoryPurchaseDrawerEffect, AutoInventoryNotice } from './domain/autoInventory';
+import { listingPlatformsLabel } from './domain/listing';
 import { AppSettings } from './domain/settings';
 import { listWorkspaceBackups, getBackupDownloadUrl } from './services/backupStorage';
 import { useWorkspaceData } from './hooks/useWorkspaceData';
@@ -557,8 +558,18 @@ const App: React.FC = () => {
     // accessory both subtract correctly instead of one silently overwriting the
     // other off a shared stale snapshot.
     const accessoryUpdates = Object.entries(payload.accessoryQtys).map(([id, soldQty]) => ({ id, delta: stockChange(soldQty) }));
+    // Delist reminder (durable copy of the confirmation-screen notice — see
+    // useCheckout's delistReminders): a device flagged listed elsewhere that
+    // just sold in-store for real (not a layaway hold). listedPlatforms is
+    // already cleared on payload.soldRows by the time it gets here, so the
+    // "was it listed" check reads the pre-sale snapshot still in dataRef.
+    const delistNotices: ActivityEntry[] = isLayaway ? [] : payload.soldRows
+      .map(d => dataRef.current.find(i => i.id === d.id))
+      .filter((i): i is InventoryItem => !!i && (i.listedPlatforms?.length || 0) > 0)
+      .map(i => mkActivity(`Remember to delist ${i.sku || i.item} from: ${listingPlatformsLabel(i.listedPlatforms)}`));
     const activity: ActivityEntry[] = [
       ...payload.soldRows.map(d => mkActivity(`${d.sku || d.item} ${isLayaway ? 'reserved (layaway) for' : 'sold to'} ${d.customerName || d.soldTo || 'customer'}`)),
+      ...delistNotices,
       ...Object.keys(payload.accessoryQtys).map(id => {
         const a = dataRef.current.find(i => i.id === id); return mkActivity(`${a?.sku || 'Accessory'} quantity updated`);
       }),

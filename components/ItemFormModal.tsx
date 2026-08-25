@@ -2,8 +2,9 @@ import React, { useState } from 'react';
 import { X, Wand2, Smartphone, Package, Barcode, Camera, Tag } from 'lucide-react';
 import { printShelfTag } from '../services/shelfTag';
 import { getStoreProfile } from './SettingsModal';
-import { InventoryItem, ItemKind, DeviceType, DeviceStatus, Runner, Repair } from '../types';
+import { InventoryItem, ItemKind, DeviceType, DeviceStatus, Runner, Repair, ListingPlatform } from '../types';
 import { REPAIR_STATUS_LABEL } from '../domain/repairs';
+import { LISTING_PLATFORMS } from '../domain/listing';
 import { ImeiScanner } from './ImeiScanner';
 import { Wrench } from 'lucide-react';
 
@@ -64,6 +65,10 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, runners, 
 
   const set = <K extends keyof InventoryItem>(k: K, v: InventoryItem[K]) => setF(p => ({ ...p, [k]: v }));
   const [showImeiScanner, setShowImeiScanner] = useState(false);
+  const toggleListedPlatform = (p: ListingPlatform) => setF(prev => {
+    const cur = prev.listedPlatforms || [];
+    return { ...prev, listedPlatforms: cur.includes(p) ? cur.filter(x => x !== p) : [...cur, p] };
+  });
 
   // Snapshot the form at mount for a dirty check, so a stray backdrop/X/Cancel
   // click doesn't silently discard typed changes.
@@ -216,6 +221,24 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, runners, 
               <Field label="Bought From" value={f.boughtFrom} onChange={setText('boughtFrom')} />
             </div>
           )}
+
+          <div>
+            <label className={lbl}>Listed Elsewhere (also posted on)</label>
+            <div className="flex flex-wrap gap-2">
+              {LISTING_PLATFORMS.map(p => {
+                const active = (f.listedPlatforms || []).includes(p.value);
+                return (
+                  <button key={p.value} type="button" onClick={() => toggleListedPlatform(p.value)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium border ${active ? 'bg-amber-500 text-white border-amber-500' : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:border-amber-400'}`}>
+                    {p.label}
+                  </button>
+                );
+              })}
+            </div>
+            {(f.listedPlatforms || []).length > 0 && (
+              <p className="text-xs text-amber-600 dark:text-amber-400 mt-1.5">Quick Sale will warn before selling this item in-store while it's flagged listed elsewhere.</p>
+            )}
+          </div>
 
           <div>
             <label className={lbl}>Notes</label>

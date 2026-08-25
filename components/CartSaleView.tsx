@@ -11,6 +11,7 @@ import { getDeviceDisplayName, suggestedSalePrice, PriceSuggestion } from '../do
 // actually printed, not on every Quick Sale.
 const LabelModal = lazy(() => import('./LabelModal').then(m => ({ default: m.LabelModal })));
 import { PLATFORMS } from '../domain/pos';
+import { listingPlatformsLabel } from '../domain/listing';
 import { formatPhoneInput } from '../domain/phone';
 import { CustomerSearchInput } from './CustomerSearchInput';
 import { useCheckout, CustomCategory, CUSTOM_DEVICE_TYPES } from '../hooks/useCheckout';
@@ -48,6 +49,7 @@ export const CartSaleView: React.FC<Props> = (props) => {
     taxRate, feePercent, previousPurchases, availableDevices, availableAccessories,
     lineSubtotal, subtotal, purchaseCostTotal, repairCostTotal, totalCost, taxApplies, tax, platformFee, totalPaid, netProfit,
     isZeroPricedDevice, hasZeroPricedDevice, allowZeroPrice, setAllowZeroPrice, blockedByZeroPrice,
+    hasListedElsewhereDevice, allowListedElsewhereSale, setAllowListedElsewhereSale, blockedByListedElsewhere, delistReminders,
     addDevice, addAccessory, updateLine, removeLine, num, addCustomItem, handleScan, handleCheckout, reset, printReceipt, printInvoice, emailReceipt, soldDeviceRows,
     scanResults, addScanResult, repairMatches, addRepair,
     printReceiptOnComplete, setPrintReceiptOnComplete,
@@ -92,6 +94,15 @@ export const CartSaleView: React.FC<Props> = (props) => {
           )}
           {canViewProfit && <div className="text-center"><p className="text-slate-400 text-xs">Net Profit</p><p className={`font-bold ${lastTx.netProfit >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>${lastTx.netProfit.toFixed(2)}</p></div>}
         </div>
+
+        {delistReminders.length > 0 && (
+          <div className="w-full max-w-sm bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-500/40 rounded-xl p-3 text-left text-sm">
+            <p className="flex items-center gap-2 font-semibold text-amber-800 dark:text-amber-300"><AlertTriangle className="w-4 h-4" /> Remember to delist</p>
+            <ul className="mt-1.5 space-y-1 text-amber-700/90 dark:text-amber-300/90">
+              {delistReminders.map((r, i) => <li key={i}>{r.name} — {listingPlatformsLabel(r.platforms)}</li>)}
+            </ul>
+          </div>
+        )}
 
         <div className="grid grid-cols-2 gap-2 w-full max-w-sm mt-2">
           <button onClick={() => printReceipt()} className="flex items-center justify-center gap-2 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium"><Printer className="w-4 h-4" /> Print Receipt</button>
@@ -368,12 +379,27 @@ export const CartSaleView: React.FC<Props> = (props) => {
           </div>
         )}
 
+        {hasListedElsewhereDevice && (
+          <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-500/40 rounded-xl p-3 text-sm">
+            <p className="flex items-center gap-2 font-semibold text-amber-800 dark:text-amber-300"><AlertTriangle className="w-4 h-4" /> Listed elsewhere</p>
+            {cart.filter(l => l.kind === 'device' && (l.listedPlatforms?.length || 0) > 0).map(l => (
+              <p key={l.key} className="text-xs text-amber-700/80 dark:text-amber-300/80 mt-1">
+                {l.name} is listed on {listingPlatformsLabel(l.listedPlatforms)}. Confirm it's not already sold there before completing this sale.
+              </p>
+            ))}
+            <label className="flex items-center gap-2 mt-2 text-amber-800 dark:text-amber-300 cursor-pointer">
+              <input type="checkbox" checked={allowListedElsewhereSale} onChange={e => setAllowListedElsewhereSale(e.target.checked)} className="rounded" />
+              Confirmed — not already sold elsewhere
+            </label>
+          </div>
+        )}
+
         <label className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300 cursor-pointer select-none">
           <input type="checkbox" checked={printReceiptOnComplete} onChange={e => setPrintReceiptOnComplete(e.target.checked)} className="rounded" />
           <Printer className="w-3.5 h-3.5 text-slate-400" /> Print receipt on completion
         </label>
 
-        <button onClick={handleCheckout} disabled={cart.length === 0 || blockedByZeroPrice}
+        <button onClick={handleCheckout} disabled={cart.length === 0 || blockedByZeroPrice || blockedByListedElsewhere}
           className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold rounded-xl text-sm transition-colors flex items-center justify-center gap-2">
           <ShoppingCart className="w-4 h-4" /> {isLayaway ? `Take Deposit · $${cx.depositAmount.toFixed(2)}` : `Complete Sale · $${totalPaid.toFixed(2)}`}
         </button>
