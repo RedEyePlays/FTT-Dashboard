@@ -152,6 +152,22 @@ export const salesBalanceOwing = (total: number, deposit?: number): number => {
 export const isLayaway = (tx: { balanceOwing?: number }): boolean =>
   (tx.balanceOwing || 0) > 0;
 
+/**
+ * A mixed-payment sale's cash + card + e-transfer amounts must sum to what's
+ * actually being collected right now (the deposit for a layaway, the full
+ * total otherwise) — an unvalidated mismatch silently corrupts the drawer's
+ * expected-cash calculation later, since `cashAmount` flows straight into it.
+ * Amounts are clamped to non-negative (a stray "-" typo shouldn't cancel out
+ * the mismatch) and compared to the cent.
+ */
+export function mixedPaymentMismatch(
+  parts: { cash?: number; card?: number; etransfer?: number },
+  collected: number,
+): boolean {
+  const sum = Math.max(0, parts.cash || 0) + Math.max(0, parts.card || 0) + Math.max(0, parts.etransfer || 0);
+  return Math.round(sum * 100) !== Math.round((collected || 0) * 100);
+}
+
 // --- Void / Return refund amounts -------------------------------------------
 // `totalPaid` is the grand total DUE, not reduced by a deposit — refunding it
 // wholesale on a layaway overpays the customer by whatever balance was never

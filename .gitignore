@@ -13,6 +13,13 @@ dist-status
 dist-ssr
 *.local
 
+# Secrets — never committed. AI calls are proxied server-side via Secret
+# Manager (functions/src/index.ts); no VITE_-prefixed key should ever be
+# needed client-side again.
+.env
+.env.*
+!.env.example
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

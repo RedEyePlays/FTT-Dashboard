@@ -43,7 +43,7 @@ export const CartSaleView: React.FC<Props> = (props) => {
     customerNotes, setCustomerNotes, setSelectedCustomerId,
     paymentMethod, setPaymentMethod, cashTaxStatus, setCashTaxStatus, paymentNotes, setPaymentNotes,
     cashAmount, setCashAmount, cardAmount, setCardAmount, etransferAmount, setEtransferAmount, taxCollected, setTaxCollected,
-    deposit, setDeposit, balanceOwing, isLayaway,
+    deposit, setDeposit, balanceOwing, isLayaway, mixedPaymentTotal, mixedPaymentMismatch,
     scan, setScan, scanMsg, scanRef, lastTx, showTx, setShowTx, labelItem, setLabelItem,
     emptyCustom, showCustom, setShowCustom, custom, setCustom,
     taxRate, feePercent, previousPurchases, availableDevices, availableAccessories,
@@ -341,6 +341,11 @@ export const CartSaleView: React.FC<Props> = (props) => {
               <div><label className={labelCls}>Tax Collected</label><input type="number" step="0.01" className={inputCls} value={taxCollected} onChange={e => setTaxCollected(e.target.value)} placeholder="0.00" /></div>
             </div>
           )}
+          {mixedPaymentMismatch && (
+            <p className="flex items-center gap-1.5 text-xs font-medium text-amber-600 dark:text-amber-400">
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0" /> Cash + Card + E-transfer (${mixedPaymentTotal.toFixed(2)}) must add up to the amount being collected (${(isLayaway ? cx.depositAmount : totalPaid).toFixed(2)}) before you can complete this sale.
+            </p>
+          )}
           <IconInput icon={<FileText className="w-4 h-4" />} placeholder="Payment notes, e.g. $200 cash + $15 tax" value={paymentNotes} onChange={setPaymentNotes} />
           <div>
             <label className={labelCls}>Deposit / partial payment (optional)</label>
@@ -399,7 +404,7 @@ export const CartSaleView: React.FC<Props> = (props) => {
           <Printer className="w-3.5 h-3.5 text-slate-400" /> Print receipt on completion
         </label>
 
-        <button onClick={handleCheckout} disabled={cart.length === 0 || blockedByZeroPrice || blockedByListedElsewhere}
+        <button onClick={handleCheckout} disabled={cart.length === 0 || blockedByZeroPrice || blockedByListedElsewhere || mixedPaymentMismatch}
           className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold rounded-xl text-sm transition-colors flex items-center justify-center gap-2">
           <ShoppingCart className="w-4 h-4" /> {isLayaway ? `Take Deposit · $${cx.depositAmount.toFixed(2)}` : `Complete Sale · $${totalPaid.toFixed(2)}`}
         </button>
