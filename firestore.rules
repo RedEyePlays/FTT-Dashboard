@@ -47,12 +47,21 @@ service cloud.firestore {
       return ['pinHash', 'pinSalt', 'pinIterations', 'pinUpdatedAt', 'pinUpdatedBy', 'pinUpdatedByEmail'];
     }
 
-    // The only repair fields a technician may change (mirrors TECH_EDITABLE_FIELDS
-    // in domain/repairs.ts, plus the completedAt/warrantyUntil the app stamps when
-    // a device is picked up).
+    // The only repair fields a technician may change directly (mirrors
+    // TECH_EDITABLE_FIELDS in domain/repairs.ts). completedAt/warrantyUntil are
+    // deliberately NOT here — a technician who wrote them directly (e.g. via dev
+    // tools, bypassing the app's computed values) could backdate completion to
+    // inflate their own Tech Performance turnaround stats, or set an arbitrary
+    // warranty end date. They (and completedBy, also never technician-writable)
+    // are stamped server-side only, by the techUpdateRepair Cloud Function
+    // (functions/src/repairs.ts) using the Admin SDK — never trusted from the
+    // client. A technician's own direct writes here can still move `status` to
+    // 'picked_up' (the technician-facing terminal state — see TECH_STATUSES in
+    // domain/repairs.ts), but completedAt/warrantyUntil will simply be
+    // missing/stale until that callable (or a staff write) sets them.
     function techRepairKeys() {
       return ['status', 'techNotes', 'diagnostics', 'workPerformed', 'partsUsed',
-              'testingResults', 'testChecks', 'completedAt', 'warrantyUntil'];
+              'testingResults', 'testChecks'];
     }
     function techRepairUpdateOk() {
       return request.resource.data.diff(resource.data).affectedKeys().hasOnly(techRepairKeys());
