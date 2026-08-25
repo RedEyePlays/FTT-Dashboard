@@ -4,6 +4,7 @@ import { AppData } from '../types';
 import { BackupPanel } from './BackupPanel';
 import { normalizeRestore, isRestorableBackup } from '../domain/restore';
 import { mergeLabelSizes, LabelSize } from '../domain/settings';
+import { useEscapeKey } from '../hooks/useEscapeKey';
 
 export const getPOSSettings = () => {
   try {
@@ -65,6 +66,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, currentDa
   const [restoreError, setRestoreError] = useState<string | null>(null);
   const [taxRate, setTaxRate] = useState(() => String(getPOSSettings().taxRate));
   const [taxSaved, setTaxSaved] = useState(false);
+
+  useEscapeKey(onClose);
 
   const handleSaveTax = () => {
     const rate = parseFloat(taxRate);

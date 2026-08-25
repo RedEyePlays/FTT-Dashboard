@@ -1,5 +1,6 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { QrCode, X, Loader2 } from 'lucide-react';
+import { useEscapeKey } from '../hooks/useEscapeKey';
 
 interface Props {
   onScan: (value: string) => void;
@@ -77,6 +78,10 @@ export const QRScanner: React.FC<Props> = ({ onScan, onClose }) => {
     return () => stopCamera();
   }, [scan, stopCamera]);
 
+  const handleClose = useCallback(() => { stopCamera(); onClose(); }, [stopCamera, onClose]);
+
+  useEscapeKey(handleClose);
+
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/90 backdrop-blur-sm p-4 animate-fadeIn">
       <div className="bg-slate-900 rounded-2xl w-full max-w-md overflow-hidden border border-slate-700">
@@ -86,7 +91,7 @@ export const QRScanner: React.FC<Props> = ({ onScan, onClose }) => {
             <QrCode className="w-5 h-5 text-indigo-400" />
             <span>Scan QR / Barcode</span>
           </div>
-          <button onClick={() => { stopCamera(); onClose(); }} className="text-white/80 hover:text-white bg-black/40 p-1.5 rounded-full">
+          <button onClick={handleClose} className="text-white/80 hover:text-white bg-black/40 p-1.5 rounded-full">
             <X className="w-5 h-5" />
           </button>
         </div>

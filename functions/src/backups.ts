@@ -5,12 +5,18 @@ import * as admin from "firebase-admin";
 // Single shared Admin app (aiGenerate in index.ts doesn't init one).
 if (!admin.apps.length) admin.initializeApp();
 
-// The workspace collections to snapshot. Kept in sync with COLLECTIONS in
-// services/firestoreDb.ts (the client can't be imported into this subproject).
+// The workspace collections to snapshot. MUST be kept in sync with
+// COLLECTIONS in services/firestoreDb.ts (the client can't be imported into
+// this subproject) — if you add a collection there, add it here too, or
+// scheduled backups will silently exclude it while the manual "Download
+// Backup"/"Export JSON" path (which loops over that constant directly)
+// stays complete. This drifted out of sync once already (cashReconciliations
+// and staffNotes were missing here for a while) — there is no automated check
+// that catches this, so double-check the two lists match on every change.
 const COLLECTIONS = [
   "inventory", "accessories", "salesTransactions", "customers",
   "dropOffs", "runners", "settlements", "activityLog", "auditLogs",
-  "repairs", "repairBatches", "timeEntries", "payPeriods",
+  "repairs", "repairBatches", "timeEntries", "payPeriods", "cashReconciliations", "staffNotes",
 ] as const;
 
 const HOUR_MS = 3_600_000;

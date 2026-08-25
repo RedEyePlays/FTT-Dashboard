@@ -7,6 +7,7 @@ import { InventoryItem, DeviceStatus } from '../types';
 import { getDeviceDisplayName, kindOf } from '../domain/inventory';
 import { LabelContent, labelPreview, labelPrintDoc, mmOf } from '../services/labelLayout';
 import { getLabelSizes, getStoreProfile } from './SettingsModal';
+import { useEscapeKey } from '../hooks/useEscapeKey';
 
 interface Props {
   item: InventoryItem;
@@ -71,6 +72,8 @@ export const LabelModal: React.FC<Props> = ({ item, onClose }) => {
   const [prefs, setPrefs] = useState<LabelPrefs>(loadPrefs);
   const [qr, setQr] = useState('');
   const [barcode, setBarcode] = useState('');
+
+  useEscapeKey(onClose);
 
   const isAccessory = kindOf(item) === 'accessory';
   const sku = item.sku || item.imei || '';

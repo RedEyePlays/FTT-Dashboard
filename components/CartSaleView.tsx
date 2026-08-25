@@ -15,8 +15,12 @@ import { listingPlatformsLabel } from '../domain/listing';
 import { formatPhoneInput } from '../domain/phone';
 import { CustomerSearchInput } from './CustomerSearchInput';
 import { useCheckout, CustomCategory, CUSTOM_DEVICE_TYPES } from '../hooks/useCheckout';
+import { useEscapeKey } from '../hooks/useEscapeKey';
+import { selectOnFocus } from '../hooks/selectOnFocus';
 
 export type { CartCheckout } from '../hooks/useCheckout';
+
+const money = (n: number) => `$${n.toFixed(2)}`;
 
 interface Props {
   inventory: InventoryItem[];
@@ -29,6 +33,7 @@ interface Props {
   onComplete: (payload: import('../hooks/useCheckout').CartCheckout) => void;
   canViewProfit?: boolean;      // gate cost/profit figures (same pattern as Dashboard)
   onGenerateSku?: (deviceType?: DeviceType) => Promise<string>;
+  onDirtyChange?: (dirty: boolean) => void; // reports whether the cart has unsaved items
 }
 
 // Desktop split-screen Quick Sale. All state / pricing / checkout logic lives in
@@ -36,6 +41,8 @@ interface Props {
 export const CartSaleView: React.FC<Props> = (props) => {
   const cx = useCheckout(props);
   const canViewProfit = props.canViewProfit ?? true;
+  const { onDirtyChange } = props;
+  React.useEffect(() => { onDirtyChange?.(cx.cart.length > 0); }, [cx.cart.length, onDirtyChange]);
   const {
     customers, cart, picker, setPicker, search, setSearch, confirmed,
     platformName, setPlatformName, platformFeePercent, setPlatformFeePercent, soldDate, setSoldDate,
@@ -54,6 +61,10 @@ export const CartSaleView: React.FC<Props> = (props) => {
     scanResults, addScanResult, repairMatches, addRepair,
     printReceiptOnComplete, setPrintReceiptOnComplete,
   } = cx;
+
+  useEscapeKey(() => setShowTx(false), showTx);
+  useEscapeKey(() => setPicker(null), !!picker);
+  useEscapeKey(() => setShowCustom(false), showCustom);
 
   const inputCls = 'w-full px-2 py-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500';
   const labelCls = 'block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1';
@@ -86,13 +97,13 @@ export const CartSaleView: React.FC<Props> = (props) => {
         <div className="flex gap-6 text-sm">
           {lastTx.balanceOwing ? (
             <>
-              <div className="text-center"><p className="text-slate-400 text-xs">Deposit Paid</p><p className="font-bold text-slate-800 dark:text-slate-100">${(lastTx.deposit || 0).toFixed(2)}</p></div>
-              <div className="text-center"><p className="text-slate-400 text-xs">Balance Owing</p><p className="font-bold text-sky-600">${lastTx.balanceOwing.toFixed(2)}</p></div>
+              <div className="text-center"><p className="text-slate-400 text-xs">Deposit Paid</p><p className="font-bold text-slate-800 dark:text-slate-100">{money(lastTx.deposit || 0)}</p></div>
+              <div className="text-center"><p className="text-slate-400 text-xs">Balance Owing</p><p className="font-bold text-sky-600">{money(lastTx.balanceOwing)}</p></div>
             </>
           ) : (
-            <div className="text-center"><p className="text-slate-400 text-xs">Total Paid</p><p className="font-bold text-slate-800 dark:text-slate-100">${lastTx.totalPaid.toFixed(2)}</p></div>
+            <div className="text-center"><p className="text-slate-400 text-xs">Total Paid</p><p className="font-bold text-slate-800 dark:text-slate-100">{money(lastTx.totalPaid)}</p></div>
           )}
-          {canViewProfit && <div className="text-center"><p className="text-slate-400 text-xs">Net Profit</p><p className={`font-bold ${lastTx.netProfit >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>${lastTx.netProfit.toFixed(2)}</p></div>}
+          {canViewProfit && <div className="text-center"><p className="text-slate-400 text-xs">Net Profit</p><p className={`font-bold ${lastTx.netProfit >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>{money(lastTx.netProfit)}</p></div>}
         </div>
 
         {delistReminders.length > 0 && (
@@ -130,7 +141,7 @@ export const CartSaleView: React.FC<Props> = (props) => {
                   {lastTx.lines.map((l, idx) => (
                     <div key={idx} className="flex items-center justify-between px-3 py-2">
                       <span className="text-slate-700 dark:text-slate-200 truncate">{l.name} <span className="text-slate-400 text-xs">×{l.quantity}</span></span>
-                      <span className="text-slate-600 dark:text-slate-300">${(l.quantity * l.unitPrice).toFixed(2)}</span>
+                      <span className="text-slate-600 dark:text-slate-300">{money(l.quantity * l.unitPrice)}</span>
                     </div>
                   ))}
                 </div>
@@ -142,7 +153,7 @@ export const CartSaleView: React.FC<Props> = (props) => {
                   {lastTx.balanceOwing ? <><Row label="Deposit" value={lastTx.deposit || 0} muted /><Row label="Balance Owing" value={lastTx.balanceOwing} /></> : null}
                   {canViewProfit && <Row label="Net Profit" value={lastTx.netProfit} />}
                 </div>
-                <p className="text-xs text-slate-500 dark:text-slate-400">Payment: {lastTx.paymentMethod}{lastTx.paymentMethod === 'mixed' ? ` — cash $${(lastTx.cashAmount || 0).toFixed(2)}, card $${(lastTx.cardAmount || 0).toFixed(2)}, e-transfer $${(lastTx.etransferAmount || 0).toFixed(2)}` : ''}</p>
+                <p className="text-xs text-slate-500 dark:text-slate-400">Payment: {lastTx.paymentMethod}{lastTx.paymentMethod === 'mixed' ? ` — cash ${money(lastTx.cashAmount || 0)}, card ${money(lastTx.cardAmount || 0)}, e-transfer ${money(lastTx.etransferAmount || 0)}` : ''}</p>
                 {lastTx.notes && <p className="text-xs text-slate-500 dark:text-slate-400 italic">{lastTx.notes}</p>}
               </div>
             </div>
@@ -183,7 +194,7 @@ export const CartSaleView: React.FC<Props> = (props) => {
                     <Wrench className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
                     <span className="min-w-0">
                       <span className="block text-sm text-slate-800 dark:text-slate-100 truncate">{r.repairNumber || 'Repair'}{r.customerName ? ` · ${r.customerName}` : ''}</span>
-                      <span className="block text-[11px] text-slate-400 truncate">{[r.brand, r.model].filter(Boolean).join(' ') || r.deviceType || 'Device'}{r.issue ? ` — ${r.issue}` : ''} · ${(r.repairPrice || 0).toFixed(2)}</span>
+                      <span className="block text-[11px] text-slate-400 truncate">{[r.brand, r.model].filter(Boolean).join(' ') || r.deviceType || 'Device'}{r.issue ? ` — ${r.issue}` : ''} · {money(r.repairPrice || 0)}</span>
                     </span>
                   </span>
                   <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded shrink-0 bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400">Repair</span>
@@ -238,16 +249,16 @@ export const CartSaleView: React.FC<Props> = (props) => {
                           onChange={e => updateLine(l.key, { quantity: Math.min(l.maxQty, Math.max(1, Math.round(num(e.target.value)))) })} /></div>
                     )}
                     <div><label className={labelCls}>Unit Price</label>
-                      <input type="number" step="0.01" className={inputCls} value={l.unitPrice} onChange={e => updateLine(l.key, { unitPrice: num(e.target.value) })} />
+                      <input type="number" step="0.01" className={inputCls} value={l.unitPrice} onChange={e => updateLine(l.key, { unitPrice: num(e.target.value) })} onFocus={selectOnFocus} />
                       {priceHints.has(l.key) && (() => { const s = priceHints.get(l.key)!; return (
                         <button type="button" onClick={() => updateLine(l.key, { unitPrice: s.price })} title={`Median of ${s.sampleSize} recent sale${s.sampleSize !== 1 ? 's' : ''} matching ${s.basis}. Click to use — you can still edit.`}
                           className="mt-1 inline-flex items-center gap-1 text-[11px] text-indigo-600 dark:text-indigo-400 hover:underline">
-                          <History className="w-3 h-3" /> Similar sold for ${s.price.toFixed(2)} <span className="text-slate-400">· {s.sampleSize} sale{s.sampleSize !== 1 ? 's' : ''}</span>
+                          <History className="w-3 h-3" /> Similar sold for {money(s.price)} <span className="text-slate-400">· {s.sampleSize} sale{s.sampleSize !== 1 ? 's' : ''}</span>
                         </button>
                       ); })()}
                     </div>
                     <div><label className={labelCls}>Discount</label>
-                      <input type="number" step="0.01" className={inputCls} value={l.discount} onChange={e => updateLine(l.key, { discount: num(e.target.value) })} /></div>
+                      <input type="number" step="0.01" className={inputCls} value={l.discount} onChange={e => updateLine(l.key, { discount: num(e.target.value) })} onFocus={selectOnFocus} /></div>
                     <div className="flex items-end">
                       <label className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300 cursor-pointer">
                         <input type="checkbox" checked={l.taxable} onChange={e => updateLine(l.key, { taxable: e.target.checked })} className="rounded" /> Taxable
@@ -256,7 +267,7 @@ export const CartSaleView: React.FC<Props> = (props) => {
                   </div>
                 </div>
                 <div className="text-right shrink-0">
-                  <p className="font-bold text-slate-800 dark:text-slate-100 text-sm">${lineSubtotal(l).toFixed(2)}</p>
+                  <p className="font-bold text-slate-800 dark:text-slate-100 text-sm">{money(lineSubtotal(l))}</p>
                   <button onClick={() => removeLine(l.key)} className="text-slate-400 hover:text-rose-500 mt-1"><Trash2 className="w-4 h-4" /></button>
                 </div>
               </div>
@@ -278,7 +289,7 @@ export const CartSaleView: React.FC<Props> = (props) => {
               <Row label="Deposit" value={cx.depositAmount} muted />
               <div className="flex items-center justify-between">
                 <span className="font-semibold text-sky-700 dark:text-sky-300">Balance Owing</span>
-                <span className="font-bold text-sky-700 dark:text-sky-300">${balanceOwing.toFixed(2)}</span>
+                <span className="font-bold text-sky-700 dark:text-sky-300">{money(balanceOwing)}</span>
               </div>
             </>
           )}
@@ -289,7 +300,7 @@ export const CartSaleView: React.FC<Props> = (props) => {
               <Row label="Total Cost" value={totalCost} muted />
               <div className="flex items-center justify-between pt-1">
                 <span className="font-semibold text-slate-700 dark:text-slate-200">Net Profit</span>
-                <span className={`text-lg font-bold ${netProfit >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>${netProfit.toFixed(2)}</span>
+                <span className={`text-lg font-bold ${netProfit >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>{money(netProfit)}</span>
               </div>
             </>
           )}
@@ -310,7 +321,7 @@ export const CartSaleView: React.FC<Props> = (props) => {
             <div className="bg-indigo-50 dark:bg-indigo-900/20 rounded-lg p-2 text-xs text-indigo-700 dark:text-indigo-300">
               <p className="font-semibold flex items-center gap-1"><History className="w-3 h-3" /> {previousPurchases.length} previous purchase{previousPurchases.length !== 1 ? 's' : ''}</p>
               <ul className="mt-1 space-y-0.5 text-indigo-600/80 dark:text-indigo-300/80">
-                {previousPurchases.slice(0, 4).map(p => <li key={p.id} className="truncate">{p.soldDate}: {getDeviceDisplayName(p)} — ${(p.salePrice || 0).toFixed(2)}</li>)}
+                {previousPurchases.slice(0, 4).map(p => <li key={p.id} className="truncate">{p.soldDate}: {getDeviceDisplayName(p)} — {money(p.salePrice || 0)}</li>)}
               </ul>
             </div>
           )}
@@ -335,25 +346,25 @@ export const CartSaleView: React.FC<Props> = (props) => {
           )}
           {paymentMethod === 'mixed' && (
             <div className="grid grid-cols-2 gap-2">
-              <div><label className={labelCls}>Cash Amount</label><input type="number" step="0.01" className={inputCls} value={cashAmount} onChange={e => setCashAmount(e.target.value)} placeholder="0.00" /></div>
-              <div><label className={labelCls}>Card Amount</label><input type="number" step="0.01" className={inputCls} value={cardAmount} onChange={e => setCardAmount(e.target.value)} placeholder="0.00" /></div>
-              <div><label className={labelCls}>E-transfer</label><input type="number" step="0.01" className={inputCls} value={etransferAmount} onChange={e => setEtransferAmount(e.target.value)} placeholder="0.00" /></div>
-              <div><label className={labelCls}>Tax Collected</label><input type="number" step="0.01" className={inputCls} value={taxCollected} onChange={e => setTaxCollected(e.target.value)} placeholder="0.00" /></div>
+              <div><label className={labelCls}>Cash Amount</label><input type="number" step="0.01" className={inputCls} value={cashAmount} onChange={e => setCashAmount(e.target.value)} onFocus={selectOnFocus} placeholder="0.00" /></div>
+              <div><label className={labelCls}>Card Amount</label><input type="number" step="0.01" className={inputCls} value={cardAmount} onChange={e => setCardAmount(e.target.value)} onFocus={selectOnFocus} placeholder="0.00" /></div>
+              <div><label className={labelCls}>E-transfer</label><input type="number" step="0.01" className={inputCls} value={etransferAmount} onChange={e => setEtransferAmount(e.target.value)} onFocus={selectOnFocus} placeholder="0.00" /></div>
+              <div><label className={labelCls}>Tax Collected</label><input type="number" step="0.01" className={inputCls} value={taxCollected} onChange={e => setTaxCollected(e.target.value)} onFocus={selectOnFocus} placeholder="0.00" /></div>
             </div>
           )}
           {mixedPaymentMismatch && (
             <p className="flex items-center gap-1.5 text-xs font-medium text-amber-600 dark:text-amber-400">
-              <AlertTriangle className="w-3.5 h-3.5 shrink-0" /> Cash + Card + E-transfer (${mixedPaymentTotal.toFixed(2)}) must add up to the amount being collected (${(isLayaway ? cx.depositAmount : totalPaid).toFixed(2)}) before you can complete this sale.
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0" /> Cash + Card + E-transfer ({money(mixedPaymentTotal)}) must add up to the amount being collected ({money(isLayaway ? cx.depositAmount : totalPaid)}) before you can complete this sale.
             </p>
           )}
           <IconInput icon={<FileText className="w-4 h-4" />} placeholder="Payment notes, e.g. $200 cash + $15 tax" value={paymentNotes} onChange={setPaymentNotes} />
           <div>
             <label className={labelCls}>Deposit / partial payment (optional)</label>
-            <input type="number" step="0.01" min="0" className={inputCls} value={deposit} onChange={e => setDeposit(e.target.value)} placeholder={`Leave blank if paying in full ($${totalPaid.toFixed(2)})`} />
+            <input type="number" step="0.01" min="0" className={inputCls} value={deposit} onChange={e => setDeposit(e.target.value)} onFocus={selectOnFocus} placeholder={`Leave blank if paying in full (${money(totalPaid)})`} />
             {isLayaway && (
               <div className="mt-2 flex items-center justify-between rounded-lg bg-sky-50 dark:bg-sky-900/20 border border-sky-200 dark:border-sky-500/30 px-3 py-2 text-sm">
                 <span className="font-semibold text-sky-700 dark:text-sky-300">Balance owing (layaway)</span>
-                <span className="font-bold text-sky-700 dark:text-sky-300">${balanceOwing.toFixed(2)}</span>
+                <span className="font-bold text-sky-700 dark:text-sky-300">{money(balanceOwing)}</span>
               </div>
             )}
           </div>
@@ -406,7 +417,7 @@ export const CartSaleView: React.FC<Props> = (props) => {
 
         <button onClick={handleCheckout} disabled={cart.length === 0 || blockedByZeroPrice || blockedByListedElsewhere || mixedPaymentMismatch}
           className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold rounded-xl text-sm transition-colors flex items-center justify-center gap-2">
-          <ShoppingCart className="w-4 h-4" /> {isLayaway ? `Take Deposit · $${cx.depositAmount.toFixed(2)}` : `Complete Sale · $${totalPaid.toFixed(2)}`}
+          <ShoppingCart className="w-4 h-4" /> {isLayaway ? `Take Deposit · ${money(cx.depositAmount)}` : `Complete Sale · ${money(totalPaid)}`}
         </button>
       </div>
 
@@ -431,7 +442,7 @@ export const CartSaleView: React.FC<Props> = (props) => {
                     <p className="text-xs text-slate-400 truncate font-mono">{i.sku || i.imei || i.manufacturerBarcode || '—'}</p>
                   </div>
                   <span className="text-xs text-slate-500 shrink-0 ml-3">
-                    {picker === 'device' ? `$${(i.targetSalePrice || 0).toFixed(2)}` : `${i.quantity} in stock · $${(i.sellingPrice || 0).toFixed(2)}`}
+                    {picker === 'device' ? money(i.targetSalePrice || 0) : `${i.quantity} in stock · ${money(i.sellingPrice || 0)}`}
                   </span>
                 </button>
               ))}
@@ -467,9 +478,9 @@ export const CartSaleView: React.FC<Props> = (props) => {
               <div><label className={labelCls}>Quantity</label>
                 <input type="number" min="1" className={inputCls} value={custom.quantity} onChange={e => setCustom(c => ({ ...c, quantity: e.target.value }))} /></div>
               <div><label className={labelCls}>Unit Price</label>
-                <input type="number" step="0.01" className={inputCls} value={custom.unitPrice} onChange={e => setCustom(c => ({ ...c, unitPrice: e.target.value }))} placeholder="0.00 (negative = discount)" /></div>
+                <input type="number" step="0.01" className={inputCls} value={custom.unitPrice} onChange={e => setCustom(c => ({ ...c, unitPrice: e.target.value }))} onFocus={selectOnFocus} placeholder="0.00 (negative = discount)" /></div>
               <div><label className={labelCls}>Cost Estimate (optional)</label>
-                <input type="number" step="0.01" className={inputCls} value={custom.costEstimate} onChange={e => setCustom(c => ({ ...c, costEstimate: e.target.value }))} placeholder="0.00" /></div>
+                <input type="number" step="0.01" className={inputCls} value={custom.costEstimate} onChange={e => setCustom(c => ({ ...c, costEstimate: e.target.value }))} onFocus={selectOnFocus} placeholder="0.00" /></div>
               {custom.category === 'device' && (
                 <div className="col-span-2"><label className={labelCls}>IMEI / Serial (optional)</label>
                   <input className={inputCls} value={custom.imei} onChange={e => setCustom(c => ({ ...c, imei: e.target.value }))} /></div>
@@ -499,7 +510,7 @@ export const CartSaleView: React.FC<Props> = (props) => {
 const Row: React.FC<{ label: string; value: number; bold?: boolean; muted?: boolean }> = ({ label, value, bold, muted }) => (
   <div className="flex items-center justify-between">
     <span className={`${muted ? 'text-slate-400' : 'text-slate-600 dark:text-slate-300'} ${bold ? 'font-semibold' : ''}`}>{label}</span>
-    <span className={`${bold ? 'font-bold text-slate-800 dark:text-slate-100' : muted ? 'text-slate-500 dark:text-slate-400' : 'text-slate-700 dark:text-slate-200'}`}>${value.toFixed(2)}</span>
+    <span className={`${bold ? 'font-bold text-slate-800 dark:text-slate-100' : muted ? 'text-slate-500 dark:text-slate-400' : 'text-slate-700 dark:text-slate-200'}`}>{money(value)}</span>
   </div>
 );
 

@@ -9,6 +9,7 @@ import {
   toISODate, periodEndInclusive, entriesOnDate, PayPeriod,
   isMissedClockOut, missedClockOuts, isValidClockOutCorrection,
 } from '../domain/timeclock';
+import { useEscapeKey } from '../hooks/useEscapeKey';
 
 interface Props {
   me: AppUser;
@@ -198,6 +199,8 @@ const BreakPickerModal: React.FC<{ onClose: () => void; onPick: (r: BreakReason,
   const [otherNote, setOtherNote] = useState('');
   const [showOther, setShowOther] = useState(false);
 
+  useEscapeKey(onClose);
+
   return (
     <div className="fixed inset-0 z-[80] flex items-end sm:items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/50" onClick={onClose} />
@@ -266,6 +269,9 @@ const ClockOutFixer: React.FC<{ entry: TimeEntry; now: number; onCancel: () => v
   const [value, setValue] = useState(() => toLocalInput(entry.clockOut ?? now));
   const parsed = fromLocalInput(value);
   const valid = isFinite(parsed) && isValidClockOutCorrection(entry, parsed, now);
+
+  useEscapeKey(onCancel);
+
   return (
     <div className="flex flex-wrap items-center gap-2 bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2">
       <span className="text-xs text-slate-500 dark:text-slate-400">Set actual clock-out for {new Date(entry.clockIn).toLocaleDateString()}:</span>

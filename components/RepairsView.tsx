@@ -15,6 +15,8 @@ import { getStoreProfile } from './SettingsModal';
 import { statusPageUrl } from '../domain/statusLink';
 import { formatPhoneInput } from '../domain/phone';
 import { usePersistedFilter } from '../hooks/usePersistedFilter';
+import { useEscapeKey } from '../hooks/useEscapeKey';
+import { selectOnFocus } from '../hooks/selectOnFocus';
 import { AutoInventoryNotice } from '../domain/autoInventory';
 // Lazy: the repair label modal pulls in jsPDF (~390 kB); load it on demand.
 const RepairLabelModal = lazy(() => import('./RepairLabelModal').then(m => ({ default: m.RepairLabelModal })));
@@ -509,7 +511,7 @@ const BatchDetail: React.FC<{
           <label className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400 cursor-pointer" title="Also print the invoice when this payment is recorded">
             <input type="checkbox" checked={printOnPay} onChange={e => setPrintOnPay(e.target.checked)} className="rounded" /> Print invoice
           </label>
-          <div className="relative"><DollarSign className="w-4 h-4 text-slate-400 absolute left-2 top-1/2 -translate-y-1/2" /><input value={pay} onChange={e => setPay(e.target.value)} placeholder="0.00" inputMode="decimal" className="w-24 pl-7 pr-2 py-2 text-sm bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg" /></div>
+          <div className="relative"><DollarSign className="w-4 h-4 text-slate-400 absolute left-2 top-1/2 -translate-y-1/2" /><input value={pay} onChange={e => setPay(e.target.value)} onFocus={selectOnFocus} placeholder="0.00" inputMode="decimal" className="w-24 pl-7 pr-2 py-2 text-sm bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg" /></div>
           <button onClick={() => { const a = parseFloat(pay) || 0; if (a > 0) { onRecordPayment(batch, a); setPay(''); if (printOnPay) onPrint('invoice', a); } }} className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium">Record Payment</button>
         </div>
       </div>
@@ -575,6 +577,7 @@ const RepairDrawer: React.FC<{
   const isTerminal = f.status === 'completed' || f.status === 'picked_up' || f.status === 'cancelled';
   const dirty = JSON.stringify(f) !== snapshot;
   const requestClose = () => { if (!dirty || window.confirm('Discard unsaved changes to this repair?')) onClose(); };
+  useEscapeKey(requestClose);
 
   // Check out: retail repairs go through the shared Quick Sale flow (so the money
   // lands in the sales P&L / cash reconciliation / dashboard totals like any sale
@@ -665,8 +668,8 @@ const RepairDrawer: React.FC<{
 
           <Section title="Payment / Warranty">
             <div className="grid grid-cols-2 gap-3">
-              <Field label="Repair Price"><input type="number" min="0" step="0.01" className={inputCls} value={f.repairPrice} onChange={e => set({ repairPrice: num(e.target.value) })} /></Field>
-              {isRetail && <Field label="Deposit"><input type="number" min="0" step="0.01" className={inputCls} value={f.deposit ?? 0} onChange={e => set({ deposit: num(e.target.value) })} /></Field>}
+              <Field label="Repair Price"><input type="number" min="0" step="0.01" className={inputCls} value={f.repairPrice} onChange={e => set({ repairPrice: num(e.target.value) })} onFocus={selectOnFocus} /></Field>
+              {isRetail && <Field label="Deposit"><input type="number" min="0" step="0.01" className={inputCls} value={f.deposit ?? 0} onChange={e => set({ deposit: num(e.target.value) })} onFocus={selectOnFocus} /></Field>}
               {isRetail && <Field label="Balance Owing"><input readOnly className={`${inputCls} opacity-70`} value={money(balanceOwing(f))} /></Field>}
               {isRetail && <Field label="Warranty (days)"><input type="number" min="0" className={inputCls} value={f.warrantyDays ?? 0} onChange={e => set({ warrantyDays: num(e.target.value) })} /></Field>}
               {isRetail && <Field label="Est. Completion" className="col-span-2"><input type="date" className={inputCls} value={f.estimatedCompletion || ''} onChange={e => set({ estimatedCompletion: e.target.value })} /></Field>}
@@ -675,7 +678,7 @@ const RepairDrawer: React.FC<{
               <div className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-800">
                 <p className="text-xs text-slate-400 mb-2">This batch auto-adds devices to inventory — what this device cost flows into its inventory record so profit reflects the real cost, not just $0.</p>
                 <div className="grid grid-cols-2 gap-3">
-                  <Field label="Purchase Cost (optional)"><input type="number" min="0" step="0.01" placeholder="0.00" className={inputCls} value={f.purchaseCost ?? ''} onChange={e => set({ purchaseCost: e.target.value === '' ? undefined : num(e.target.value) })} /></Field>
+                  <Field label="Purchase Cost (optional)"><input type="number" min="0" step="0.01" placeholder="0.00" className={inputCls} value={f.purchaseCost ?? ''} onChange={e => set({ purchaseCost: e.target.value === '' ? undefined : num(e.target.value) })} onFocus={selectOnFocus} /></Field>
                   <Field label="Paid From">
                     <select className={inputCls} value={f.purchasePaidBy || 'personal'} onChange={e => set({ purchasePaidBy: e.target.value as RepairPurchasePaidBy })}>
                       <option value="personal">Paid personally / outside store cash</option>
@@ -695,7 +698,7 @@ const RepairDrawer: React.FC<{
             {(f.parts || []).map(p => (
               <div key={p.id} className="flex items-center gap-2 mb-2">
                 <input className={`${inputCls} flex-1`} placeholder="Part (e.g. OLED screen)" value={p.name} onChange={e => updatePart(p.id, { name: e.target.value })} />
-                <input type="number" min="0" step="0.01" className={`${inputCls} w-24`} placeholder="Cost" value={p.unitCost || ''} onChange={e => updatePart(p.id, { unitCost: num(e.target.value) })} />
+                <input type="number" min="0" step="0.01" className={`${inputCls} w-24`} placeholder="Cost" value={p.unitCost || ''} onChange={e => updatePart(p.id, { unitCost: num(e.target.value) })} onFocus={selectOnFocus} />
                 <input type="number" min="1" step="1" className={`${inputCls} w-16`} placeholder="Qty" value={p.quantity || ''} onChange={e => updatePart(p.id, { quantity: Math.max(1, Math.round(num(e.target.value)) || 1) })} />
                 <button type="button" onClick={() => removePart(p.id)} className="p-1.5 text-slate-400 hover:text-rose-500 shrink-0" aria-label="Remove part"><Trash2 className="w-4 h-4" /></button>
               </div>
@@ -768,6 +771,7 @@ const BatchForm: React.FC<{ initial: RepairBatch; isNew: boolean; onClose: () =>
   const set = (patch: Partial<RepairBatch>) => setF(prev => ({ ...prev, ...patch }));
   const dirty = JSON.stringify(f) !== snapshot;
   const requestClose = () => { if (!dirty || window.confirm('Discard unsaved changes to this batch?')) onClose(); };
+  useEscapeKey(requestClose);
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4" onClick={requestClose}>
       <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-700" onClick={e => e.stopPropagation()}>

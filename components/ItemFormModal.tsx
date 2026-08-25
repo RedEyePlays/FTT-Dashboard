@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, FocusEventHandler } from 'react';
 import { X, Wand2, Smartphone, Package, Barcode, Camera, Tag } from 'lucide-react';
 import { printShelfTag } from '../services/shelfTag';
 import { getStoreProfile } from './SettingsModal';
@@ -7,6 +7,8 @@ import { REPAIR_STATUS_LABEL } from '../domain/repairs';
 import { LISTING_PLATFORMS } from '../domain/listing';
 import { ImeiScanner } from './ImeiScanner';
 import { Wrench } from 'lucide-react';
+import { useEscapeKey } from '../hooks/useEscapeKey';
+import { selectOnFocus } from '../hooks/selectOnFocus';
 
 interface Props {
   initial?: InventoryItem;
@@ -44,11 +46,11 @@ const lbl = 'block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1';
 // render, so React unmounts/remounts its DOM subtree each time the parent
 // re-renders — which for a text input means losing focus after every keystroke.
 // Hoisting it keeps the input mounted so typing stays continuous.
-const Field: React.FC<{ label: string; value: unknown; onChange: (v: string) => void; type?: string; placeholder?: string }> = ({ label, value, onChange, type = 'text', placeholder = '' }) => (
+const Field: React.FC<{ label: string; value: unknown; onChange: (v: string) => void; type?: string; placeholder?: string; onFocus?: FocusEventHandler<HTMLInputElement> }> = ({ label, value, onChange, type = 'text', placeholder = '', onFocus }) => (
   <div>
     <label className={lbl}>{label}</label>
     <input type={type} className={inp} placeholder={placeholder}
-      value={(value as any) ?? ''} onChange={e => onChange(e.target.value)} />
+      value={(value as any) ?? ''} onChange={e => onChange(e.target.value)} onFocus={onFocus} />
   </div>
 );
 
@@ -75,6 +77,7 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, runners, 
   const [snapshot] = useState(() => JSON.stringify({ kind, f }));
   const dirty = JSON.stringify({ kind, f }) !== snapshot;
   const requestClose = () => { if (!dirty || window.confirm('Discard unsaved changes to this item?')) onClose(); };
+  useEscapeKey(requestClose);
 
   const genSku = async () => set('sku', await onGenerateSku(kind, f.deviceType));
 
@@ -192,16 +195,16 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, runners, 
                     {runners.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
                   </select>
                 </div>
-                <Field label="Purchase Price ($)" value={f.purchaseCost} onChange={setNum('purchaseCost')} type="number" />
-                <Field label="Repair Cost ($)" value={f.repairCost} onChange={setNum('repairCost')} type="number" />
-                <Field label="Target Sale Price ($)" value={f.targetSalePrice} onChange={setNum('targetSalePrice')} type="number" />
+                <Field label="Purchase Price ($)" value={f.purchaseCost} onChange={setNum('purchaseCost')} type="number" onFocus={selectOnFocus} />
+                <Field label="Repair Cost ($)" value={f.repairCost} onChange={setNum('repairCost')} type="number" onFocus={selectOnFocus} />
+                <Field label="Target Sale Price ($)" value={f.targetSalePrice} onChange={setNum('targetSalePrice')} type="number" onFocus={selectOnFocus} />
                 <Field label="Date In" value={f.date} onChange={setText('date')} type="date" />
               </div>
               {/* Record a sale made outside Quick Sale (private sale, trade show, …).
                   Entering an Actual price marks the device sold on save (Date Sold
                   defaults to today if blank) so it counts in the dashboard/P&L. */}
               <div className="grid grid-cols-3 gap-4">
-                <Field label="Actual Sale Price ($)" value={f.salePrice} onChange={setNum('salePrice')} type="number" placeholder="0.00" />
+                <Field label="Actual Sale Price ($)" value={f.salePrice} onChange={setNum('salePrice')} type="number" placeholder="0.00" onFocus={selectOnFocus} />
                 <Field label="Date Sold" value={f.soldDate} onChange={setText('soldDate')} type="date" />
                 <Field label="Sold To" value={f.soldTo} onChange={setText('soldTo')} placeholder="Buyer (optional)" />
               </div>
@@ -214,8 +217,8 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, runners, 
               <div className="col-span-2"><Field label="Item Name" value={f.item} onChange={setText('item')} placeholder="Lightning Cable 1m" /></div>
               <Field label="Category" value={f.category} onChange={setText('category')} placeholder="Cables" />
               <Field label="Quantity" value={f.quantity} onChange={setNum('quantity')} type="number" />
-              <Field label="Cost / Unit ($)" value={f.costPerUnit} onChange={setNum('costPerUnit')} type="number" />
-              <Field label="Selling Price ($)" value={f.sellingPrice} onChange={setNum('sellingPrice')} type="number" />
+              <Field label="Cost / Unit ($)" value={f.costPerUnit} onChange={setNum('costPerUnit')} type="number" onFocus={selectOnFocus} />
+              <Field label="Selling Price ($)" value={f.sellingPrice} onChange={setNum('sellingPrice')} type="number" onFocus={selectOnFocus} />
               <Field label="Low Stock Threshold" value={f.lowStockThreshold} onChange={setNum('lowStockThreshold')} type="number" />
               <Field label="Purchase Date" value={f.date} onChange={setText('date')} type="date" />
               <Field label="Bought From" value={f.boughtFrom} onChange={setText('boughtFrom')} />

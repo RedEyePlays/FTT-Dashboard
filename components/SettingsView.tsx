@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react';
 import {
   Store, Building2, Wrench, ShoppingCart, Percent, Tag, Contact, LayoutDashboard,
   Palette, ShieldCheck, DatabaseBackup, Info, Save, RotateCcw, Check, Lock, Plus, Trash2,
-  Download, RefreshCw, Loader2, CalendarClock, SlidersHorizontal,
+  Download, RefreshCw, Loader2, CalendarClock, SlidersHorizontal, Copy,
 } from 'lucide-react';
 import { Role, Permission } from '../types';
 import {
@@ -12,8 +12,10 @@ import {
 import { ROLE_PERMISSIONS, ROLE_LABEL } from '../services/rbac';
 import { REPAIR_STATUS_LABEL } from '../domain/repairs';
 import { formatPhoneInput } from '../domain/phone';
+import { STATUS_PAGE_ORIGIN } from '../domain/statusLink';
 import { useIsMobile } from '../hooks/useMediaQuery';
 import { SettingsSection, SettingsCard, SettingsToggle, SettingsSelect, SettingsTextField } from './settingsPrimitives';
+import { selectOnFocus } from '../hooks/selectOnFocus';
 import { BackupFileMeta } from '../services/backupStorage';
 
 // The centralized Settings module. Owners configure the whole business here —
@@ -375,7 +377,8 @@ const OperationsSection: React.FC<{ draft: AppSettings; patch: PatchFn }> = ({ d
       <SettingsTextField label="Default opening cash float ($)" type="number" min={0} step={0.01}
         hint="Pre-filled as the starting drawer cash on the daily reconciliation screen."
         value={draft.operations.openingFloatDefault}
-        onChange={v => patch('operations', { openingFloatDefault: Math.max(0, parseFloat(v) || 0) })} />
+        onChange={v => patch('operations', { openingFloatDefault: Math.max(0, parseFloat(v) || 0) })}
+        onFocus={selectOnFocus} />
       <SettingsTextField label="Void window (days)" type="number" min={0} max={365} step={1}
         hint="How long after a sale it can still be voided. 0 = same calendar day only. Returns handle anything after this."
         value={draft.operations.voidWindowDays}
@@ -595,14 +598,33 @@ const BackupHistory: React.FC<{
   );
 };
 
-const AboutSection: React.FC<{ appVersion: string; role: Role }> = ({ appVersion, role }) => (
-  <SettingsSection title="About" description="FlipThatTech Dashboard.">
-    <SettingsCard>
-      <dl className="text-sm divide-y divide-slate-100 dark:divide-slate-800">
-        <div className="flex justify-between py-2"><dt className="text-slate-500 dark:text-slate-400">Application</dt><dd className="text-slate-800 dark:text-slate-100 font-medium">FlipThatTech Dashboard</dd></div>
-        <div className="flex justify-between py-2"><dt className="text-slate-500 dark:text-slate-400">Version</dt><dd className="text-slate-800 dark:text-slate-100 font-medium">{appVersion}</dd></div>
-        <div className="flex justify-between py-2"><dt className="text-slate-500 dark:text-slate-400">Your role</dt><dd className="text-slate-800 dark:text-slate-100 font-medium">{ROLE_LABEL[role]}</dd></div>
-      </dl>
-    </SettingsCard>
-  </SettingsSection>
-);
+const AboutSection: React.FC<{ appVersion: string; role: Role }> = ({ appVersion, role }) => {
+  const [copied, setCopied] = useState(false);
+  const copyStatusLink = () => {
+    navigator.clipboard?.writeText(STATUS_PAGE_ORIGIN).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    }).catch(() => {});
+  };
+  return (
+    <SettingsSection title="About" description="FlipThatTech Dashboard.">
+      <SettingsCard>
+        <dl className="text-sm divide-y divide-slate-100 dark:divide-slate-800">
+          <div className="flex justify-between py-2"><dt className="text-slate-500 dark:text-slate-400">Application</dt><dd className="text-slate-800 dark:text-slate-100 font-medium">FlipThatTech Dashboard</dd></div>
+          <div className="flex justify-between py-2"><dt className="text-slate-500 dark:text-slate-400">Version</dt><dd className="text-slate-800 dark:text-slate-100 font-medium">{appVersion}</dd></div>
+          <div className="flex justify-between py-2"><dt className="text-slate-500 dark:text-slate-400">Your role</dt><dd className="text-slate-800 dark:text-slate-100 font-medium">{ROLE_LABEL[role]}</dd></div>
+          <div className="flex justify-between items-center py-2">
+            <dt className="text-slate-500 dark:text-slate-400">Public repair status page</dt>
+            <dd className="flex items-center gap-2">
+              <span className="text-slate-800 dark:text-slate-100 font-medium">{STATUS_PAGE_ORIGIN}</span>
+              <button type="button" onClick={copyStatusLink} title="Copy status page link"
+                className="flex items-center gap-1 p-1.5 rounded-lg text-slate-500 hover:text-indigo-600 text-xs">
+                {copied ? <><Check className="w-3.5 h-3.5" /> Copied</> : <Copy className="w-3.5 h-3.5" />}
+              </button>
+            </dd>
+          </div>
+        </dl>
+      </SettingsCard>
+    </SettingsSection>
+  );
+};

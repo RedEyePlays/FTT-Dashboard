@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import { X, DoorOpen } from 'lucide-react';
+import { useEscapeKey } from '../hooks/useEscapeKey';
+import { selectOnFocus } from '../hooks/selectOnFocus';
 
 interface Props {
   onClose: () => void;
@@ -19,6 +21,7 @@ export const OpenDrawerModal: React.FC<Props> = ({ onClose, onOpen, defaultFloat
   const [amount, setAmount] = useState(alreadyOpen ? String(currentFloat ?? '') : (defaultFloat ? String(defaultFloat) : ''));
   const amountNum = parseFloat(amount) || 0;
   const submit = () => { onOpen(Math.round(amountNum * 100) / 100); onClose(); };
+  useEscapeKey(onClose);
 
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={onClose}>
@@ -36,6 +39,7 @@ export const OpenDrawerModal: React.FC<Props> = ({ onClose, onOpen, defaultFloat
           <div>
             <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Starting float ($)</label>
             <input autoFocus type="number" min="0" step="0.01" value={amount} onChange={e => setAmount(e.target.value)}
+              onFocus={selectOnFocus}
               onKeyDown={e => { if (e.key === 'Enter') submit(); }} placeholder="0.00" className={input} />
           </div>
         </div>

@@ -9,6 +9,7 @@ import { Dpi, buildZpl } from '../services/zpl';
 import { detectZebra, sendZpl, ZebraDetect } from '../services/zebra';
 import { LabelContent, labelPreview, labelPrintDoc, mmOf } from '../services/labelLayout';
 import { getLabelSizes, getStoreProfile } from './SettingsModal';
+import { useEscapeKey } from '../hooks/useEscapeKey';
 
 interface Props {
   repair: Repair;
@@ -85,6 +86,8 @@ export const RepairLabelModal: React.FC<Props> = ({ repair: r, context, onClose,
     });
     return () => { alive = false; };
   }, []);
+
+  useEscapeKey(onClose);
 
   const selectedDevice = zebra.devices.find(d => d.uid === settings.deviceUid) || zebra.devices[0];
 

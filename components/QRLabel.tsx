@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Printer, X, QrCode } from 'lucide-react';
 import QRCode from 'qrcode';
+import { useEscapeKey } from '../hooks/useEscapeKey';
 
 interface Props {
   imei: string;
@@ -12,6 +13,8 @@ export const QRLabel: React.FC<Props> = ({ imei, itemName, onClose }) => {
   const [dataUrl, setDataUrl] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   const printFrame = useRef<HTMLIFrameElement>(null);
+
+  useEscapeKey(onClose);
 
   useEffect(() => {
     if (!imei) {

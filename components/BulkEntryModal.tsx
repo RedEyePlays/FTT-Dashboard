@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { InventoryItem } from '../types';
 import { parseBulkInventory } from '../services/geminiService';
 import { Sparkles, X, Loader2, CheckCircle, AlertCircle } from 'lucide-react';
+import { useEscapeKey } from '../hooks/useEscapeKey';
+import { selectOnFocus } from '../hooks/selectOnFocus';
 
 interface BulkEntryModalProps {
   onClose: () => void;
@@ -14,6 +16,8 @@ export const BulkEntryModal: React.FC<BulkEntryModalProps> = ({ onClose, onImpor
   const [parsedItems, setParsedItems] = useState<InventoryItem[]>([]);
   const [step, setStep] = useState<'input' | 'preview'>('input');
   const [error, setError] = useState<string | null>(null);
+
+  useEscapeKey(onClose);
 
   const handleProcess = async () => {
     if (!inputText.trim()) return;
@@ -124,17 +128,19 @@ export const BulkEntryModal: React.FC<BulkEntryModalProps> = ({ onClose, onImpor
                          </td>
                          <td className="px-3 py-2 text-right">
                            <input 
-                              type="number" 
-                              value={item.purchaseCost} 
+                              type="number"
+                              value={item.purchaseCost}
                               onChange={(e) => updateItem(idx, 'purchaseCost', parseFloat(e.target.value) || 0)}
+                              onFocus={selectOnFocus}
                               className="w-full bg-transparent border-none outline-none focus:ring-1 focus:ring-indigo-500 rounded px-1 py-0.5 text-right text-slate-700 dark:text-slate-300"
                             />
                          </td>
                          <td className="px-3 py-2 text-right">
                            <input 
-                              type="number" 
-                              value={item.salePrice} 
+                              type="number"
+                              value={item.salePrice}
                               onChange={(e) => updateItem(idx, 'salePrice', parseFloat(e.target.value) || 0)}
+                              onFocus={selectOnFocus}
                               className="w-full bg-transparent border-none outline-none focus:ring-1 focus:ring-indigo-500 rounded px-1 py-0.5 text-right text-emerald-600 dark:text-emerald-400 font-medium"
                             />
                          </td>
