@@ -1,14 +1,18 @@
 import { DeviceStatus, InventoryItem, Repair, RepairBatch } from '../types';
 import { DrawerEffect } from './dropoffs';
 
-// Auto-inventory: when a device repair ticket is created under a batch with
-// `autoInventory = true` (e.g. an "FTT Personal" batch — never hardcoded by
-// name, always keyed off the flag), the device is added to inventory
-// automatically, or attached to an existing record by IMEI/serial match
-// instead of duplicating it. Pure decision logic lives here; the atomic
-// create-or-attach write lives in services/firestoreDb.ts's
-// commitAutoInventory (a Firestore transaction against a dedicated identity
-// index, since Firestore has no server-side unique-column constraint).
+// Auto-inventory: when a device repair ticket is created under a `private`
+// batch (e.g. an "FTT Personal" batch — never hardcoded by name, always keyed
+// off the flag) AND that specific ticket has wantsAutoInventory on, the
+// device is added to inventory automatically, or attached to an existing
+// record by IMEI/serial match instead of duplicating it. Both conditions are
+// required: a private batch alone auto-adds nothing — the per-device toggle
+// (defaulting off) is what a technician/manager actually opts each ticket
+// into, since not every device under a private batch is meant to go to
+// inventory. Pure decision logic lives here; the atomic create-or-attach
+// write lives in services/firestoreDb.ts's commitAutoInventory (a Firestore
+// transaction against a dedicated identity index, since Firestore has no
+// server-side unique-column constraint).
 //
 // Schema note: this app stores one "IMEI / Serial" field per device (`imei`),
 // not separate imei/serial columns. So identity matching normalizes whatever
@@ -68,8 +72,16 @@ export function findAutoInventoryMatch(normalized: string, inventory: InventoryI
   return inventory.find(i => (i.kind ?? 'device') === 'device' && i.imeiNormalized === normalized);
 }
 
+// A batch is private if explicitly flagged so, falling back to the legacy
+// `autoInventory` flag for a batch saved before this change (e.g. an old "FTT
+// Personal" batch with autoInventory: true) — so it reads as private with no
+// data migration required. New saves always write `private`, never the
+// legacy field (see RepairBatch's field comments).
+export const isPrivateBatch = (batch: Pick<RepairBatch, 'private' | 'autoInventory'> | undefined): boolean =>
+  !!(batch?.private ?? batch?.autoInventory);
+
 export type AutoInventoryDecision =
-  | { action: 'skip' }                                     // batch isn't auto_inventory
+  | { action: 'skip' }                                     // batch isn't private, or this ticket didn't opt in
   | { action: 'noIdentifier' }                              // blank IMEI/serial
   | { action: 'invalidImei'; digits: string }               // 15 digits but fails Luhn
   | { action: 'create'; normalized: string }                // Case A
@@ -80,13 +92,18 @@ export type AutoInventoryDecision =
  * synchronous so every branch is directly unit-testable; the caller performs
  * the actual create/attach (atomically, via commitAutoInventory) only for the
  * 'create'/'attach' outcomes.
+ *
+ * Requires BOTH the batch to be private AND this specific ticket to have
+ * opted in (Repair.wantsAutoInventory) — a private batch alone auto-adds
+ * nothing.
  */
 export function decideAutoInventory(
-  batch: Pick<RepairBatch, 'autoInventory'> | undefined,
+  batch: Pick<RepairBatch, 'private' | 'autoInventory'> | undefined,
+  wantsAutoInventory: boolean | undefined,
   imeiRaw: string | undefined,
   inventory: InventoryItem[],
 ): AutoInventoryDecision {
-  if (!batch?.autoInventory) return { action: 'skip' };
+  if (!isPrivateBatch(batch) || !wantsAutoInventory) return { action: 'skip' };
   if (!imeiRaw || !imeiRaw.trim()) return { action: 'noIdentifier' };
 
   const { normalized, looksLikeImei, imeiValid } = normalizeIdentifier(imeiRaw);

@@ -17,7 +17,7 @@ import { formatPhoneInput } from '../domain/phone';
 import { usePersistedFilter } from '../hooks/usePersistedFilter';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 import { selectOnFocus } from '../hooks/selectOnFocus';
-import { AutoInventoryNotice } from '../domain/autoInventory';
+import { AutoInventoryNotice, isPrivateBatch } from '../domain/autoInventory';
 // Lazy: the repair label modal pulls in jsPDF (~390 kB); load it on demand.
 const RepairLabelModal = lazy(() => import('./RepairLabelModal').then(m => ({ default: m.RepairLabelModal })));
 import { CustomerSearchInput } from './CustomerSearchInput';
@@ -422,7 +422,7 @@ export const RepairsView: React.FC<Props> = (props) => {
       {drawer && (
         <RepairDrawer key={drawer.repair.id} initial={drawer.repair} isNew={drawer.isNew} canDelete={canDelete}
           auditLogs={auditLogs} customers={props.customers}
-          autoInventoryBatch={!!(drawer.repair.batchId && batches.find(b => b.id === drawer.repair.batchId)?.autoInventory)}
+          privateBatch={isPrivateBatch(drawer.repair.batchId ? batches.find(b => b.id === drawer.repair.batchId) : undefined)}
           onClose={() => setDrawer(null)}
           onSave={saveDrawer}
           onCheckoutViaSale={props.onCheckoutViaSale}
@@ -552,12 +552,13 @@ const BatchDetail: React.FC<{
 /* ---------------- Repair drawer ---------------- */
 const RepairDrawer: React.FC<{
   initial: Repair; isNew: boolean; canDelete: boolean; auditLogs: AuditEntry[]; customers: Customer[];
-  // Whether this ticket's wholesale batch has auto_inventory on — gates the
-  // Purchase Cost / Paid By fields, only meaningful while this ticket is the
-  // one about to auto-create its inventory record (see App.tsx's handleSaveRepair).
-  autoInventoryBatch: boolean;
+  // Whether this ticket's wholesale batch is flagged private — gates the
+  // per-device "Add this device to inventory" toggle (Repair.wantsAutoInventory),
+  // which in turn gates the Purchase Cost / Paid By fields. See App.tsx's
+  // handleSaveRepair and domain/autoInventory.ts's isPrivateBatch.
+  privateBatch: boolean;
   onClose: () => void; onSave: (r: Repair) => void; onCheckoutViaSale?: (r: Repair) => void; onDelete: () => void; onPrint: (doc: 'intake' | 'repair' | 'pickup') => void; onPrintSheet: () => void; onPrintLabel: () => void; onPrintEstimate: () => void;
-}> = ({ initial, isNew, canDelete, auditLogs, customers, autoInventoryBatch, onClose, onSave, onCheckoutViaSale, onDelete, onPrint, onPrintSheet, onPrintLabel, onPrintEstimate }) => {
+}> = ({ initial, isNew, canDelete, auditLogs, customers, privateBatch, onClose, onSave, onCheckoutViaSale, onDelete, onPrint, onPrintSheet, onPrintLabel, onPrintEstimate }) => {
   const [f, setF] = useState<Repair>(initial);
   const [linkCopied, setLinkCopied] = useState(false);
   // Snapshot the form state at mount for a dirty check, so a stray backdrop/X
@@ -674,20 +675,28 @@ const RepairDrawer: React.FC<{
               {isRetail && <Field label="Warranty (days)"><input type="number" min="0" className={inputCls} value={f.warrantyDays ?? 0} onChange={e => set({ warrantyDays: num(e.target.value) })} /></Field>}
               {isRetail && <Field label="Est. Completion" className="col-span-2"><input type="date" className={inputCls} value={f.estimatedCompletion || ''} onChange={e => set({ estimatedCompletion: e.target.value })} /></Field>}
             </div>
-            {isNew && autoInventoryBatch && (
+            {isNew && privateBatch && (
               <div className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-800">
-                <p className="text-xs text-slate-400 mb-2">This batch auto-adds devices to inventory — what this device cost flows into its inventory record so profit reflects the real cost, not just $0.</p>
-                <div className="grid grid-cols-2 gap-3">
-                  <Field label="Purchase Cost (optional)"><input type="number" min="0" step="0.01" placeholder="0.00" className={inputCls} value={f.purchaseCost ?? ''} onChange={e => set({ purchaseCost: e.target.value === '' ? undefined : num(e.target.value) })} onFocus={selectOnFocus} /></Field>
-                  <Field label="Paid From">
-                    <select className={inputCls} value={f.purchasePaidBy || 'personal'} onChange={e => set({ purchasePaidBy: e.target.value as RepairPurchasePaidBy })}>
-                      <option value="personal">Paid personally / outside store cash</option>
-                      <option value="store">Paid from store cash</option>
-                    </select>
-                  </Field>
-                </div>
-                {!!f.purchaseCost && f.purchasePaidBy === 'store' && (
-                  <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-1.5">Saving will log a ${f.purchaseCost.toFixed(2)} cash-out against today's drawer.</p>
+                <label className="flex items-start gap-2 text-xs text-slate-600 dark:text-slate-300">
+                  <input type="checkbox" className="mt-0.5" checked={!!f.wantsAutoInventory} onChange={e => set({ wantsAutoInventory: e.target.checked })} />
+                  <span>Add this device to inventory — adds it automatically (or attaches to an existing IMEI/serial match), and makes it available for sale once this repair completes.</span>
+                </label>
+                {f.wantsAutoInventory && (
+                  <div className="mt-3">
+                    <p className="text-xs text-slate-400 mb-2">What this device cost flows into its inventory record so profit reflects the real cost, not just $0.</p>
+                    <div className="grid grid-cols-2 gap-3">
+                      <Field label="Purchase Cost (optional)"><input type="number" min="0" step="0.01" placeholder="0.00" className={inputCls} value={f.purchaseCost ?? ''} onChange={e => set({ purchaseCost: e.target.value === '' ? undefined : num(e.target.value) })} onFocus={selectOnFocus} /></Field>
+                      <Field label="Paid From">
+                        <select className={inputCls} value={f.purchasePaidBy || 'personal'} onChange={e => set({ purchasePaidBy: e.target.value as RepairPurchasePaidBy })}>
+                          <option value="personal">Paid personally / outside store cash</option>
+                          <option value="store">Paid from store cash</option>
+                        </select>
+                      </Field>
+                    </div>
+                    {!!f.purchaseCost && f.purchasePaidBy === 'store' && (
+                      <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-1.5">Saving will log a ${f.purchaseCost.toFixed(2)} cash-out against today's drawer.</p>
+                    )}
+                  </div>
                 )}
               </div>
             )}
@@ -789,8 +798,8 @@ const BatchForm: React.FC<{ initial: RepairBatch; isNew: boolean; onClose: () =>
           </div>
           {!isNew && <Field label="Batch Status"><select className={inputCls} value={f.status} onChange={e => set({ status: e.target.value as any })}><option value="active">Active</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option></select></Field>}
           <label className="flex items-start gap-2 text-xs text-slate-600 dark:text-slate-300 pt-1">
-            <input type="checkbox" className="mt-0.5" checked={!!f.autoInventory} onChange={e => set({ autoInventory: e.target.checked })} />
-            <span>Auto-add devices to inventory — each device ticket added under this batch is added to inventory automatically (or attached to an existing IMEI/serial match), and becomes available for sale once its repair completes.</span>
+            <input type="checkbox" className="mt-0.5" checked={isPrivateBatch(f)} onChange={e => set({ private: e.target.checked })} />
+            <span>Private batch — for store/personal repairs, not a wholesale client. Each device ticket under a private batch can individually opt in to being added to inventory.</span>
           </label>
           <Field label="Notes"><textarea rows={2} className={inputCls} value={f.notes || ''} onChange={e => set({ notes: e.target.value })} /></Field>
         </div>

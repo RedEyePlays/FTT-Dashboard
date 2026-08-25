@@ -512,10 +512,17 @@ export interface Repair {
   repairNumber: string;         // e.g. RPR-000123
   type: RepairType;
   batchId?: string;             // set for wholesale devices → repairBatches/{id}
+  // Per-ticket opt-in into auto-inventory (domain/autoInventory.ts) — only
+  // offered/meaningful when the ticket's batch is private (RepairBatch.private,
+  // see isPrivateBatch). Off by default: even under a private batch, a device
+  // is only auto-added to inventory when this is explicitly turned on for that
+  // specific ticket, not for every device under the batch.
+  wantsAutoInventory?: boolean;
   // → inventory/{id}. Set for internal repairs (the device being refurbished),
-  // AND for a wholesale device ticket created under an auto_inventory batch
-  // (see domain/autoInventory.ts) — either a freshly auto-created record, or an
-  // existing one this ticket got attached to by IMEI/serial match.
+  // AND for a wholesale device ticket created under a private batch with
+  // wantsAutoInventory on (see domain/autoInventory.ts) — either a freshly
+  // auto-created record, or an existing one this ticket got attached to by
+  // IMEI/serial match.
   inventoryId?: string;
   // Auto-inventory bookkeeping (only set when inventoryId was resolved via
   // domain/autoInventory.ts, not for a manually-linked internal repair):
@@ -606,10 +613,18 @@ export interface RepairBatch {
   amountPaid: number;           // the only stored money fact; totals are computed
   invoicedAt?: number;
   completedAt?: number;
-  // When true, creating a device ticket under this batch auto-adds the device
-  // to inventory (or attaches to an existing IMEI/serial match) — see
-  // domain/autoInventory.ts. Off by default; the shop turns it on per batch
-  // (e.g. an "FTT Personal" batch for the owner's own devices) rather than
-  // this ever being keyed off a hardcoded batch name.
+  // Flags this as a private/store/personal batch — devices repaired for the
+  // shop or its owner, not a wholesale client (e.g. an "FTT Personal" batch)
+  // — rather than this ever being keyed off a hardcoded batch name. Off by
+  // default. Purely a label: it doesn't change invoices/settlements/anything
+  // else about how the batch works. Only a private batch's device tickets get
+  // offered the per-device Repair.wantsAutoInventory toggle — see
+  // domain/autoInventory.ts's isPrivateBatch.
+  private?: boolean;
+  // @deprecated Superseded by `private` (see isPrivateBatch, which reads
+  // `private ?? autoInventory`) — kept only so a batch saved before this
+  // change (e.g. an old "FTT Personal" batch with autoInventory: true) still
+  // reads as private without a data migration. Never set by new code; every
+  // batch save writes `private` instead.
   autoInventory?: boolean;
 }
