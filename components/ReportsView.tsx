@@ -1,10 +1,13 @@
 import React, { useMemo, useState } from 'react';
-import { Wallet, Receipt, Download, Save, AlertTriangle, CheckCircle2, Plus, Trash2, Scale, FileArchive, Truck, DoorOpen } from 'lucide-react';
-import { SalesTransaction, CashReconciliation, CashDrawerEntry, InventoryItem, PayPeriodPaid, Settlement, Runner } from '../types';
+import { Wallet, Receipt, Download, Save, AlertTriangle, CheckCircle2, Plus, Trash2, Scale, FileArchive, Truck, DoorOpen, History, LockOpen } from 'lucide-react';
+import { SalesTransaction, CashReconciliation, CashDrawerEntry, InventoryItem, PayPeriodPaid, Settlement, Runner, Repair, Customer, AuditEntry, ActivityEntry, TimeEntry, AppUser } from '../types';
 import {
   expectedCashForDate, expectedEndingCash, sumDrawerEntries, reconcileCash, taxRemittance, taxReportCsvRows, TaxGrouping,
   profitAndLoss, profitLossCsvRows, settlementHistory, yearEndSummary, yearEndCsvRows, ProfitLossInput, ReconciliationInput,
+  cashDrawerSummary,
 } from '../domain/reports';
+import { computeAnalytics, presetRange } from '../domain/analytics';
+import { entriesOnDate, workedHours } from '../domain/timeclock';
 import { toCSV, triggerDownload } from '../services/backup';
 import { newId } from '../domain/ids';
 
@@ -19,10 +22,19 @@ interface Props {
   runners: Runner[];
   onSaveReconciliation: SaveReconciliation;
   defaultOpeningFloat?: number;
+  // Daily History tab — everything that happened on a given day, reusing the
+  // same underlying data every other view already reads (no parallel state).
+  repairs: Repair[];
+  customers: Customer[];
+  auditLogs: AuditEntry[];
+  activity: ActivityEntry[];
+  timeEntries: TimeEntry[];
+  users: AppUser[];
 }
 
-type TabId = 'cash' | 'tax' | 'pnl' | 'yearend' | 'settlements';
+type TabId = 'history' | 'cash' | 'tax' | 'pnl' | 'yearend' | 'settlements';
 const TABS: { id: TabId; label: string; icon: React.ReactNode }[] = [
+  { id: 'history', label: 'Daily History', icon: <History className="w-4 h-4" /> },
   { id: 'cash', label: 'Cash Reconciliation', icon: <Wallet className="w-4 h-4" /> },
   { id: 'tax', label: 'Sales Tax', icon: <Receipt className="w-4 h-4" /> },
   { id: 'pnl', label: 'Profit & Loss', icon: <Scale className="w-4 h-4" /> },
@@ -38,8 +50,11 @@ const card = 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-sla
 const input = 'px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500';
 const label = 'block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1';
 
-export const ReportsView: React.FC<Props> = ({ salesTransactions, cashReconciliations, inventory, payPeriods, settlements, runners, onSaveReconciliation }) => {
-  const [tab, setTab] = useState<TabId>('cash');
+export const ReportsView: React.FC<Props> = ({
+  salesTransactions, cashReconciliations, inventory, payPeriods, settlements, runners, onSaveReconciliation,
+  repairs, customers, auditLogs, activity, timeEntries, users,
+}) => {
+  const [tab, setTab] = useState<TabId>('history');
   // Shared input set for the P&L / settlement / year-end reports.
   const plInput: ProfitLossInput = { transactions: salesTransactions, inventory, payPeriods, cashReconciliations, settlements };
   return (
@@ -51,6 +66,13 @@ export const ReportsView: React.FC<Props> = ({ salesTransactions, cashReconcilia
           </button>
         ))}
       </div>
+      {tab === 'history' && (
+        <DailyHistoryTab
+          salesTransactions={salesTransactions} cashReconciliations={cashReconciliations}
+          repairs={repairs} inventory={inventory} customers={customers} auditLogs={auditLogs} activity={activity}
+          timeEntries={timeEntries} users={users}
+        />
+      )}
       {tab === 'cash' && <CashReconTab salesTransactions={salesTransactions} cashReconciliations={cashReconciliations} onSave={onSaveReconciliation} />}
       {tab === 'tax' && <TaxReportTab salesTransactions={salesTransactions} />}
       {tab === 'pnl' && <ProfitLossTab plInput={plInput} />}
@@ -59,6 +81,156 @@ export const ReportsView: React.FC<Props> = ({ salesTransactions, cashReconcilia
     </div>
   );
 };
+
+/* ---------------- Daily History ---------------- */
+// A single owner/manager-only screen (this whole view is gated by
+// cash.reconcile) that pulls together everything that happened on one
+// picked date — the Close Out screen's summary, but for any past date, not
+// just today. Every figure is read from the same domain functions the other
+// tabs/screens already use (computeAnalytics, cashDrawerSummary,
+// entriesOnDate/workedHours) — nothing here is a second calculation.
+const DailyHistoryTab: React.FC<{
+  salesTransactions: SalesTransaction[];
+  cashReconciliations: CashReconciliation[];
+  repairs: Repair[];
+  inventory: InventoryItem[];
+  customers: Customer[];
+  auditLogs: AuditEntry[];
+  activity: ActivityEntry[];
+  timeEntries: TimeEntry[];
+  users: AppUser[];
+}> = ({ salesTransactions, cashReconciliations, repairs, inventory, customers, auditLogs, activity, timeEntries, users }) => {
+  const [date, setDate] = useState(todayISO());
+  const now = Date.now();
+
+  // Same sales/profit/repairs-completed math Owner Analytics and Close Out
+  // both use — a single-day custom range around the picked date.
+  const range = useMemo(() => presetRange('custom', now, { start: date, end: date }), [date, now]);
+  const a = useMemo(
+    () => computeAnalytics(range, { salesTransactions, repairs, inventory, customers, auditLogs, activity }, now),
+    [range, salesTransactions, repairs, inventory, customers, auditLogs, activity, now],
+  );
+  const eod = a.eod;
+
+  // Same cash-reconciliation figures the Cash Reconciliation tab / Close Out
+  // read for a day — the saved record (if any) plus that day's cash sales.
+  const cashSales = useMemo(() => expectedCashForDate(salesTransactions, date), [salesTransactions, date]);
+  const recon = cashReconciliations.find(r => r.date === date);
+  const drawer = useMemo(() => cashDrawerSummary(recon, cashSales), [recon, cashSales]);
+  const reconciled = !!recon?.reconciledAt;
+  const variance = recon?.variance || 0;
+  const varianceOk = Math.abs(variance) < 0.005;
+
+  // Same per-shift data the Time Clock's Daily Hours view reads — just scoped
+  // to entries whose clock-in falls on this one date instead of a range.
+  const nameById = useMemo(() => new Map(users.map(u => [u.id, u.email.split('@')[0]])), [users]);
+  const dayEntries = useMemo(() => entriesOnDate(timeEntries, date), [timeEntries, date]);
+  const hoursByUser = useMemo(() => {
+    const byUser = new Map<string, number>();
+    for (const e of dayEntries) byUser.set(e.userId, (byUser.get(e.userId) || 0) + workedHours(e, now));
+    return [...byUser.entries()]
+      .map(([userId, hours]) => ({ userId, name: nameById.get(userId) || userId, hours }))
+      .sort((x, y) => x.name.localeCompare(y.name));
+  }, [dayEntries, nameById, now]);
+
+  // A shift that started this day and still has no clock-out — same
+  // isMissedClockOut concept the Time Clock view flags, scoped to this date
+  // rather than "still open as of right now."
+  const missedThatDay = useMemo(() => dayEntries.filter(e => !e.clockOut), [dayEntries]);
+
+  const isToday = date === todayISO();
+
+  return (
+    <div className="space-y-6">
+      <div className={`${card} p-5`}>
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <label className={label}>Date</label>
+            <input type="date" max={todayISO()} value={date} onChange={e => setDate(e.target.value)} className={input} />
+          </div>
+          {!isToday && (
+            <button onClick={() => setDate(todayISO())} className="text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:underline">Jump to today</button>
+          )}
+        </div>
+      </div>
+
+      {/* --- Sales & repairs -------------------------------------------------- */}
+      <div className={`${card} p-5`}>
+        <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200 mb-3">Sales & Repairs</h3>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          <Stat label="Sales" value={String(eod.sales)} />
+          <Stat label="Revenue" value={money(eod.revenue)} />
+          <Stat label="Gross Profit" value={money(eod.grossProfit)} tone={eod.grossProfit >= 0 ? 'good' : 'bad'} />
+          <Stat label="Repairs Completed" value={String(eod.repairsCompleted)} />
+        </div>
+      </div>
+
+      {/* --- Cash reconciliation ------------------------------------------------ */}
+      <div className={`${card} p-5`}>
+        <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200 mb-3">Cash Drawer</h3>
+        {!drawer.opened ? (
+          <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+            <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0" /> Drawer was never opened this day.
+          </div>
+        ) : reconciled ? (
+          <div className="flex flex-wrap items-center gap-4">
+            <span className={`inline-flex items-center gap-1.5 text-sm font-semibold ${varianceOk ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}`}>
+              {varianceOk ? <CheckCircle2 className="w-4 h-4" /> : <AlertTriangle className="w-4 h-4" />}
+              Reconciled{varianceOk ? ' — balanced' : ` — ${variance > 0 ? 'over' : 'short'} ${money(Math.abs(variance))}`}
+            </span>
+            <span className="text-xs text-slate-400">
+              Opening {money(drawer.openingFloat)} · Cash in {money(drawer.cashIn)} · Cash out {money(drawer.cashOut)} · Expected {money(drawer.expected)} · Counted {money(recon?.countedCash || 0)}
+            </span>
+          </div>
+        ) : (
+          <div className="flex flex-wrap items-center gap-1.5 text-sm font-semibold text-amber-600 dark:text-amber-400">
+            <LockOpen className="w-4 h-4" /> Not reconciled — opening {money(drawer.openingFloat)}, expected {money(drawer.expected)}
+          </div>
+        )}
+      </div>
+
+      {/* --- Hours worked --------------------------------------------------- */}
+      <div className={`${card} p-5`}>
+        <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200 mb-3">Hours Worked</h3>
+        {hoursByUser.length === 0 ? (
+          <p className="text-sm text-slate-400">No shifts recorded this day.</p>
+        ) : (
+          <div className="divide-y divide-slate-100 dark:divide-slate-800">
+            {hoursByUser.map(h => (
+              <div key={h.userId} className="flex items-center justify-between py-1.5 text-sm">
+                <span className="text-slate-700 dark:text-slate-200 capitalize">{h.name}</span>
+                <span className="font-semibold text-slate-900 dark:text-white tabular-nums">{h.hours.toFixed(2)} hrs</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* --- Flags ------------------------------------------------------------ */}
+      <div className={`${card} p-5`}>
+        <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200 mb-3">Flags</h3>
+        {missedThatDay.length === 0 ? (
+          <div className="flex items-center gap-2 text-sm text-emerald-600 dark:text-emerald-400"><CheckCircle2 className="w-4 h-4" /> Nothing flagged for this day.</div>
+        ) : (
+          <ul className="flex flex-col gap-1.5">
+            {missedThatDay.map(e => (
+              <li key={e.id} className="flex items-center gap-2 text-sm text-amber-700 dark:text-amber-300">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0" /> {nameById.get(e.userId) || e.userId} never clocked out this day.
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const Stat: React.FC<{ label: string; value: string; tone?: 'good' | 'bad' }> = ({ label: l, value, tone }) => (
+  <div>
+    <p className="text-[11px] uppercase tracking-wide text-slate-400">{l}</p>
+    <p className={`text-xl font-bold tabular-nums ${tone === 'good' ? 'text-emerald-600 dark:text-emerald-400' : tone === 'bad' ? 'text-rose-600 dark:text-rose-400' : 'text-slate-900 dark:text-white'}`}>{value}</p>
+  </div>
+);
 
 /* ---------------- Cash reconciliation ---------------- */
 const num = (v: string) => parseFloat(v) || 0;

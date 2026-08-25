@@ -1446,7 +1446,8 @@ const App: React.FC = () => {
           )}
           {view === 'reports' && (
             allow('cash.reconcile')
-              ? <ReportsView salesTransactions={salesTransactions} cashReconciliations={cashReconciliations} inventory={data} payPeriods={payPeriods} settlements={settlements} runners={runners} onSaveReconciliation={handleSaveReconciliation} defaultOpeningFloat={settings.operations.openingFloatDefault} />
+              ? <ReportsView salesTransactions={salesTransactions} cashReconciliations={cashReconciliations} inventory={data} payPeriods={payPeriods} settlements={settlements} runners={runners} onSaveReconciliation={handleSaveReconciliation} defaultOpeningFloat={settings.operations.openingFloatDefault}
+                  repairs={repairs} customers={customers} auditLogs={auditLogs} activity={activityLog} timeEntries={timeEntries} users={workspaceUsers} />
               : <div className="text-center text-slate-400 py-20">Reports are restricted to owners and managers.</div>
           )}
           {view === 'customers' && allow('reports.view') && (
