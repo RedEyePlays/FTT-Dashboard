@@ -347,7 +347,9 @@ export interface SalesTransaction {
   voidedAt?: number;       // epoch ms
   voidedBy?: string;       // uid of the owner/manager who voided it
   voidedByEmail?: string;
-  // Return details (status === 'returned'). refundAmount = totalPaid − restockingFee.
+  // Return details (status === 'returned'). refundAmount = amount actually
+  // collected (deposit for a layaway, totalPaid otherwise) − restockingFee —
+  // see domain/pos.ts's collectedOnSale.
   returnedAt?: number;         // epoch ms
   returnedBy?: string;         // uid of the owner/manager who processed the return
   returnedByEmail?: string;

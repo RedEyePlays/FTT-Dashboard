@@ -58,7 +58,7 @@ import { listWorkspaceBackups, getBackupDownloadUrl } from './services/backupSto
 import { useWorkspaceData } from './hooks/useWorkspaceData';
 import { newId, mkActivity } from './domain/ids';
 import { collectionFor, stockChange, applyDirectSale } from './domain/inventory';
-import { canVoidSale, canReturnSale, returnRefund, saleAccessoryRestock } from './domain/pos';
+import { canVoidSale, canReturnSale, returnRefund, saleAccessoryRestock, collectedOnSale, cashCollectedOnSale, saleRefundDrawerEffect } from './domain/pos';
 import { expectedCashForDate, expectedEndingCash, sumDrawerEntries, cashDrawerSummary, openDrawerPatch, ReconciliationInput } from './domain/reports';
 import type { CashMovementKind } from './components/LogCashMovementModal';
 const OpenDrawerModal = lazy(() => import('./components/OpenDrawerModal').then(m => ({ default: m.OpenDrawerModal })));
@@ -625,6 +625,20 @@ const App: React.FC = () => {
       activity,
     }).catch(e => console.error('Void failed', e));
     audit('sale.void', 'sale', tx.id, { totalPaid: tx.totalPaid }, { devices: deviceIds.length, accessories: accessoryUpdates.length });
+
+    // Cash actually leaves the till right now (the day the void is processed),
+    // never retroactively against the original sale's date (already reconciled
+    // in virtually every real case) — see domain/pos.ts's saleRefundDrawerEffect.
+    // A layaway only ever collected its deposit (cashCollectedOnSale), so a
+    // voided layaway never refunds more cash than actually came in; a card/
+    // e-transfer sale never touches the drawer at all.
+    const voidCashEffect = saleRefundDrawerEffect(cashCollectedOnSale(tx));
+    if (voidCashEffect) {
+      const date = new Date().toISOString().split('T')[0];
+      const existing = cashReconciliations.find(r => r.date === date);
+      const entry = { id: newId(), amount: voidCashEffect.amount, note: `Sale ${tx.id.slice(0, 8)} voided — refund` };
+      commitDrawerRecord(date, { cashOut: [...(existing?.cashOut || []), entry] });
+    }
   };
 
   // Process a return (the after-the-void-window counterpart to Void): refund the
@@ -643,7 +657,10 @@ const App: React.FC = () => {
     const defectiveDeviceIds = opts.disposition === 'defective' ? deviceIds : [];
     const accessoryUpdates = saleAccessoryRestock(tx);
     const restockingFee = opts.restockingFee && opts.restockingFee > 0 ? opts.restockingFee : undefined;
-    const refundAmount = returnRefund(tx.totalPaid || 0, restockingFee);
+    // Refund base is what was actually COLLECTED, not the grand total due — a
+    // layaway only ever took its deposit, so refunding tx.totalPaid would hand
+    // back money that was never paid in (see domain/pos.ts's collectedOnSale).
+    const refundAmount = returnRefund(collectedOnSale(tx), restockingFee);
 
     const activity: ActivityEntry[] = [mkActivity(`Sale ${tx.id.slice(0, 8)} returned — refunded ${refundAmount.toFixed(2)} (${tx.customerName || 'customer'})`)];
     returnSale(uid, {
@@ -653,6 +670,17 @@ const App: React.FC = () => {
     }).catch(e => console.error('Return failed', e));
     audit('sale.return', 'sale', tx.id, { totalPaid: tx.totalPaid },
       { refundAmount, restockingFee: restockingFee || 0, disposition: opts.disposition, devices: deviceIds.length, accessories: accessoryUpdates.length });
+
+    // Same today's-date cash-out rule as Void (see handleVoidSale) — the
+    // restocking fee comes out of the cash portion first (returnRefund's usual
+    // fee-clamping), so a card/e-transfer sale still never touches the drawer.
+    const returnCashEffect = saleRefundDrawerEffect(returnRefund(cashCollectedOnSale(tx), restockingFee));
+    if (returnCashEffect) {
+      const date = new Date().toISOString().split('T')[0];
+      const existing = cashReconciliations.find(r => r.date === date);
+      const entry = { id: newId(), amount: returnCashEffect.amount, note: `Sale ${tx.id.slice(0, 8)} returned — refund` };
+      commitDrawerRecord(date, { cashOut: [...(existing?.cashOut || []), entry] });
+    }
   };
 
   // Save (or update) a day's cash-drawer reconciliation. One doc per date (id ===

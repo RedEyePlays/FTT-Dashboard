@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { platformFeeAmount, isZeroPricedDevice, cartHasZeroPricedDevice, PricedLine, salesBalanceOwing, isLayaway, searchCheckoutInventory, canVoidSale, isVoided, isReturned, isReversed, canReturnSale, returnRefund, saleAccessoryRestock } from './pos';
+import { platformFeeAmount, isZeroPricedDevice, cartHasZeroPricedDevice, PricedLine, salesBalanceOwing, isLayaway, searchCheckoutInventory, canVoidSale, isVoided, isReturned, isReversed, canReturnSale, returnRefund, saleAccessoryRestock, collectedOnSale, cashCollectedOnSale, saleRefundDrawerEffect } from './pos';
 import { InventoryItem, SalesTransaction } from '../types';
 
 const item = (p: Partial<InventoryItem>): InventoryItem => ({
@@ -185,5 +185,69 @@ describe('saleAccessoryRestock', () => {
   });
   it('is empty for a device-only sale', () => {
     expect(saleAccessoryRestock(tx([{ inventoryId: 'd1', kind: 'device', name: 'Phone', quantity: 1, unitPrice: 500 }]))).toEqual([]);
+  });
+});
+
+describe('collectedOnSale / cashCollectedOnSale (void + return refund base)', () => {
+  const base = { totalPaid: 500, deposit: undefined as number | undefined, balanceOwing: undefined as number | undefined, paymentMethod: 'cash' as const, cashAmount: undefined as number | undefined };
+
+  it('a fully-paid sale collected the full totalPaid', () => {
+    expect(collectedOnSale(base)).toBe(500);
+  });
+  it('a layaway only collected its deposit, never the full total', () => {
+    expect(collectedOnSale({ ...base, deposit: 150, balanceOwing: 350 })).toBe(150);
+  });
+
+  it('a cash sale\'s cash-collected is the whole amount', () => {
+    expect(cashCollectedOnSale({ ...base, paymentMethod: 'cash' })).toBe(500);
+  });
+  it('a card sale never collected any cash', () => {
+    expect(cashCollectedOnSale({ ...base, paymentMethod: 'card' })).toBe(0);
+  });
+  it('a mixed sale\'s cash-collected is only the recorded cash portion', () => {
+    expect(cashCollectedOnSale({ ...base, paymentMethod: 'mixed', cashAmount: 200 })).toBe(200);
+  });
+  it('a mixed layaway\'s cash-collected is capped by the deposit\'s cash portion', () => {
+    // Deposit was $150, of which $60 was recorded as the cash portion.
+    expect(cashCollectedOnSale({ ...base, paymentMethod: 'mixed', cashAmount: 60, deposit: 150, balanceOwing: 350 })).toBe(60);
+  });
+  it('treats a missing cashAmount on a mixed sale as zero', () => {
+    expect(cashCollectedOnSale({ ...base, paymentMethod: 'mixed', cashAmount: undefined })).toBe(0);
+  });
+});
+
+describe('return refund composition (App.tsx handleReturnSale\'s exact formula)', () => {
+  const base = { totalPaid: 500, deposit: undefined as number | undefined, balanceOwing: undefined as number | undefined, paymentMethod: 'cash' as const, cashAmount: undefined as number | undefined };
+
+  it('a cash sale refunds the full total minus the restocking fee, all as cash', () => {
+    const tx = { ...base, paymentMethod: 'cash' as const };
+    expect(returnRefund(collectedOnSale(tx), 50)).toBe(450);       // total refund to the customer
+    expect(returnRefund(cashCollectedOnSale(tx), 50)).toBe(450);   // same amount, all cash
+  });
+
+  it('a layaway return refunds only the deposit collected, not the full totalPaid', () => {
+    const tx = { ...base, deposit: 150, balanceOwing: 350 };
+    expect(returnRefund(collectedOnSale(tx), undefined)).toBe(150); // NOT tx.totalPaid (500)
+  });
+
+  it('a mixed-payment return only deducts the cash portion from the drawer, while the total refund covers both', () => {
+    const tx = { ...base, paymentMethod: 'mixed' as const, cashAmount: 200 }; // $200 cash + $300 card of $500
+    expect(returnRefund(collectedOnSale(tx), undefined)).toBe(500);     // full refund to the customer
+    expect(returnRefund(cashCollectedOnSale(tx), undefined)).toBe(200); // only the cash portion hits the drawer
+  });
+
+  it('a card-only return never produces a cash drawer effect', () => {
+    const tx = { ...base, paymentMethod: 'card' as const };
+    expect(saleRefundDrawerEffect(returnRefund(cashCollectedOnSale(tx), undefined))).toBeNull();
+  });
+});
+
+describe('saleRefundDrawerEffect', () => {
+  it('a nonzero cash refund is cash OUT of the drawer', () => {
+    expect(saleRefundDrawerEffect(250)).toEqual({ kind: 'cashOut', amount: 250 });
+  });
+  it('produces no entry for a zero or near-zero amount (a card/e-transfer refund)', () => {
+    expect(saleRefundDrawerEffect(0)).toBeNull();
+    expect(saleRefundDrawerEffect(0.001)).toBeNull();
   });
 });
