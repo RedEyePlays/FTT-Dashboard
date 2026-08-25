@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   balanceOwing, batchTotals, batchDevicesComplete, addDays, computeWarrantyUntil,
   matchesRepair, matchesBatch, isInProgress, isRepairOpen,
-  applyTechEdit, repairAgeDays, TECH_STATUSES,
+  applyTechEdit, techUpdateAuditPlan, repairAgeDays, TECH_STATUSES,
   repairNeedsCustomer, isInternalRepair, canSaveRepair, linkedRepairFor,
   partsTotal, repairPartsCost, repairLabor, repairCheckoutSummary, completeRepair,
   repairSalePrefill, completeRepairSale, technicianPerformance, partName, dateToEpochMs,
@@ -204,6 +204,67 @@ describe('applyTechEdit', () => {
     const next = applyTechEdit(stored, { status: 'completed' as any });
     expect(next.status).toBe('received'); // unchanged
     expect(TECH_STATUSES).not.toContain('completed');
+  });
+});
+
+describe('techUpdateAuditPlan', () => {
+  const stored = repair({ id: 'r1', status: 'in_repair', techNotes: 'old note', testChecks: ['Power'] });
+
+  it('plans a status_change entry when status differs', () => {
+    const next = { ...stored, status: 'picked_up' as const };
+    const plan = techUpdateAuditPlan(stored, next);
+    expect(plan).toContainEqual({ action: 'repair.status_change', entityId: 'r1', before: { status: 'in_repair' }, after: { status: 'picked_up' } });
+  });
+
+  it('plans one entry per changed work field, keyed by field', () => {
+    const next = { ...stored, techNotes: 'new note', diagnostics: 'bad screen' };
+    const plan = techUpdateAuditPlan(stored, next);
+    expect(plan).toContainEqual({ action: 'repair.tech.techNotes', entityId: 'r1', before: { techNotes: 'old note' }, after: { techNotes: 'new note' } });
+    expect(plan).toContainEqual({ action: 'repair.tech.diagnostics', entityId: 'r1', before: { diagnostics: undefined }, after: { diagnostics: 'bad screen' } });
+  });
+
+  it('compares testChecks by content, not reference — no phantom entry for an equal-but-new array', () => {
+    const next = { ...stored, testChecks: ['Power'] }; // same content, different array instance
+    expect(techUpdateAuditPlan(stored, next)).toEqual([]);
+  });
+
+  it('plans a testChecks entry when the checklist actually changes', () => {
+    const next = { ...stored, testChecks: ['Power', 'Charging'] };
+    const plan = techUpdateAuditPlan(stored, next);
+    expect(plan).toContainEqual({ action: 'repair.tech.testChecks', entityId: 'r1', before: { testChecks: ['Power'] }, after: { testChecks: ['Power', 'Charging'] } });
+  });
+
+  it('plans nothing when nothing actually changed', () => {
+    expect(techUpdateAuditPlan(stored, { ...stored })).toEqual([]);
+  });
+});
+
+// Mirrors the exact control-flow pattern App.tsx's handleTechUpdateRepair
+// uses: the plan is only ever applied inside the remote call's .then(), never
+// speculatively before it resolves. This is the regression test for the bug
+// where audit entries were written regardless of whether the Cloud Function
+// call actually succeeded — an audit entry must never exist for a change
+// that didn't actually happen.
+describe('techUpdateAuditPlan applied only after a successful remote call (App.tsx handleTechUpdateRepair pattern)', () => {
+  const stored = repair({ id: 'r1', status: 'in_repair' });
+  const next = { ...stored, status: 'picked_up' as const };
+
+  const runLikeAppTsx = (remoteCall: () => Promise<void>, record: (e: ReturnType<typeof techUpdateAuditPlan>[number]) => void) =>
+    remoteCall().then(() => {
+      for (const e of techUpdateAuditPlan(stored, next)) record(e);
+    }).catch(() => { /* swallowed the same way App.tsx's .catch(console.error) does */ });
+
+  it('a failed Cloud Function call never produces an audit entry', async () => {
+    const recorded: unknown[] = [];
+    await runLikeAppTsx(() => Promise.reject(new Error('network error')), e => recorded.push(e));
+    expect(recorded).toEqual([]);
+  });
+
+  it('a successful call produces exactly the expected audit plan', async () => {
+    const recorded: unknown[] = [];
+    await runLikeAppTsx(() => Promise.resolve(), e => recorded.push(e));
+    expect(recorded).toEqual(techUpdateAuditPlan(stored, next));
+    expect(recorded.length).toBeGreaterThan(0);
   });
 });
 

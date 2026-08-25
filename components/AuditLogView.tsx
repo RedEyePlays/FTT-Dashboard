@@ -1,7 +1,8 @@
 import React, { useMemo, useState } from 'react';
-import { ScrollText, Search, X } from 'lucide-react';
+import { ScrollText, Search, X, Download, ShieldAlert } from 'lucide-react';
 import { AuditEntry, AppUser } from '../types';
-import { auditActionLabel } from '../domain/audit';
+import { auditActionLabel, auditChangeSummary, auditExportRows, isCriticalAuditAction } from '../domain/audit';
+import { toCSV, triggerDownload } from '../services/backup';
 
 interface Props {
   logs: AuditEntry[];
@@ -17,6 +18,7 @@ export const AuditLogView: React.FC<Props> = ({ logs, users, onLoadMore, hasMore
   const [entity, setEntity] = useState('all');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
+  const [criticalOnly, setCriticalOnly] = useState(false);
 
   const actions = useMemo(() => Array.from(new Set(logs.map(l => l.action))).sort(), [logs]);
   const entities = useMemo(() => Array.from(new Set(logs.map(l => l.entityType))).sort(), [logs]);
@@ -29,10 +31,15 @@ export const AuditLogView: React.FC<Props> = ({ logs, users, onLoadMore, hasMore
       .filter(l => userId === 'all' || l.userId === userId)
       .filter(l => action === 'all' || l.action === action)
       .filter(l => entity === 'all' || l.entityType === entity)
+      .filter(l => !criticalOnly || isCriticalAuditAction(l.action))
       .filter(l => l.ts >= fromTs && l.ts <= toTs)
       .filter(l => !term || [l.userEmail, l.action, auditActionLabel(l.action), l.entityType, l.entityId].some(v => (v || '').toLowerCase().includes(term)))
       .sort((a, b) => b.ts - a.ts);
-  }, [logs, q, userId, action, entity, from, to]);
+  }, [logs, q, userId, action, entity, criticalOnly, from, to]);
+
+  const exportCsv = () => {
+    triggerDownload(`audit-log-${new Date().toISOString().split('T')[0]}.csv`, toCSV(auditExportRows(filtered)), 'text/csv;charset=utf-8;');
+  };
 
   const sel = 'p-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm';
   const fmt = (ts: number) => new Date(ts).toLocaleString();
@@ -64,10 +71,18 @@ export const AuditLogView: React.FC<Props> = ({ logs, users, onLoadMore, hasMore
         </select>
         <input type="date" value={from} onChange={e => setFrom(e.target.value)} className={sel} title="From date" />
         <input type="date" value={to} onChange={e => setTo(e.target.value)} className={sel} title="To date" />
-        {(q || userId !== 'all' || action !== 'all' || entity !== 'all' || from || to) && (
-          <button onClick={() => { setQ(''); setUserId('all'); setAction('all'); setEntity('all'); setFrom(''); setTo(''); }}
+        <button onClick={() => setCriticalOnly(v => !v)} title="Sensitive actions only: voids/returns, PIN/role/profit-access changes, drawer reconciliation, settings changes"
+          className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border ${criticalOnly ? 'bg-amber-500 text-white border-amber-500' : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-amber-400'}`}>
+          <ShieldAlert className="w-4 h-4" /> Critical actions
+        </button>
+        {(q || userId !== 'all' || action !== 'all' || entity !== 'all' || criticalOnly || from || to) && (
+          <button onClick={() => { setQ(''); setUserId('all'); setAction('all'); setEntity('all'); setCriticalOnly(false); setFrom(''); setTo(''); }}
             className="flex items-center gap-1 px-2 py-2 text-slate-400 hover:text-slate-600 text-sm"><X className="w-4 h-4" /> Clear</button>
         )}
+        <button onClick={exportCsv} disabled={filtered.length === 0}
+          className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-indigo-400 disabled:opacity-40 disabled:cursor-not-allowed ml-auto">
+          <Download className="w-4 h-4" /> Export CSV
+        </button>
       </div>
 
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl overflow-hidden">
@@ -92,8 +107,8 @@ export const AuditLogView: React.FC<Props> = ({ logs, users, onLoadMore, hasMore
                   <td className="px-3 py-2 whitespace-nowrap"><span title={l.action} className="px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300">{auditActionLabel(l.action)}</span></td>
                   <td className="px-3 py-2 whitespace-nowrap text-slate-600 dark:text-slate-300">{l.entityType}</td>
                   <td className="px-3 py-2 whitespace-nowrap font-mono text-xs text-slate-400">{l.entityId || '—'}</td>
-                  <td className="px-3 py-2 text-xs text-slate-400 max-w-xs truncate" title={[l.before && `before: ${JSON.stringify(l.before)}`, l.after && `after: ${JSON.stringify(l.after)}`].filter(Boolean).join('  ')}>
-                    {l.before || l.after ? [l.before && 'before', l.after && 'after'].filter(Boolean).join(' → ') : '—'}
+                  <td className="px-3 py-2 text-xs text-slate-500 dark:text-slate-400 max-w-xs truncate" title={auditChangeSummary(l.before, l.after) ?? [l.before && `before: ${JSON.stringify(l.before)}`, l.after && `after: ${JSON.stringify(l.after)}`].filter(Boolean).join('  ')}>
+                    {auditChangeSummary(l.before, l.after) ?? (l.before || l.after ? [l.before && 'before', l.after && 'after'].filter(Boolean).join(' + ') + ' (complex — hover for JSON)' : '—')}
                   </td>
                 </tr>
               ))}
