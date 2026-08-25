@@ -34,7 +34,7 @@ const TimeClockView = lazy(() => import('./components/TimeClockView').then(m => 
 const CloseOutView = lazy(() => import('./components/CloseOutView').then(m => ({ default: m.CloseOutView })));
 import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, Runner, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission, Repair, RepairBatch, TimeEntry, PayPeriodPaid, BreakReason, SalesTransaction, CashReconciliation, StaffNote } from './types';
 import { skuPrefix, nextSku } from './services/sku';
-import { REPAIR_PREFIX, BATCH_PREFIX, applyTechEdit, TECH_EDITABLE_FIELDS, repairSalePrefill, completeRepair, completeRepairSale, dateToEpochMs } from './domain/repairs';
+import { REPAIR_PREFIX, BATCH_PREFIX, applyTechEdit, techUpdateAuditPlan, repairSalePrefill, completeRepair, completeRepairSale, dateToEpochMs } from './domain/repairs';
 import { MergePlan } from './domain/customers';
 import { can } from './services/rbac';
 import { downloadJson, toCSV, triggerDownload } from './services/backup';
@@ -1246,24 +1246,21 @@ const App: React.FC = () => {
   const handleTechUpdateRepair = (stored: Repair, draft: Partial<Repair>) => {
     if (!uid || !allow('repairs.tech')) return;
     const next = applyTechEdit(stored, draft);
-    techUpdateRepair(stored.id, draft).catch(e => console.error('Tech repair update failed', e));
-    // Auto-inventory devices become sellable once their ticket completes (same
-    // rule as handleSaveRepair — see spec point 5).
-    if ((next.status === 'picked_up' || next.status === 'completed') && next.inventoryAutoCreated !== undefined && next.inventoryId) {
-      const invItem = dataRef.current.find(i => i.id === next.inventoryId);
-      if (invItem && invItem.deviceStatus !== 'ready') saveItem(uid, 'inventory', { ...invItem, deviceStatus: 'ready' });
-    }
-    if (stored.status !== next.status) {
-      logActivity(`${next.repairNumber} → ${next.status.replace(/_/g, ' ')}`);
-      audit('repair.status_change', 'repair', next.id, { status: stored.status }, { status: next.status });
-    }
-    // Audit each changed work field (before → after) for full traceability.
-    for (const f of TECH_EDITABLE_FIELDS) {
-      if (f === 'status') continue;
-      const b = (stored as any)[f], a = (next as any)[f];
-      const changed = f === 'testChecks' ? (b || []).join('|') !== (a || []).join('|') : b !== a;
-      if (changed) audit(`repair.tech.${f}`, 'repair', next.id, { [f]: b }, { [f]: a });
-    }
+    // Every side effect below (the auto-inventory-ready flip, the activity log
+    // line, and the audit trail) is applied ONLY after confirming the
+    // techUpdateRepair Cloud Function call actually succeeded — never
+    // optimistically. An audit entry (or any of these) must never exist for a
+    // change that didn't actually happen.
+    techUpdateRepair(stored.id, draft).then(() => {
+      // Auto-inventory devices become sellable once their ticket completes
+      // (same rule as handleSaveRepair — see spec point 5).
+      if ((next.status === 'picked_up' || next.status === 'completed') && next.inventoryAutoCreated !== undefined && next.inventoryId) {
+        const invItem = dataRef.current.find(i => i.id === next.inventoryId);
+        if (invItem && invItem.deviceStatus !== 'ready') saveItem(uid, 'inventory', { ...invItem, deviceStatus: 'ready' });
+      }
+      if (stored.status !== next.status) logActivity(`${next.repairNumber} → ${next.status.replace(/_/g, ' ')}`);
+      for (const e of techUpdateAuditPlan(stored, next)) audit(e.action, 'repair', e.entityId, e.before, e.after);
+    }).catch(e => console.error('Tech repair update failed', e));
   };
 
   const handleDeleteRepair = (id: string) => {

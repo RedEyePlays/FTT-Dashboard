@@ -75,6 +75,30 @@ export function applyTechEdit(stored: Repair, draft: Partial<Repair>): Repair {
   return next;
 }
 
+export interface AuditPlanEntry { action: string; entityId: string; before?: Record<string, unknown>; after?: Record<string, unknown> }
+
+/**
+ * The audit entries a technician's edit SHOULD produce, computed purely from
+ * the before/after repair records — no side effects, and no knowledge of
+ * whether the underlying write actually succeeded. The caller (App.tsx's
+ * handleTechUpdateRepair) must apply this plan only after confirming the
+ * techUpdateRepair Cloud Function call actually resolved — an audit entry
+ * must never exist for a change that didn't actually happen.
+ */
+export function techUpdateAuditPlan(stored: Repair, next: Repair): AuditPlanEntry[] {
+  const entries: AuditPlanEntry[] = [];
+  if (stored.status !== next.status) {
+    entries.push({ action: 'repair.status_change', entityId: next.id, before: { status: stored.status }, after: { status: next.status } });
+  }
+  for (const f of TECH_EDITABLE_FIELDS) {
+    if (f === 'status') continue;
+    const b = (stored as any)[f], a = (next as any)[f];
+    const changed = f === 'testChecks' ? (b || []).join('|') !== (a || []).join('|') : b !== a;
+    if (changed) entries.push({ action: `repair.tech.${f}`, entityId: next.id, before: { [f]: b }, after: { [f]: a } });
+  }
+  return entries;
+}
+
 // --- Repair type semantics ---
 // Only retail tickets involve an external customer. Wholesale devices belong to
 // a business batch; internal tickets are shop-owned devices being refurbished

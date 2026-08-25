@@ -1,4 +1,5 @@
 import { AppSettings } from './settings';
+import { AuditEntry } from '../types';
 
 // --- Audit helpers ----------------------------------------------------------
 //
@@ -74,6 +75,71 @@ const prettify = (action: string): string => {
 /** Human-readable label for an audit action string (never the raw token). */
 export const auditActionLabel = (action: string): string =>
   AUDIT_ACTION_LABELS[action] ?? prettify(action);
+
+// Sensitive actions worth a one-click filter in the audit log, instead of
+// picking them out of the full action dropdown one at a time — confirmed
+// against the real action strings App.tsx's audit() calls actually emit
+// (see the exhaustive `audit(` grep this was built from), not guessed names.
+export const CRITICAL_AUDIT_ACTIONS: readonly string[] = [
+  'sale.void', 'sale.return',
+  'user.set_pin', 'user.role_change', 'user.allow_profit',
+  'cash.reconcile', 'settings.update',
+];
+
+/** Whether an audit action is on the critical/sensitive list above. */
+export const isCriticalAuditAction = (action: string): boolean => CRITICAL_AUDIT_ACTIONS.includes(action);
+
+/**
+ * A clean, human-readable one-line diff for an audit entry's before/after —
+ * e.g. "status: in_repair → picked_up" — instead of raw JSON. Only produced
+ * when both sides are "flat" (no nested object/array values): a genuinely
+ * complex/nested change isn't something a one-liner can represent honestly,
+ * so this returns null and the caller falls back to a JSON view for those.
+ */
+export function auditChangeSummary(before?: Record<string, unknown>, after?: Record<string, unknown>): string | null {
+  if (!before && !after) return null;
+  const isFlat = (o?: Record<string, unknown>) =>
+    !o || Object.values(o).every(v => v === null || v === undefined || typeof v !== 'object');
+  if (!isFlat(before) || !isFlat(after)) return null;
+
+  const fmt = (v: unknown): string => (v === undefined || v === null || v === '' ? '—' : String(v));
+  const keys = Array.from(new Set([...Object.keys(before || {}), ...Object.keys(after || {})])).sort();
+  const parts = keys.map(k => {
+    const hasBefore = !!before && k in before;
+    const hasAfter = !!after && k in after;
+    if (hasBefore && hasAfter) return `${k}: ${fmt(before![k])} → ${fmt(after![k])}`;
+    if (hasAfter) return `${k}: ${fmt(after![k])}`;
+    return `${k}: ${fmt(before![k])}`;
+  });
+  return parts.length ? parts.join(', ') : null;
+}
+
+export interface AuditExportRow {
+  Timestamp: string;
+  User: string;
+  Action: string;
+  Entity: string;
+  'Entity ID': string;
+  Change: string;
+}
+
+/**
+ * Flatten audit entries into plain CSV-ready rows (see AuditLogView's Export
+ * CSV button) — the caller passes whatever set is currently filtered/visible,
+ * so the export always matches what's on screen. The Change column reuses
+ * the same readable summary the table itself shows, falling back to raw
+ * JSON only where a clean one-liner isn't practical (see auditChangeSummary).
+ */
+export const auditExportRows = (entries: AuditEntry[]): AuditExportRow[] =>
+  entries.map(l => ({
+    Timestamp: new Date(l.ts).toLocaleString(),
+    User: l.userEmail,
+    Action: auditActionLabel(l.action),
+    Entity: l.entityType,
+    'Entity ID': l.entityId || '',
+    Change: auditChangeSummary(l.before, l.after)
+      ?? [l.before && `before: ${JSON.stringify(l.before)}`, l.after && `after: ${JSON.stringify(l.after)}`].filter(Boolean).join('  '),
+  }));
 
 /**
  * The top-level settings sections that differ between two AppSettings snapshots
