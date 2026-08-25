@@ -51,7 +51,7 @@ import {
   saveTimeEntry, savePayPeriodPaid, deletePayPeriodPaid,
   saveStaffNote, deleteStaffNote, commitAutoInventory,
 } from './services/firestoreDb';
-import { decideAutoInventory, AutoInventoryNotice } from './domain/autoInventory';
+import { decideAutoInventory, autoInventoryPurchaseDrawerEffect, AutoInventoryNotice } from './domain/autoInventory';
 import { AppSettings } from './domain/settings';
 import { listWorkspaceBackups, getBackupDownloadUrl } from './services/backupStorage';
 import { useWorkspaceData } from './hooks/useWorkspaceData';
@@ -1054,7 +1054,7 @@ const App: React.FC = () => {
         const candidate: InventoryItem = {
           id: newId(), kind: 'device', sku, date: next.date || new Date().toISOString().split('T')[0],
           item: [next.brand, next.model].filter(Boolean).join(' ') || next.model || next.deviceType || 'Device',
-          imei: next.imei || '', boughtFrom: '', purchaseCost: 0, repairCost: 0,
+          imei: next.imei || '', boughtFrom: '', purchaseCost: next.purchaseCost || 0, repairCost: 0,
           soldDate: '', soldTo: '', salePrice: 0, notes: '',
           deviceType: next.deviceType, brand: next.brand, model: next.model, storage: next.storage, color: next.color,
           deviceStatus: 'pending_repair', imeiNormalized: decision.normalized,
@@ -1065,6 +1065,19 @@ const App: React.FC = () => {
         if (result.action === 'create') {
           next.inventoryAutoCreated = true;
           notice = { kind: 'created', sku: result.item.sku || '' };
+          // Real cash left the drawer right now if this device's cost came out
+          // of store cash — mirrors the drop-off accept fix's drawer-effect
+          // pattern. Only fires for the ticket that actually creates the
+          // record, never a later ticket that just attaches to it.
+          const purchaseEffect = autoInventoryPurchaseDrawerEffect(next);
+          if (purchaseEffect) {
+            const date = new Date().toISOString().split('T')[0];
+            const existing = cashReconciliations.find(rec => rec.date === date);
+            const listKey: 'cashIn' | 'cashOut' = purchaseEffect.kind;
+            const entry = { id: newId(), amount: purchaseEffect.amount, note: `Device purchase — ${next.repairNumber || candidate.item}` };
+            commitDrawerRecord(date, { [listKey]: [...(existing?.[listKey] || []), entry] });
+            logActivity(`Cash paid out $${purchaseEffect.amount.toFixed(2)} — device purchase (${candidate.item})`);
+          }
         } else {
           next.inventoryAutoCreated = false;
           next.inventoryPreviousStatus = result.item.deviceStatus;

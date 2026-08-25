@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   normalizeSerial, luhnValid, normalizeIdentifier, identifierOf,
-  findAutoInventoryMatch, decideAutoInventory,
+  findAutoInventoryMatch, decideAutoInventory, autoInventoryPurchaseDrawerEffect,
 } from './autoInventory';
 import { InventoryItem } from '../types';
 
@@ -123,5 +123,25 @@ describe('decideAutoInventory', () => {
     const dashed = `${VALID_IMEI.slice(0, 2)}-${VALID_IMEI.slice(2, 8)}-${VALID_IMEI.slice(8, 14)}-${VALID_IMEI.slice(14)}`;
     const existing = dev({ id: 'z', imeiNormalized: VALID_IMEI });
     expect(decideAutoInventory({ autoInventory: true }, dashed, [existing])).toEqual({ action: 'attach', match: existing, normalized: VALID_IMEI });
+  });
+});
+
+describe('autoInventoryPurchaseDrawerEffect', () => {
+  it('a store-paid device purchase reduces expected drawer cash by the entered amount', () => {
+    expect(autoInventoryPurchaseDrawerEffect({ purchaseCost: 340, purchasePaidBy: 'store' })).toEqual({ kind: 'cashOut', amount: 340 });
+  });
+
+  it('a personally-paid device purchase never touches the drawer', () => {
+    expect(autoInventoryPurchaseDrawerEffect({ purchaseCost: 340, purchasePaidBy: 'personal' })).toBeNull();
+  });
+
+  it('an unset payment source never touches the drawer (defaults safe, not store cash)', () => {
+    expect(autoInventoryPurchaseDrawerEffect({ purchaseCost: 340 })).toBeNull();
+  });
+
+  it('produces no entry for a zero, near-zero, or missing purchase cost even when store-paid', () => {
+    expect(autoInventoryPurchaseDrawerEffect({ purchaseCost: 0, purchasePaidBy: 'store' })).toBeNull();
+    expect(autoInventoryPurchaseDrawerEffect({ purchaseCost: 0.001, purchasePaidBy: 'store' })).toBeNull();
+    expect(autoInventoryPurchaseDrawerEffect({ purchasePaidBy: 'store' })).toBeNull();
   });
 });

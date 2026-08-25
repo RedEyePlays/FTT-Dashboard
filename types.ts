@@ -480,6 +480,13 @@ export interface RepairCosmetic {
   notes?: string;
 }
 
+// Mirrors DropOff's `PaidBy` for the same "who actually handed over the cash"
+// question, applied to a wholesale device ticket's purchaseCost instead of a
+// drop-off's purchasePrice. 'store' hits the cash drawer at ticket creation
+// (see domain/autoInventory.ts's autoInventoryPurchaseDrawerEffect); 'personal'
+// never touches it.
+export type RepairPurchasePaidBy = 'store' | 'personal';
+
 export interface Repair {
   id: string;
   repairNumber: string;         // e.g. RPR-000123
@@ -497,6 +504,21 @@ export interface Repair {
   // ticket touched it — kept so a manual revert is always possible.
   inventoryAutoCreated?: boolean;
   inventoryPreviousStatus?: DeviceStatus;
+  // What this device cost to acquire — only meaningful (and shown) for a
+  // wholesale device ticket under an auto_inventory batch: flows into the
+  // auto-created inventory record's purchaseCost instead of it defaulting to
+  // 0, so profit-at-sale reflects the real cost. Blank/omitted defaults to 0
+  // (some personal devices genuinely have no traceable cost). Only applied
+  // when THIS ticket is the one that auto-creates the inventory record
+  // (inventoryAutoCreated === true) — never overwrites an existing record's
+  // cost basis on a later ticket that merely attaches to it.
+  purchaseCost?: number;
+  // Whether that purchase cost came out of store cash (logs a cash-out entry
+  // against the day's drawer at ticket creation, same drawer-effect pattern as
+  // domain/dropoffs.ts's dropOffAcceptDrawerEffect) or was paid personally /
+  // outside store cash (purchaseCost still applies to the inventory record,
+  // the drawer is just never touched). Mirrors DropOff's paidBy pattern.
+  purchasePaidBy?: RepairPurchasePaidBy;
   createdAt: number;            // epoch ms
   date: string;                 // YYYY-MM-DD (date created)
 
