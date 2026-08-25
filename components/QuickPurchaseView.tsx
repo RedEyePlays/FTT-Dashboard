@@ -1,0 +1,121 @@
+import React, { useState, useEffect } from 'react';
+import { ShoppingBag, AlertTriangle, CheckCircle } from 'lucide-react';
+import { InventoryItem } from '../types';
+import { findInventoryMatchByIdentifier, normalizeIdentifier } from '../domain/autoInventory';
+import { quickPurchaseImeiError, QuickPurchasePaidBy } from '../domain/quickPurchase';
+import { selectOnFocus } from '../hooks/selectOnFocus';
+
+export interface QuickPurchaseSaveInput {
+  device: string;
+  imei?: string;
+  purchaseCost: number;
+  paidBy: QuickPurchasePaidBy;
+  boughtFrom?: string;
+}
+
+interface Props {
+  inventory: InventoryItem[];
+  onSave: (input: QuickPurchaseSaveInput) => void;
+}
+
+const inputCls = 'w-full px-3 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500';
+const labelCls = 'block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1';
+
+const emptyForm = () => ({ device: '', imei: '', purchaseCost: '', paidBy: 'store' as QuickPurchasePaidBy, boughtFrom: '' });
+
+// A fast, minimal-friction way to log buying a device with store cash (or
+// personal money) at the counter — the buying-side counterpart to Quick
+// Sale. Just the essentials; the full Add Item form (InventoryView) stays
+// available for complete specs up front or filling in more detail later.
+export const QuickPurchaseView: React.FC<Props> = ({ inventory, onSave }) => {
+  const [f, setF] = useState(emptyForm());
+  const [confirmDuplicate, setConfirmDuplicate] = useState(false);
+  const [saved, setSaved] = useState<{ device: string; amount: number } | null>(null);
+  const set = (patch: Partial<ReturnType<typeof emptyForm>>) => setF(prev => ({ ...prev, ...patch }));
+
+  const imeiError = quickPurchaseImeiError(f.imei);
+  const normalized = normalizeIdentifier(f.imei || '').normalized;
+  const duplicate = !imeiError && normalized ? findInventoryMatchByIdentifier(normalized, inventory) : undefined;
+
+  // Confirming a duplicate applies only to the identifier that triggered it —
+  // editing the field again (even back to a different duplicate) requires a
+  // fresh confirmation rather than silently carrying the old one over.
+  useEffect(() => { setConfirmDuplicate(false); }, [normalized]);
+
+  const cost = parseFloat(f.purchaseCost) || 0;
+  const canSave = f.device.trim().length > 0 && cost > 0 && !imeiError && (!duplicate || confirmDuplicate);
+
+  const save = () => {
+    if (!canSave) return;
+    onSave({ device: f.device.trim(), imei: f.imei.trim() || undefined, purchaseCost: cost, paidBy: f.paidBy, boughtFrom: f.boughtFrom.trim() || undefined });
+    setSaved({ device: f.device.trim(), amount: cost });
+    setF(emptyForm());
+    setConfirmDuplicate(false);
+    setTimeout(() => setSaved(null), 3000);
+  };
+
+  return (
+    <div className="max-w-lg mx-auto px-4 py-6">
+      <div className="flex items-center gap-2 mb-1">
+        <ShoppingBag className="w-6 h-6 text-indigo-500" />
+        <h2 className="text-2xl font-bold text-slate-900 dark:text-white">Quick Purchase</h2>
+      </div>
+      <p className="text-sm text-slate-500 dark:text-slate-400 mb-5">Log buying a device at the counter — just the essentials. Use the full Add Item form (Inventory) for complete specs, or come back and fill in more detail later.</p>
+
+      {saved && (
+        <div className="mb-4 flex items-center gap-2 bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-500/30 text-emerald-700 dark:text-emerald-300 rounded-xl px-4 py-3 text-sm">
+          <CheckCircle className="w-4 h-4 shrink-0" /> Added "{saved.device}" — ${saved.amount.toFixed(2)}.
+        </div>
+      )}
+
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl p-5 space-y-4">
+        <div>
+          <label className={labelCls}>Device</label>
+          <input autoFocus className={inputCls} placeholder="e.g. iPhone 13 Pro 256GB" value={f.device} onChange={e => set({ device: e.target.value })} />
+        </div>
+
+        <div>
+          <label className={labelCls}>IMEI / Serial (optional)</label>
+          <input className={inputCls} placeholder="Optional" value={f.imei} onChange={e => set({ imei: e.target.value })} />
+          {imeiError && <p className="text-xs text-rose-600 dark:text-rose-400 mt-1">{imeiError}</p>}
+          {duplicate && (
+            <div className="mt-2 bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-500/40 rounded-lg p-3 text-xs">
+              <p className="flex items-center gap-1.5 font-semibold text-amber-800 dark:text-amber-300"><AlertTriangle className="w-3.5 h-3.5 shrink-0" /> Already in inventory</p>
+              <p className="text-amber-700/90 dark:text-amber-300/90 mt-1">This IMEI/serial matches {duplicate.sku ? `${duplicate.sku} — ` : ''}{duplicate.item || 'an existing record'} ({duplicate.deviceStatus || 'unknown status'}).</p>
+              <label className="flex items-center gap-2 mt-2 text-amber-800 dark:text-amber-300 cursor-pointer">
+                <input type="checkbox" checked={confirmDuplicate} onChange={e => setConfirmDuplicate(e.target.checked)} className="rounded" /> Add anyway — this is a different device / re-entry confirmed
+              </label>
+            </div>
+          )}
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className={labelCls}>Purchase Price</label>
+            <input type="number" min="0" step="0.01" className={inputCls} placeholder="0.00" value={f.purchaseCost} onChange={e => set({ purchaseCost: e.target.value })} onFocus={selectOnFocus} />
+          </div>
+          <div>
+            <label className={labelCls}>Paid From</label>
+            <select className={inputCls} value={f.paidBy} onChange={e => set({ paidBy: e.target.value as QuickPurchasePaidBy })}>
+              <option value="store">Store cash</option>
+              <option value="personal">Personal / outside store cash</option>
+            </select>
+          </div>
+        </div>
+        {cost > 0 && f.paidBy === 'store' && (
+          <p className="text-[11px] text-amber-600 dark:text-amber-400 -mt-2">Saving will log a ${cost.toFixed(2)} cash-out against today's drawer.</p>
+        )}
+
+        <div>
+          <label className={labelCls}>Seller Name / Bought From (optional)</label>
+          <input className={inputCls} placeholder="Optional" value={f.boughtFrom} onChange={e => set({ boughtFrom: e.target.value })} />
+        </div>
+
+        <button onClick={save} disabled={!canSave}
+          className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg text-sm font-semibold">
+          Add to Inventory
+        </button>
+      </div>
+    </div>
+  );
+};

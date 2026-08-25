@@ -16,6 +16,7 @@ const VIEW_SLUGS: { view: ViewState; slug: string }[] = [
   { view: 'analytics', slug: 'analytics' },
   { view: 'reports', slug: 'reports' },
   { view: 'pos', slug: 'checkout' },
+  { view: 'quickpurchase', slug: 'quick-purchase' },
   { view: 'repairs', slug: 'repairs' },
   { view: 'customers', slug: 'customers' },
   { view: 'dropoff', slug: 'drop-offs' },
