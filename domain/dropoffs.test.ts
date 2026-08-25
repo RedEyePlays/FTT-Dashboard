@@ -28,6 +28,16 @@ describe('runnerBalance', () => {
     const b = runnerBalance('r9', [d({ runnerId: 'r1', purchasePrice: 100, dropOffFee: 10 })]);
     expect(b).toEqual({ cashFronted: 0, feesOwed: 0, net: 0, count: 0 });
   });
+
+  it('a personal-paid drop-off never adds to cash fronted (same as store), but its fee is still owed', () => {
+    const dropOffs: DropOff[] = [
+      d({ id: '1', runnerId: 'r1', paidBy: 'personal', purchasePrice: 400, dropOffFee: 25, status: 'accepted' }),
+    ];
+    const b = runnerBalance('r1', dropOffs);
+    expect(b.cashFronted).toBe(0);
+    expect(b.feesOwed).toBe(25);
+    expect(b.net).toBe(25);
+  });
 });
 
 describe('settleableDropOffs', () => {
@@ -79,6 +89,16 @@ describe('settlementTotals', () => {
   it('is zero for an empty set', () => {
     expect(settlementTotals([])).toEqual({ cashFronted: 0, totalFees: 0, amountToPay: 0 });
   });
+
+  it('a personal-paid drop-off is never reimbursed as fronted cash (same as store)', () => {
+    const set: DropOff[] = [
+      d({ paidBy: 'personal', purchasePrice: 250, dropOffFee: 15 }),
+    ];
+    const t = settlementTotals(set);
+    expect(t.cashFronted).toBe(0);
+    expect(t.totalFees).toBe(15);
+    expect(t.amountToPay).toBe(15);
+  });
 });
 
 describe('dropOffPurchaseCost', () => {
@@ -96,6 +116,12 @@ describe('dropOffPurchaseCost', () => {
   it('treats missing amounts as zero', () => {
     expect(dropOffPurchaseCost({ purchasePrice: 0, dropOffFee: 0 })).toBe(0);
     expect(dropOffPurchaseCost({ purchasePrice: undefined as any, dropOffFee: undefined as any })).toBe(0);
+  });
+
+  it('still counts correctly toward purchaseCost for a personal-paid drop-off, same as store/runner', () => {
+    // dropOffPurchaseCost is paidBy-agnostic by design — the acquisition cost
+    // is the same real cost regardless of whose money paid it.
+    expect(dropOffPurchaseCost({ purchasePrice: 250, dropOffFee: 15 })).toBe(265);
   });
 });
 
@@ -131,6 +157,10 @@ describe('dropOffAcceptDrawerEffect', () => {
 
   it('a runner-paid drop-off never touches the drawer at accept — reimbursed later at settlement', () => {
     expect(dropOffAcceptDrawerEffect({ paidBy: 'runner', purchasePrice: 275 })).toBeNull();
+  });
+
+  it('a personal-paid drop-off never touches the drawer either — not store cash, and not a runner to reimburse', () => {
+    expect(dropOffAcceptDrawerEffect({ paidBy: 'personal', purchasePrice: 275 })).toBeNull();
   });
 
   it('produces no entry for a zero (or near-zero) store-paid purchase price', () => {

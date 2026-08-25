@@ -48,6 +48,39 @@ describe('buildQuickPurchaseItem', () => {
     expect(item.imeiNormalized).toBeUndefined();
   });
 
+  it('carries through the optional details (storage, color, battery health, target sale price) when given', () => {
+    const item = buildQuickPurchaseItem(
+      { device: 'iPhone 13', purchaseCost: 250, paidBy: 'store', storage: '128GB', color: 'Midnight', batteryHealth: '92%', targetSalePrice: 400 },
+      { id: 'i5', sku: 'PHN-5' },
+      '2026-08-25',
+    );
+    expect(item.storage).toBe('128GB');
+    expect(item.color).toBe('Midnight');
+    expect(item.batteryHealth).toBe('92%');
+    expect(item.targetSalePrice).toBe(400);
+  });
+
+  it('leaves the optional details unset when not given — fillable later, same as a normal Add Item save', () => {
+    const item = buildQuickPurchaseItem(
+      { device: 'iPhone 13', purchaseCost: 250, paidBy: 'store' },
+      { id: 'i6', sku: 'PHN-6' },
+      '2026-08-25',
+    );
+    expect(item.storage).toBeUndefined();
+    expect(item.color).toBeUndefined();
+    expect(item.batteryHealth).toBeUndefined();
+    expect(item.targetSalePrice).toBeUndefined();
+  });
+
+  it('never stores a zero/negative target sale price (treated as unset, matching purchaseCost\'s own floor)', () => {
+    const item = buildQuickPurchaseItem(
+      { device: 'X', purchaseCost: 250, paidBy: 'store', targetSalePrice: 0 },
+      { id: 'i7', sku: 'PHN-7' },
+      '2026-08-25',
+    );
+    expect(item.targetSalePrice).toBeUndefined();
+  });
+
   it('never records a negative purchase cost', () => {
     const item = buildQuickPurchaseItem(
       { device: 'X', purchaseCost: -50, paidBy: 'personal' },

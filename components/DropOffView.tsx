@@ -25,6 +25,8 @@ const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 
 const today = () => new Date().toISOString().split('T')[0];
 const money = (n: number) => `$${n.toFixed(2)}`;
 
+const PAID_BY_LABEL: Record<PaidBy, string> = { runner: 'Runner paid', store: 'Store paid', personal: 'Personal paid' };
+
 const STATUS_META: Record<DropOffStatus, { label: string; cls: string }> = {
   pending:  { label: 'Pending review', cls: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400' },
   accepted: { label: 'Accepted',       cls: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400' },
@@ -159,7 +161,7 @@ const EntriesTab: React.FC<{
                 </p>
                 <div className="flex gap-4 mt-2 text-xs">
                   <span className="text-slate-500 dark:text-slate-400">Purchase: <b className="text-slate-700 dark:text-slate-200">{money(d.purchasePrice)}</b></span>
-                  <span className="text-slate-500 dark:text-slate-400">Paid by: <b className="text-slate-700 dark:text-slate-200">{d.paidBy === 'runner' ? 'Runner' : 'Store'}</b></span>
+                  <span className="text-slate-500 dark:text-slate-400">Paid by: <b className="text-slate-700 dark:text-slate-200">{PAID_BY_LABEL[d.paidBy] || 'Store paid'}</b></span>
                   <span className="text-slate-500 dark:text-slate-400">Fee: <b className="text-emerald-600">{money(d.dropOffFee)}</b></span>
                 </div>
                 {d.notes && <p className="text-xs text-slate-400 mt-1 italic">{d.notes}</p>}
@@ -247,10 +249,10 @@ const EntriesTab: React.FC<{
               <div className="col-span-2">
                 <label className={lbl}>Who paid the seller?</label>
                 <div className="flex gap-2">
-                  {(['runner', 'store'] as PaidBy[]).map(p => (
+                  {(['runner', 'store', 'personal'] as PaidBy[]).map(p => (
                     <button key={p} type="button" onClick={() => set('paidBy', p)}
                       className={`flex-1 py-2 rounded-lg text-sm font-medium border ${form.paidBy === p ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'}`}>
-                      {p === 'runner' ? 'Runner paid' : 'Store paid'}
+                      {PAID_BY_LABEL[p]}
                     </button>
                   ))}
                 </div>
@@ -410,7 +412,7 @@ const SettlementTab: React.FC<{
             <div key={d.id} className="flex items-center justify-between px-3 py-2 text-sm">
               <div className="min-w-0">
                 <p className="text-slate-700 dark:text-slate-200 truncate">{d.item}</p>
-                <p className="text-[11px] text-slate-400">{d.paidBy === 'runner' ? 'Runner paid' : 'Store paid'} · fee {money(d.dropOffFee)}</p>
+                <p className="text-[11px] text-slate-400">{PAID_BY_LABEL[d.paidBy] || 'Store paid'} · fee {money(d.dropOffFee)}</p>
               </div>
               <span className="text-slate-500 dark:text-slate-400">{money(d.purchasePrice)}</span>
             </div>

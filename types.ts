@@ -112,7 +112,11 @@ export interface InventoryItem {
   notes: string;
 }
 
-export type PaidBy = 'runner' | 'store';
+// 'personal' = the owner/staff paid the seller out of pocket — not store
+// cash (never touches the drawer) and not the runner needing reimbursement
+// (never adds to what's owed them). Same vocabulary/shape as
+// RepairPurchasePaidBy's 'store' | 'personal'.
+export type PaidBy = 'runner' | 'store' | 'personal';
 
 // How a settlement was actually paid out to the runner. Only 'cash' touches the
 // cash drawer's expected total — an e-transfer or other non-cash payment never
@@ -136,7 +140,7 @@ export interface DropOff {
   sellerName: string;        // marketplace seller name, optional
   sellerContact: string;     // marketplace seller contact, optional
   purchasePrice: number;     // what was paid to the seller
-  paidBy: PaidBy;            // 'runner' paid the seller, or 'store' paid
+  paidBy: PaidBy;            // 'runner' paid, 'store' cash paid, or 'personal' (staff's own money) paid
   dropOffFee: number;        // commission owed to the runner for this device
   dateDropped: string;       // YYYY-MM-DD
   status: DropOffStatus;

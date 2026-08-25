@@ -11,6 +11,10 @@ export interface QuickPurchaseSaveInput {
   purchaseCost: number;
   paidBy: QuickPurchasePaidBy;
   boughtFrom?: string;
+  storage?: string;
+  color?: string;
+  batteryHealth?: string;
+  targetSalePrice?: number;
 }
 
 interface Props {
@@ -21,12 +25,18 @@ interface Props {
 const inputCls = 'w-full px-3 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500';
 const labelCls = 'block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1';
 
-const emptyForm = () => ({ device: '', imei: '', purchaseCost: '', paidBy: 'store' as QuickPurchasePaidBy, boughtFrom: '' });
+const emptyForm = () => ({
+  device: '', imei: '', purchaseCost: '', paidBy: 'store' as QuickPurchasePaidBy, boughtFrom: '',
+  storage: '', color: '', batteryHealth: '', targetSalePrice: '',
+});
 
 // A fast, minimal-friction way to log buying a device with store cash (or
 // personal money) at the counter — the buying-side counterpart to Quick
-// Sale. Just the essentials; the full Add Item form (InventoryView) stays
-// available for complete specs up front or filling in more detail later.
+// Sale. Device / Purchase Price / Paid From are the only required fields;
+// IMEI/Serial, Storage, Color, Battery Health and Target Sale Price sit on
+// the same screen (not a second step) but stay optional — left blank, they
+// behave exactly as on the plain Add Item form (fillable later). The full
+// Add Item form (InventoryView) stays available for complete specs up front.
 export const QuickPurchaseView: React.FC<Props> = ({ inventory, onSave }) => {
   const [f, setF] = useState(emptyForm());
   const [confirmDuplicate, setConfirmDuplicate] = useState(false);
@@ -47,7 +57,13 @@ export const QuickPurchaseView: React.FC<Props> = ({ inventory, onSave }) => {
 
   const save = () => {
     if (!canSave) return;
-    onSave({ device: f.device.trim(), imei: f.imei.trim() || undefined, purchaseCost: cost, paidBy: f.paidBy, boughtFrom: f.boughtFrom.trim() || undefined });
+    onSave({
+      device: f.device.trim(), imei: f.imei.trim() || undefined, purchaseCost: cost, paidBy: f.paidBy,
+      boughtFrom: f.boughtFrom.trim() || undefined,
+      storage: f.storage.trim() || undefined, color: f.color.trim() || undefined,
+      batteryHealth: f.batteryHealth.trim() || undefined,
+      targetSalePrice: parseFloat(f.targetSalePrice) > 0 ? parseFloat(f.targetSalePrice) : undefined,
+    });
     setSaved({ device: f.device.trim(), amount: cost });
     setF(emptyForm());
     setConfirmDuplicate(false);
@@ -60,7 +76,7 @@ export const QuickPurchaseView: React.FC<Props> = ({ inventory, onSave }) => {
         <ShoppingBag className="w-6 h-6 text-indigo-500" />
         <h2 className="text-2xl font-bold text-slate-900 dark:text-white">Quick Purchase</h2>
       </div>
-      <p className="text-sm text-slate-500 dark:text-slate-400 mb-5">Log buying a device at the counter — just the essentials. Use the full Add Item form (Inventory) for complete specs, or come back and fill in more detail later.</p>
+      <p className="text-sm text-slate-500 dark:text-slate-400 mb-5">Log buying a device at the counter — just the essentials, with optional details if you have them handy. Use the full Add Item form (Inventory) for complete specs, or come back and fill in more detail later.</p>
 
       {saved && (
         <div className="mb-4 flex items-center gap-2 bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-500/30 text-emerald-700 dark:text-emerald-300 rounded-xl px-4 py-3 text-sm">
@@ -72,21 +88,6 @@ export const QuickPurchaseView: React.FC<Props> = ({ inventory, onSave }) => {
         <div>
           <label className={labelCls}>Device</label>
           <input autoFocus className={inputCls} placeholder="e.g. iPhone 13 Pro 256GB" value={f.device} onChange={e => set({ device: e.target.value })} />
-        </div>
-
-        <div>
-          <label className={labelCls}>IMEI / Serial (optional)</label>
-          <input className={inputCls} placeholder="Optional" value={f.imei} onChange={e => set({ imei: e.target.value })} />
-          {imeiError && <p className="text-xs text-rose-600 dark:text-rose-400 mt-1">{imeiError}</p>}
-          {duplicate && (
-            <div className="mt-2 bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-500/40 rounded-lg p-3 text-xs">
-              <p className="flex items-center gap-1.5 font-semibold text-amber-800 dark:text-amber-300"><AlertTriangle className="w-3.5 h-3.5 shrink-0" /> Already in inventory</p>
-              <p className="text-amber-700/90 dark:text-amber-300/90 mt-1">This IMEI/serial matches {duplicate.sku ? `${duplicate.sku} — ` : ''}{duplicate.item || 'an existing record'} ({duplicate.deviceStatus || 'unknown status'}).</p>
-              <label className="flex items-center gap-2 mt-2 text-amber-800 dark:text-amber-300 cursor-pointer">
-                <input type="checkbox" checked={confirmDuplicate} onChange={e => setConfirmDuplicate(e.target.checked)} className="rounded" /> Add anyway — this is a different device / re-entry confirmed
-              </label>
-            </div>
-          )}
         </div>
 
         <div className="grid grid-cols-2 gap-3">
@@ -106,9 +107,50 @@ export const QuickPurchaseView: React.FC<Props> = ({ inventory, onSave }) => {
           <p className="text-[11px] text-amber-600 dark:text-amber-400 -mt-2">Saving will log a ${cost.toFixed(2)} cash-out against today's drawer.</p>
         )}
 
-        <div>
-          <label className={labelCls}>Seller Name / Bought From (optional)</label>
-          <input className={inputCls} placeholder="Optional" value={f.boughtFrom} onChange={e => set({ boughtFrom: e.target.value })} />
+        <div className="pt-2 border-t border-slate-100 dark:border-slate-800">
+          <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">Optional details</p>
+
+          <div className="mb-3">
+            <label className={labelCls}>IMEI / Serial</label>
+            <input className={inputCls} placeholder="Optional" value={f.imei} onChange={e => set({ imei: e.target.value })} />
+            {imeiError && <p className="text-xs text-rose-600 dark:text-rose-400 mt-1">{imeiError}</p>}
+            {duplicate && (
+              <div className="mt-2 bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-500/40 rounded-lg p-3 text-xs">
+                <p className="flex items-center gap-1.5 font-semibold text-amber-800 dark:text-amber-300"><AlertTriangle className="w-3.5 h-3.5 shrink-0" /> Already in inventory</p>
+                <p className="text-amber-700/90 dark:text-amber-300/90 mt-1">This IMEI/serial matches {duplicate.sku ? `${duplicate.sku} — ` : ''}{duplicate.item || 'an existing record'} ({duplicate.deviceStatus || 'unknown status'}).</p>
+                <label className="flex items-center gap-2 mt-2 text-amber-800 dark:text-amber-300 cursor-pointer">
+                  <input type="checkbox" checked={confirmDuplicate} onChange={e => setConfirmDuplicate(e.target.checked)} className="rounded" /> Add anyway — this is a different device / re-entry confirmed
+                </label>
+              </div>
+            )}
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 mb-3">
+            <div>
+              <label className={labelCls}>Storage</label>
+              <input className={inputCls} placeholder="e.g. 128GB" value={f.storage} onChange={e => set({ storage: e.target.value })} />
+            </div>
+            <div>
+              <label className={labelCls}>Color</label>
+              <input className={inputCls} placeholder="e.g. Midnight" value={f.color} onChange={e => set({ color: e.target.value })} />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 mb-3">
+            <div>
+              <label className={labelCls}>Battery Health</label>
+              <input className={inputCls} placeholder="e.g. 92%" value={f.batteryHealth} onChange={e => set({ batteryHealth: e.target.value })} />
+            </div>
+            <div>
+              <label className={labelCls}>Target Sale Price</label>
+              <input type="number" min="0" step="0.01" className={inputCls} placeholder="0.00" value={f.targetSalePrice} onChange={e => set({ targetSalePrice: e.target.value })} onFocus={selectOnFocus} />
+            </div>
+          </div>
+
+          <div>
+            <label className={labelCls}>Source / Bought From</label>
+            <input className={inputCls} placeholder="Seller name (optional)" value={f.boughtFrom} onChange={e => set({ boughtFrom: e.target.value })} />
+          </div>
         </div>
 
         <button onClick={save} disabled={!canSave}
