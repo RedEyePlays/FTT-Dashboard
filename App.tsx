@@ -33,7 +33,7 @@ const TimeClockView = lazy(() => import('./components/TimeClockView').then(m => 
 const CloseOutView = lazy(() => import('./components/CloseOutView').then(m => ({ default: m.CloseOutView })));
 import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, Runner, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission, Repair, RepairBatch, TimeEntry, PayPeriodPaid, BreakReason, SalesTransaction, CashReconciliation, StaffNote } from './types';
 import { skuPrefix, nextSku } from './services/sku';
-import { REPAIR_PREFIX, BATCH_PREFIX, computeWarrantyUntil, applyTechEdit, TECH_EDITABLE_FIELDS, repairSalePrefill, completeRepairSale, dateToEpochMs } from './domain/repairs';
+import { REPAIR_PREFIX, BATCH_PREFIX, computeWarrantyUntil, applyTechEdit, TECH_EDITABLE_FIELDS, repairSalePrefill, completeRepair, completeRepairSale, dateToEpochMs } from './domain/repairs';
 import { MergePlan } from './domain/customers';
 import { can } from './services/rbac';
 import { downloadJson, toCSV, triggerDownload } from './services/backup';
@@ -457,6 +457,17 @@ const App: React.FC = () => {
     return () => window.removeEventListener('popstate', onPop);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Keep the localStorage-mirrored POS tax rate in sync with the live Firestore
+  // settings on every load (not just when Settings happens to get saved) — a
+  // browser/terminal that's never had Settings manually saved on it used to
+  // fall back to the hardcoded 13% default indefinitely instead of the shop's
+  // actual configured rate. Runs whenever `settings` changes, so it also picks
+  // up a rate change saved from a different device.
+  useEffect(() => {
+    try { localStorage.setItem('posSettings', JSON.stringify({ taxRate: settings.tax.percent })); }
+    catch { /* ignore */ }
+  }, [settings.tax.percent]);
 
   // Persist owner settings to Firestore, and mirror the few values that other
   // components read from localStorage (POS tax rate, default label template).
@@ -1126,15 +1137,19 @@ const App: React.FC = () => {
       }
     }
 
-    // Stamp completion + warranty when moving into completed.
-    if (next.status === 'completed' && !next.completedAt) {
-      const completedDate = new Date().toISOString().split('T')[0];
-      next = { ...next, completedAt: Date.now(), completedBy: appUser.id, warrantyUntil: computeWarrantyUntil(completedDate, next.warrantyDays) || undefined };
+    // Stamp completion + warranty when moving into a terminal status — 'picked_up'
+    // is just as terminal as 'completed' (matches handleTechUpdateRepair's same
+    // rule below), so picking either directly from the status quick-pill (which
+    // otherwise writes { ...r, status: s } with no completion bookkeeping at all)
+    // still gets completedAt/completedBy/warrantyUntil stamped correctly instead
+    // of silently landing in a terminal state with no completion data.
+    if ((next.status === 'completed' || next.status === 'picked_up') && !next.completedAt) {
+      next = { ...completeRepair(next, Date.now(), next.status), completedBy: appUser.id };
     }
     // Auto-inventory devices become sellable once their ticket completes — Case A
     // (this ticket created the record) and Case B (attached to an existing one)
     // both land here, since only auto-inventory-resolved links set this field.
-    if (next.status === 'completed' && next.inventoryAutoCreated !== undefined && next.inventoryId) {
+    if ((next.status === 'completed' || next.status === 'picked_up') && next.inventoryAutoCreated !== undefined && next.inventoryId) {
       const invItem = dataRef.current.find(i => i.id === next.inventoryId);
       if (invItem && invItem.deviceStatus !== 'ready') saveItem(uid, 'inventory', { ...invItem, deviceStatus: 'ready' });
     }

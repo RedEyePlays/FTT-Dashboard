@@ -3,7 +3,7 @@ import { InventoryItem, ItemKind, DeviceType, SalesTransaction, Customer, Repair
 import { getPOSSettings, getStoreProfile } from '../components/SettingsModal';
 import { newId } from '../domain/ids';
 import { kindOf, getDeviceDisplayName } from '../domain/inventory';
-import { isZeroPricedDevice as isZeroPricedLine, cartHasZeroPricedDevice, searchCheckoutInventory, salesBalanceOwing } from '../domain/pos';
+import { isZeroPricedDevice as isZeroPricedLine, cartHasZeroPricedDevice, searchCheckoutInventory, salesBalanceOwing, mixedPaymentMismatch as computeMixedPaymentMismatch } from '../domain/pos';
 import { hasListedElsewhere } from '../domain/listing';
 import { RepairSalePrefill, repairSalePrefill, isRepairOpen, matchesRepair } from '../domain/repairs';
 import { printSalesReceipt } from '../services/salesReceipt';
@@ -239,6 +239,18 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
   const balanceOwing = salesBalanceOwing(totalPaid, depositAmount);
   const isLayaway = balanceOwing > 0;
 
+  // Mixed-payment safeguard: cash + card + e-transfer must sum to what's
+  // actually being collected right now — the deposit for a layaway, the full
+  // total otherwise (same split domain/pos.ts's cashCollectedOnSale later
+  // reads off cashAmount) — or the drawer's expected cash silently drifts
+  // from a typo. Blocks checkout until the amounts actually add up.
+  const collectedNow = isLayaway ? depositAmount : totalPaid;
+  const mixedPaymentTotal = (parseFloat(cashAmount) || 0) + (parseFloat(cardAmount) || 0) + (parseFloat(etransferAmount) || 0);
+  const mixedPaymentMismatch = paymentMethod === 'mixed' && computeMixedPaymentMismatch(
+    { cash: parseFloat(cashAmount) || 0, card: parseFloat(cardAmount) || 0, etransfer: parseFloat(etransferAmount) || 0 },
+    collectedNow,
+  );
+
   // Customer name is optional — a blank name checks out as a "Walk-in".
   const effectiveName = customerName.trim() || 'Walk-in';
 
@@ -366,7 +378,7 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
 
   // ---- checkout ----
   const handleCheckout = async () => {
-    if (cart.length === 0 || blockedByZeroPrice || blockedByListedElsewhere) return;
+    if (cart.length === 0 || blockedByZeroPrice || blockedByListedElsewhere || mixedPaymentMismatch) return;
     const transactionId = uid();
     const soldRows: InventoryItem[] = [];
     const accessoryQtys: Record<string, number> = {};
@@ -462,6 +474,9 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
     setLastTx(transaction);
     setDelistReminders(delistReminders);
     setConfirmed(true);
+    // A backdated sale must never silently carry its date into the next sale
+    // rung up in the same session — reset to today now that this one's done.
+    setSoldDate(new Date().toISOString().split('T')[0]);
     // Opt-in auto-print: only when the tech ticked "Print receipt" at checkout.
     // Prints the just-built transaction (state's lastTx isn't set yet this tick).
     if (printReceiptOnComplete) printReceipt(transaction);
@@ -599,6 +614,7 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
     paymentMethod, setPaymentMethod, cashTaxStatus, setCashTaxStatus, paymentNotes, setPaymentNotes,
     cashAmount, setCashAmount, cardAmount, setCardAmount, etransferAmount, setEtransferAmount, taxCollected, setTaxCollected,
     deposit, setDeposit, depositAmount, balanceOwing, isLayaway, effectiveName,
+    mixedPaymentTotal, mixedPaymentMismatch,
     scan, setScan, scanMsg, setScanMsg, scanRef, lastTx, showTx, setShowTx, labelItem, setLabelItem,
     emptyCustom, showCustom, setShowCustom, custom, setCustom,
     taxRate, feePercent, previousPurchases, availableDevices, availableAccessories,

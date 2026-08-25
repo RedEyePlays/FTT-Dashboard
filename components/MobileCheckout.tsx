@@ -310,6 +310,11 @@ export const MobileCheckout: React.FC<Props> = (props) => {
               <label className="text-xs text-slate-400">Tax collected<input type="number" inputMode="decimal" value={cx.taxCollected} onChange={e => cx.setTaxCollected(e.target.value)} className={input} placeholder="0.00" /></label>
             </div>
           )}
+          {cx.mixedPaymentMismatch && (
+            <p className="flex items-center gap-1.5 text-xs font-medium text-amber-600 dark:text-amber-400">
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0" /> Cash + Card + E-transfer ({money(cx.mixedPaymentTotal)}) must add up to the amount being collected ({money(cx.isLayaway ? cx.depositAmount : cx.totalPaid)}).
+            </p>
+          )}
           <input value={cx.paymentNotes} onChange={e => cx.setPaymentNotes(e.target.value)} placeholder="Payment notes (optional)" className={input} />
           <label className="block text-sm text-slate-500 dark:text-slate-400">Deposit / partial payment (optional)
             <input type="number" inputMode="decimal" min="0" value={cx.deposit} onChange={e => cx.setDeposit(e.target.value)} placeholder={`Blank if paying in full (${money(cx.totalPaid)})`} className={input} />
@@ -359,7 +364,7 @@ export const MobileCheckout: React.FC<Props> = (props) => {
         {step < 3 ? (
           <button onClick={next} disabled={!canNext} className="ml-auto px-6 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white rounded-xl text-sm font-semibold">Next</button>
         ) : (
-          <button onClick={cx.handleCheckout} disabled={cx.cart.length === 0 || cx.blockedByZeroPrice || cx.blockedByListedElsewhere} className="ml-auto px-6 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white rounded-xl text-sm font-semibold flex items-center gap-2"><CheckCircle className="w-4 h-4" /> {cx.isLayaway ? 'Take Deposit' : 'Complete Sale'}</button>
+          <button onClick={cx.handleCheckout} disabled={cx.cart.length === 0 || cx.blockedByZeroPrice || cx.blockedByListedElsewhere || cx.mixedPaymentMismatch} className="ml-auto px-6 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white rounded-xl text-sm font-semibold flex items-center gap-2"><CheckCircle className="w-4 h-4" /> {cx.isLayaway ? 'Take Deposit' : 'Complete Sale'}</button>
         )}
       </div>
 

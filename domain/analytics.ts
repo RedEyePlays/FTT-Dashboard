@@ -254,7 +254,11 @@ export function computeAnalytics(range: DateRange, input: AnalyticsInput, now: n
     + accessories.reduce((a, i) => a + (i.costPerUnit || 0) * (i.quantity || 0), 0);
   const invRetail = held.reduce((a, i) => a + (i.targetSalePrice || 0), 0)
     + accessories.reduce((a, i) => a + (i.sellingPrice || 0) * (i.quantity || 0), 0);
-  const lowStock = accessories.filter(i => (i.quantity || 0) > 0 && (i.quantity || 0) <= (i.lowStockThreshold || 3)).length;
+  // Fallback matches every other low-stock check in the app (InventoryView,
+  // Dashboard, domain/alerts.ts) — `?? 0`, not `|| 3`. An accessory with no
+  // threshold explicitly set previously showed as low stock here (any
+  // quantity 1-3) but nowhere else in the app for the same data.
+  const lowStock = accessories.filter(i => (i.quantity || 0) > 0 && (i.quantity || 0) <= (i.lowStockThreshold ?? 0)).length;
   const outOfStock = accessories.filter(i => (i.quantity || 0) <= 0).length;
 
   // --- Chart series (daily buckets across the range, capped) ---

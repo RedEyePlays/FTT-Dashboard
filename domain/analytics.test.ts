@@ -216,4 +216,13 @@ describe('inventory snapshot', () => {
     expect(a.lowStock).toBe(1);
     expect(a.outOfStock).toBe(1);
   });
+
+  it('an accessory with no threshold explicitly set is never counted as low stock (matches the ?? 0 fallback used everywhere else — InventoryView, Dashboard, domain/alerts.ts)', () => {
+    const input: AnalyticsInput = {
+      ...base,
+      inventory: [acc({ id: 'a1', quantity: 2 })], // no lowStockThreshold field at all
+    };
+    const a = computeAnalytics(presetRange('today', NOW), input, NOW);
+    expect(a.lowStock).toBe(0);
+  });
 });

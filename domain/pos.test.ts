@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { platformFeeAmount, isZeroPricedDevice, cartHasZeroPricedDevice, PricedLine, salesBalanceOwing, isLayaway, searchCheckoutInventory, canVoidSale, isVoided, isReturned, isReversed, canReturnSale, returnRefund, saleAccessoryRestock, collectedOnSale, cashCollectedOnSale, saleRefundDrawerEffect } from './pos';
+import { platformFeeAmount, isZeroPricedDevice, cartHasZeroPricedDevice, PricedLine, salesBalanceOwing, isLayaway, searchCheckoutInventory, canVoidSale, isVoided, isReturned, isReversed, canReturnSale, returnRefund, saleAccessoryRestock, collectedOnSale, cashCollectedOnSale, saleRefundDrawerEffect, mixedPaymentMismatch } from './pos';
 import { InventoryItem, SalesTransaction } from '../types';
 
 const item = (p: Partial<InventoryItem>): InventoryItem => ({
@@ -239,6 +239,28 @@ describe('return refund composition (App.tsx handleReturnSale\'s exact formula)'
   it('a card-only return never produces a cash drawer effect', () => {
     const tx = { ...base, paymentMethod: 'card' as const };
     expect(saleRefundDrawerEffect(returnRefund(cashCollectedOnSale(tx), undefined))).toBeNull();
+  });
+});
+
+describe('mixedPaymentMismatch', () => {
+  it('is false when cash + card + etransfer exactly sum to the collected amount', () => {
+    expect(mixedPaymentMismatch({ cash: 200, card: 250, etransfer: 50 }, 500)).toBe(false);
+  });
+  it('is true when the parts sum to less than the collected amount', () => {
+    expect(mixedPaymentMismatch({ cash: 200, card: 250, etransfer: 0 }, 500)).toBe(true);
+  });
+  it('is true when the parts sum to more than the collected amount', () => {
+    expect(mixedPaymentMismatch({ cash: 300, card: 250, etransfer: 0 }, 500)).toBe(true);
+  });
+  it('treats missing parts as zero', () => {
+    expect(mixedPaymentMismatch({ cash: 500 }, 500)).toBe(false);
+    expect(mixedPaymentMismatch({}, 500)).toBe(true);
+  });
+  it('is exact to the cent, not fooled by floating-point drift', () => {
+    expect(mixedPaymentMismatch({ cash: 100.1, card: 100.2, etransfer: 0 }, 200.3)).toBe(false);
+  });
+  it('clamps a negative part to zero rather than letting it cancel out a mismatch', () => {
+    expect(mixedPaymentMismatch({ cash: 600, card: -100, etransfer: 0 }, 500)).toBe(true); // 600, not 500
   });
 });
 

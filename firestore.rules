@@ -28,6 +28,13 @@ service cloud.firestore {
     // A non-technician active member (owner/manager/employee) — the roles that
     // may write general shop data.
     function isStaffOf(ws) { return activeMemberOf(ws) && myRole() != 'technician'; }
+    // Owner or manager — the roles services/rbac.ts grants cash.reconcile,
+    // sales.void, sales.return and dropoffs.manage to (employees get cash.log
+    // but NOT reconcile/void/return/dropoffs; the generic isStaffOf() catch-all
+    // used to let an employee bypass that server-side, which the rules below
+    // for cashReconciliations/salesTransactions/dropOffs/runners/settlements
+    // close).
+    function isManagerUp(ws) { return activeMemberOf(ws) && (myRole() == 'owner' || myRole() == 'manager'); }
 
     // Role rank for PIN assignment (domain/pin.ts mirrors this exactly): an
     // owner/manager may set a PIN only for someone STRICTLY below their own
@@ -121,8 +128,87 @@ service cloud.firestore {
         allow read, write: if isOwnerOf(ws);
       }
 
-      // Everything else in the workspace (customers, sales, settings, dropoffs,
-      // payPeriods…): active staff read/write; technicians read-only.
+      // Cash drawer: any staff (incl. employees, per cash.log) may log a
+      // movement (open, cash in/out, withdrawal) or create the day's record,
+      // but only owner/manager may touch the reconcile/close fields
+      // (cash.reconcile) — an employee closing out their own drawer count
+      // unsupervised is exactly what cash.reconcile is meant to gate.
+      //
+      // Every write here is a full-document overwrite, not a Firestore-level
+      // merge (App.tsx's commitDrawerRecord merges client-side, then setDoc's
+      // the whole record) — and re-opening a previously-closed day explicitly
+      // CLEARS reconciledAt/reconciledBy/reconciledByEmail/countedCash back to
+      // absent (domain/reports.ts's openDrawerPatch), which any staff must
+      // still be able to do. So the gate isn't "did a reconcile key change"
+      // (removing one on reopen is a legitimate cash.log action) — it's
+      // "is a reconcile key being SET to a real value" (present in the new
+      // doc AND different from before).
+      function reconcileKeys() { return ['reconciledAt', 'reconciledBy', 'reconciledByEmail', 'countedCash', 'note']; }
+      function settingReconcileFields() {
+        return request.resource.data.diff(resource.data).affectedKeys().hasAny(reconcileKeys())
+          && request.resource.data.keys().hasAny(reconcileKeys());
+      }
+      match /cashReconciliations/{id} {
+        allow read: if activeMemberOf(ws);
+        allow create: if isStaffOf(ws) && (isManagerUp(ws) || !request.resource.data.keys().hasAny(reconcileKeys()));
+        allow update: if isStaffOf(ws) && (isManagerUp(ws) || !settingReconcileFields());
+        allow delete: if isOwnerOf(ws);
+      }
+
+      // Sales: any staff may complete a new sale (sales.complete), but only
+      // owner/manager may change a sale's `status` (sales.void / sales.return)
+      // — an employee reversing their own sale unsupervised is exactly what
+      // those permissions are meant to gate. Other field-only edits (e.g. the
+      // customer-merge relink of customerId/Phone/Email) stay open to any
+      // staff as long as status itself isn't part of the write.
+      match /salesTransactions/{id} {
+        allow read: if activeMemberOf(ws);
+        allow create: if isStaffOf(ws);
+        allow update: if isStaffOf(ws) &&
+          (isManagerUp(ws) || request.resource.data.get('status', null) == resource.data.get('status', null));
+        allow delete: if isOwnerOf(ws);
+      }
+
+      // Drop-offs / runner settlements: owner/manager only (dropoffs.manage) —
+      // an employee has no drop-off write access at all, matching rbac.ts.
+      match /dropOffs/{id} {
+        allow read: if activeMemberOf(ws);
+        allow create, update: if isManagerUp(ws);
+        allow delete: if isOwnerOf(ws);
+      }
+      match /runners/{id} {
+        allow read: if activeMemberOf(ws);
+        allow create, update: if isManagerUp(ws);
+        allow delete: if isOwnerOf(ws);
+      }
+      match /settlements/{id} {
+        allow read: if activeMemberOf(ws);
+        allow create, update: if isManagerUp(ws);
+        allow delete: if isOwnerOf(ws);
+      }
+
+      // Workspace meta doc (settings, notes, tasks, sku counters, backup
+      // stamp — see services/firestoreDb.ts's metaRef): any staff may touch
+      // it (sku counters advance on every device add, notes/tasks are shared
+      // scratch space), EXCEPT the `settings` field, which only the owner may
+      // change (settings.manage is owner-only in rbac.ts). saveSettings/
+      // saveMeta both write with {merge:true}, so the resulting document
+      // always still contains `settings` once the owner has ever saved it —
+      // update must gate on the field actually CHANGING (diff), not merely
+      // being present in the post-write document, or every later staff note/
+      // task save would trip this check forever after the first settings save.
+      match /meta/{id} {
+        allow read: if activeMemberOf(ws);
+        allow create: if isStaffOf(ws) && (isOwnerOf(ws) || !request.resource.data.keys().hasAny(['settings']));
+        allow update: if isStaffOf(ws) && (isOwnerOf(ws) || !request.resource.data.diff(resource.data).affectedKeys().hasAny(['settings']));
+        allow delete: if isOwnerOf(ws);
+      }
+
+      // Everything else in the workspace (customers, timeEntries already
+      // handled above, payPeriods…): active staff read/write; technicians
+      // read-only. The sensitive collections above are carved out from this
+      // catch-all specifically because it grants isStaffOf() — which includes
+      // employees — write access with no further restriction.
       match /{document=**} {
         allow read: if activeMemberOf(ws);
         allow write: if isStaffOf(ws);
@@ -149,16 +235,19 @@ service cloud.firestore {
           )
         );
 
-      // Self may only update lastLogin; an owner may change role/disabled/
-      // allowProfit/hourlyRate for members of their workspace; a manager may only
-      // toggle `disabled` on a technician account (no role or workspace changes).
-      // hourlyRate is owner-set pay, so a user may never change their own.
+      // Self may only update lastLogin and notifSeenTs (the two fields a
+      // client legitimately self-writes — see hooks/useWorkspaceData.ts's
+      // login stamp and App.tsx's handleMarkNotificationsSeen); everything
+      // else, including allowProfit and the PIN fields, requires an owner/
+      // manager acting on someone else via the branches below. An owner may
+      // change role/disabled/allowProfit/hourlyRate for members of their
+      // workspace; a manager may only toggle `disabled` on a technician
+      // account (no role or workspace changes). hourlyRate is owner-set pay,
+      // so a user may never change their own (nor could they under hasOnly
+      // below, since it's not in the self-editable set).
       allow update: if signedIn() && (
         (request.auth.uid == uid
-          && request.resource.data.role == resource.data.role
-          && request.resource.data.workspaceId == resource.data.workspaceId
-          && request.resource.data.get('disabled', false) == resource.data.get('disabled', false)
-          && request.resource.data.get('hourlyRate', 0) == resource.data.get('hourlyRate', 0))
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastLogin', 'notifSeenTs']))
         || (hasProfile() && myRole() == 'owner' && resource.data.workspaceId == myWorkspace())
         || (hasProfile() && myRole() == 'manager'
             && resource.data.workspaceId == myWorkspace()
