@@ -1119,7 +1119,7 @@ const App: React.FC = () => {
     let notice: AutoInventoryNotice | undefined;
     if (isNew && next.type === 'wholesale' && next.batchId && !next.inventoryId) {
       const batch = repairBatchesRef.current.find(b => b.id === next.batchId);
-      const decision = decideAutoInventory(batch, next.imei, dataRef.current);
+      const decision = decideAutoInventory(batch, next.wantsAutoInventory, next.imei, dataRef.current);
       if (decision.action === 'invalidImei') {
         return { kind: 'blocked', message: `IMEI "${decision.digits}" fails the checksum check — fix the entry or clear the IMEI/serial field before saving.` };
       }

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   normalizeSerial, luhnValid, normalizeIdentifier, identifierOf,
-  findAutoInventoryMatch, decideAutoInventory, autoInventoryPurchaseDrawerEffect,
+  findAutoInventoryMatch, decideAutoInventory, autoInventoryPurchaseDrawerEffect, isPrivateBatch,
 } from './autoInventory';
 import { InventoryItem } from '../types';
 
@@ -82,47 +82,91 @@ describe('findAutoInventoryMatch', () => {
   });
 });
 
+describe('isPrivateBatch', () => {
+  it('reads the new `private` flag', () => {
+    expect(isPrivateBatch({ private: true })).toBe(true);
+    expect(isPrivateBatch({ private: false })).toBe(false);
+  });
+  it('falls back to the legacy `autoInventory` flag when `private` is unset — a batch saved before this change (e.g. an old FTT Personal batch) still reads as private with no data migration', () => {
+    expect(isPrivateBatch({ autoInventory: true })).toBe(true);
+    expect(isPrivateBatch({ autoInventory: false })).toBe(false);
+  });
+  it('`private` wins when both are set', () => {
+    expect(isPrivateBatch({ private: false, autoInventory: true })).toBe(false);
+    expect(isPrivateBatch({ private: true, autoInventory: false })).toBe(true);
+  });
+  it('is false for an undefined batch or neither flag set', () => {
+    expect(isPrivateBatch(undefined)).toBe(false);
+    expect(isPrivateBatch({})).toBe(false);
+  });
+});
+
 describe('decideAutoInventory', () => {
-  // Test case 9: batch not flagged → no inventory side effects at all.
-  it('skips entirely when the batch is not auto_inventory', () => {
-    expect(decideAutoInventory({ autoInventory: false }, VALID_IMEI, [])).toEqual({ action: 'skip' });
-    expect(decideAutoInventory(undefined, VALID_IMEI, [])).toEqual({ action: 'skip' });
+  // Non-private batch → no inventory side effects at all, regardless of the
+  // per-device toggle (which the UI wouldn't even show, but the domain layer
+  // must still refuse to act on it).
+  it('skips entirely when the batch is not private, even if wantsAutoInventory is somehow true', () => {
+    expect(decideAutoInventory({ private: false }, true, VALID_IMEI, [])).toEqual({ action: 'skip' });
+    expect(decideAutoInventory(undefined, true, VALID_IMEI, [])).toEqual({ action: 'skip' });
   });
 
-  // Test case 6: blank IMEI and serial → warn, no inventory record.
+  // The core of the redesign: a private batch alone auto-adds nothing — the
+  // per-device toggle must also be on. Same VALID_IMEI that produces 'create'
+  // below when the toggle is on, produces 'skip' when it's off.
+  it('skips a private batch\'s device ticket when the per-device toggle is off (default)', () => {
+    expect(decideAutoInventory({ private: true }, false, VALID_IMEI, [])).toEqual({ action: 'skip' });
+    expect(decideAutoInventory({ private: true }, undefined, VALID_IMEI, [])).toEqual({ action: 'skip' });
+  });
+
+  // A batch saved before this change (autoInventory: true, no `private`) is
+  // still private via the fallback, but a NEW ticket under it still needs the
+  // per-device toggle — the old "every device auto-added" behavior is gone.
+  it('a legacy autoInventory:true batch is private, but still requires the per-device toggle', () => {
+    expect(decideAutoInventory({ autoInventory: true }, false, VALID_IMEI, [])).toEqual({ action: 'skip' });
+    expect(decideAutoInventory({ autoInventory: true }, true, VALID_IMEI, [])).toEqual({ action: 'create', normalized: VALID_IMEI });
+  });
+
+  // Blank IMEI and serial → warn, no inventory record.
   it('flags a missing identifier without touching inventory', () => {
-    expect(decideAutoInventory({ autoInventory: true }, '', [])).toEqual({ action: 'noIdentifier' });
-    expect(decideAutoInventory({ autoInventory: true }, '   ', [])).toEqual({ action: 'noIdentifier' });
-    expect(decideAutoInventory({ autoInventory: true }, undefined, [])).toEqual({ action: 'noIdentifier' });
+    expect(decideAutoInventory({ private: true }, true, '', [])).toEqual({ action: 'noIdentifier' });
+    expect(decideAutoInventory({ private: true }, true, '   ', [])).toEqual({ action: 'noIdentifier' });
+    expect(decideAutoInventory({ private: true }, true, undefined, [])).toEqual({ action: 'noIdentifier' });
   });
 
-  // Test case 7: IMEI fails Luhn → blocked.
+  // IMEI fails Luhn → blocked.
   it('blocks a 15-digit IMEI that fails the Luhn check', () => {
-    expect(decideAutoInventory({ autoInventory: true }, INVALID_IMEI, [])).toEqual({ action: 'invalidImei', digits: INVALID_IMEI });
+    expect(decideAutoInventory({ private: true }, true, INVALID_IMEI, [])).toEqual({ action: 'invalidImei', digits: INVALID_IMEI });
   });
 
-  // Test case 1: new device, valid IMEI → create.
+  // New device, valid IMEI, toggle on → create.
   it('creates a new record when nothing matches (Case A)', () => {
-    expect(decideAutoInventory({ autoInventory: true }, VALID_IMEI, [])).toEqual({ action: 'create', normalized: VALID_IMEI });
+    expect(decideAutoInventory({ private: true }, true, VALID_IMEI, [])).toEqual({ action: 'create', normalized: VALID_IMEI });
   });
 
-  // Test case 2: device already in inventory by IMEI → attach, no duplicate.
+  // Device already in inventory by IMEI → attach, no duplicate.
   it('attaches to an existing record matched by IMEI (Case B)', () => {
     const existing = dev({ id: 'x', imeiNormalized: VALID_IMEI });
-    expect(decideAutoInventory({ autoInventory: true }, VALID_IMEI, [existing])).toEqual({ action: 'attach', match: existing, normalized: VALID_IMEI });
+    expect(decideAutoInventory({ private: true }, true, VALID_IMEI, [existing])).toEqual({ action: 'attach', match: existing, normalized: VALID_IMEI });
   });
 
-  // Test case 3: device already in inventory by serial only → matches.
+  // Device already in inventory by serial only → matches.
   it('attaches to an existing record matched by serial (Case B)', () => {
     const existing = dev({ id: 'y', imeiNormalized: 'SN-42' });
-    expect(decideAutoInventory({ autoInventory: true }, 'sn-42', [existing])).toEqual({ action: 'attach', match: existing, normalized: 'SN-42' });
+    expect(decideAutoInventory({ private: true }, true, 'sn-42', [existing])).toEqual({ action: 'attach', match: existing, normalized: 'SN-42' });
   });
 
-  // Test case 4: dashed IMEI matches a record stored without dashes.
+  // Dashed IMEI matches a record stored without dashes.
   it('matches a dashed IMEI to an existing dash-free record (Case B)', () => {
     const dashed = `${VALID_IMEI.slice(0, 2)}-${VALID_IMEI.slice(2, 8)}-${VALID_IMEI.slice(8, 14)}-${VALID_IMEI.slice(14)}`;
     const existing = dev({ id: 'z', imeiNormalized: VALID_IMEI });
-    expect(decideAutoInventory({ autoInventory: true }, dashed, [existing])).toEqual({ action: 'attach', match: existing, normalized: VALID_IMEI });
+    expect(decideAutoInventory({ private: true }, true, dashed, [existing])).toEqual({ action: 'attach', match: existing, normalized: VALID_IMEI });
+  });
+
+  // Toggle off means NO inventory side effects at all, even with a device that
+  // has a perfectly valid IMEI that would otherwise create a new record.
+  it('toggle off produces zero inventory side effects even for a device with a valid IMEI', () => {
+    const decision = decideAutoInventory({ private: true }, false, VALID_IMEI, []);
+    expect(decision).toEqual({ action: 'skip' });
   });
 });
 
