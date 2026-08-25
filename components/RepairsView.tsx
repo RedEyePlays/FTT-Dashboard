@@ -11,6 +11,7 @@ import {
 } from '../domain/repairs';
 import { newId } from '../domain/ids';
 import { printRetailReceipt, printBatchIntake, printBatchInvoice, printBatchSummary, printDeviceSheet, printRepairEstimate } from '../services/repairPrint';
+import { getStoreProfile } from './SettingsModal';
 import { statusPageUrl } from '../domain/statusLink';
 import { formatPhoneInput } from '../domain/phone';
 import { usePersistedFilter } from '../hooks/usePersistedFilter';
@@ -162,7 +163,7 @@ export const RepairsView: React.FC<Props> = (props) => {
   // Print a device sheet, resolving the parent batch (for wholesale context).
   const printSheet = (r: Repair) => {
     const b = r.batchId ? batches.find(x => x.id === r.batchId) : undefined;
-    printDeviceSheet(r, b ? { companyName: b.companyName, batchNumber: b.batchNumber } : undefined);
+    printDeviceSheet(r, { companyName: b?.companyName, batchNumber: b?.batchNumber, storeName: getStoreProfile().storeName });
     onPrintAudit('repair', r.id, 'device_sheet');
   };
 
@@ -407,9 +408,10 @@ export const RepairsView: React.FC<Props> = (props) => {
             // openBatch.amountPaid won't reflect this payment yet. justPaid lets the
             // caller fold it in locally so the invoice shows the correct running total.
             const forPrint = justPaid ? { ...openBatch, amountPaid: (openBatch.amountPaid || 0) + justPaid } : openBatch;
-            if (doc === 'intake') printBatchIntake(forPrint, devices);
-            if (doc === 'invoice') printBatchInvoice(forPrint, devices);
-            if (doc === 'summary') printBatchSummary(forPrint, devices);
+            const storeName = getStoreProfile().storeName;
+            if (doc === 'intake') printBatchIntake(forPrint, devices, { storeName });
+            if (doc === 'invoice') printBatchInvoice(forPrint, devices, { storeName });
+            if (doc === 'summary') printBatchSummary(forPrint, devices, { storeName });
             onPrintAudit('repairBatch', openBatch.id, doc);
           }} />
       )}
@@ -422,10 +424,10 @@ export const RepairsView: React.FC<Props> = (props) => {
           onSave={saveDrawer}
           onCheckoutViaSale={props.onCheckoutViaSale}
           onDelete={() => { onDeleteRepair(drawer.repair.id); setDrawer(null); }}
-          onPrint={(doc) => { printRetailReceipt(drawer.repair, doc); onPrintAudit('repair', drawer.repair.id, doc); }}
+          onPrint={(doc) => { printRetailReceipt(drawer.repair, doc, { storeName: getStoreProfile().storeName }); onPrintAudit('repair', drawer.repair.id, doc); }}
           onPrintSheet={() => printSheet(drawer.repair)}
           onPrintLabel={() => openLabel(drawer.repair)}
-          onPrintEstimate={() => { printRepairEstimate(drawer.repair); onPrintAudit('repair', drawer.repair.id, 'estimate'); }} />
+          onPrintEstimate={() => { printRepairEstimate(drawer.repair, { storeName: getStoreProfile().storeName }); onPrintAudit('repair', drawer.repair.id, 'estimate'); }} />
       )}
 
       {/* Batch create/edit form */}
