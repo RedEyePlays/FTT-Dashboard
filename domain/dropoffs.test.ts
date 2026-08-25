@@ -41,6 +41,26 @@ describe('settleableDropOffs', () => {
     ];
     expect(settleableDropOffs('r1', dropOffs).map(x => x.id)).toEqual(['1', '2']);
   });
+
+  // Regression for the runner-double-payment bug: settling must actually flip
+  // every included drop-off to 'settled' (services/firestoreDb.ts's
+  // settleRunner does this atomically alongside the settlement save), or the
+  // same drop-offs stay eligible for a second settlement.
+  it('drop-offs marked settled after a settlement no longer show up as settleable', () => {
+    const before: DropOff[] = [
+      d({ id: '1', runnerId: 'r1', status: 'accepted' }),
+      d({ id: '2', runnerId: 'r1', status: 'paidout' }),
+    ];
+    expect(settleableDropOffs('r1', before).map(x => x.id)).toEqual(['1', '2']);
+
+    // Simulate settleRunner's atomic write: every settled drop-off flips status.
+    const settledIds = new Set(['1', '2']);
+    const after: DropOff[] = before.map(x =>
+      settledIds.has(x.id) ? { ...x, status: 'settled' as DropOffStatus, settlementId: 'settlement-1' } : x
+    );
+
+    expect(settleableDropOffs('r1', after)).toEqual([]);
+  });
 });
 
 describe('settlementTotals', () => {

@@ -49,7 +49,7 @@ import {
   updateUserDoc, setInvite, deleteInvite,
   logAudit, exportWorkspaceData, recordBackup, saveSettings,
   saveTimeEntry, savePayPeriodPaid, deletePayPeriodPaid,
-  saveStaffNote, deleteStaffNote, commitAutoInventory,
+  saveStaffNote, deleteStaffNote, commitAutoInventory, settleRunner,
 } from './services/firestoreDb';
 import { decideAutoInventory, autoInventoryPurchaseDrawerEffect, AutoInventoryNotice } from './domain/autoInventory';
 import { listingPlatformsLabel } from './domain/listing';
@@ -305,7 +305,7 @@ const App: React.FC = () => {
     if (allow('audit.view')) p.push({ id: 'audit', label: 'Audit Log', view: 'audit' });
     if (allow('users.tech')) p.push({ id: 'users', label: 'Users', keywords: 'staff roles permissions', view: 'users' });
     p.push({ id: 'notes', label: 'Notes', view: 'notes' });
-    p.push({ id: 'ai', label: 'AI Assistant', view: 'ai' });
+    if (allow('reports.profit.summary')) p.push({ id: 'ai', label: 'AI Assistant', view: 'ai' });
     p.push({ id: 'labels', label: 'Labels', keywords: 'print qr barcode', view: 'grid' });
     p.push({ id: 'settings', label: 'Settings', keywords: 'backup preferences', action: 'settings' });
     return p;
@@ -872,7 +872,13 @@ const App: React.FC = () => {
   // so the register's live total and the reconciliation screen can't drift.
   const handleSettleRunner = (settlement: Settlement) => {
     if (!uid || !allow('dropoffs.manage')) return;
-    saveItem(uid, 'settlements', settlement);
+    // Saving the settlement and flagging its drop-offs 'settled' happen in one
+    // atomic commit — settleableDropOffs (domain/dropoffs.ts) only excludes
+    // 'settled'/'accepted'-gone-'paidout' drop-offs, so if this ever landed as
+    // two separate writes, a failure (or just a slow second write) between
+    // them would leave the same drop-offs eligible for a second settlement —
+    // the runner could get paid twice for the same batch of devices.
+    settleRunner(uid, { settlement, dropOffIds: settlement.dropOffIds }).catch(e => console.error('Settle runner failed', e));
     audit('dropoff.settle', 'settlement', settlement.id, undefined, {
       runnerId: settlement.runnerId, amountPaid: settlement.amountPaid, paymentMethod: settlement.paymentMethod,
     });
@@ -1563,11 +1569,13 @@ const App: React.FC = () => {
             />
           )}
           {view === 'ai' && (
-            <AIChatView
-               inventory={data}
-               messages={aiMessages}
-               onUpdateMessages={setAiMessages}
-            />
+            allow('reports.profit.summary')
+              ? <AIChatView
+                  inventory={data}
+                  messages={aiMessages}
+                  onUpdateMessages={setAiMessages}
+                />
+              : <div className="text-center text-slate-400 py-20">The AI Assistant is restricted to accounts with profit visibility.</div>
           )}
           {view === 'users' && allow('users.tech') && (
             <UsersView

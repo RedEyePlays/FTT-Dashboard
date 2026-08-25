@@ -82,7 +82,16 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
 
   const initials = (userEmail.split('@')[0] || 'U').slice(0, 2).toUpperCase();
 
-  const AiMenu = (
+  // AI Assistant / Quick AI Chat can surface real profit/margin figures (they
+  // send the full inventory, including purchaseCost/salePrice/repairCost, to
+  // Gemini) — gated the same as every other profit-surfacing view
+  // (reports.profit.summary; enforced server-side too, see functions/src/
+  // index.ts's requireProfitVisibility). AI Bulk Add only adds inventory
+  // items and never touches profit data, so it stays gated on inventory.add
+  // instead. The whole menu disappears if neither is available.
+  const canAiInsights = allow('reports.profit.summary');
+  const canBulkAdd = allow('inventory.add');
+  const AiMenu = (canAiInsights || canBulkAdd) ? (
     <HeaderMenu
       label="AI tools"
       align="right"
@@ -91,12 +100,12 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
       trigger={<><Bot className="w-4 h-4" /><span>AI</span><ChevronDown className="w-3.5 h-3.5 opacity-60" /></>}
     >
       {(close) => (<>
-        <MenuItem icon={<Bot className="w-4 h-4" />} label="AI Assistant" active={view === 'ai'} onClick={() => { onNavigate('ai'); close(); }} />
-        <MenuItem icon={<MessageCircle className="w-4 h-4" />} label="Quick AI Chat" onClick={() => { onToggleAiSidebar(); close(); }} />
-        <MenuItem icon={<Sparkles className="w-4 h-4" />} label="AI Bulk Add" onClick={() => { onOpenBulk(); close(); }} />
+        {canAiInsights && <MenuItem icon={<Bot className="w-4 h-4" />} label="AI Assistant" active={view === 'ai'} onClick={() => { onNavigate('ai'); close(); }} />}
+        {canAiInsights && <MenuItem icon={<MessageCircle className="w-4 h-4" />} label="Quick AI Chat" onClick={() => { onToggleAiSidebar(); close(); }} />}
+        {canBulkAdd && <MenuItem icon={<Sparkles className="w-4 h-4" />} label="AI Bulk Add" onClick={() => { onOpenBulk(); close(); }} />}
       </>)}
     </HeaderMenu>
-  );
+  ) : null;
 
   const MoreMenu = (
     <HeaderMenu

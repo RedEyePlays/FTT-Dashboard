@@ -204,6 +204,20 @@ export async function returnSale(uid: string, payload: {
   await batch.commit();
 }
 
+// Record a runner settlement in one atomic commit: save the settlement record
+// AND flag every drop-off it covers 'settled', in the same batch — never as a
+// separate, untracked follow-up write. Without this, settleableDropOffs
+// (domain/dropoffs.ts) never sees these drop-offs leave 'accepted'/'paidout',
+// so the exact same batch of devices stays eligible for a second settlement
+// and the runner risks getting paid twice for it.
+export async function settleRunner(uid: string, payload: { settlement: Settlement; dropOffIds: string[] }) {
+  const batch = writeBatch(db);
+  batch.set(docRef(uid, 'settlements', payload.settlement.id), clean(payload.settlement));
+  payload.dropOffIds.forEach(id => batch.set(docRef(uid, 'dropOffs', id),
+    { status: 'settled', settlementId: payload.settlement.id }, { merge: true } as any));
+  await batch.commit();
+}
+
 // Seed sample devices/accessories into Firestore (demo option, not auto-loaded).
 export async function seedSampleData(uid: string, items: InventoryItem[]) {
   const batch = writeBatch(db);
