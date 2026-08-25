@@ -1,5 +1,6 @@
 import { InventoryItem, SalesTransaction } from '../types';
 import { kindOf } from './inventory';
+import { DrawerEffect } from './dropoffs';
 
 // Shared POS constants/helpers. Extracted from CartSaleView so the platform-fee
 // list has a single home and can be unit-tested and reused by future POS views.
@@ -150,3 +151,51 @@ export const salesBalanceOwing = (total: number, deposit?: number): number => {
 /** True when a sale still has money owing on it (a layaway / partial payment). */
 export const isLayaway = (tx: { balanceOwing?: number }): boolean =>
   (tx.balanceOwing || 0) > 0;
+
+// --- Void / Return refund amounts -------------------------------------------
+// `totalPaid` is the grand total DUE, not reduced by a deposit — refunding it
+// wholesale on a layaway overpays the customer by whatever balance was never
+// actually collected. These mirror domain/reports.ts's private collectedOnTx
+// / cashCollectedOnTx (same contract: layaway → deposit only, cash/mixed →
+// only the cash portion) but live here, independently, so domain/pos.ts and
+// domain/reports.ts don't form an import cycle (reports.ts already imports
+// isReversed from this file).
+
+/**
+ * The amount actually collected on a sale so far — the most a refund can ever
+ * hand back. A layaway only ever took its deposit; a fully-paid sale took the
+ * whole total.
+ */
+export const collectedOnSale = (tx: Pick<SalesTransaction, 'totalPaid' | 'deposit' | 'balanceOwing'>): number =>
+  isLayaway(tx) ? (tx.deposit || 0) : (tx.totalPaid || 0);
+
+/**
+ * The CASH portion of what was actually collected: a cash sale → the whole
+ * collected amount; a mixed sale → its recorded cash portion; card/e-transfer
+ * → nothing (no cash ever entered the till, so none should leave it on a
+ * refund).
+ */
+export const cashCollectedOnSale = (
+  tx: Pick<SalesTransaction, 'totalPaid' | 'deposit' | 'balanceOwing' | 'paymentMethod' | 'cashAmount'>,
+): number => {
+  const collected = collectedOnSale(tx);
+  if (collected <= 0) return 0;
+  if (tx.paymentMethod === 'cash') return Math.round(collected * 100) / 100;
+  if (tx.paymentMethod === 'mixed') return Math.round(Math.max(0, tx.cashAmount || 0) * 100) / 100;
+  return 0; // card / etransfer / unset
+};
+
+/**
+ * A void/return's effect on today's cash drawer — the ONE place that decides
+ * whether reversing a sale touches the till. Always logged against the day
+ * the reversal is actually processed (today), never retroactively against the
+ * original (likely already-reconciled) sale date — see App.tsx's
+ * handleVoidSale/handleReturnSale, which pass cashCollectedOnSale (void) or
+ * returnRefund(cashCollectedOnSale(tx), restockingFee) (return) in here.
+ * A zero/near-zero cash amount (a card/e-transfer sale) produces no entry.
+ */
+export const saleRefundDrawerEffect = (cashAmount: number): DrawerEffect | null => {
+  const amount = Math.round((cashAmount || 0) * 100) / 100;
+  if (amount < 0.005) return null;
+  return { kind: 'cashOut', amount };
+};
