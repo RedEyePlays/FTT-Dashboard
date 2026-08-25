@@ -706,7 +706,7 @@ const RepairDrawer: React.FC<{
             <p className="text-xs text-slate-400 mb-2">Log each part used and its cost — the parts total feeds repair margin, separate from the price you charge.</p>
             {(f.parts || []).map(p => (
               <div key={p.id} className="flex items-center gap-2 mb-2">
-                <input className={`${inputCls} flex-1`} placeholder="Part (e.g. OLED screen)" value={p.name} onChange={e => updatePart(p.id, { name: e.target.value })} />
+                <input className={`${inputCls} flex-1 min-w-0`} placeholder="Part (e.g. OLED screen)" value={p.name} onChange={e => updatePart(p.id, { name: e.target.value })} />
                 <input type="number" min="0" step="0.01" className={`${inputCls} w-24`} placeholder="Cost" value={p.unitCost || ''} onChange={e => updatePart(p.id, { unitCost: num(e.target.value) })} onFocus={selectOnFocus} />
                 <input type="number" min="1" step="1" className={`${inputCls} w-16`} placeholder="Qty" value={p.quantity || ''} onChange={e => updatePart(p.id, { quantity: Math.max(1, Math.round(num(e.target.value)) || 1) })} />
                 <button type="button" onClick={() => removePart(p.id)} className="p-1.5 text-slate-400 hover:text-rose-500 shrink-0" aria-label="Remove part"><Trash2 className="w-4 h-4" /></button>
