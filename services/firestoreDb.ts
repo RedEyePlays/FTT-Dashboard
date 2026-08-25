@@ -77,6 +77,46 @@ export function allocateSku(uid: string, prefix: string, existing: { sku?: strin
 // whole (not merged field-by-field) so removing a list entry actually deletes it.
 export const saveSettings = (uid: string, settings: AppSettings) => setDoc(metaRef(uid), clean({ settings }), { merge: true });
 
+/**
+ * Auto-inventory create-or-attach (domain/autoInventory.ts's 'create'/'attach'
+ * outcomes), committed atomically so two concurrent tickets for the same
+ * device never create two inventory records.
+ *
+ * Firestore has no server-side unique-column constraint, so the identity
+ * index doubles for it: `inventoryImeiIndex/{normalized}` holds the winning
+ * record's id. The transaction reads that doc first — if it already exists,
+ * someone else's create (or an earlier ticket) already claimed this identity,
+ * so we attach to it instead (falling through to Case B) rather than erroring.
+ * If it doesn't exist, we create both the inventory record and the index doc
+ * in the same transaction. Two clients racing to create the same identity
+ * both read the index as missing, but only one write wins — Firestore
+ * transparently retries the loser's transaction, which then re-reads the now-
+ * existing index and falls through to attach. This is what makes concurrent
+ * duplicate creates (spec test case 8) resolve to exactly one record.
+ */
+export async function commitAutoInventory(uid: string, payload: {
+  normalized: string;
+  candidate: InventoryItem; // pre-built record (id/SKU already allocated) to use if creating
+}): Promise<{ action: 'create' | 'attach'; item: InventoryItem }> {
+  const indexRef = doc(db, 'user_data', uid, 'inventoryImeiIndex', payload.normalized);
+  return runTransaction(db, async tx => {
+    const indexSnap = await tx.get(indexRef);
+    if (indexSnap.exists()) {
+      const inventoryId = (indexSnap.data() as { inventoryId: string }).inventoryId;
+      const itemSnap = await tx.get(docRef(uid, 'inventory', inventoryId));
+      if (itemSnap.exists()) {
+        return { action: 'attach' as const, item: { ...(itemSnap.data() as any), id: itemSnap.id } as InventoryItem };
+      }
+      // Index points at a record that's gone (inventory records are never
+      // hard-deleted, but be defensive) — reclaim the slot below instead of
+      // getting stuck unable to ever create under this identity again.
+    }
+    tx.set(docRef(uid, 'inventory', payload.candidate.id), clean(payload.candidate));
+    tx.set(indexRef, { inventoryId: payload.candidate.id });
+    return { action: 'create' as const, item: payload.candidate };
+  });
+}
+
 export const saveItem = (uid: string, name: CollName, item: { id: string } & Record<string, any>) =>
   setDoc(docRef(uid, name, item.id), clean(item));
 export const deleteItem = (uid: string, name: CollName, id: string) =>

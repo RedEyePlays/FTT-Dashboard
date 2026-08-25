@@ -14,6 +14,7 @@ import { printRetailReceipt, printBatchIntake, printBatchInvoice, printBatchSumm
 import { statusPageUrl } from '../domain/statusLink';
 import { formatPhoneInput } from '../domain/phone';
 import { usePersistedFilter } from '../hooks/usePersistedFilter';
+import { AutoInventoryNotice } from '../domain/autoInventory';
 // Lazy: the repair label modal pulls in jsPDF (~390 kB); load it on demand.
 const RepairLabelModal = lazy(() => import('./RepairLabelModal').then(m => ({ default: m.RepairLabelModal })));
 import { CustomerSearchInput } from './CustomerSearchInput';
@@ -27,7 +28,7 @@ interface Props {
   userId?: string; // signed-in user's uid — scopes the remembered status filter so it never leaks between accounts
   onGenerateRepairNumber: () => Promise<string>;
   onGenerateBatchNumber: () => Promise<string>;
-  onSaveRepair: (r: Repair, prev?: Repair) => void;
+  onSaveRepair: (r: Repair, prev?: Repair) => Promise<AutoInventoryNotice | undefined>;
   onDeleteRepair: (id: string) => void;
   onSaveBatch: (b: RepairBatch, prev?: RepairBatch) => void;
   onDeleteBatch: (id: string) => void;
@@ -213,8 +214,18 @@ export const RepairsView: React.FC<Props> = (props) => {
     // so analytics/reports read one consistent number.
     let next: Repair = { ...form, partsCost: repairPartsCost(form) };
     if (drawer?.isNew && !next.repairNumber) next = { ...next, repairNumber: await props.onGenerateRepairNumber() };
-    onSaveRepair(next, drawer?.isNew ? undefined : drawer?.repair);
+    const notice = await onSaveRepair(next, drawer?.isNew ? undefined : drawer?.repair);
+    // A Luhn-invalid IMEI blocks the save entirely (no ticket created) — keep the
+    // drawer open so the user can fix or clear the field, rather than silently
+    // losing their in-progress edits.
+    if (notice?.kind === 'blocked') { window.alert(notice.message); return; }
     setDrawer(null);
+    if (notice?.kind === 'warning') window.alert(notice.message);
+    else if (notice?.kind === 'created') window.alert(`Added to inventory as SKU ${notice.sku}.`);
+    else if (notice?.kind === 'attached') {
+      const was = notice.previousStatus ? `, was: ${notice.previousStatus.replace(/_/g, ' ')}` : '';
+      window.alert(`Already in inventory — SKU ${notice.sku}${was}. Repair attached to existing record.`);
+    }
   };
   const saveBatch = async (form: RepairBatch, isNew: boolean, prev?: RepairBatch) => {
     let next = form;
@@ -749,6 +760,10 @@ const BatchForm: React.FC<{ initial: RepairBatch; isNew: boolean; onClose: () =>
             <Field label="Date Received"><input type="date" className={inputCls} value={f.dateReceived} onChange={e => set({ dateReceived: e.target.value })} /></Field>
           </div>
           {!isNew && <Field label="Batch Status"><select className={inputCls} value={f.status} onChange={e => set({ status: e.target.value as any })}><option value="active">Active</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option></select></Field>}
+          <label className="flex items-start gap-2 text-xs text-slate-600 dark:text-slate-300 pt-1">
+            <input type="checkbox" className="mt-0.5" checked={!!f.autoInventory} onChange={e => set({ autoInventory: e.target.checked })} />
+            <span>Auto-add devices to inventory — each device ticket added under this batch is added to inventory automatically (or attached to an existing IMEI/serial match), and becomes available for sale once its repair completes.</span>
+          </label>
           <Field label="Notes"><textarea rows={2} className={inputCls} value={f.notes || ''} onChange={e => set({ notes: e.target.value })} /></Field>
         </div>
         <div className="px-5 py-3 border-t border-slate-100 dark:border-slate-800 flex justify-end gap-2">

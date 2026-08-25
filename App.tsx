@@ -49,8 +49,9 @@ import {
   updateUserDoc, setInvite, deleteInvite,
   logAudit, exportWorkspaceData, recordBackup, saveSettings,
   saveTimeEntry, savePayPeriodPaid, deletePayPeriodPaid,
-  saveStaffNote, deleteStaffNote,
+  saveStaffNote, deleteStaffNote, commitAutoInventory,
 } from './services/firestoreDb';
+import { decideAutoInventory, AutoInventoryNotice } from './domain/autoInventory';
 import { AppSettings } from './domain/settings';
 import { listWorkspaceBackups, getBackupDownloadUrl } from './services/backupStorage';
 import { useWorkspaceData } from './hooks/useWorkspaceData';
@@ -976,8 +977,23 @@ const App: React.FC = () => {
   const handleGenRepairNumber = () => genNumber(REPAIR_PREFIX, repairsRef.current.map(r => r.repairNumber));
   const handleGenBatchNumber = () => genNumber(BATCH_PREFIX, repairBatchesRef.current.map(b => b.batchNumber));
 
-  const handleSaveRepair = (repair: Repair, prev?: Repair) => {
-    if (!uid || !allow('repairs.manage')) return;
+  // Auto-inventory cleanup for a ticket being voided/cancelled/deleted (spec
+  // point 6): an auto-created record still referenced by another ticket is left
+  // alone (this ticket just loses its link); one referenced by nobody else is
+  // flagged for review, never hard-deleted. No-op for tickets that were never
+  // resolved through domain/autoInventory.ts (inventoryAutoCreated undefined).
+  const cleanupOrphanedAutoInventory = (repair: Repair): Partial<Repair> => {
+    if (!uid || !repair.inventoryId || repair.inventoryAutoCreated === undefined) return {};
+    const item = dataRef.current.find(i => i.id === repair.inventoryId);
+    if (!item?.autoCreated) return {};
+    const stillReferenced = repairsRef.current.some(r => r.id !== repair.id && r.inventoryId === repair.inventoryId);
+    if (stillReferenced) return { inventoryId: undefined };
+    saveItem(uid, 'inventory', { ...item, flaggedForReview: true });
+    return {};
+  };
+
+  const handleSaveRepair = async (repair: Repair, prev?: Repair): Promise<AutoInventoryNotice | undefined> => {
+    if (!uid || !allow('repairs.manage')) return undefined;
     const isNew = !repairsRef.current.some(r => r.id === repair.id);
     let next: Repair = { ...repair };
     // Retail customer: create once, then reuse by customerId (builds history).
@@ -986,11 +1002,65 @@ const App: React.FC = () => {
       saveItem(uid, 'customers', cust);
       next.customerId = cust.id;
     }
+
+    // Auto-inventory (domain/autoInventory.ts): only evaluated once, the moment a
+    // wholesale device ticket is first created under a batch — a ticket's
+    // inventory link, once resolved, is fixed for its lifetime.
+    let notice: AutoInventoryNotice | undefined;
+    if (isNew && next.type === 'wholesale' && next.batchId && !next.inventoryId) {
+      const batch = repairBatchesRef.current.find(b => b.id === next.batchId);
+      const decision = decideAutoInventory(batch, next.imei, dataRef.current);
+      if (decision.action === 'invalidImei') {
+        return { kind: 'blocked', message: `IMEI "${decision.digits}" fails the checksum check — fix the entry or clear the IMEI/serial field before saving.` };
+      }
+      if (decision.action === 'noIdentifier') {
+        notice = { kind: 'warning', message: 'No IMEI or serial — device not added to inventory.' };
+      } else if (decision.action === 'create' || decision.action === 'attach') {
+        // SKU is pre-allocated outside commitAutoInventory's transaction (SKU
+        // allocation runs its own transaction and Firestore doesn't nest them);
+        // it goes unused if the transaction resolves to 'attach' instead — an
+        // accepted gap, same as any other SKU counter race.
+        const sku = await handleGenerateSku('device', next.deviceType);
+        const candidate: InventoryItem = {
+          id: newId(), kind: 'device', sku, date: next.date || new Date().toISOString().split('T')[0],
+          item: [next.brand, next.model].filter(Boolean).join(' ') || next.model || next.deviceType || 'Device',
+          imei: next.imei || '', boughtFrom: '', purchaseCost: 0, repairCost: 0,
+          soldDate: '', soldTo: '', salePrice: 0, notes: '',
+          deviceType: next.deviceType, brand: next.brand, model: next.model, storage: next.storage, color: next.color,
+          deviceStatus: 'pending_repair', imeiNormalized: decision.normalized,
+          autoCreated: true, sourceTicketId: next.id, batchId: next.batchId,
+        };
+        const result = await commitAutoInventory(uid, { normalized: decision.normalized, candidate });
+        next.inventoryId = result.item.id;
+        if (result.action === 'create') {
+          next.inventoryAutoCreated = true;
+          notice = { kind: 'created', sku: result.item.sku || '' };
+        } else {
+          next.inventoryAutoCreated = false;
+          next.inventoryPreviousStatus = result.item.deviceStatus;
+          saveItem(uid, 'inventory', { ...result.item, deviceStatus: 'pending_repair', sourceTicketId: next.id });
+          notice = { kind: 'attached', sku: result.item.sku, previousStatus: result.item.deviceStatus };
+        }
+      }
+    }
+
     // Stamp completion + warranty when moving into completed.
     if (next.status === 'completed' && !next.completedAt) {
       const completedDate = new Date().toISOString().split('T')[0];
       next = { ...next, completedAt: Date.now(), completedBy: appUser.id, warrantyUntil: computeWarrantyUntil(completedDate, next.warrantyDays) || undefined };
     }
+    // Auto-inventory devices become sellable once their ticket completes — Case A
+    // (this ticket created the record) and Case B (attached to an existing one)
+    // both land here, since only auto-inventory-resolved links set this field.
+    if (next.status === 'completed' && next.inventoryAutoCreated !== undefined && next.inventoryId) {
+      const invItem = dataRef.current.find(i => i.id === next.inventoryId);
+      if (invItem && invItem.deviceStatus !== 'ready') saveItem(uid, 'inventory', { ...invItem, deviceStatus: 'ready' });
+    }
+    // Ticket cancelled: clean up its auto-inventory link per spec point 6.
+    if (next.status === 'cancelled' && prev && prev.status !== 'cancelled' && next.inventoryAutoCreated !== undefined) {
+      next = { ...next, ...cleanupOrphanedAutoInventory(next) };
+    }
+
     saveItem(uid, 'repairs', next);
     if (isNew) {
       logActivity(`${next.repairNumber} repair created`);
@@ -1005,6 +1075,7 @@ const App: React.FC = () => {
       if (prev && prev.repairPrice !== next.repairPrice) audit('repair.price_change', 'repair', next.id, { repairPrice: prev.repairPrice }, { repairPrice: next.repairPrice });
       if (prev && (prev.customerName !== next.customerName || prev.customerPhone !== next.customerPhone)) audit('repair.customer_update', 'repair', next.id);
     }
+    return notice;
   };
 
   // Technician-scoped update: only the whitelisted work fields + status are
@@ -1016,6 +1087,12 @@ const App: React.FC = () => {
     if ((next.status === 'picked_up' || next.status === 'completed') && !next.completedAt) {
       const completedDate = new Date().toISOString().split('T')[0];
       next = { ...next, completedAt: Date.now(), completedBy: appUser.id, warrantyUntil: computeWarrantyUntil(completedDate, next.warrantyDays) || undefined };
+    }
+    // Auto-inventory devices become sellable once their ticket completes (same
+    // rule as handleSaveRepair — see spec point 5).
+    if ((next.status === 'picked_up' || next.status === 'completed') && next.inventoryAutoCreated !== undefined && next.inventoryId) {
+      const invItem = dataRef.current.find(i => i.id === next.inventoryId);
+      if (invItem && invItem.deviceStatus !== 'ready') saveItem(uid, 'inventory', { ...invItem, deviceStatus: 'ready' });
     }
     saveItem(uid, 'repairs', next);
     if (stored.status !== next.status) {
@@ -1034,6 +1111,7 @@ const App: React.FC = () => {
   const handleDeleteRepair = (id: string) => {
     if (!uid || appUser?.role !== 'owner') return;
     const t = repairsRef.current.find(r => r.id === id);
+    if (t) cleanupOrphanedAutoInventory(t);
     audit('repair.delete', 'repair', id, t);
     deleteItem(uid, 'repairs', id);
   };
@@ -1061,7 +1139,7 @@ const App: React.FC = () => {
     // only place its details will still exist afterward.
     const t = repairBatchesRef.current.find(b => b.id === id);
     audit('batch.delete', 'repairBatch', id, t);
-    repairsRef.current.filter(r => r.batchId === id).forEach(r => deleteItem(uid, 'repairs', r.id));
+    repairsRef.current.filter(r => r.batchId === id).forEach(r => { cleanupOrphanedAutoInventory(r); deleteItem(uid, 'repairs', r.id); });
     deleteItem(uid, 'repairBatches', id);
   };
 
