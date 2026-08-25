@@ -19,6 +19,12 @@ export interface QuickPurchaseInput {
   purchaseCost: number;
   paidBy: QuickPurchasePaidBy;
   boughtFrom?: string;
+  // Optional, available on the same screen (not a second step) — left blank
+  // behaves exactly as it does on the plain Add Item form: fillable later.
+  storage?: string;
+  color?: string;
+  batteryHealth?: string;
+  targetSalePrice?: number;
 }
 
 /**
@@ -46,6 +52,10 @@ export function buildQuickPurchaseItem(
     purchaseCost: Math.max(0, input.purchaseCost || 0), repairCost: 0,
     soldDate: '', soldTo: '', salePrice: 0, notes: '',
     condition: 'Good', deviceStatus: 'ready',
+    storage: input.storage?.trim() || undefined,
+    color: input.color?.trim() || undefined,
+    batteryHealth: input.batteryHealth?.trim() || undefined,
+    targetSalePrice: input.targetSalePrice && input.targetSalePrice > 0 ? input.targetSalePrice : undefined,
   };
 }
 
