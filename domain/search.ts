@@ -47,6 +47,10 @@ export const MIN_QUERY = 1; // identifiers can be very short; begin at 1 char
 const norm = (s?: string) => (s || '').toLowerCase().trim();
 const digits = (s?: string) => (s || '').replace(/\D/g, '');
 const money = (n?: number) => `$${(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+// Only the one value that doesn't read right just capitalized ('etransfer' →
+// 'Etransfer') needs a real label; everything else falls through to the
+// generic capitalization below.
+const SEARCH_PAYMENT_LABEL: Record<string, string> = { etransfer: 'E-Transfer' };
 
 // exact = 1000, prefix = 700, word-prefix = 600, partial = 400.
 function fieldScore(value: string | undefined, q: string): number {
@@ -133,7 +137,7 @@ export function globalSearch(raw: string, data: SearchData, opts: SearchOpts): {
     const score = best(fieldScore(t.id, q), fieldScore(t.customerName, q), digitScore(t.customerPhone, qd), lineHit);
     return { r: {
       key: `sale:${t.id}`, type: 'sale' as const, title: `Invoice #${t.id.slice(0, 8)}`,
-      subtitle: [t.customerName || 'Walk-in', money(t.totalPaid), t.paymentMethod && t.paymentMethod[0].toUpperCase() + t.paymentMethod.slice(1)].filter(Boolean).join(' · ') || undefined,
+      subtitle: [t.customerName || 'Walk-in', money(t.totalPaid), t.paymentMethod && (SEARCH_PAYMENT_LABEL[t.paymentMethod] || t.paymentMethod[0].toUpperCase() + t.paymentMethod.slice(1))].filter(Boolean).join(' · ') || undefined,
       score, itemId: t.id, customerId: t.customerId,
     } };
   }));

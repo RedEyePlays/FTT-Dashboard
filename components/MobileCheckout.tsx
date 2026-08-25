@@ -10,6 +10,7 @@ import { getDeviceDisplayName, suggestedSalePrice, PriceSuggestion } from '../do
 import { formatPhoneInput } from '../domain/phone';
 import { listingPlatformsLabel } from '../domain/listing';
 import { useCheckout, CartCheckout, CustomCategory, CUSTOM_DEVICE_TYPES } from '../hooks/useCheckout';
+import { PAYMENT_METHOD_LABEL } from '../services/salesReceipt';
 import { CustomerSearchInput } from './CustomerSearchInput';
 import { selectOnFocus } from '../hooks/selectOnFocus';
 // Lazy: defers jsPDF (~390 kB) until a label is actually printed.
@@ -41,7 +42,6 @@ export const MobileCheckout: React.FC<Props> = (props) => {
   const [step, setStep] = useState(0); // 0..4
   const [pick, setPick] = useState<null | 'device' | 'accessory'>(null);
   const [showCustom, setShowCustom] = useState(false);
-  const [payChoice, setPayChoice] = useState<'cash' | 'card' | 'etransfer' | 'mixed'>('cash');
   const [txModal, setTxModal] = useState(false);
 
   // "Similar past sale" price hints per device line — suggestion only, applied on tap.
@@ -56,26 +56,6 @@ export const MobileCheckout: React.FC<Props> = (props) => {
     }
     return map;
   }, [cx.cart, props.inventory]);
-
-  // E-Transfer maps to the existing 'mixed' record with the full total in the
-  // e-transfer bucket (no schema change); tax uses the rate-based figure so it
-  // isn't self-referential.
-  const computedTax = cx.taxableBase * cx.taxRate / 100;
-  useEffect(() => {
-    if (payChoice !== 'etransfer') return;
-    cx.setPaymentMethod('mixed');
-    cx.setCashAmount(''); cx.setCardAmount('');
-    cx.setTaxCollected(computedTax.toFixed(2));
-    cx.setEtransferAmount((cx.subtotal + computedTax).toFixed(2));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [payChoice, cx.subtotal, cx.taxableBase, cx.taxRate]);
-
-  const choosePay = (c: typeof payChoice) => {
-    setPayChoice(c);
-    if (c === 'cash') cx.setPaymentMethod('cash');
-    else if (c === 'card') cx.setPaymentMethod('card');
-    else cx.setPaymentMethod('mixed');
-  };
 
   const money = (n: number) => `$${(n || 0).toFixed(2)}`;
   const input = 'w-full px-3 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500';
@@ -95,7 +75,7 @@ export const MobileCheckout: React.FC<Props> = (props) => {
             {t.lines.map((l, i) => <div key={i} className="flex justify-between py-1.5"><span className="text-slate-700 dark:text-slate-200 truncate">{l.name} <span className="text-slate-400 text-xs">×{l.quantity}</span></span><span className="text-slate-600 dark:text-slate-300">{money(l.quantity * l.unitPrice)}</span></div>)}
           </div>
           <div className="flex justify-between"><span className="text-slate-400">Customer</span><span className="text-slate-700 dark:text-slate-200">{t.customerName || 'Walk-in'}</span></div>
-          <div className="flex justify-between"><span className="text-slate-400">Payment</span><span className="text-slate-700 dark:text-slate-200 capitalize">{payChoice === 'etransfer' ? 'E-Transfer' : t.paymentMethod}</span></div>
+          <div className="flex justify-between"><span className="text-slate-400">Payment</span><span className="text-slate-700 dark:text-slate-200">{PAYMENT_METHOD_LABEL[t.paymentMethod || ''] || t.paymentMethod}</span></div>
           <div className="flex justify-between text-base font-bold pt-1"><span>{t.balanceOwing ? 'Total due' : 'Total paid'}</span><span>{money(t.totalPaid)}</span></div>
           {t.balanceOwing ? (
             <>
@@ -118,7 +98,7 @@ export const MobileCheckout: React.FC<Props> = (props) => {
           <button onClick={cx.emailReceipt} className="flex items-center justify-center gap-2 py-3 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-sm font-medium"><Mail className="w-4 h-4" /> Email Receipt</button>
           <div className="grid grid-cols-2 gap-2">
             <button onClick={() => setTxModal(true)} className="flex items-center justify-center gap-2 py-3 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-sm font-medium"><Eye className="w-4 h-4" /> View Sale</button>
-            <button onClick={() => { cx.reset(); setStep(0); setPayChoice('cash'); }} className="flex items-center justify-center gap-2 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-medium"><RotateCcw className="w-4 h-4" /> New Sale</button>
+            <button onClick={() => { cx.reset(); setStep(0); }} className="flex items-center justify-center gap-2 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-medium"><RotateCcw className="w-4 h-4" /> New Sale</button>
           </div>
           {cx.soldDeviceRows[0] && <button onClick={() => cx.setLabelItem(cx.soldDeviceRows[0])} className="text-xs text-indigo-600 dark:text-indigo-400 py-1">Print device label</button>}
         </div>
@@ -293,12 +273,12 @@ export const MobileCheckout: React.FC<Props> = (props) => {
             <input type="date" max={new Date().toISOString().split('T')[0]} value={cx.soldDate} onChange={e => cx.setSoldDate(e.target.value)} className={input} />
           </label>
           <div className="grid grid-cols-2 gap-2">
-            <PayBig active={payChoice === 'cash'} onClick={() => choosePay('cash')} icon={<Banknote className="w-6 h-6" />} label="Cash" />
-            <PayBig active={payChoice === 'card'} onClick={() => choosePay('card')} icon={<CreditCard className="w-6 h-6" />} label="Card" />
-            <PayBig active={payChoice === 'etransfer'} onClick={() => choosePay('etransfer')} icon={<Send className="w-6 h-6" />} label="E-Transfer" />
-            <PayBig active={payChoice === 'mixed'} onClick={() => choosePay('mixed')} icon={<Blend className="w-6 h-6" />} label="Mixed" />
+            <PayBig active={cx.paymentMethod === 'cash'} onClick={() => cx.setPaymentMethod('cash')} icon={<Banknote className="w-6 h-6" />} label="Cash" />
+            <PayBig active={cx.paymentMethod === 'card'} onClick={() => cx.setPaymentMethod('card')} icon={<CreditCard className="w-6 h-6" />} label="Card" />
+            <PayBig active={cx.paymentMethod === 'etransfer'} onClick={() => cx.setPaymentMethod('etransfer')} icon={<Send className="w-6 h-6" />} label="E-Transfer" />
+            <PayBig active={cx.paymentMethod === 'mixed'} onClick={() => cx.setPaymentMethod('mixed')} icon={<Blend className="w-6 h-6" />} label="Mixed" />
           </div>
-          {payChoice === 'cash' && (
+          {cx.paymentMethod === 'cash' && (
             <label className="block text-sm text-slate-500 dark:text-slate-400">Cash tax status
               <select value={cx.cashTaxStatus === 'none' ? 'none' : 'separate'} onChange={e => cx.setCashTaxStatus(e.target.value as any)} className={input}>
                 <option value="separate">Charge tax</option>
@@ -306,7 +286,15 @@ export const MobileCheckout: React.FC<Props> = (props) => {
               </select>
             </label>
           )}
-          {payChoice === 'mixed' && (
+          {cx.paymentMethod === 'etransfer' && (
+            <label className="block text-sm text-slate-500 dark:text-slate-400">E-Transfer tax status
+              <select value={cx.etransferTaxStatus} onChange={e => cx.setEtransferTaxStatus(e.target.value as any)} className={input}>
+                <option value="separate">Charge tax</option>
+                <option value="none">No tax</option>
+              </select>
+            </label>
+          )}
+          {cx.paymentMethod === 'mixed' && (
             <div className="grid grid-cols-2 gap-2">
               <label className="text-xs text-slate-400">Cash<input type="number" inputMode="decimal" value={cx.cashAmount} onChange={e => cx.setCashAmount(e.target.value)} onFocus={selectOnFocus} className={input} placeholder="0.00" /></label>
               <label className="text-xs text-slate-400">Card<input type="number" inputMode="decimal" value={cx.cardAmount} onChange={e => cx.setCardAmount(e.target.value)} onFocus={selectOnFocus} className={input} placeholder="0.00" /></label>

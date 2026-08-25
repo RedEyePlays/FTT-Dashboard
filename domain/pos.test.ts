@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { platformFeeAmount, isZeroPricedDevice, cartHasZeroPricedDevice, PricedLine, salesBalanceOwing, isLayaway, searchCheckoutInventory, canVoidSale, isVoided, isReturned, isReversed, canReturnSale, returnRefund, saleAccessoryRestock, saleDeviceListedPlatforms, collectedOnSale, cashCollectedOnSale, saleRefundDrawerEffect, mixedPaymentMismatch } from './pos';
+import { platformFeeAmount, isZeroPricedDevice, cartHasZeroPricedDevice, PricedLine, salesBalanceOwing, isLayaway, searchCheckoutInventory, canVoidSale, isVoided, isReturned, isReversed, canReturnSale, returnRefund, saleAccessoryRestock, saleDeviceListedPlatforms, collectedOnSale, cashCollectedOnSale, saleRefundDrawerEffect, mixedPaymentMismatch, taxAppliesForSale } from './pos';
 import { InventoryItem, SalesTransaction } from '../types';
 
 const item = (p: Partial<InventoryItem>): InventoryItem => ({
@@ -213,6 +213,32 @@ describe('collectedOnSale / cashCollectedOnSale (void + return refund base)', ()
   });
   it('treats a missing cashAmount on a mixed sale as zero', () => {
     expect(cashCollectedOnSale({ ...base, paymentMethod: 'mixed', cashAmount: undefined })).toBe(0);
+  });
+  it('an e-transfer sale never affects the cash drawer — no cash was collected, even though money was collected', () => {
+    expect(cashCollectedOnSale({ ...base, paymentMethod: 'etransfer' })).toBe(0);
+  });
+  it('an e-transfer layaway deposit also never affects the cash drawer', () => {
+    expect(cashCollectedOnSale({ ...base, paymentMethod: 'etransfer', deposit: 150, balanceOwing: 350 })).toBe(0);
+  });
+});
+
+describe('taxAppliesForSale', () => {
+  it('a cash sale with "no tax" charges no tax; "separate" (Charge tax) does', () => {
+    expect(taxAppliesForSale('cash', 'none', 'none')).toBe(false);
+    expect(taxAppliesForSale('cash', 'separate', 'none')).toBe(true);
+  });
+  it('an e-transfer sale with "no tax" charges no tax; "separate" (Charge tax) does', () => {
+    expect(taxAppliesForSale('etransfer', 'none', 'none')).toBe(false);
+    expect(taxAppliesForSale('etransfer', 'none', 'separate')).toBe(true);
+  });
+  it('a card sale always has tax apply, regardless of the cash/e-transfer toggles', () => {
+    expect(taxAppliesForSale('card', 'none', 'none')).toBe(true);
+  });
+  it('a mixed sale always has tax apply (it has its own explicit Tax Collected field)', () => {
+    expect(taxAppliesForSale('mixed', 'none', 'none')).toBe(true);
+  });
+  it('an unset payment method defaults to tax applying', () => {
+    expect(taxAppliesForSale(undefined, 'none', 'none')).toBe(true);
   });
 });
 

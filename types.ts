@@ -95,10 +95,13 @@ export interface InventoryItem {
   customerNotes?: string;
 
   // Payment (POS)
-  paymentMethod?: 'cash' | 'card' | 'mixed';
+  paymentMethod?: 'cash' | 'card' | 'mixed' | 'etransfer';
   taxCollected?: number;
   cashAmount?: number;
   cashTaxStatus?: 'none' | 'separate' | 'included';
+  // Same "was tax charged" decision as cashTaxStatus, for a standalone
+  // e-transfer sale (see hooks/useCheckout.ts's taxApplies).
+  etransferTaxStatus?: 'none' | 'separate';
   paymentNotes?: string;
 
   // Drop-off / runner sourcing
@@ -321,7 +324,7 @@ export interface SalesTransaction {
   customerName: string;
   customerPhone?: string;
   customerEmail?: string;
-  paymentMethod?: 'cash' | 'card' | 'mixed';
+  paymentMethod?: 'cash' | 'card' | 'mixed' | 'etransfer';
   cashAmount?: number;
   cardAmount?: number;
   etransferAmount?: number;

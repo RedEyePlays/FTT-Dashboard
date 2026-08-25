@@ -149,6 +149,7 @@ export function computeAnalytics(range: DateRange, input: AnalyticsInput, now: n
     if (cash || card || etr) { payments.cash += cash; payments.card += card; payments.etransfer += etr; payments.other += Math.max(0, (t.totalPaid || 0) - cash - card - etr); }
     else if (t.paymentMethod === 'cash') payments.cash += t.totalPaid || 0;
     else if (t.paymentMethod === 'card') payments.card += t.totalPaid || 0;
+    else if (t.paymentMethod === 'etransfer') payments.etransfer += t.totalPaid || 0;
     else payments.other += t.totalPaid || 0;
 
     // Repair checkout: attribute the whole sale to Repairs (its single service
@@ -197,6 +198,7 @@ export function computeAnalytics(range: DateRange, input: AnalyticsInput, now: n
     if (cash) { payments.cash += cash; payments.other += Math.max(0, rev - cash); }
     else if (i.paymentMethod === 'cash') payments.cash += rev;
     else if (i.paymentMethod === 'card') payments.card += rev;
+    else if (i.paymentMethod === 'etransfer') payments.etransfer += rev;
     else payments.other += rev;
   }
 

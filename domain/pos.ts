@@ -24,6 +24,23 @@ export const PLATFORMS: PlatformFee[] = [
 export const platformFeeAmount = (subtotal: number, percent: number): number =>
   Math.max(0, subtotal) * (Math.max(0, percent) / 100);
 
+/**
+ * Whether tax applies to a sale, given its payment method and each payment
+ * method's own "was tax charged" choice (see CartSaleView/MobileCheckout's
+ * Cash Sale Tax Status / E-Transfer Sale Tax Status controls). Only cash and
+ * e-transfer sales have that explicit toggle — 'none' turns tax off for that
+ * one sale; card sales and mixed sales (which have their own explicit Tax
+ * Collected field) always have tax apply.
+ */
+export const taxAppliesForSale = (
+  paymentMethod: 'cash' | 'card' | 'mixed' | 'etransfer' | undefined,
+  cashTaxStatus: 'none' | 'separate' | 'included',
+  etransferTaxStatus: 'none' | 'separate',
+): boolean => !(
+  (paymentMethod === 'cash' && cashTaxStatus === 'none') ||
+  (paymentMethod === 'etransfer' && etransferTaxStatus === 'none')
+);
+
 // --- $0 device safeguard ---------------------------------------------------
 // A device with no sale price set (targetSalePrice missing/0) can be added to
 // the cart and would sell for $0.00. These pure predicates let the checkout flag

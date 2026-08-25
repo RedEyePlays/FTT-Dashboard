@@ -1,7 +1,7 @@
 import React, { lazy, Suspense } from 'react';
 import {
   ShoppingCart, Trash2, X, Search, User, Phone, FileText, Mail,
-  Banknote, CreditCard, Blend, CheckCircle, Package, Smartphone, ScanLine, History,
+  Banknote, CreditCard, Blend, Send, CheckCircle, Package, Smartphone, ScanLine, History,
   Printer, Eye, RotateCcw, QrCode, Sparkles, AlertTriangle, Wrench,
 } from 'lucide-react';
 import { InventoryItem, Customer, DeviceType, Repair } from '../types';
@@ -15,6 +15,7 @@ import { listingPlatformsLabel } from '../domain/listing';
 import { formatPhoneInput } from '../domain/phone';
 import { CustomerSearchInput } from './CustomerSearchInput';
 import { useCheckout, CustomCategory, CUSTOM_DEVICE_TYPES } from '../hooks/useCheckout';
+import { PAYMENT_METHOD_LABEL } from '../services/salesReceipt';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 import { selectOnFocus } from '../hooks/selectOnFocus';
 
@@ -48,7 +49,7 @@ export const CartSaleView: React.FC<Props> = (props) => {
     platformName, setPlatformName, platformFeePercent, setPlatformFeePercent, soldDate, setSoldDate,
     customerName, setCustomerName, customerPhone, setCustomerPhone, customerEmail, setCustomerEmail,
     customerNotes, setCustomerNotes, setSelectedCustomerId,
-    paymentMethod, setPaymentMethod, cashTaxStatus, setCashTaxStatus, paymentNotes, setPaymentNotes,
+    paymentMethod, setPaymentMethod, cashTaxStatus, setCashTaxStatus, etransferTaxStatus, setEtransferTaxStatus, paymentNotes, setPaymentNotes,
     cashAmount, setCashAmount, cardAmount, setCardAmount, etransferAmount, setEtransferAmount, taxCollected, setTaxCollected,
     deposit, setDeposit, balanceOwing, isLayaway, mixedPaymentTotal, mixedPaymentMismatch,
     scan, setScan, scanMsg, scanRef, lastTx, showTx, setShowTx, labelItem, setLabelItem,
@@ -153,7 +154,7 @@ export const CartSaleView: React.FC<Props> = (props) => {
                   {lastTx.balanceOwing ? <><Row label="Deposit" value={lastTx.deposit || 0} muted /><Row label="Balance Owing" value={lastTx.balanceOwing} /></> : null}
                   {canViewProfit && <Row label="Net Profit" value={lastTx.netProfit} />}
                 </div>
-                <p className="text-xs text-slate-500 dark:text-slate-400">Payment: {lastTx.paymentMethod}{lastTx.paymentMethod === 'mixed' ? ` — cash ${money(lastTx.cashAmount || 0)}, card ${money(lastTx.cardAmount || 0)}, e-transfer ${money(lastTx.etransferAmount || 0)}` : ''}</p>
+                <p className="text-xs text-slate-500 dark:text-slate-400">Payment: {PAYMENT_METHOD_LABEL[lastTx.paymentMethod || ''] || lastTx.paymentMethod}{lastTx.paymentMethod === 'mixed' ? ` — cash ${money(lastTx.cashAmount || 0)}, card ${money(lastTx.cardAmount || 0)}, e-transfer ${money(lastTx.etransferAmount || 0)}` : ''}</p>
                 {lastTx.notes && <p className="text-xs text-slate-500 dark:text-slate-400 italic">{lastTx.notes}</p>}
               </div>
             </div>
@@ -333,12 +334,22 @@ export const CartSaleView: React.FC<Props> = (props) => {
           <div className="flex gap-2">
             <PayBtn active={paymentMethod === 'cash'} onClick={() => setPaymentMethod('cash')} icon={<Banknote className="w-4 h-4" />} label="Store / Cash" />
             <PayBtn active={paymentMethod === 'card'} onClick={() => setPaymentMethod('card')} icon={<CreditCard className="w-4 h-4" />} label="Card" />
+            <PayBtn active={paymentMethod === 'etransfer'} onClick={() => setPaymentMethod('etransfer')} icon={<Send className="w-4 h-4" />} label="E-Transfer" />
             <PayBtn active={paymentMethod === 'mixed'} onClick={() => setPaymentMethod('mixed')} icon={<Blend className="w-4 h-4" />} label="Mixed" />
           </div>
           {paymentMethod === 'cash' && (
             <div>
               <label className={labelCls}>Cash Sale Tax Status</label>
               <select className={inputCls} value={cashTaxStatus === 'none' ? 'none' : 'separate'} onChange={e => setCashTaxStatus(e.target.value as any)}>
+                <option value="separate">Charge tax</option>
+                <option value="none">No tax</option>
+              </select>
+            </div>
+          )}
+          {paymentMethod === 'etransfer' && (
+            <div>
+              <label className={labelCls}>E-Transfer Sale Tax Status</label>
+              <select className={inputCls} value={etransferTaxStatus} onChange={e => setEtransferTaxStatus(e.target.value as any)}>
                 <option value="separate">Charge tax</option>
                 <option value="none">No tax</option>
               </select>
