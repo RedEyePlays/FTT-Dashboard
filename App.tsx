@@ -12,6 +12,7 @@ import { GlobalSearch } from './components/GlobalSearch';
 // exports are unwrapped to default for React.lazy.
 const Dashboard = lazy(() => import('./components/Dashboard').then(m => ({ default: m.Dashboard })));
 const QuickSaleView = lazy(() => import('./components/QuickSaleView').then(m => ({ default: m.QuickSaleView })));
+const QuickPurchaseView = lazy(() => import('./components/QuickPurchaseView').then(m => ({ default: m.QuickPurchaseView })));
 const InventoryView = lazy(() => import('./components/InventoryView').then(m => ({ default: m.InventoryView })));
 const RepairsView = lazy(() => import('./components/RepairsView').then(m => ({ default: m.RepairsView })));
 const TechRepairsView = lazy(() => import('./components/TechRepairsView').then(m => ({ default: m.TechRepairsView })));
@@ -52,6 +53,8 @@ import {
   saveStaffNote, deleteStaffNote, commitAutoInventory, settleRunner,
 } from './services/firestoreDb';
 import { decideAutoInventory, autoInventoryPurchaseDrawerEffect, AutoInventoryNotice } from './domain/autoInventory';
+import { buildQuickPurchaseItem, quickPurchaseDrawerEffect } from './domain/quickPurchase';
+import type { QuickPurchaseSaveInput } from './components/QuickPurchaseView';
 import { listingPlatformsLabel } from './domain/listing';
 import { AppSettings } from './domain/settings';
 import { listWorkspaceBackups, getBackupDownloadUrl } from './services/backupStorage';
@@ -79,7 +82,7 @@ import { useIsMobile } from './hooks/useMediaQuery';
 // Page titles for the mobile header bar.
 const PAGE_TITLES: Record<ViewState, string> = {
   dashboard: 'Dashboard', analytics: 'Analytics', reports: 'Reports', entry: 'Add Item', edit: 'Edit Item',
-  grid: 'Inventory', notes: 'Notes', ai: 'AI Assistant', pos: 'Checkout', dropoff: 'Drop-Offs',
+  grid: 'Inventory', notes: 'Notes', ai: 'AI Assistant', pos: 'Checkout', quickpurchase: 'Quick Purchase', dropoff: 'Drop-Offs',
   repairs: 'Repairs', customers: 'Customers', users: 'Users', audit: 'Audit Log',
   settings: 'Settings', timeclock: 'Time Clock', closeout: 'Close Out',
 };
@@ -298,6 +301,7 @@ const App: React.FC = () => {
     if (canAnalytics) p.push({ id: 'analytics', label: 'Analytics', keywords: 'reports owner profit', view: 'analytics' });
     p.push({ id: 'grid', label: 'Inventory', keywords: 'stock devices accessories', view: 'grid' });
     p.push({ id: 'pos', label: 'Checkout', keywords: 'sell quick sale pos sales', view: 'pos' });
+    if (allow('inventory.add')) p.push({ id: 'quickpurchase', label: 'Quick Purchase', keywords: 'buy purchase device counter cash', view: 'quickpurchase' });
     if (allow('repairs.tech')) p.push({ id: 'repairs', label: 'Repairs', keywords: 'tickets', view: 'repairs' });
     if (allow('timeclock.use')) p.push({ id: 'timeclock', label: 'Time Clock', keywords: 'clock in out hours shift break payroll pay', view: 'timeclock' });
     if (allow('closeout.view')) p.push({ id: 'closeout', label: 'Close Out', keywords: 'end of day summary lock up reconcile', view: 'closeout' });
@@ -571,6 +575,30 @@ const App: React.FC = () => {
     else audit('inventory.edit', collectionFor(item), item.id);
     if (item.soldDate && !raw.soldDate) logActivity(`${item.sku || item.item || 'Device'} sold for $${(item.salePrice || 0).toFixed(2)}`);
     saveItem(uid, collectionFor(item), item);
+  };
+
+  // Quick Purchase (QuickPurchaseView): the buying-side counterpart to Quick
+  // Sale — creates a real inventory record (status 'ready', same as a normal
+  // Add Item save) and, when store-paid, logs the drawer cash-out in the same
+  // action (same pattern as the FTT Personal repair purchase-cost feature —
+  // see domain/autoInventory.ts's autoInventoryPurchaseDrawerEffect).
+  const handleQuickPurchase = async (input: QuickPurchaseSaveInput) => {
+    if (!uid || !allow('inventory.add')) return;
+    const sku = await handleGenerateSku('device');
+    const item = buildQuickPurchaseItem(input, { id: newId(), sku }, new Date().toISOString().split('T')[0]);
+    logActivity(`${item.sku} added — quick purchase ($${item.purchaseCost.toFixed(2)})`);
+    audit('inventory.add', 'inventory', item.id, undefined, item);
+    saveItem(uid, 'inventory', item);
+
+    const purchaseEffect = quickPurchaseDrawerEffect(input.purchaseCost, input.paidBy);
+    if (purchaseEffect) {
+      const date = new Date().toISOString().split('T')[0];
+      const existing = cashReconciliations.find(rec => rec.date === date);
+      const listKey: 'cashIn' | 'cashOut' = purchaseEffect.kind;
+      const entry = { id: newId(), amount: purchaseEffect.amount, note: `Quick Purchase — ${item.item}` };
+      commitDrawerRecord(date, { [listKey]: [...(existing?.[listKey] || []), entry] });
+      logActivity(`Cash paid out $${purchaseEffect.amount.toFixed(2)} — quick purchase (${item.item})`);
+    }
   };
 
   // Sell a cart: mark devices sold in Firestore, decrement accessory quantities,
@@ -1579,6 +1607,9 @@ const App: React.FC = () => {
               reconciledToday={!!todayRecon?.reconciledAt}
               onCartDirtyChange={(d) => { cartDirtyRef.current = d; }}
             />
+          )}
+          {view === 'quickpurchase' && (
+            <QuickPurchaseView inventory={data} onSave={handleQuickPurchase} />
           )}
           {view === 'dropoff' && (
             <DropOffView

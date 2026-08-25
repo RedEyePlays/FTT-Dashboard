@@ -1,6 +1,6 @@
 import React from 'react';
 import {
-  LayoutDashboard, Table, ShoppingCart, Wrench, Contact, Activity, BarChart3, StickyNote,
+  LayoutDashboard, Table, ShoppingCart, ShoppingBag, Wrench, Contact, Activity, BarChart3, StickyNote,
   Truck, ScrollText, Users as UsersIcon, Settings, Bot, Sparkles, MessageCircle,
   Search, PlusCircle, Moon, Sun, Menu, MoreHorizontal, ChevronDown, LogOut, Clock, Receipt, ClipboardCheck,
 } from 'lucide-react';
@@ -60,6 +60,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     { key: 'repairs', label: 'Repairs', icon: <Wrench className="w-4 h-4" />, view: 'repairs', show: allow('repairs.tech') },
     { key: 'customers', label: 'Customers', icon: <Contact className="w-4 h-4" />, view: 'customers', show: allow('reports.view') },
     { key: 'pos', label: 'Quick Sale', icon: <ShoppingCart className="w-4 h-4" />, view: 'pos', show: true },
+    { key: 'quickpurchase', label: 'Quick Purchase', icon: <ShoppingBag className="w-4 h-4" />, view: 'quickpurchase', show: allow('inventory.add') },
     { key: 'notes', label: 'Notes', icon: <StickyNote className="w-4 h-4" />, view: 'notes', show: true },
   ] as NavItem[]).filter(i => i.show);
 

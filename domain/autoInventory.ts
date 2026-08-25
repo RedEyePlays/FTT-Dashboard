@@ -72,6 +72,22 @@ export function findAutoInventoryMatch(normalized: string, inventory: InventoryI
   return inventory.find(i => (i.kind ?? 'device') === 'device' && i.imeiNormalized === normalized);
 }
 
+/**
+ * Same identity match as findAutoInventoryMatch, but recomputed live from each
+ * device's raw `imei` field (via identifierOf) rather than trusting the stored
+ * `imeiNormalized` index. Only devices resolved through the auto-inventory
+ * flow are guaranteed to have that field populated — a device added through
+ * the plain Add Item form (or Quick Purchase, before this) never had it
+ * backfilled. Used for a warn-only "this device may already be in inventory"
+ * check (Quick Purchase) where scanning the whole list live is fine — NOT for
+ * the atomic create-or-attach transaction (commitAutoInventory), which needs
+ * the indexed field for a real uniqueness guarantee under concurrent writes.
+ */
+export function findInventoryMatchByIdentifier(normalized: string, inventory: InventoryItem[]): InventoryItem | undefined {
+  if (!normalized) return undefined;
+  return inventory.find(i => (i.kind ?? 'device') === 'device' && identifierOf(i) === normalized);
+}
+
 // A batch is private if explicitly flagged so, falling back to the legacy
 // `autoInventory` flag for a batch saved before this change (e.g. an old "FTT
 // Personal" batch with autoInventory: true) — so it reads as private with no

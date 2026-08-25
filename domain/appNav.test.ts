@@ -9,6 +9,7 @@ describe('viewPath', () => {
     expect(viewPath('repairs')).toBe('/repairs');
     expect(viewPath('customers')).toBe('/customers');
     expect(viewPath('pos')).toBe('/checkout');
+    expect(viewPath('quickpurchase')).toBe('/quick-purchase');
     expect(viewPath('dropoff')).toBe('/drop-offs');
     expect(viewPath('timeclock')).toBe('/time-clock');
     expect(viewPath('closeout')).toBe('/close-out');
@@ -53,7 +54,7 @@ describe('parseViewPath', () => {
   });
 
   it('round-trips every routable view through its path', () => {
-    const views: ViewState[] = ['dashboard', 'analytics', 'pos', 'repairs', 'customers', 'dropoff', 'notes', 'ai', 'audit', 'users', 'settings', 'timeclock', 'closeout', 'grid'];
+    const views: ViewState[] = ['dashboard', 'analytics', 'pos', 'quickpurchase', 'repairs', 'customers', 'dropoff', 'notes', 'ai', 'audit', 'users', 'settings', 'timeclock', 'closeout', 'grid'];
     for (const v of views) {
       expect(parseViewPath(viewPath(v))).toBe(v);
     }
