@@ -1,14 +1,15 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Note, Task, NoteLinkType, Customer, InventoryItem, Repair } from '../types';
 import {
-  parseNoteBlocks, toggleChecklistItem, parseInlineSpans, checklistProgress,
-  sortNotes, stampNoteEdit, editedSummary, NoteBlock,
+  checklistProgress, sortNotes, stampNoteEdit, editedSummary,
 } from '../domain/notes';
+import { NoteEditor, applyBold, applyBlockKind } from './NoteEditor';
+import { htmlToMarkdown } from '../domain/notesHtml';
 import { getDeviceDisplayName } from '../domain/inventory';
 import {
   Plus, X, Check, Trash2, FileText,
   CheckSquare, Calendar, Clock, Search, File, Pin, Bold, Heading1, Heading2,
-  List, Link2, Eye, Pencil, User, Package, Wrench,
+  List, Link2, User, Package, Wrench,
 } from 'lucide-react';
 
 interface NotesBoardProps {
@@ -43,11 +44,6 @@ const LINK_META: Record<NoteLinkType, { label: string; icon: React.ReactNode }> 
   repair: { label: 'Repair', icon: <Wrench className="w-3.5 h-3.5" /> },
 };
 
-/** Renders one line's inline formatting (`**bold**`) as spans. */
-const Inline: React.FC<{ text: string }> = ({ text }) => (
-  <>{parseInlineSpans(text).map((s, i) => (s.bold ? <strong key={i} className="font-bold">{s.text}</strong> : <span key={i}>{s.text}</span>))}</>
-);
-
 export const NotesBoard: React.FC<NotesBoardProps> = ({
   notes, tasks, onUpdateNotes, onUpdateTasks, currentUser,
   customers = [], inventory = [], repairs = [], initialNoteId, onConsumeInitial,
@@ -55,11 +51,10 @@ export const NotesBoard: React.FC<NotesBoardProps> = ({
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
   const [newTaskText, setNewTaskText] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
-  // Preview (formatted, tickable checkboxes) is the default so a checklist page
-  // is usable at a glance; clicking the body drops into the raw editor.
-  const [editing, setEditing] = useState(false);
   const [linkPickerOpen, setLinkPickerOpen] = useState(false);
-  const bodyRef = useRef<HTMLTextAreaElement>(null);
+  // The contentEditable surface. Toolbar actions operate on it directly; there
+  // is no longer an edit/preview split to coordinate.
+  const editorRef = useRef<HTMLDivElement>(null);
 
   const ordered = useMemo(() => sortNotes(notes), [notes]);
 
@@ -67,7 +62,6 @@ export const NotesBoard: React.FC<NotesBoardProps> = ({
   useEffect(() => {
     if (initialNoteId && notes.some(n => n.id === initialNoteId)) {
       setSelectedNoteId(initialNoteId);
-      setEditing(false);
       onConsumeInitial?.();
     }
   }, [initialNoteId, notes, onConsumeInitial]);
@@ -95,7 +89,6 @@ export const NotesBoard: React.FC<NotesBoardProps> = ({
     }, currentUser, now);
     onUpdateNotes([newNote, ...notes]);
     setSelectedNoteId(newNote.id);
-    setEditing(true);
   };
 
   const handleDeleteNote = (e: React.MouseEvent, id: string) => {
@@ -111,63 +104,16 @@ export const NotesBoard: React.FC<NotesBoardProps> = ({
     patchNote(id, { color: colors[(idx + 1) % colors.length] });
   };
 
-  // --- Body editing helpers -------------------------------------------------
-  // Toolbar actions operate on the raw text at the cursor, so they compose with
-  // typing instead of replacing it.
-  const withTextarea = (fn: (el: HTMLTextAreaElement) => void) => {
-    setEditing(true);
-    requestAnimationFrame(() => { const el = bodyRef.current; if (el) { el.focus(); fn(el); } });
-  };
-
-  /** Prefix the line under the cursor, toggling the marker off if already present. */
-  const applyLinePrefix = (prefix: string) => {
-    if (!activeNote) return;
-    withTextarea(el => {
-      const value = el.value;
-      const start = value.lastIndexOf('\n', el.selectionStart - 1) + 1;
-      const endIdx = value.indexOf('\n', el.selectionStart);
-      const end = endIdx === -1 ? value.length : endIdx;
-      const line = value.slice(start, end);
-      const has = line.startsWith(prefix);
-      const nextLine = has ? line.slice(prefix.length) : prefix + line;
-      const next = value.slice(0, start) + nextLine + value.slice(end);
-      patchNote(activeNote.id, { content: next });
-      const caret = el.selectionStart + (has ? -prefix.length : prefix.length);
-      requestAnimationFrame(() => el.setSelectionRange(Math.max(start, caret), Math.max(start, caret)));
-    });
-  };
-
-  /** Wrap the selection in `**`, or insert an empty bold pair at the cursor. */
-  const applyBold = () => {
-    if (!activeNote) return;
-    withTextarea(el => {
-      const { selectionStart: s, selectionEnd: e, value } = el;
-      const next = `${value.slice(0, s)}**${value.slice(s, e)}**${value.slice(e)}`;
-      patchNote(activeNote.id, { content: next });
-      requestAnimationFrame(() => el.setSelectionRange(s + 2, e + 2));
-    });
-  };
-
-  // Pressing Enter on a checklist/bullet line continues the list, and clears the
-  // marker on an empty one (so Enter twice exits the list) — the usual affordance.
-  const handleBodyKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key !== 'Enter' || e.shiftKey || !activeNote) return;
-    const el = e.currentTarget;
-    const value = el.value;
-    const start = value.lastIndexOf('\n', el.selectionStart - 1) + 1;
-    const line = value.slice(start, el.selectionStart);
-    const marker = /^(\s*)(\[[ xX]?\]|[-*])\s+/.exec(line);
-    if (!marker) return;
-    e.preventDefault();
-    const isEmptyItem = line.slice(marker[0].length).trim() === '';
-    // Continuing a checkbox always starts the next one unchecked.
-    const cont = marker[2].startsWith('[') ? `${marker[1]}[] ` : `${marker[1]}${marker[2]} `;
-    const insert = isEmptyItem ? '\n' : `\n${cont}`;
-    const from = isEmptyItem ? start : el.selectionStart;
-    const next = value.slice(0, from) + insert + value.slice(el.selectionEnd);
-    patchNote(activeNote.id, { content: next });
-    const caret = from + insert.length;
-    requestAnimationFrame(() => { el.setSelectionRange(caret, caret); });
+  // --- Body editing -----------------------------------------------------
+  // The editor owns its DOM (see NoteEditor); the board only receives the
+  // markdown it produces and hands toolbar actions back down to it.
+  const syncBody = () => {
+    const el = editorRef.current;
+    if (!el || !activeNote) return;
+    // Toolbar actions mutate the editor's DOM directly, so the board reads the
+    // result back here rather than waiting for the next input event.
+    const md = htmlToMarkdown(el);
+    if (md !== activeNote.content) patchNote(activeNote.id, { content: md });
   };
 
   const handleAddTask = (e: React.FormEvent) => {
@@ -216,7 +162,7 @@ export const NotesBoard: React.FC<NotesBoardProps> = ({
             return (
               <div
                 key={note.id}
-                onClick={() => { setSelectedNoteId(note.id); setEditing(false); }}
+                onClick={() => setSelectedNoteId(note.id)}
                 className={`group flex items-center gap-2 px-3 py-1.5 rounded-md text-sm cursor-pointer transition-colors ${selectedNoteId === note.id ? 'bg-slate-200/60 dark:bg-slate-800 text-slate-900 dark:text-white font-medium' : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
               >
                 <div className="text-slate-400 shrink-0">
@@ -303,48 +249,28 @@ export const NotesBoard: React.FC<NotesBoardProps> = ({
                 )}
               </div>
 
-              {/* Formatting toolbar. Every button suppresses mousedown so the
-                  textarea never loses focus — otherwise its onBlur would flip
-                  back to preview and the action would land on a unmounted
-                  element, silently doing nothing. */}
+              {/* Formatting toolbar. Buttons suppress mousedown so the
+                  contentEditable surface keeps focus and its selection — an
+                  action that lost the caret would have nothing to apply to.
+                  There is no Preview toggle: formatting is always visible. */}
               <div className="flex items-center gap-0.5 border-y border-slate-100 dark:border-slate-800 py-1.5 mb-1" onMouseDown={e => e.preventDefault()}>
-                <button onClick={applyBold} className={toolBtn} title="Bold (**text**)"><Bold className="w-4 h-4" /></button>
-                <button onClick={() => applyLinePrefix('# ')} className={toolBtn} title="Heading"><Heading1 className="w-4 h-4" /></button>
-                <button onClick={() => applyLinePrefix('## ')} className={toolBtn} title="Subheading"><Heading2 className="w-4 h-4" /></button>
-                <button onClick={() => applyLinePrefix('[] ')} className={toolBtn} title="Checklist item"><CheckSquare className="w-4 h-4" /></button>
-                <button onClick={() => applyLinePrefix('- ')} className={toolBtn} title="Bullet"><List className="w-4 h-4" /></button>
-                <div className="ml-auto">
-                  <button
-                    onClick={() => setEditing(v => !v)}
-                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
-                    title={editing ? 'Show formatted view' : 'Edit raw text'}
-                  >
-                    {editing ? <><Eye className="w-3.5 h-3.5" /> Preview</> : <><Pencil className="w-3.5 h-3.5" /> Edit</>}
-                  </button>
-                </div>
+                <button onClick={() => applyBold(editorRef.current, syncBody)} className={toolBtn} title="Bold"><Bold className="w-4 h-4" /></button>
+                <button onClick={() => applyBlockKind(editorRef.current, 'h1', syncBody)} className={toolBtn} title="Heading"><Heading1 className="w-4 h-4" /></button>
+                <button onClick={() => applyBlockKind(editorRef.current, 'h2', syncBody)} className={toolBtn} title="Subheading"><Heading2 className="w-4 h-4" /></button>
+                <button onClick={() => applyBlockKind(editorRef.current, 'check', syncBody)} className={toolBtn} title="Checklist item"><CheckSquare className="w-4 h-4" /></button>
+                <button onClick={() => applyBlockKind(editorRef.current, 'bullet', syncBody)} className={toolBtn} title="Bullet"><List className="w-4 h-4" /></button>
               </div>
             </div>
 
             <div className="flex-1 overflow-y-auto px-6 lg:px-10 pb-12 w-full custom-scrollbar">
-              {editing ? (
-                <textarea
-                  ref={bodyRef}
-                  value={activeNote.content}
-                  onChange={(e) => patchNote(activeNote.id, { content: e.target.value })}
-                  onKeyDown={handleBodyKeyDown}
-                  onBlur={() => setEditing(false)}
-                  autoFocus
-                  placeholder={'Type "[] " for a checkbox, "# " for a heading, **bold** for bold'}
-                  className="w-full h-full min-h-[50vh] resize-none border-none outline-none bg-transparent text-lg leading-8 text-slate-700 dark:text-slate-300 placeholder:text-slate-300 dark:placeholder:text-slate-700 font-mono"
-                  spellCheck={false}
-                />
-              ) : (
-                <NotePreview
-                  content={activeNote.content}
-                  onToggle={(lineIndex) => patchNote(activeNote.id, { content: toggleChecklistItem(activeNote.content, lineIndex) })}
-                  onEditRequest={() => setEditing(true)}
-                />
-              )}
+              <NoteEditor
+                ref={editorRef}
+                noteId={activeNote.id}
+                value={activeNote.content}
+                onChange={(md) => patchNote(activeNote.id, { content: md })}
+                placeholder={'Type "[] " for a checkbox, "# " for a heading'}
+                className="min-h-[50vh] text-lg leading-8 text-slate-700 dark:text-slate-300"
+              />
             </div>
           </div>
         ) : (
@@ -397,62 +323,6 @@ export const NotesBoard: React.FC<NotesBoardProps> = ({
         </div>
       </div>
 
-    </div>
-  );
-};
-
-/**
- * The formatted, read-mode body. Checkboxes are tickable straight from here —
- * that's the point of defaulting to this view for running lists. Clicking
- * anywhere else drops into the raw editor at that spot.
- */
-const NotePreview: React.FC<{ content: string; onToggle: (lineIndex: number) => void; onEditRequest: () => void }> = ({ content, onToggle, onEditRequest }) => {
-  const blocks = parseNoteBlocks(content);
-  if (!content.trim()) {
-    return (
-      <div onClick={onEditRequest} className="cursor-text text-lg text-slate-300 dark:text-slate-700 min-h-[50vh] pt-1">
-        Type "[] " for a checkbox, "# " for a heading, **bold** for bold
-      </div>
-    );
-  }
-  return (
-    <div className="min-h-[50vh] pt-1 text-slate-700 dark:text-slate-300">
-      {blocks.map((b: NoteBlock) => {
-        if (b.kind === 'check') {
-          return (
-            <div key={b.index} className="flex items-start gap-2.5 py-0.5 group">
-              <button
-                onClick={() => onToggle(b.index)}
-                role="checkbox" aria-checked={b.checked} aria-label={b.text || 'Checklist item'}
-                className={`mt-1.5 w-4 h-4 shrink-0 rounded border flex items-center justify-center transition-colors ${b.checked ? 'bg-indigo-500 border-indigo-500 text-white' : 'border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 hover:border-indigo-400'}`}
-              >
-                {b.checked && <Check className="w-3 h-3" />}
-              </button>
-              <span
-                onClick={onEditRequest}
-                className={`text-lg leading-8 cursor-text flex-1 min-w-0 break-words ${b.checked ? 'text-slate-400 line-through decoration-slate-300' : ''}`}
-              >
-                <Inline text={b.text} />
-              </span>
-            </div>
-          );
-        }
-        const common = 'cursor-text break-words';
-        if (b.kind === 'h1') return <h1 key={b.index} onClick={onEditRequest} className={`${common} text-3xl font-bold text-slate-900 dark:text-slate-100 mt-5 mb-1.5`}><Inline text={b.text} /></h1>;
-        if (b.kind === 'h2') return <h2 key={b.index} onClick={onEditRequest} className={`${common} text-2xl font-bold text-slate-900 dark:text-slate-100 mt-4 mb-1`}><Inline text={b.text} /></h2>;
-        if (b.kind === 'h3') return <h3 key={b.index} onClick={onEditRequest} className={`${common} text-xl font-semibold text-slate-800 dark:text-slate-200 mt-3 mb-1`}><Inline text={b.text} /></h3>;
-        if (b.kind === 'bullet') {
-          return (
-            <div key={b.index} onClick={onEditRequest} className={`${common} flex items-start gap-2.5 py-0.5 text-lg leading-8`}>
-              <span className="mt-0.5 text-slate-400 shrink-0">•</span>
-              <span className="flex-1 min-w-0"><Inline text={b.text} /></span>
-            </div>
-          );
-        }
-        // A blank line is deliberate spacing, so keep it as an empty row.
-        if (!b.text) return <div key={b.index} onClick={onEditRequest} className="h-4 cursor-text" />;
-        return <p key={b.index} onClick={onEditRequest} className={`${common} text-lg leading-8`}><Inline text={b.text} /></p>;
-      })}
     </div>
   );
 };
