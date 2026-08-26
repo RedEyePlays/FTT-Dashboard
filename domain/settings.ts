@@ -88,13 +88,20 @@ export interface AppSettings {
     qrContent: 'sku' | 'id' | 'url' | 'imei';
     marginMm: number;
     density: number;       // Zebra ^MD darkness (-30..30)
-    // Content padding + inter-line spacing for the non-Dymo (inch/ZP 450) HTML
+    // Content padding + push-down offset for the non-Dymo (inch/ZP 450) HTML
     // label templates — self-serve tuning knobs since getting these right has
     // taken several rounds of physical print calibration. Undefined/omitted
     // means "use the built-in default" (labelLayout.ts / shelf/PDF paths each
     // fall back sensibly); Dymo labels keep their own separately-tuned constants.
     paddingMm?: number;
-    lineSpacingMm?: number;
+    // Shifts the whole text block (org/code/device/sub/serial) down as one
+    // group via a paint-only transform — it does NOT touch the gap between
+    // individual lines or the block's total height, so unlike the old
+    // per-line "line spacing" knob it can't trigger the browser's print
+    // auto-shrink-to-fit (that only reacts to layout/flow size, and a
+    // transform never changes layout size). Overshooting the safe range just
+    // visually clips the last line instead of shrinking the whole label.
+    contentPushDownMm?: number;
   };
   customers: {
     requirePhone: boolean;
