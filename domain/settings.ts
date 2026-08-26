@@ -102,6 +102,13 @@ export interface AppSettings {
     // transform never changes layout size). Overshooting the safe range just
     // visually clips the last line instead of shrinking the whole label.
     contentPushDownMm?: number;
+    // Gap between content lines (org/code/device/sub/serial) on the non-Dymo
+    // templates. Physically-confirmed known-good default is 1.1mm (undefined
+    // here). Clamped to [0, 1.5] — 0 is a valid "tightly packed" choice;
+    // values above ~1.5-1.6 have been confirmed to overcrowd the 2×1" label
+    // and can re-trigger the browser's print auto-shrink-to-fit. Clamped both
+    // at the Settings input and defensively in labelBody itself.
+    lineSpacingMm?: number;
   };
   customers: {
     requirePhone: boolean;
