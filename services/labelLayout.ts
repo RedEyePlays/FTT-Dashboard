@@ -38,7 +38,15 @@ export interface LabelOpts {
   // Shifts the whole text block down as one group (a paint-only transform,
   // not a layout change) — see AppSettings.labels.contentPushDownMm.
   pushDownMm?: number;
+  // Gap between content lines (org/code/device/sub/serial) on the non-Dymo
+  // templates — see AppSettings.labels.lineSpacingMm. Clamped to [0, 1.5]
+  // even here (not just at the Settings input) since a bad stored value
+  // (old data, a direct Firestore edit) shouldn't be able to reintroduce
+  // the print shrink-to-fit that too-large a gap causes.
+  lineGapMm?: number;
 }
+
+const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
 
 const IN = 25.4; // mm per inch
 export const mmOf = (m: LabelMedia) => ({ w: +(m.w * IN).toFixed(2), h: +(m.h * IN).toFixed(2) });
@@ -123,12 +131,14 @@ function labelBody(u: U, m: LabelMedia, c: LabelContent, img: LabelImages, o: La
   const fSerial = large ? 4.4 : 3.6;
   const qrS = +(Math.min(w, h) * (m.h >= 3 ? 0.42 : 0.6)).toFixed(2);
   const bcH = showBarcode ? h * 0.14 : 0;
-  // Vertical gap between content lines (org/code/device/sub/serial). The
-  // smaller inch templates (2×1") used to leave noticeable dead space below
-  // the last line at pad=2.0 — a bigger default gap here spreads the same
-  // content more evenly across the full label height instead of leaving it
-  // clumped in the center.
-  const lineGap = large ? 1.1 : 1.6;
+  // Vertical gap between content lines (org/code/device/sub/serial). 1.1mm
+  // is the physically-confirmed known-good default at pad=2.0 — a larger
+  // default (1.6mm) was tried for the smaller inch templates but physical
+  // print testing showed it overcrowds the 2×1" label and can re-trigger
+  // the browser's print shrink-to-fit at pure defaults, so it's back to
+  // 1.1mm across all sizes. Owner-configurable in Settings up to 1.5mm;
+  // clamped defensively even for a bad stored value.
+  const lineGap = clamp(o.lineGapMm ?? 1.1, 0, 1.5);
   // Push the whole text block down as one group, without touching the gap
   // between lines or the block's own height — a `transform`, not a layout
   // change, so it can't trigger the browser's print auto-shrink-to-fit (that

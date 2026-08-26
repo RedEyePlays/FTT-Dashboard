@@ -53,21 +53,23 @@ export const getLabelSizes = (): LabelSize[] => {
   catch { return mergeLabelSizes(); }
 };
 
-// Client-side cache of the owner's label content padding / push-down
-// overrides (AppSettings.labels.paddingMm / contentPushDownMm) — same
-// read-through pattern as getLabelSizes, so the label modals can apply them
-// without threading settings through every parent. Both undefined means
-// "use the built-in defaults" (see labelLayout.ts / shelfTag.ts).
-export interface LabelSpacing { paddingMm?: number; pushDownMm?: number }
-const LABEL_SPACING_KEY = 'ftt_label_spacing_v2';
+// Client-side cache of the owner's label content padding / line spacing /
+// push-down overrides (AppSettings.labels.paddingMm / lineSpacingMm /
+// contentPushDownMm) — same read-through pattern as getLabelSizes, so the
+// label modals can apply them without threading settings through every
+// parent. All undefined means "use the built-in defaults" (see
+// labelLayout.ts / shelfTag.ts).
+export interface LabelSpacing { paddingMm?: number; lineGapMm?: number; pushDownMm?: number }
+const LABEL_SPACING_KEY = 'ftt_label_spacing_v3';
 export const cacheLabelSpacing = (s: LabelSpacing) => {
-  try { localStorage.setItem(LABEL_SPACING_KEY, JSON.stringify({ paddingMm: s.paddingMm, pushDownMm: s.pushDownMm })); } catch {}
+  try { localStorage.setItem(LABEL_SPACING_KEY, JSON.stringify({ paddingMm: s.paddingMm, lineGapMm: s.lineGapMm, pushDownMm: s.pushDownMm })); } catch {}
 };
 export const getLabelSpacing = (): LabelSpacing => {
   try {
     const s = JSON.parse(localStorage.getItem(LABEL_SPACING_KEY) || '{}');
     return {
       paddingMm: typeof s.paddingMm === 'number' ? s.paddingMm : undefined,
+      lineGapMm: typeof s.lineGapMm === 'number' ? s.lineGapMm : undefined,
       pushDownMm: typeof s.pushDownMm === 'number' ? s.pushDownMm : undefined,
     };
   } catch { return {}; }
