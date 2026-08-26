@@ -9,6 +9,7 @@ import { formatPhoneInput } from '../domain/phone';
 import { printSettlementInvoice } from '../services/settlementInvoice';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 import { todayISO } from '../domain/dates';
+import { useSubmitGuard, useKeyedSubmitGuard } from '../hooks/useSubmitGuard';
 
 interface Props {
   runners: Runner[];
@@ -91,6 +92,12 @@ const EntriesTab: React.FC<{
 }> = ({ runners, dropOffs, onDropOffsChange, onAddToInventory }) => {
   const [showForm, setShowForm] = useState(false);
   const [filter, setFilter] = useState<DropOffStatus | 'all'>('all');
+  // Accept moves real cash (dropOffAcceptDrawerEffect, logged in App.tsx's
+  // saveDropOffs) and Add to Inventory creates a real inventory record —
+  // both are keyed per-row so a double-tap on one drop-off's button can't
+  // double-log the cash or double-create the item, without freezing every
+  // other row's buttons while one is in flight.
+  const { isPending: rowPending, run: runRow } = useKeyedSubmitGuard();
 
   useEscapeKey(() => setShowForm(false), showForm);
 
@@ -174,8 +181,10 @@ const EntriesTab: React.FC<{
             <div className="flex flex-wrap gap-2 mt-3 pt-3 border-t border-slate-100 dark:border-slate-800">
               {d.status === 'pending' && (
                 <>
-                  <button onClick={() => update(d.id, { status: 'accepted' })} className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300 hover:bg-indigo-100">
-                    <CheckCircle className="w-3.5 h-3.5" /> Accept
+                  <button onClick={() => runRow(`accept:${d.id}`, () => update(d.id, { status: 'accepted' }))}
+                    disabled={rowPending(`accept:${d.id}`)}
+                    className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300 hover:bg-indigo-100 disabled:opacity-40">
+                    <CheckCircle className="w-3.5 h-3.5" /> {rowPending(`accept:${d.id}`) ? 'Accepting…' : 'Accept'}
                   </button>
                   <button onClick={() => update(d.id, { status: 'rejected' })} className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium bg-rose-50 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300 hover:bg-rose-100">
                     <XCircle className="w-3.5 h-3.5" /> Reject / Return
@@ -183,8 +192,10 @@ const EntriesTab: React.FC<{
                 </>
               )}
               {d.status === 'accepted' && !d.inventoryId && (
-                <button onClick={() => onAddToInventory(d)} className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300 hover:bg-emerald-100">
-                  <ArrowRight className="w-3.5 h-3.5" /> Add to Inventory
+                <button onClick={() => runRow(`add:${d.id}`, () => onAddToInventory(d))}
+                  disabled={rowPending(`add:${d.id}`)}
+                  className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300 hover:bg-emerald-100 disabled:opacity-40">
+                  <ArrowRight className="w-3.5 h-3.5" /> {rowPending(`add:${d.id}`) ? 'Adding…' : 'Add to Inventory'}
                 </button>
               )}
               {d.inventoryId && (
@@ -361,6 +372,10 @@ const SettlementTab: React.FC<{
   const [runnerId, setRunnerId] = useState(runners[0]?.id || '');
   const [notes, setNotes] = useState('');
   const [paymentMethod, setPaymentMethod] = useState<SettlementPaymentMethod>('cash');
+  // A double-tap on "Mark as Settled" before `dropOffs` reflects the first
+  // settlement (async — the live subscription hasn't refreshed yet) would
+  // otherwise settle — and pay — the same runner twice for the same batch.
+  const { isSubmitting, run } = useSubmitGuard();
 
   // Settle everything accepted/paid-out & not yet settled/rejected for this runner
   const pending = settleableDropOffs(runnerId, dropOffs);
@@ -368,20 +383,22 @@ const SettlementTab: React.FC<{
 
   const settle = () => {
     if (pending.length === 0) return;
-    const settlement: Settlement = {
-      id: uid(), runnerId, date: today(),
-      dropOffIds: pending.map(d => d.id),
-      totalPurchaseFronted: cashFronted, totalFees, amountPaid: amountToPay, paymentMethod, notes,
-    };
-    // onSettle (App.tsx's handleSettleRunner → services/firestoreDb.ts's
-    // settleRunner) saves the settlement AND flags every drop-off in
-    // dropOffIds 'settled' in one atomic batch — a separate onDropOffsChange
-    // call here would be a second, untracked write racing the same status
-    // transition, exactly the gap that let a runner's drop-offs stay eligible
-    // for a second settlement. The live subscription refreshes `dropOffs` once
-    // the batch commits, same as every other write in this app.
-    onSettle(settlement);
-    setNotes('');
+    run(() => {
+      const settlement: Settlement = {
+        id: uid(), runnerId, date: today(),
+        dropOffIds: pending.map(d => d.id),
+        totalPurchaseFronted: cashFronted, totalFees, amountPaid: amountToPay, paymentMethod, notes,
+      };
+      // onSettle (App.tsx's handleSettleRunner → services/firestoreDb.ts's
+      // settleRunner) saves the settlement AND flags every drop-off in
+      // dropOffIds 'settled' in one atomic batch — a separate onDropOffsChange
+      // call here would be a second, untracked write racing the same status
+      // transition, exactly the gap that let a runner's drop-offs stay eligible
+      // for a second settlement. The live subscription refreshes `dropOffs` once
+      // the batch commits, same as every other write in this app.
+      onSettle(settlement);
+      setNotes('');
+    });
   };
 
   const runnerName = (id: string) => runners.find(r => r.id === id)?.name || 'Unknown';
@@ -449,9 +466,9 @@ const SettlementTab: React.FC<{
         <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={2} placeholder="Settlement notes…"
           className="w-full p-2 bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-md text-sm" />
 
-        <button onClick={settle} disabled={pending.length === 0}
+        <button onClick={settle} disabled={pending.length === 0 || isSubmitting}
           className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white rounded-lg text-sm font-semibold flex items-center justify-center gap-2">
-          <CheckCircle className="w-4 h-4" /> Mark as Settled
+          <CheckCircle className="w-4 h-4" /> {isSubmitting ? 'Settling…' : 'Mark as Settled'}
         </button>
       </div>
 
