@@ -95,12 +95,17 @@ export interface AppSettings {
     // fall back sensibly); Dymo labels keep their own separately-tuned constants.
     paddingMm?: number;
     // Shifts the whole text block (org/code/device/sub/serial) down as one
-    // group via a paint-only transform — it does NOT touch the gap between
-    // individual lines or the block's total height, so unlike the old
-    // per-line "line spacing" knob it can't trigger the browser's print
-    // auto-shrink-to-fit (that only reacts to layout/flow size, and a
-    // transform never changes layout size). Overshooting the safe range just
-    // visually clips the last line instead of shrinking the whole label.
+    // group — it does NOT touch the gap between individual lines or the
+    // block's total height, so unlike the old per-line "line spacing" knob
+    // it can't trigger the browser's print auto-shrink-to-fit. Implemented
+    // in labelBody as a margin-box trick (margin-top:N / margin-bottom:-N,
+    // which cancel out for layout-sizing purposes) rather than a CSS
+    // `transform` — physical print testing showed a transform produces zero
+    // visible effect on the real ZP 450 output, since label-printer drivers
+    // commonly flatten HTML through a simplified box-model-only renderer
+    // that doesn't implement compositing transforms. Overshooting the safe
+    // range just visually clips the last line instead of shrinking the
+    // whole label.
     contentPushDownMm?: number;
     // Gap between content lines (org/code/device/sub/serial) on the non-Dymo
     // templates. Physically-confirmed known-good default is 1.1mm (undefined
