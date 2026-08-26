@@ -10,11 +10,27 @@ import { kindOf } from './inventory';
 
 const round2 = (n: number): number => Math.round((n || 0) * 100) / 100;
 
-// The money actually collected on a sale so far: a layaway only took its
-// deposit, everything else took the full total. A reversed sale nets to zero.
+// The cash-relevant amount collected ON THIS TRANSACTION'S OWN DATE — for
+// daily till reconciliation, deliberately NOT "however much has been
+// collected on this sale overall" (that's domain/pos.ts's collectedOnSale,
+// used for void/return refund caps instead).
+//
+// Keyed off whether `deposit` was EVER set, not whether `balanceOwing` is
+// CURRENTLY > 0. Those two only ever coincided before a layaway had a
+// completion flow (domain/layaway.ts) — a sale's `balanceOwing` was fixed
+// forever once written. Now it can be paid down or cleared on a LATER date
+// via a balance payment, while `deposit` stays frozen at whatever was
+// collected at the original checkout (see applyBalancePayment's doc
+// comment). If this used `balanceOwing > 0` instead, a layaway that gets
+// paid off next month would suddenly report its FULL total as cash
+// collected on the ORIGINAL sale date the next time this recomputes —
+// silently inflating an already-reconciled day, months after the fact. A
+// balance payment's own cash effect is posted separately, against the day
+// it's actually taken (App.tsx's handleCollectBalance, same pattern as
+// void/return's refund entries) — never folded back in here.
 const collectedOnTx = (t: SalesTransaction): number => {
   if (isReversed(t)) return 0;
-  return (t.balanceOwing || 0) > 0 ? (t.deposit || 0) : (t.totalPaid || 0);
+  return t.deposit !== undefined ? (t.deposit || 0) : (t.totalPaid || 0);
 };
 
 // --- Part 1: daily cash reconciliation ------------------------------------
@@ -276,7 +292,10 @@ export const taxReportCsvRows = (report: TaxReport): Record<string, string | num
 // A sale counts toward revenue/COGS only when it's recognized — not reversed
 // (voided/returned) and not a layaway with a balance still owing. Mirrors the
 // txns filter in domain/analytics.ts so the P&L reconciles with Owner Analytics.
-const isRecognizedSale = (t: SalesTransaction): boolean => !isReversed(t) && !((t.balanceOwing || 0) > 0);
+// Exported so components/Dashboard.tsx and domain/customers.ts can apply the
+// exact same recognition rule instead of each re-deriving it (Dashboard's own
+// revenue tiles didn't, which was the layaway-misreporting bug).
+export const isRecognizedSale = (t: SalesTransaction): boolean => !isReversed(t) && !((t.balanceOwing || 0) > 0);
 const inDateRange = (dateISO: string | undefined, lo: string, hi: string): boolean => !!dateISO && dateISO >= lo && dateISO <= hi;
 const order = (start: string, end: string): [string, string] => (start <= end ? [start, end] : [end, start]);
 

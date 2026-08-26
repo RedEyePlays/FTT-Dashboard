@@ -220,6 +220,29 @@ describe('collectedOnSale / cashCollectedOnSale (void + return refund base)', ()
   it('an e-transfer layaway deposit also never affects the cash drawer', () => {
     expect(cashCollectedOnSale({ ...base, paymentMethod: 'etransfer', deposit: 150, balanceOwing: 350 })).toBe(0);
   });
+
+  it('collectedOnSale adds partial balance payments on top of the frozen original deposit while still open', () => {
+    const t = { ...base, deposit: 150, balanceOwing: 200, balancePayments: [{ id: 'p1', amount: 150, paymentMethod: 'cash' as const, date: '2026-01-02', at: 1 }] };
+    expect(collectedOnSale(t)).toBe(300); // 150 deposit + 150 balance payment, still $200 short of $500
+  });
+
+  it('collectedOnSale is the full total once balanceOwing has cleared — no need to sum payments after payoff', () => {
+    const t = { ...base, deposit: 150, balanceOwing: undefined, balancePayments: [{ id: 'p1', amount: 350, paymentMethod: 'cash' as const, date: '2026-01-02', at: 1 }] };
+    expect(collectedOnSale(t)).toBe(500);
+  });
+
+  it("cashCollectedOnSale sums each balance payment's OWN cash portion, independent of the original sale's method", () => {
+    // Original sale was card (0 cash), but the customer later paid the balance in cash.
+    const t = { ...base, paymentMethod: 'card' as const, deposit: 150, balanceOwing: 200,
+      balancePayments: [{ id: 'p1', amount: 150, paymentMethod: 'cash' as const, date: '2026-01-02', at: 1 }] };
+    expect(cashCollectedOnSale(t)).toBe(150);
+  });
+
+  it('cashCollectedOnSale mixes cash from the original checkout AND a later mixed balance payment', () => {
+    const t = { ...base, paymentMethod: 'mixed' as const, cashAmount: 50, deposit: 150, balanceOwing: 200,
+      balancePayments: [{ id: 'p1', amount: 150, paymentMethod: 'mixed' as const, cashAmount: 30, date: '2026-01-02', at: 1 }] };
+    expect(cashCollectedOnSale(t)).toBe(80); // 50 (checkout) + 30 (balance payment's cash slice)
+  });
 });
 
 describe('taxAppliesForSale', () => {

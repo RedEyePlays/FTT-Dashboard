@@ -209,26 +209,58 @@ export function mixedPaymentMismatch(
 
 /**
  * The amount actually collected on a sale so far — the most a refund can ever
- * hand back. A layaway only ever took its deposit; a fully-paid sale took the
- * whole total.
+ * hand back. A fully-paid sale (never a layaway, or a layaway since paid off)
+ * took the whole total; an open layaway took its original deposit PLUS
+ * whatever balance payments have landed since (domain/layaway.ts's
+ * applyBalancePayment — `deposit` itself stays frozen at the original
+ * checkout amount, so those payments have to be added back in here or a
+ * cancellation after a partial balance payment would under-refund).
  */
-export const collectedOnSale = (tx: Pick<SalesTransaction, 'totalPaid' | 'deposit' | 'balanceOwing'>): number =>
-  isLayaway(tx) ? (tx.deposit || 0) : (tx.totalPaid || 0);
+export const collectedOnSale = (tx: Pick<SalesTransaction, 'totalPaid' | 'deposit' | 'balanceOwing' | 'balancePayments'>): number => {
+  if (!isLayaway(tx)) return tx.totalPaid || 0;
+  const paymentsSoFar = (tx.balancePayments || []).reduce((s, p) => s + (p.amount || 0), 0);
+  return Math.round(((tx.deposit || 0) + paymentsSoFar) * 100) / 100;
+};
 
 /**
- * The CASH portion of what was actually collected: a cash sale → the whole
- * collected amount; a mixed sale → its recorded cash portion; card/e-transfer
- * → nothing (no cash ever entered the till, so none should leave it on a
- * refund).
+ * The CASH portion of what was actually collected at ORIGINAL checkout: a
+ * cash sale → the whole collected amount; a mixed sale → its recorded cash
+ * portion; card/e-transfer → nothing. Each later balance payment can have
+ * its own independent payment method, so its cash portion is added
+ * separately below rather than assumed to follow the original sale's method.
  */
-export const cashCollectedOnSale = (
+const cashCollectedAtCheckout = (
   tx: Pick<SalesTransaction, 'totalPaid' | 'deposit' | 'balanceOwing' | 'paymentMethod' | 'cashAmount'>,
 ): number => {
-  const collected = collectedOnSale(tx);
+  const collected = isLayaway(tx) ? (tx.deposit || 0) : (tx.totalPaid || 0);
   if (collected <= 0) return 0;
   if (tx.paymentMethod === 'cash') return Math.round(collected * 100) / 100;
   if (tx.paymentMethod === 'mixed') return Math.round(Math.max(0, tx.cashAmount || 0) * 100) / 100;
   return 0; // card / etransfer / unset
+};
+
+/** The cash portion of one balance payment — same contract as above, applied
+ * to that payment's own method rather than the original sale's. */
+const cashPortionOfBalancePayment = (p: { paymentMethod: string; amount: number; cashAmount?: number }): number => {
+  if (p.paymentMethod === 'cash') return Math.round((p.amount || 0) * 100) / 100;
+  if (p.paymentMethod === 'mixed') return Math.round(Math.max(0, p.cashAmount || 0) * 100) / 100;
+  return 0;
+};
+
+/**
+ * The total CASH portion of everything collected on a sale so far — the most
+ * cash a refund can ever hand back. Sums the original checkout's cash portion
+ * with every balance payment's own cash portion (each may have used a
+ * different method), so cancelling a layaway after a partial cash balance
+ * payment refunds that cash too, not just the original deposit's.
+ */
+export const cashCollectedOnSale = (
+  tx: Pick<SalesTransaction, 'totalPaid' | 'deposit' | 'balanceOwing' | 'paymentMethod' | 'cashAmount' | 'balancePayments'>,
+): number => {
+  const atCheckout = cashCollectedAtCheckout(tx);
+  if (!isLayaway(tx)) return atCheckout;
+  const fromPayments = (tx.balancePayments || []).reduce((s, p) => s + cashPortionOfBalancePayment(p), 0);
+  return Math.round((atCheckout + fromPayments) * 100) / 100;
 };
 
 /**

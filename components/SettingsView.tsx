@@ -406,6 +406,10 @@ const OperationsSection: React.FC<{ draft: AppSettings; patch: PatchFn }> = ({ d
         hint="An unsold device older than this triggers the aging-inventory notification."
         value={draft.operations.agingInventoryDays}
         onChange={v => patch('operations', { agingInventoryDays: Math.max(1, Math.round(parseFloat(v) || 1)) })} />
+      <SettingsTextField label="Stale layaway alert (days)" type="number" min={1} max={365} step={1}
+        hint="An open layaway older than this is flagged on the Layaways list as needing follow-up."
+        value={draft.operations.staleLayawayDays}
+        onChange={v => patch('operations', { staleLayawayDays: Math.max(1, Math.round(parseFloat(v) || 1)) })} />
     </SettingsCard>
   </SettingsSection>
 );

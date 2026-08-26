@@ -162,6 +162,18 @@ describe('decideAutoInventory', () => {
     expect(decideAutoInventory({ private: true }, true, dashed, [existing])).toEqual({ action: 'attach', match: existing, normalized: VALID_IMEI });
   });
 
+  // A device already reserved for (or sold to) a customer must never be
+  // silently repurposed by an unrelated repair ticket sharing its IMEI.
+  it('refuses to attach to a reserved device — blockedClaimed, not attach', () => {
+    const existing = dev({ id: 'r1', imeiNormalized: VALID_IMEI, deviceStatus: 'reserved' });
+    expect(decideAutoInventory({ private: true }, true, VALID_IMEI, [existing])).toEqual({ action: 'blockedClaimed', match: existing, normalized: VALID_IMEI });
+  });
+
+  it('refuses to attach to an already-sold device — blockedClaimed, not attach', () => {
+    const existing = dev({ id: 's1', imeiNormalized: VALID_IMEI, deviceStatus: 'sold' });
+    expect(decideAutoInventory({ private: true }, true, VALID_IMEI, [existing])).toEqual({ action: 'blockedClaimed', match: existing, normalized: VALID_IMEI });
+  });
+
   // Toggle off means NO inventory side effects at all, even with a device that
   // has a perfectly valid IMEI that would otherwise create a new record.
   it('toggle off produces zero inventory side effects even for a device with a valid IMEI', () => {

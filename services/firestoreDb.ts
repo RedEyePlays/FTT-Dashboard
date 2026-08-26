@@ -4,7 +4,7 @@ import {
 import { db } from './firebase';
 import {
   InventoryItem, Runner, DropOff, Settlement, Customer, SalesTransaction, ActivityEntry, Note, Task,
-  AppUser, WorkspaceInvite, AuditEntry, TimeEntry, PayPeriodPaid, CashReconciliation, StaffNote, ListingPlatform,
+  AppUser, WorkspaceInvite, AuditEntry, TimeEntry, PayPeriodPaid, CashReconciliation, StaffNote, ListingPlatform, Repair,
 } from '../types';
 import { collectionFor } from '../domain/inventory';
 import { AppSettings } from '../domain/settings';
@@ -152,6 +152,28 @@ export async function commitSale(uid: string, payload: {
   payload.accessoryUpdates.forEach(a => batch.set(docRef(uid, 'accessories', a.id), { quantity: increment(a.delta) }, { merge: true } as any));
   batch.set(docRef(uid, 'salesTransactions', payload.transaction.id), clean(payload.transaction));
   if (payload.customer) batch.set(docRef(uid, 'customers', payload.customer.id), clean(payload.customer), { merge: true } as any);
+  payload.activity.forEach(a => batch.set(docRef(uid, 'activityLog', a.id), clean(a)));
+  await batch.commit();
+}
+
+// Collect a payment against a layaway's remaining balance — one atomic commit
+// for everything that changes together: the updated transaction (balance
+// reduced or cleared, see domain/layaway.ts's applyBalancePayment), the
+// reserved device(s) if the balance just cleared (deviceStatus: 'sold' with a
+// real soldDate — never touched on a partial payment, which keeps them
+// reserved), and the linked repair completing/warrantying if this sale was a
+// repair checkout that had been deferred pending the layaway (see App.tsx's
+// handleSellCart, which skips repair completion specifically when isLayaway).
+export async function collectLayawayBalance(uid: string, payload: {
+  transaction: SalesTransaction;
+  devices?: InventoryItem[];
+  repair?: Repair;
+  activity: ActivityEntry[];
+}) {
+  const batch = writeBatch(db);
+  batch.set(docRef(uid, 'salesTransactions', payload.transaction.id), clean(payload.transaction));
+  (payload.devices || []).forEach(d => batch.set(docRef(uid, 'inventory', d.id), clean(d)));
+  if (payload.repair) batch.set(docRef(uid, 'repairs', payload.repair.id), clean(payload.repair));
   payload.activity.forEach(a => batch.set(docRef(uid, 'activityLog', a.id), clean(a)));
   await batch.commit();
 }

@@ -6,12 +6,14 @@ import {
 } from 'lucide-react';
 import { Customer, SalesTransaction, Repair, RepairBatch, InventoryItem, AuditEntry, Note, Role } from '../types';
 import { LinkedNotes } from './LinkedNotes';
+import { CollectBalanceModal } from './CollectBalanceModal';
 import {
   customerStats, customerTimeline, customerDevices, customerSearchMatch,
   passesFilter, sortCustomers, findDuplicateGroups, planMerge,
   CustomerSort, CustomerFilter, CustomerData, CustomerStats, MergePlan,
 } from '../domain/customers';
 import { REPAIR_STATUS_CELL, REPAIR_STATUS_LABEL, partName } from '../domain/repairs';
+import { isReversed, collectedOnSale } from '../domain/pos';
 import { statusPageUrl } from '../domain/statusLink';
 import { formatPhoneInput } from '../domain/phone';
 import { PRINT_PREVIEW_BAR_STYLE, PRINT_PREVIEW_BAR_HTML } from '../services/printPreview';
@@ -42,6 +44,10 @@ interface Props {
   canVoidSale?: (tx: SalesTransaction) => boolean;     // within-window + permission check
   onReturnSale?: (tx: SalesTransaction, opts: { restockingFee?: number; disposition: 'resell' | 'defective' }) => void; // owner/manager: process a return
   canReturnSale?: (tx: SalesTransaction) => boolean;   // after-void-window + permission check
+  // Collect a payment against an open layaway's balance (item 1 of the
+  // layaway-completion batch). Omitted hides the action for anyone who can't
+  // complete sales.
+  onCollectBalance?: (tx: SalesTransaction, input: { amount: number; paymentMethod: 'cash' | 'card' | 'mixed' | 'etransfer'; cashAmount?: number; cardAmount?: number; etransferAmount?: number; date: string }) => Promise<SalesTransaction>;
   defaultRestockingFeePercent?: number;                // pre-filled restocking fee % when processing a return
   notes?: Note[];                                      // workspace notes, for the linked-notes panel
   noteRole?: Role;                                     // viewer's role, gates which linked notes show
@@ -209,7 +215,7 @@ export const CustomersView: React.FC<Props> = (props) => {
 
 /* ---------------- Profile ---------------- */
 const CustomerProfile: React.FC<Props & { customer: Customer; data: CustomerData; onBack: () => void }> = (
-  { customer, data, canViewProfit, canEdit, auditLogs, inventory, onBack, onSaveCustomer, onStartSale, onCreateRepair, onVoidSale, canVoidSale, onReturnSale, canReturnSale, defaultRestockingFeePercent, notes, noteRole, onOpenNote },
+  { customer, data, canViewProfit, canEdit, auditLogs, inventory, onBack, onSaveCustomer, onStartSale, onCreateRepair, onVoidSale, canVoidSale, onReturnSale, canReturnSale, onCollectBalance, defaultRestockingFeePercent, notes, noteRole, onOpenNote },
 ) => {
   const s = useMemo(() => customerStats(customer, data), [customer, data]);
   const timeline = useMemo(() => customerTimeline(s), [s]);
@@ -217,6 +223,11 @@ const CustomerProfile: React.FC<Props & { customer: Customer; data: CustomerData
   const [tab, setTab] = useState<'overview' | 'purchases' | 'repairs' | 'devices' | 'activity'>('overview');
   const [editing, setEditing] = useState(false);
   const [invoice, setInvoice] = useState<SalesTransaction | null>(null);
+  const [collectingBalance, setCollectingBalance] = useState<SalesTransaction | null>(null);
+  // Open layaways refresh live from `data` (the same source `s` is built
+  // from), so once fully paid off this list naturally empties without a
+  // separate "refresh" step.
+  const openLayawaySales = useMemo(() => s.purchases.filter(t => !isReversed(t) && (t.balanceOwing || 0) > 0.005), [s.purchases]);
   const [ticket, setTicket] = useState<Repair | null>(null);
   const [copied, setCopied] = useState(false);
   const mask = (v: string) => (canViewProfit ? v : '•••');
@@ -298,8 +309,20 @@ const CustomerProfile: React.FC<Props & { customer: Customer; data: CustomerData
         <Stat label="Last Repair" value={fmtDate(s.lastRepair)} />
       </div>
       {s.outstandingBalance > 0.005 && (
-        <div className="flex items-center gap-2 text-sm bg-rose-50 dark:bg-rose-500/10 border border-rose-200 dark:border-rose-500/30 rounded-lg px-3 py-2 text-rose-700 dark:text-rose-300">
+        <div className="flex items-center gap-2 text-sm bg-rose-50 dark:bg-rose-500/10 border border-rose-200 dark:border-rose-500/30 rounded-lg px-3 py-2 text-rose-700 dark:text-rose-300 flex-wrap">
           <DollarSign className="w-4 h-4" /> Outstanding balance: <span className="font-semibold">{money(s.outstandingBalance)}</span>
+          {onCollectBalance && openLayawaySales.length === 1 && (
+            <button onClick={() => setCollectingBalance(openLayawaySales[0])}
+              className="ml-auto flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-white dark:bg-slate-900 border border-rose-300 dark:border-rose-700 text-rose-700 dark:text-rose-300 hover:bg-rose-100 dark:hover:bg-rose-900/30">
+              Collect Balance
+            </button>
+          )}
+          {onCollectBalance && openLayawaySales.length > 1 && (
+            <button onClick={() => setTab('purchases')}
+              className="ml-auto flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-white dark:bg-slate-900 border border-rose-300 dark:border-rose-700 text-rose-700 dark:text-rose-300 hover:bg-rose-100 dark:hover:bg-rose-900/30">
+              {openLayawaySales.length} open layaways — view
+            </button>
+          )}
         </div>
       )}
 
@@ -340,19 +363,32 @@ const CustomerProfile: React.FC<Props & { customer: Customer; data: CustomerData
         <Panel title={`Purchase History (${s.purchaseCount})`}>
           {s.purchases.length === 0 ? <Empty text="No purchases yet." /> : (
             <div className="overflow-x-auto"><table className="w-full text-sm">
-              <thead className="text-[10px] uppercase tracking-wider text-slate-400"><tr><th className="text-left py-2">Invoice #</th><th className="text-left py-2">Date</th><th className="text-left py-2">Items</th><th className="text-left py-2">Payment</th><th className="text-left py-2">Warranty</th><th className="text-right py-2">Total</th><th></th></tr></thead>
+              <thead className="text-[10px] uppercase tracking-wider text-slate-400"><tr><th className="text-left py-2">Invoice #</th><th className="text-left py-2">Date</th><th className="text-left py-2">Items</th><th className="text-left py-2">Payment</th><th className="text-left py-2">Warranty</th><th className="text-right py-2">Total</th><th className="text-right py-2">Balance</th><th></th></tr></thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                {s.purchases.map(t => (
+                {s.purchases.map(t => {
+                  const owing = !isReversed(t) && (t.balanceOwing || 0) > 0.005;
+                  return (
                   <tr key={t.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40 cursor-pointer" onClick={() => setInvoice(t)}>
-                    <td className="py-2 font-mono text-xs text-slate-500">{t.id.slice(0, 8)}{t.status === 'voided' && <span className="ml-1 text-[9px] font-sans font-semibold px-1 py-0.5 rounded bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300 align-middle">VOID</span>}{t.status === 'returned' && <span className="ml-1 text-[9px] font-sans font-semibold px-1 py-0.5 rounded bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300 align-middle">RETURNED</span>}</td>
+                    <td className="py-2 font-mono text-xs text-slate-500">{t.id.slice(0, 8)}{t.status === 'voided' && <span className="ml-1 text-[9px] font-sans font-semibold px-1 py-0.5 rounded bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300 align-middle">VOID</span>}{t.status === 'returned' && <span className="ml-1 text-[9px] font-sans font-semibold px-1 py-0.5 rounded bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300 align-middle">RETURNED</span>}{owing && <span className="ml-1 text-[9px] font-sans font-semibold px-1 py-0.5 rounded bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300 align-middle">LAYAWAY</span>}</td>
                     <td className={`py-2 text-slate-600 dark:text-slate-300 ${t.status === 'voided' || t.status === 'returned' ? 'line-through opacity-60' : ''}`}>{t.date}</td>
                     <td className="py-2 text-slate-500 dark:text-slate-400 truncate max-w-[220px]">{t.lines.map(l => `${l.quantity}× ${l.name}`).join(', ')}</td>
                     <td className="py-2 text-slate-500 dark:text-slate-400">{PAYMENT_LABEL[t.paymentMethod || ''] || '—'}</td>
                     <td className="py-2">{warrantyBadge(t, s, inventory)}</td>
                     <td className="py-2 text-right font-medium text-slate-800 dark:text-slate-100">{money(t.totalPaid)}</td>
+                    <td className="py-2 text-right">
+                      {owing ? (
+                        onCollectBalance ? (
+                          <button onClick={e => { e.stopPropagation(); setCollectingBalance(t); }}
+                            className="text-xs font-semibold px-2 py-1 rounded-lg bg-sky-50 dark:bg-sky-900/20 text-sky-700 dark:text-sky-300 border border-sky-200 dark:border-sky-800 hover:bg-sky-100 dark:hover:bg-sky-900/30">
+                            {money(t.balanceOwing || 0)} — Collect
+                          </button>
+                        ) : <span className="font-semibold text-sky-600 dark:text-sky-400">{money(t.balanceOwing || 0)}</span>
+                      ) : <span className="text-slate-300 dark:text-slate-600">—</span>}
+                    </td>
                     <td className="py-2 text-right"><ChevronRight className="w-4 h-4 text-slate-300 inline" /></td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table></div>
           )}
@@ -435,8 +471,13 @@ const CustomerProfile: React.FC<Props & { customer: Customer; data: CustomerData
       {invoice && <InvoiceModal tx={invoice} customer={customer} canViewProfit={canViewProfit} onClose={() => setInvoice(null)}
         onVoid={onVoidSale && canVoidSale && canVoidSale(invoice) ? () => { onVoidSale(invoice); setInvoice(null); } : undefined}
         onReturn={onReturnSale && canReturnSale && canReturnSale(invoice) ? (opts) => { onReturnSale(invoice, opts); setInvoice(null); } : undefined}
+        onCollectBalance={onCollectBalance && !isReversed(invoice) && (invoice.balanceOwing || 0) > 0.005 ? () => { setCollectingBalance(invoice); setInvoice(null); } : undefined}
         defaultRestockingFeePercent={defaultRestockingFeePercent} />}
       {ticket && <TicketModal repair={ticket} tech={techFor.get(ticket.id)} customer={customer} onClose={() => setTicket(null)} />}
+      {collectingBalance && onCollectBalance && (
+        <CollectBalanceModal tx={collectingBalance} onClose={() => setCollectingBalance(null)}
+          onConfirm={input => onCollectBalance(collectingBalance, input)} />
+      )}
     </div>
   );
 };
@@ -464,7 +505,13 @@ const Row: React.FC<{ label: string; value: string }> = ({ label, value }) => (
 const Empty: React.FC<{ text: string }> = ({ text }) => <p className="text-sm text-slate-400 py-6 text-center">{text}</p>;
 
 /* ---------------- Invoice modal ---------------- */
-const InvoiceModal: React.FC<{ tx: SalesTransaction; customer: Customer; canViewProfit: boolean; onClose: () => void; onVoid?: () => void; onReturn?: (opts: { restockingFee?: number; disposition: ReturnDisposition }) => void; defaultRestockingFeePercent?: number }> = ({ tx, customer, canViewProfit, onClose, onVoid, onReturn, defaultRestockingFeePercent }) => (
+const InvoiceModal: React.FC<{ tx: SalesTransaction; customer: Customer; canViewProfit: boolean; onClose: () => void; onVoid?: () => void; onReturn?: (opts: { restockingFee?: number; disposition: ReturnDisposition }) => void; onCollectBalance?: () => void; defaultRestockingFeePercent?: number }> = ({ tx, customer, canViewProfit, onClose, onVoid, onReturn, onCollectBalance, defaultRestockingFeePercent }) => {
+  // Still an OPEN layaway (not one that later got paid off) — that's the
+  // case where voiding/returning must be clearly labeled as a layaway
+  // cancellation and must refund only what was actually collected so far,
+  // never the full sale price (see domain/pos.ts's collectedOnSale).
+  const isLayawayTx = (tx.balanceOwing || 0) > 0.005;
+  return (
   <Modal title={`Invoice ${tx.id.slice(0, 8)}`} onClose={onClose} onPrint={() => printInvoice(tx, customer)}>
     <div className="space-y-2 text-sm">
       {tx.status === 'voided' && (
@@ -494,43 +541,62 @@ const InvoiceModal: React.FC<{ tx: SalesTransaction; customer: Customer; canView
       <Row label="Subtotal" value={money(tx.subtotal)} />
       {tx.tax ? <Row label="Tax" value={money(tx.tax)} /> : null}
       <div className="flex items-center justify-between py-1 text-base font-bold"><span>Total</span><span>{money(tx.totalPaid)}</span></div>
+      {(tx.balanceOwing || 0) > 0.005 && (
+        <>
+          <Row label="Deposit paid" value={money(tx.deposit || 0)} />
+          <div className="flex items-center justify-between py-1 text-sm font-bold text-sky-600 dark:text-sky-400"><span>Balance owing</span><span>{money(tx.balanceOwing || 0)}</span></div>
+        </>
+      )}
       {canViewProfit && <Row label="Profit" value={money(tx.netProfit)} />}
       <button onClick={() => printSalesReceipt(tx, { storeName: getStoreProfile().storeName })}
         className="w-full mt-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700">
         <Printer className="w-4 h-4" /> Print Receipt
       </button>
+      {onCollectBalance && (
+        <button onClick={onCollectBalance}
+          className="w-full flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-semibold bg-sky-50 dark:bg-sky-900/20 text-sky-700 dark:text-sky-300 border border-sky-200 dark:border-sky-800 hover:bg-sky-100 dark:hover:bg-sky-900/30">
+          Collect Balance
+        </button>
+      )}
       {onVoid && (
         <div className="pt-2 mt-1 border-t border-slate-100 dark:border-slate-800">
           <button
-            onClick={() => { if (window.confirm('Void this sale? Sold devices return to stock, accessory quantities are restored, and the sale is flagged voided (kept for history).')) onVoid(); }}
+            onClick={() => { if (window.confirm(isLayawayTx ? `Cancel this layaway? The reserved device(s) return to sellable stock and the ${money(collectedOnSale(tx))} deposit already collected is refunded — never the full ${money(tx.totalPaid)} sale price, since the rest was never paid. Kept for history, labeled as a layaway cancellation.` : 'Void this sale? Sold devices return to stock, accessory quantities are restored, and the sale is flagged voided (kept for history).')) onVoid(); }}
             className="w-full flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium bg-rose-50 dark:bg-rose-900/20 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-900/40 hover:bg-rose-100 dark:hover:bg-rose-900/30">
-            <Ban className="w-4 h-4" /> Void Sale
+            <Ban className="w-4 h-4" /> {isLayawayTx ? 'Cancel Layaway' : 'Void Sale'}
           </button>
         </div>
       )}
-      {onReturn && <ReturnSection total={tx.totalPaid} onReturn={onReturn} defaultFeePercent={defaultRestockingFeePercent} />}
+      {onReturn && <ReturnSection total={collectedOnSale(tx)} isLayaway={isLayawayTx} fullTotal={tx.totalPaid} onReturn={onReturn} defaultFeePercent={defaultRestockingFeePercent} />}
     </div>
   </Modal>
-);
+  );
+};
 
 /* ---------------- Return processing ---------------- */
 // Restocking fee (optional) + device disposition, then confirm. Refund is the
 // sale total minus the fee; the fee is clamped so the refund never goes negative.
-const ReturnSection: React.FC<{ total: number; onReturn: (opts: { restockingFee?: number; disposition: ReturnDisposition }) => void; defaultFeePercent?: number }> = ({ total, onReturn, defaultFeePercent }) => {
+const ReturnSection: React.FC<{ total: number; isLayaway?: boolean; fullTotal?: number; onReturn: (opts: { restockingFee?: number; disposition: ReturnDisposition }) => void; defaultFeePercent?: number }> = ({ total, isLayaway, fullTotal, onReturn, defaultFeePercent }) => {
   // Pre-fill the configured default restocking fee (a % of the sale total), still
-  // fully editable per return.
+  // fully editable per return. `total` is what was actually COLLECTED (the
+  // deposit + any balance payments for an open layaway, domain/pos.ts's
+  // collectedOnSale) — never the full sale price, which would refund money
+  // that was never paid in.
   const prefill = defaultFeePercent && defaultFeePercent > 0 ? (Math.round(total * defaultFeePercent) / 100).toFixed(2) : '';
   const [fee, setFee] = useState(prefill);
   const [disposition, setDisposition] = useState<ReturnDisposition>('resell');
   const feeNum = Math.min(Math.max(parseFloat(fee) || 0, 0), Math.max(0, total));
   const refund = Math.max(0, Math.round((total - feeNum) * 100) / 100);
   const submit = () => {
-    if (!window.confirm(`Process this return? Refund ${money(refund)}${feeNum > 0 ? ` (after a ${money(feeNum)} restocking fee)` : ''}. ${disposition === 'resell' ? 'Device(s) return to sellable stock' : 'Device(s) are marked not-for-resale'}; accessory stock is restored. The sale is flagged returned (kept for history).`)) return;
+    const msg = isLayaway
+      ? `Cancel this layaway? Refund ${money(refund)}${feeNum > 0 ? ` (after a ${money(feeNum)} restocking fee)` : ''} — the deposit collected so far, never the full ${money(fullTotal || total)} sale price. ${disposition === 'resell' ? 'The reserved device returns to sellable stock' : 'The device is marked not-for-resale'}; accessory stock is restored. Labeled as a layaway cancellation, kept for history.`
+      : `Process this return? Refund ${money(refund)}${feeNum > 0 ? ` (after a ${money(feeNum)} restocking fee)` : ''}. ${disposition === 'resell' ? 'Device(s) return to sellable stock' : 'Device(s) are marked not-for-resale'}; accessory stock is restored. The sale is flagged returned (kept for history).`;
+    if (!window.confirm(msg)) return;
     onReturn({ restockingFee: feeNum > 0 ? feeNum : undefined, disposition });
   };
   return (
     <div className="pt-3 mt-1 border-t border-slate-100 dark:border-slate-800 space-y-2">
-      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Process Return</p>
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">{isLayaway ? 'Cancel Layaway (deposit-only refund)' : 'Process Return'}</p>
       <label className="flex items-center justify-between gap-3 text-sm text-slate-600 dark:text-slate-300">
         <span>Restocking fee (optional)</span>
         <span className="flex items-center gap-1">$<input type="number" min="0" step="0.01" value={fee} onChange={e => setFee(e.target.value)} onFocus={selectOnFocus} placeholder="0.00"

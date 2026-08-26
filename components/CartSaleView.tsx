@@ -1,8 +1,8 @@
-import React, { lazy, Suspense } from 'react';
+import React, { lazy, Suspense, useState } from 'react';
 import {
   ShoppingCart, Trash2, X, Search, User, Phone, FileText, Mail,
   Banknote, CreditCard, Blend, Send, CheckCircle, Package, Smartphone, ScanLine, History,
-  Printer, Eye, RotateCcw, QrCode, Sparkles, AlertTriangle, Wrench,
+  Printer, Eye, RotateCcw, QrCode, Sparkles, AlertTriangle, Wrench, HandCoins,
 } from 'lucide-react';
 import { InventoryItem, Customer, DeviceType, Repair } from '../types';
 import { RepairSalePrefill } from '../domain/repairs';
@@ -43,6 +43,11 @@ interface Props {
 export const CartSaleView: React.FC<Props> = (props) => {
   const cx = useCheckout(props);
   const canViewProfit = props.canViewProfit ?? true;
+  // Off by default: a normal full-payment checkout should never see a deposit
+  // field at all. Only Quick Sale gets this toggle (item 8 of the layaway-
+  // completion batch) — everywhere else layaways are managed (Collect
+  // Balance, the Layaways list) is a separate, dedicated surface.
+  const [layawayToggle, setLayawayToggle] = useState(false);
   const { onDirtyChange } = props;
   React.useEffect(() => { onDirtyChange?.(cx.cart.length > 0); }, [cx.cart.length, onDirtyChange]);
   const {
@@ -371,12 +376,23 @@ export const CartSaleView: React.FC<Props> = (props) => {
           )}
           <IconInput icon={<FileText className="w-4 h-4" />} placeholder="Payment notes, e.g. $200 cash + $15 tax" value={paymentNotes} onChange={setPaymentNotes} />
           <div>
-            <label className={labelCls}>Deposit / partial payment (optional)</label>
-            <input type="number" step="0.01" min="0" className={inputCls} value={deposit} onChange={e => setDeposit(e.target.value)} onFocus={selectOnFocus} placeholder={`Leave blank if paying in full (${money(totalPaid)})`} />
-            {isLayaway && (
-              <div className="mt-2 flex items-center justify-between rounded-lg bg-sky-50 dark:bg-sky-900/20 border border-sky-200 dark:border-sky-500/30 px-3 py-2 text-sm">
-                <span className="font-semibold text-sky-700 dark:text-sky-300">Balance owing (layaway)</span>
-                <span className="font-bold text-sky-700 dark:text-sky-300">{money(balanceOwing)}</span>
+            <button type="button" onClick={() => { const next = !layawayToggle; setLayawayToggle(next); if (!next) setDeposit(''); }}
+              className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${layawayToggle ? 'bg-sky-50 dark:bg-sky-900/20 border-sky-300 dark:border-sky-700 text-sky-700 dark:text-sky-300' : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400'}`}>
+              <span className="flex items-center gap-1.5"><HandCoins className="w-3.5 h-3.5" /> Layaway / partial payment</span>
+              <span className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${layawayToggle ? 'bg-sky-600' : 'bg-slate-300 dark:bg-slate-700'}`}>
+                <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${layawayToggle ? 'translate-x-[18px]' : 'translate-x-[3px]'}`} />
+              </span>
+            </button>
+            {layawayToggle && (
+              <div className="mt-2">
+                <label className={labelCls}>Deposit / partial payment</label>
+                <input type="number" step="0.01" min="0" className={inputCls} value={deposit} onChange={e => setDeposit(e.target.value)} onFocus={selectOnFocus} placeholder={`Leave blank if paying in full (${money(totalPaid)})`} />
+                {isLayaway && (
+                  <div className="mt-2 flex items-center justify-between rounded-lg bg-sky-50 dark:bg-sky-900/20 border border-sky-200 dark:border-sky-500/30 px-3 py-2 text-sm">
+                    <span className="font-semibold text-sky-700 dark:text-sky-300">Balance owing (layaway)</span>
+                    <span className="font-bold text-sky-700 dark:text-sky-300">{money(balanceOwing)}</span>
+                  </div>
+                )}
               </div>
             )}
           </div>

@@ -215,3 +215,54 @@ describe('duplicate detection + merge', () => {
     expect(plan.customer.tags!.sort()).toEqual(['Student', 'VIP']); // unioned
   });
 });
+
+describe('customerStats: layaway money reflects actual payments, not the full total up front', () => {
+  it('lifetimeSpent counts only the deposit while a layaway is still open, plus any balance payments made so far', () => {
+    const c = cust({ id: 'c1', phone: '555-1' });
+    const s = customerStats(c, {
+      salesTransactions: [
+        tx({ customerId: 'c1', totalPaid: 500, deposit: 150, balanceOwing: 200, netProfit: 300,
+          balancePayments: [{ id: 'p1', amount: 150, paymentMethod: 'cash', date: '2026-01-05', at: 1 }] }),
+      ],
+      repairs: [], batches: [],
+    });
+    expect(s.lifetimeSpent).toBe(300); // 150 deposit + 150 balance payment, still $200 short of $500
+  });
+
+  it('lifetimeProfit excludes an open layaway entirely (not yet recognized) even though lifetimeSpent shows partial payment', () => {
+    const c = cust({ id: 'c1', phone: '555-1' });
+    const s = customerStats(c, {
+      salesTransactions: [
+        tx({ customerId: 'c1', totalPaid: 300, netProfit: 100 }),                                        // fully paid — recognized
+        tx({ customerId: 'c1', totalPaid: 500, deposit: 150, balanceOwing: 350, netProfit: 999 }),        // open layaway — not recognized yet
+      ],
+      repairs: [], batches: [],
+    });
+    expect(s.lifetimeProfit).toBe(100); // the layaway's netProfit is excluded, not double-counted or guessed
+  });
+
+  it('lifetimeSpent and lifetimeProfit both count a layaway in full once it is fully paid off', () => {
+    const c = cust({ id: 'c1', phone: '555-1' });
+    const s = customerStats(c, {
+      salesTransactions: [
+        tx({ customerId: 'c1', totalPaid: 500, deposit: 150, netProfit: 300, balanceOwing: undefined, // paid off
+          balancePayments: [{ id: 'p1', amount: 350, paymentMethod: 'cash', date: '2026-01-05', at: 1 }] }),
+      ],
+      repairs: [], batches: [],
+    });
+    expect(s.lifetimeSpent).toBe(500);
+    expect(s.lifetimeProfit).toBe(300);
+  });
+
+  it('outstandingBalance reflects a partial balance payment, not just the original deposit', () => {
+    const c = cust({ id: 'c1', phone: '555-1' });
+    const s = customerStats(c, {
+      salesTransactions: [
+        tx({ customerId: 'c1', totalPaid: 500, deposit: 150, balanceOwing: 200, // was 350, a $150 payment already landed
+          balancePayments: [{ id: 'p1', amount: 150, paymentMethod: 'cash', date: '2026-01-05', at: 1 }] }),
+      ],
+      repairs: [], batches: [],
+    });
+    expect(s.outstandingBalance).toBe(200);
+  });
+});

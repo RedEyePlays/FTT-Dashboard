@@ -121,12 +121,19 @@ export function findDuplicateDevice(
 export const isPrivateBatch = (batch: Pick<RepairBatch, 'private' | 'autoInventory'> | undefined): boolean =>
   !!(batch?.private ?? batch?.autoInventory);
 
+// Statuses that mean a device is already spoken for by a customer — an
+// unrelated repair ticket auto-attaching to one of these would silently yank
+// it out from under a pending sale or an already-sold record (item 3 of the
+// layaway-completion batch: a reserved device must never be double-committed).
+const CLAIMED_STATUSES: DeviceStatus[] = ['reserved', 'sold'];
+
 export type AutoInventoryDecision =
   | { action: 'skip' }                                     // batch isn't private, or this ticket didn't opt in
   | { action: 'noIdentifier' }                              // blank IMEI/serial
   | { action: 'invalidImei'; digits: string }               // 15 digits but fails Luhn
   | { action: 'create'; normalized: string }                // Case A
-  | { action: 'attach'; match: InventoryItem; normalized: string }; // Case B
+  | { action: 'attach'; match: InventoryItem; normalized: string } // Case B
+  | { action: 'blockedClaimed'; match: InventoryItem; normalized: string }; // matched record is reserved/sold — refuse to attach
 
 /**
  * The full decision flow from the spec, minus the DB write. Pure and
@@ -151,7 +158,9 @@ export function decideAutoInventory(
   if (looksLikeImei && !imeiValid) return { action: 'invalidImei', digits: normalized };
 
   const match = findAutoInventoryMatch(normalized, inventory);
-  return match ? { action: 'attach', match, normalized } : { action: 'create', normalized };
+  if (!match) return { action: 'create', normalized };
+  if (CLAIMED_STATUSES.includes(match.deviceStatus)) return { action: 'blockedClaimed', match, normalized };
+  return { action: 'attach', match, normalized };
 }
 
 /**

@@ -47,6 +47,17 @@ describe('cashCollectedOnTx', () => {
   it('counts nothing for an e-transfer sale — no physical cash ever changed hands', () => {
     expect(cashCollectedOnTx(tx({ paymentMethod: 'etransfer', totalPaid: 250 }))).toBe(0);
   });
+
+  it('still counts only the original deposit once a layaway is later paid off — never retroactively the full total', () => {
+    // This is the specific bug a naive "balanceOwing > 0 ? deposit : totalPaid"
+    // check would reintroduce: once a later balance payment clears
+    // balanceOwing, that check would flip to totalPaid and this (already
+    // reconciled, in the past) sale date's expected cash would silently
+    // inflate the next time it's recomputed. `deposit` staying set (even
+    // though balanceOwing is now cleared) is exactly the frozen signal that
+    // must keep this at the original $100, not jump to $500.
+    expect(cashCollectedOnTx(tx({ paymentMethod: 'cash', totalPaid: 500, deposit: 100, balanceOwing: undefined }))).toBe(100);
+  });
 });
 
 describe('expectedCashForDate', () => {
