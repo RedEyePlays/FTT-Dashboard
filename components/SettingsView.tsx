@@ -323,10 +323,10 @@ const LabelsSection: React.FC<{ draft: AppSettings; patch: PatchFn }> = ({ draft
           value={draft.labels.paddingMm ?? ''} placeholder="Default (2.0mm)"
           onChange={v => patch('labels', { paddingMm: v === '' ? undefined : (parseFloat(v) || 0) })}
           hint="Space around the label content on all sides." />
-        <SettingsTextField label="Line spacing (mm)" type="number" min={0} max={4} step={0.1}
-          value={draft.labels.lineSpacingMm ?? ''} placeholder="Default (1.1–1.6mm)"
-          onChange={v => patch('labels', { lineSpacingMm: v === '' ? undefined : (parseFloat(v) || 0) })}
-          hint="Gap between the org/code/device/sub/serial lines." />
+        <SettingsTextField label="Push content down (mm)" type="number" min={0} max={2.5} step={0.1}
+          value={draft.labels.contentPushDownMm ?? ''} placeholder="Default (0mm)"
+          onChange={v => patch('labels', { contentPushDownMm: v === '' ? undefined : (parseFloat(v) || 0) })}
+          hint="Shifts the whole text block down as one group, to close up whitespace below the last line — doesn't change the spacing between lines. Kept modest (max 2.5mm) since going too far crops the last line instead of shrinking the label." />
       </SettingsCard>
 
       <SettingsCard>

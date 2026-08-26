@@ -72,15 +72,19 @@ const TAG_STYLE = `
     display: flex; flex-direction: column; justify-content: center; align-items: center;
     font-family: 'Inter', system-ui, Arial, sans-serif; color: #000; overflow: hidden;
   }
-  .store { font-size: 2.6mm; letter-spacing: 0.3mm; text-transform: uppercase; color: #666; line-height: 1; }
+  .store { font-size: 3mm; letter-spacing: 0.3mm; text-transform: uppercase; color: #222; line-height: 1; }
   .name { font-size: 5.2mm; font-weight: 800; line-height: 1.1; margin-top: 0.8mm; text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .specs { font-size: 3.1mm; color: #333; margin-top: 0.5mm; text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .price { font-size: 10mm; font-weight: 900; letter-spacing: -0.2mm; border-top: 0.3mm solid #000; border-bottom: 0.3mm solid #000; padding: 0.8mm 0; margin-top: 1mm; }
   .sku { font-family: 'SF Mono', ui-monospace, Menlo, Consolas, monospace; font-size: 2.9mm; letter-spacing: 0.3mm; margin-top: 0.8mm; }
   /* Small IMEI/serial QR — a corner overlay, well clear of the centered
      price/name stack. Sized just large enough to scan reliably, nowhere
-     near the full-size QR on the ZP 450 inventory label. */
-  .tag-qr { position: absolute; top: 1.2mm; right: 1.2mm; width: 7mm; height: 7mm; image-rendering: pixelated; }
+     near the full-size QR on the ZP 450 inventory label. Deliberately NOT
+     image-rendering:pixelated — this tag is rotated 90° via CSS transform
+     to print correctly (see below), and nearest-neighbor scaling combined
+     with that rotation is what made the QR look rough/jagged. Smooth
+     (default) scaling reads far cleaner at this size. */
+  .tag-qr { position: absolute; top: 1.2mm; right: 1.2mm; width: 7mm; height: 7mm; }
 `;
 
 // Wraps tag content for the DYMO portrait-native page: one .tag-page per
@@ -108,11 +112,13 @@ const printDoc = (title: string, pages: string[]): string => {
 
 // Small IMEI/serial QR for the corner overlay — only generated when the item
 // actually has one; a blank/missing IMEI omits the QR cleanly rather than
-// encoding an empty string.
+// encoding an empty string. Generated well above the 7mm display size (see
+// .tag-qr) as extra insurance against quality loss from the CSS scale +
+// rotation it goes through on the printed tag.
 const imeiQr = (item: InventoryItem): Promise<string | undefined> => {
   const imei = (item.imei || '').trim();
   if (!imei) return Promise.resolve(undefined);
-  return QRCode.toDataURL(imei, { margin: 1, width: 120, errorCorrectionLevel: 'M' }).catch(() => undefined);
+  return QRCode.toDataURL(imei, { margin: 1, width: 240, errorCorrectionLevel: 'M' }).catch(() => undefined);
 };
 
 export async function printShelfTag(item: InventoryItem, opts: { storeName?: string } = {}): Promise<boolean> {

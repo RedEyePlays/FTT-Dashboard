@@ -35,7 +35,9 @@ export interface LabelOpts {
   // non-Dymo (inch/ZP 450) templates only — undefined uses the built-in
   // default. Dymo keeps its own separately-tuned constants.
   padMm?: number;
-  lineGapMm?: number;
+  // Shifts the whole text block down as one group (a paint-only transform,
+  // not a layout change) — see AppSettings.labels.contentPushDownMm.
+  pushDownMm?: number;
 }
 
 const IN = 25.4; // mm per inch
@@ -125,14 +127,20 @@ function labelBody(u: U, m: LabelMedia, c: LabelContent, img: LabelImages, o: La
   // smaller inch templates (2×1") used to leave noticeable dead space below
   // the last line at pad=2.0 — a bigger default gap here spreads the same
   // content more evenly across the full label height instead of leaving it
-  // clumped in the center. Owner-configurable in Settings; falls back to
-  // this size-aware default when unset.
-  const lineGap = o.lineGapMm ?? (large ? 1.1 : 1.6);
+  // clumped in the center.
+  const lineGap = large ? 1.1 : 1.6;
+  // Push the whole text block down as one group, without touching the gap
+  // between lines or the block's own height — a `transform`, not a layout
+  // change, so it can't trigger the browser's print auto-shrink-to-fit (that
+  // only reacts to content overflowing its layout box; a transform only
+  // repaints, it never resizes anything). Owner-configurable in Settings;
+  // 0 (no shift) when unset.
+  const pushDown = o.pushDownMm ?? 0;
   return `
     <div style="box-sizing:border-box;width:100%;height:100%;padding:${u(pad)};background:#fff;color:#000;
       font-family:'Inter',system-ui,Arial,sans-serif;display:flex;flex-direction:column;gap:${u(1)};overflow:hidden;">
       <div style="flex:1;min-height:0;display:flex;gap:${u(2)};">
-        <div style="flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:${u(lineGap)};">
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:${u(lineGap)};transform:translateY(${u(pushDown)});">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:${u(1.2)};">
             <span style="font-weight:800;font-size:${u(fOrg)};letter-spacing:.5px;line-height:1;">${esc(c.org)}</span>
             ${pill}
