@@ -16,6 +16,7 @@ import { selectOnFocus } from '../hooks/selectOnFocus';
 // Lazy: defers jsPDF (~390 kB) until a label is actually printed.
 const LabelModal = lazy(() => import('./LabelModal').then(m => ({ default: m.LabelModal })));
 import { ResponsiveDialog, EmptyState } from './responsive';
+import { todayISO } from '../domain/dates';
 
 interface Props {
   inventory: InventoryItem[];
@@ -270,7 +271,7 @@ export const MobileCheckout: React.FC<Props> = (props) => {
       {step === 3 && (
         <div className="space-y-3">
           <label className="block text-sm text-slate-500 dark:text-slate-400">Sale Date
-            <input type="date" max={new Date().toISOString().split('T')[0]} value={cx.soldDate} onChange={e => cx.setSoldDate(e.target.value)} className={input} />
+            <input type="date" max={todayISO()} value={cx.soldDate} onChange={e => cx.setSoldDate(e.target.value)} className={input} />
           </label>
           <div className="grid grid-cols-2 gap-2">
             <PayBig active={cx.paymentMethod === 'cash'} onClick={() => cx.setPaymentMethod('cash')} icon={<Banknote className="w-6 h-6" />} label="Cash" />

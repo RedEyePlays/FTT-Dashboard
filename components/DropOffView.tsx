@@ -8,6 +8,7 @@ import { runnerBalance, settleableDropOffs, settlementTotals } from '../domain/d
 import { formatPhoneInput } from '../domain/phone';
 import { printSettlementInvoice } from '../services/settlementInvoice';
 import { useEscapeKey } from '../hooks/useEscapeKey';
+import { todayISO } from '../domain/dates';
 
 interface Props {
   runners: Runner[];
@@ -22,7 +23,7 @@ interface Props {
 }
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-const today = () => new Date().toISOString().split('T')[0];
+const today = () => todayISO();
 const money = (n: number) => `$${n.toFixed(2)}`;
 
 const PAID_BY_LABEL: Record<PaidBy, string> = { runner: 'Runner paid', store: 'Store paid', personal: 'Personal paid' };

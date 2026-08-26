@@ -3,6 +3,7 @@ import { kindOf } from './inventory';
 import { isRepairOpen, repairPartsCost as partsCostOf } from './repairs';
 import { customerStats } from './customers';
 import { isReversed } from './pos';
+import { toISODate } from './dates';
 
 // Owner analytics — every figure is DERIVED from existing sales, repairs,
 // inventory and customer documents. Nothing is duplicated or stored.
@@ -321,7 +322,7 @@ export function computeAnalytics(range: DateRange, input: AnalyticsInput, now: n
 function buildDailySeries(range: DateRange, txns: SalesTransaction[], inventory: InventoryItem[], txnInvIds: Set<string>) {
   const days = Math.min(60, Math.max(1, Math.round((range.end - range.start) / DAY)));
   const buckets = new Map<string, { revenue: number; profit: number }>();
-  const keyOf = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+  const keyOf = (ms: number) => toISODate(ms);
   for (let i = 0; i < days; i++) buckets.set(keyOf(range.start + i * DAY), { revenue: 0, profit: 0 });
   const add = (ymd: string, revenue: number, profit: number) => {
     const b = buckets.get(ymd); if (b) { b.revenue += revenue; b.profit += profit; }

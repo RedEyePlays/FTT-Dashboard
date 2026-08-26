@@ -1,4 +1,5 @@
 import { Repair, RepairBatch, RepairStatus, RepairType, RepairPart } from '../types';
+import { toISODate } from './dates';
 
 // --- Numbering prefixes (reuse the meta.skuCounters mechanism) ---
 export const REPAIR_PREFIX = 'RPR';
@@ -190,7 +191,7 @@ export const dateToEpochMs = (dateISO: string): number => new Date(`${dateISO}T1
  * timestamp built via dateToEpochMs for that.
  */
 export const completeRepair = (r: Repair, now: number = Date.now(), status: 'completed' | 'picked_up' = 'completed'): Repair => {
-  const completedDate = new Date(now).toISOString().split('T')[0];
+  const completedDate = toISODate(now);
   return {
     ...r,
     status,
