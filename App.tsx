@@ -1,15 +1,18 @@
 
 import React, { useState, useEffect, useRef, useMemo, lazy, Suspense } from 'react';
-import { DataEntryForm } from './components/DataEntryForm';
 import { AuthScreen } from './components/AuthScreen';
 import { SettingsModal, cacheLabelSizes, cacheStoreProfile, cacheLabelSpacing } from './components/SettingsModal';
 import type { CartCheckout } from './components/CartSaleView';
-import { GlobalSearch } from './components/GlobalSearch';
 
 // Code-splitting: every page-level view loads on demand as its own chunk (each
 // route only downloads the JS it renders) instead of bloating the initial
 // bundle. They all render inside the single <Suspense> boundary below. Named
 // exports are unwrapped to default for React.lazy.
+// DataEntryForm is only reachable via the 'entry'/'edit' views, and it pulls in
+// the `qrcode` library plus both camera scanners — no reason for any of that to
+// be in the first-load bundle. GlobalSearch only ever mounts behind Cmd/Ctrl+K.
+const DataEntryForm = lazy(() => import('./components/DataEntryForm').then(m => ({ default: m.DataEntryForm })));
+const GlobalSearch = lazy(() => import('./components/GlobalSearch').then(m => ({ default: m.GlobalSearch })));
 const Dashboard = lazy(() => import('./components/Dashboard').then(m => ({ default: m.Dashboard })));
 const QuickSaleView = lazy(() => import('./components/QuickSaleView').then(m => ({ default: m.QuickSaleView })));
 const QuickPurchaseView = lazy(() => import('./components/QuickPurchaseView').then(m => ({ default: m.QuickPurchaseView })));
@@ -57,7 +60,6 @@ import { buildQuickPurchaseItem, quickPurchaseDrawerEffect } from './domain/quic
 import type { QuickPurchaseSaveInput } from './components/QuickPurchaseView';
 import { listingPlatformsLabel } from './domain/listing';
 import { AppSettings } from './domain/settings';
-import { listWorkspaceBackups, getBackupDownloadUrl } from './services/backupStorage';
 import { techUpdateRepair } from './services/repairFunctions';
 import { useWorkspaceData } from './hooks/useWorkspaceData';
 import { newId, mkActivity } from './domain/ids';
@@ -1579,11 +1581,11 @@ const App: React.FC = () => {
             />
           )}
           {(view === 'entry' || view === 'edit') && (
-            <DataEntryForm 
+            <Suspense fallback={<LoadingSkeleton message="Loading…" />}><DataEntryForm 
               initialData={editingItem} 
               onSave={handleSaveItem}
               onCancel={() => navigate('grid')}
-            />
+            /></Suspense>
           )}
           {view === 'grid' && (
             <InventoryView
@@ -1728,8 +1730,8 @@ const App: React.FC = () => {
               onSave={handleSaveSettings}
               canManage={allow('settings.manage')}
               role={appUser.role}
-              loadBackupHistory={appUser.role === 'owner' && workspaceId ? () => listWorkspaceBackups(workspaceId) : undefined}
-              onDownloadBackup={(path) => { getBackupDownloadUrl(path).then(url => window.open(url, '_blank', 'noopener')).catch(() => {}); }}
+              loadBackupHistory={appUser.role === 'owner' && workspaceId ? () => import('./services/backupStorage').then(m => m.listWorkspaceBackups(workspaceId)) : undefined}
+              onDownloadBackup={(path) => { import('./services/backupStorage').then(m => m.getBackupDownloadUrl(path)).then(url => window.open(url, '_blank', 'noopener')).catch(() => {}); }}
               backupSlot={
                 <div className="space-y-3">
                   {allow('backup.export') && (
@@ -1818,13 +1820,13 @@ const App: React.FC = () => {
          />
       )}
 
-      <GlobalSearch
+      {showFinder && <Suspense fallback={null}><GlobalSearch
         open={showFinder}
         onClose={() => setShowFinder(false)}
         data={searchData}
         canViewCost={allow('reports.profit.detailed')}
         onSelect={handleSearchSelect}
-      />
+      /></Suspense>}
     </div>
   );
 };

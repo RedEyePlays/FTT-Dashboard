@@ -1,5 +1,15 @@
-import { ref, listAll, getMetadata, getDownloadURL } from 'firebase/storage';
-import { storage } from './firebase';
+import { loadStorage } from './firebase';
+
+// The Cloud Storage SDK is pulled in on first use (see firebase.ts's
+// loadStorage) so it stays out of the first-load bundle — this panel is
+// owner-only and rarely opened.
+const storageApi = async () => {
+  const [{ ref, listAll, getMetadata, getDownloadURL }, storage] = await Promise.all([
+    import('firebase/storage'),
+    loadStorage(),
+  ]);
+  return { ref, listAll, getMetadata, getDownloadURL, storage };
+};
 
 // Client access to the automated backup snapshots in Cloud Storage. The
 // scheduledBackups Cloud Function writes them to backups/{workspaceId}/; Storage
@@ -24,6 +34,7 @@ const parseStamp = (name: string): number => {
 
 /** The workspace's automated backups, newest first (owner-only via Storage rules). */
 export async function listWorkspaceBackups(workspaceId: string): Promise<BackupFileMeta[]> {
+  const { ref, listAll, getMetadata, storage } = await storageApi();
   const dir = ref(storage, `backups/${workspaceId}`);
   const res = await listAll(dir);
   const metas = await Promise.all(
@@ -43,5 +54,6 @@ export async function listWorkspaceBackups(workspaceId: string): Promise<BackupF
 
 /** A tokenized download URL for one backup object (owner-only via Storage rules). */
 export async function getBackupDownloadUrl(path: string): Promise<string> {
+  const { ref, getDownloadURL, storage } = await storageApi();
   return getDownloadURL(ref(storage, path));
 }

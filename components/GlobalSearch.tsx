@@ -54,15 +54,21 @@ export const GlobalSearch: React.FC<Props> = ({ open, onClose, data, canViewCost
   // Debounce input (ignore stale keystrokes).
   useEffect(() => { const t = setTimeout(() => setDebounced(raw), 140); return () => clearTimeout(t); }, [raw]);
 
+  // Focus restoration runs from the effect's CLEANUP rather than an `else`
+  // branch, so it happens whether the palette is merely closed or unmounted
+  // outright — App only mounts it while open (it's lazy-loaded, and an
+  // always-mounted lazy component would just load its chunk immediately).
   useEffect(() => {
-    if (open) {
-      restoreFocus.current = document.activeElement;
-      setRaw(''); setDebounced(''); setActive(0);
-      setStore(loadStore());
-      setTimeout(() => inputRef.current?.focus(), 20);
-    } else if (restoreFocus.current instanceof HTMLElement) {
-      restoreFocus.current.focus();
-    }
+    if (!open) return;
+    const previouslyFocused = document.activeElement;
+    restoreFocus.current = previouslyFocused;
+    setRaw(''); setDebounced(''); setActive(0);
+    setStore(loadStore());
+    const t = setTimeout(() => inputRef.current?.focus(), 20);
+    return () => {
+      clearTimeout(t);
+      if (previouslyFocused instanceof HTMLElement) previouslyFocused.focus();
+    };
   }, [open]);
 
   const { groups, total } = useMemo(
