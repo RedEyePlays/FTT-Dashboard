@@ -1,4 +1,4 @@
-import React, { useState, FocusEventHandler } from 'react';
+import React, { useState, useMemo, FocusEventHandler } from 'react';
 import { X, Wand2, Smartphone, Package, Barcode, Camera, Tag } from 'lucide-react';
 import { printShelfTag } from '../services/shelfTag';
 import { getStoreProfile } from './SettingsModal';
@@ -6,10 +6,13 @@ import { InventoryItem, ItemKind, DeviceType, DeviceStatus, Runner, Repair, List
 import { LinkedNotes } from './LinkedNotes';
 import { REPAIR_STATUS_LABEL } from '../domain/repairs';
 import { LISTING_PLATFORMS } from '../domain/listing';
+import { findDuplicateDevice } from '../domain/autoInventory';
+import { AlertTriangle } from 'lucide-react';
 import { ImeiScanner } from './ImeiScanner';
 import { Wrench } from 'lucide-react';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 import { selectOnFocus } from '../hooks/selectOnFocus';
+import { todayISO } from '../domain/dates';
 
 interface Props {
   initial?: InventoryItem;
@@ -24,6 +27,10 @@ interface Props {
   linkedRepair?: Repair;
   onCreateRepair?: () => void;
   onOpenRepair?: (repairId: string) => void;
+  // Existing inventory, for the duplicate IMEI/serial guard. Optional so the
+  // form still renders for callers that don't have the list; the guard simply
+  // doesn't engage without it.
+  inventory?: InventoryItem[];
   notes?: Note[];                        // workspace notes, for the linked-notes panel
   onOpenNote?: (noteId: string) => void; // jump to a linked note in the Notes board
 }
@@ -39,7 +46,7 @@ const DEVICE_STATUSES: { value: DeviceStatus; label: string }[] = [
 const CONDITIONS = ['New', 'Like New', 'Excellent', 'Good', 'Fair', 'For Parts'];
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-const today = () => new Date().toISOString().split('T')[0];
+const today = () => todayISO();
 
 const inp = 'w-full p-2 bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-md text-sm focus:ring-indigo-500 focus:border-indigo-500';
 const lbl = 'block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1';
@@ -57,7 +64,7 @@ const Field: React.FC<{ label: string; value: unknown; onChange: (v: string) => 
   </div>
 );
 
-export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, runners, onSave, onGenerateSku, onClose, linkedRepair, onCreateRepair, onOpenRepair, notes, onOpenNote }) => {
+export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, runners, onSave, onGenerateSku, onClose, linkedRepair, onCreateRepair, onOpenRepair, inventory = [], notes, onOpenNote }) => {
   const [kind, setKind] = useState<ItemKind>(initial?.kind ?? initialKind ?? 'device');
   const [f, setF] = useState<InventoryItem>(() => initial ?? {
     id: uid(), kind: initialKind ?? 'device', sku: '', manufacturerBarcode: '',
@@ -84,7 +91,15 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, runners, 
 
   const genSku = async () => set('sku', await onGenerateSku(kind, f.deviceType));
 
+  // Same normalization + matching auto-inventory and Quick Purchase use — a
+  // device already in stock must not be enterable a second time by hand.
+  const duplicate = useMemo(
+    () => (kind === 'device' ? findDuplicateDevice(f.imei || '', inventory, f.id) : undefined),
+    [kind, f.imei, f.id, inventory],
+  );
+
   const save = () => {
+    if (duplicate) return;
     const item: InventoryItem = { ...f, kind };
     if (kind === 'accessory') {
       // Accessories derive item-level cost/price from per-unit fields
@@ -98,7 +113,7 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, runners, 
     onClose();
   };
 
-  const canSave = kind === 'device' ? !!(f.item || f.brand || f.model) : !!f.item;
+  const canSave = (kind === 'device' ? !!(f.item || f.brand || f.model) : !!f.item) && !duplicate;
 
   // Text/date fields go straight through; number fields parse to a number.
   const setText = (k: keyof InventoryItem) => (v: string) => set(k, v as any);
@@ -152,6 +167,18 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, runners, 
                   <Barcode className="w-4 h-4 text-slate-400 absolute left-2 top-1/2 -translate-y-1/2" />
                   <input className={`${inp} pl-8`} value={f.manufacturerBarcode ?? ''} onChange={e => set('manufacturerBarcode', e.target.value)} />
                 </div>
+              )}
+              {/* Blocks the save rather than silently creating a second record
+                  for one physical device, or merging into the existing one
+                  behind the user's back. */}
+              {duplicate && (
+                <p className="mt-1.5 flex items-start gap-1.5 text-xs font-medium text-rose-600 dark:text-rose-400">
+                  <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-px" />
+                  <span>
+                    Already in inventory as <strong>{duplicate.sku || duplicate.item || duplicate.id}</strong>
+                    {duplicate.item && duplicate.sku ? ` (${duplicate.item})` : ''}. Open that record instead of adding it twice.
+                  </span>
+                </p>
               )}
             </div>
           </div>

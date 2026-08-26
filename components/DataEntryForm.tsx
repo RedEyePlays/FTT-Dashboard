@@ -1,22 +1,27 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { QrCode, Printer, Camera } from 'lucide-react';
 import { InventoryItem } from '../types';
 import { QRScanner } from './QRScanner';
 import { QRLabel } from './QRLabel';
 import { ImeiScanner } from './ImeiScanner';
 import { selectOnFocus } from '../hooks/selectOnFocus';
+import { findDuplicateDevice } from '../domain/autoInventory';
+import { todayISO } from '../domain/dates';
 
 interface DataEntryFormProps {
   initialData?: InventoryItem;
   onSave: (item: InventoryItem) => void;
   onCancel: () => void;
+  // Existing inventory, for the duplicate IMEI/serial guard (same check the
+  // Inventory item modal, Quick Purchase and auto-inventory all use).
+  inventory?: InventoryItem[];
 }
 
-export const DataEntryForm: React.FC<DataEntryFormProps> = ({ initialData, onSave, onCancel }) => {
+export const DataEntryForm: React.FC<DataEntryFormProps> = ({ initialData, onSave, onCancel, inventory = [] }) => {
   // Initialize state with a default structure or from initialData
   const [formData, setFormData] = useState<Omit<InventoryItem, 'id'>>({
-    date: new Date().toISOString().split('T')[0],
+    date: todayISO(),
     item: '',
     imei: '',
     boughtFrom: '',
@@ -39,7 +44,7 @@ export const DataEntryForm: React.FC<DataEntryFormProps> = ({ initialData, onSav
     if (initialData) {
       setFormData({
         ...initialData,
-        date: initialData.date || new Date().toISOString().split('T')[0],
+        date: initialData.date || todayISO(),
       });
     }
   }, [initialData]);
@@ -80,6 +85,7 @@ export const DataEntryForm: React.FC<DataEntryFormProps> = ({ initialData, onSav
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (duplicate) return;
     const finalItem: InventoryItem = {
       id: initialData?.id || Date.now().toString() + Math.random().toString(36).substr(2, 5),
       ...formData,
@@ -87,6 +93,13 @@ export const DataEntryForm: React.FC<DataEntryFormProps> = ({ initialData, onSav
     onSave(finalItem);
   };
   
+  // Blocks entering one physical device twice — reuses the shared identifier
+  // matching rather than a second notion of "same device".
+  const duplicate = useMemo(
+    () => findDuplicateDevice(formData.imei || '', inventory, initialData?.id),
+    [formData.imei, inventory, initialData?.id],
+  );
+
   const title = initialData ? 'Edit Item' : 'Add New Item';
 
   return (
@@ -123,6 +136,11 @@ export const DataEntryForm: React.FC<DataEntryFormProps> = ({ initialData, onSav
                     <Printer className="w-4 h-4" />
                   </button>
                 </div>
+                {duplicate && (
+                  <p className="mt-1.5 text-xs font-medium text-rose-600 dark:text-rose-400">
+                    Already in inventory as <strong>{duplicate.sku || duplicate.item || duplicate.id}</strong> — open that record instead of adding it twice.
+                  </p>
+                )}
               </div>
                <div>
                 <label htmlFor="boughtFrom" className="block text-sm font-medium text-slate-600 dark:text-slate-300 mb-1">Bought From</label>
@@ -182,7 +200,7 @@ export const DataEntryForm: React.FC<DataEntryFormProps> = ({ initialData, onSav
           <button type="button" onClick={onCancel} className="px-6 py-2 rounded-lg text-slate-700 dark:text-slate-300 bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 font-medium transition-colors">
             Cancel
           </button>
-          <button type="submit" className="px-6 py-2 rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-600 font-medium transition-colors shadow-sm">
+          <button type="submit" disabled={!!duplicate} className="px-6 py-2 rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-600 disabled:opacity-40 disabled:cursor-not-allowed font-medium transition-colors shadow-sm">
             Save Item
           </button>
         </div>

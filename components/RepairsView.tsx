@@ -22,6 +22,7 @@ import { AutoInventoryNotice, isPrivateBatch } from '../domain/autoInventory';
 // Lazy: the repair label modal pulls in jsPDF (~390 kB); load it on demand.
 const RepairLabelModal = lazy(() => import('./RepairLabelModal').then(m => ({ default: m.RepairLabelModal })));
 import { CustomerSearchInput } from './CustomerSearchInput';
+import { toISODate, todayISO } from '../domain/dates';
 
 interface Props {
   repairs: Repair[];
@@ -53,7 +54,7 @@ interface Props {
 }
 
 const DEVICE_TYPES: DeviceType[] = ['Phone', 'Tablet', 'Laptop', 'Console', 'Watch', 'Other'];
-const today = () => new Date().toISOString().split('T')[0];
+const today = () => todayISO();
 const money = (n?: number) => `$${(n || 0).toFixed(2)}`;
 const deviceName = (r: Repair) => [r.brand, r.model].filter(Boolean).join(' ') || r.deviceType || 'Device';
 
@@ -113,7 +114,7 @@ export const RepairsView: React.FC<Props> = (props) => {
   const [batchForm, setBatchForm] = useState<{ batch: RepairBatch; isNew: boolean } | null>(null);
   const [labelTarget, setLabelTarget] = useState<{ repair: Repair; context?: { batchNumber?: string; lineNumber?: number } } | null>(null);
   // Performance tab date range — defaults to the last 30 days (inclusive of today).
-  const [perfFrom, setPerfFrom] = useState(() => { const d = new Date(); d.setDate(d.getDate() - 29); return d.toISOString().split('T')[0]; });
+  const [perfFrom, setPerfFrom] = useState(() => { const d = new Date(); d.setDate(d.getDate() - 29); return toISODate(d); });
   const [perfTo, setPerfTo] = useState(() => today());
 
   // If the caller loses performance access (role change), never leave the tab stuck open.
@@ -317,7 +318,7 @@ export const RepairsView: React.FC<Props> = (props) => {
             <Field label="To"><input type="date" value={perfTo} min={perfFrom} max={today()} onChange={e => setPerfTo(e.target.value)} className={inputCls} /></Field>
             <div className="flex gap-1.5">
               {(([[7, '7d'], [30, '30d'], [90, '90d']]) as [number, string][]).map(([days, label]) => (
-                <button key={days} onClick={() => { const d = new Date(); d.setDate(d.getDate() - (days - 1)); setPerfFrom(d.toISOString().split('T')[0]); setPerfTo(today()); }}
+                <button key={days} onClick={() => { const d = new Date(); d.setDate(d.getDate() - (days - 1)); setPerfFrom(toISODate(d)); setPerfTo(today()); }}
                   className="px-2.5 py-1.5 rounded-md text-xs font-medium border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-indigo-400">Last {label}</button>
               ))}
             </div>

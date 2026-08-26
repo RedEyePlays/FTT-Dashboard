@@ -5,6 +5,7 @@ import {
   expectedEndingCash, sumDrawerEntries, cashDrawerSummary, openDrawerPatch,
   taxRemittance, taxReportCsvRows,
   profitAndLoss, profitLossCsvRows, settlementHistory, yearEndSummary, ProfitLossInput,
+  cashSalesAfterClose, unreconciledDays,
 } from './reports';
 
 const tx = (p: Partial<SalesTransaction>): SalesTransaction => ({
@@ -310,5 +311,77 @@ describe('yearEndSummary', () => {
     expect(s.cashExpenses).toBe(25);
     expect(s.runnerCommissions).toBe(45);
     expect(s.netProfit).toBe(1000 - 400 - 800 - 25 - 45);
+  });
+});
+
+// --- Post-close cash + unreconciled-day flagging -----------------------------
+describe('cashSalesAfterClose', () => {
+  const tx = (id: string, date: string, cash: number, createdAt?: number): SalesTransaction => ({
+    id, date, createdAt, customerName: 'C', paymentMethod: 'cash',
+    subtotal: cash, tax: 0, platformFee: 0, purchaseCost: 0, repairCost: 0, totalCost: 0,
+    totalPaid: cash, netProfit: cash, lines: [],
+  } as unknown as SalesTransaction);
+
+  const CLOSE = 1_000_000;
+
+  it('sums only the cash that came in after the drawer was counted', () => {
+    const txs = [tx('before', '2026-08-26', 100, CLOSE - 1), tx('after', '2026-08-26', 250, CLOSE + 1)];
+    expect(cashSalesAfterClose(txs, '2026-08-26', CLOSE)).toBe(250);
+  });
+
+  it('is zero for a day that was never reconciled — nothing is "after" an event that did not happen', () => {
+    expect(cashSalesAfterClose([tx('t', '2026-08-26', 100, CLOSE + 1)], '2026-08-26', undefined)).toBe(0);
+  });
+
+  it('ignores other days', () => {
+    expect(cashSalesAfterClose([tx('t', '2026-08-27', 100, CLOSE + 1)], '2026-08-26', CLOSE)).toBe(0);
+  });
+
+  it('treats a legacy row with no createdAt as pre-close rather than guessing', () => {
+    expect(cashSalesAfterClose([tx('legacy', '2026-08-26', 100, undefined)], '2026-08-26', CLOSE)).toBe(0);
+  });
+
+  it('counts only the cash portion of a mixed payment, and nothing for a card sale', () => {
+    const mixed = { ...tx('m', '2026-08-26', 300, CLOSE + 1), paymentMethod: 'mixed', cashAmount: 120 } as SalesTransaction;
+    const card = { ...tx('c', '2026-08-26', 500, CLOSE + 1), paymentMethod: 'card' } as SalesTransaction;
+    expect(cashSalesAfterClose([mixed, card], '2026-08-26', CLOSE)).toBe(120);
+  });
+
+  it('excludes a post-close sale that was then voided', () => {
+    const voided = { ...tx('v', '2026-08-26', 200, CLOSE + 1), status: 'voided' } as SalesTransaction;
+    expect(cashSalesAfterClose([voided], '2026-08-26', CLOSE)).toBe(0);
+  });
+});
+
+describe('unreconciledDays', () => {
+  const day = (date: string, p: Partial<CashReconciliation> = {}): CashReconciliation => ({
+    id: date, date, expectedCash: 0, variance: 0, recordedBy: 'u', recordedAt: 0, ...p,
+  });
+
+  it('flags a past day that was opened but never reconciled', () => {
+    const rows = [day('2026-08-24', { openedAt: 1 }), day('2026-08-25', { openedAt: 1, reconciledAt: 2 })];
+    expect(unreconciledDays(rows, '2026-08-26').map(r => r.date)).toEqual(['2026-08-24']);
+  });
+
+  it('flags a past day with cash movement even if the drawer was never formally opened', () => {
+    const rows = [
+      day('2026-08-24', { cashIn: [{ id: 'a', amount: 50 }] }),
+      day('2026-08-23', { withdrawals: [{ id: 'b', amount: 20 }] }),
+      day('2026-08-22', { cashOut: [{ id: 'c', amount: 10 }] }),
+    ];
+    expect(unreconciledDays(rows, '2026-08-26').map(r => r.date)).toEqual(['2026-08-22', '2026-08-23', '2026-08-24']);
+  });
+
+  it('never flags today — a day is not late until it is over', () => {
+    expect(unreconciledDays([day('2026-08-26', { openedAt: 1 })], '2026-08-26')).toEqual([]);
+  });
+
+  it('ignores a day with a record but no activity at all', () => {
+    expect(unreconciledDays([day('2026-08-24')], '2026-08-26')).toEqual([]);
+  });
+
+  it('returns oldest-first so the flag can name the longest-outstanding day', () => {
+    const rows = [day('2026-08-25', { openedAt: 1 }), day('2026-08-20', { openedAt: 1 })];
+    expect(unreconciledDays(rows, '2026-08-26').map(r => r.date)).toEqual(['2026-08-20', '2026-08-25']);
   });
 });

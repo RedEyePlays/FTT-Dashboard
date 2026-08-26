@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   normalizeSerial, luhnValid, normalizeIdentifier, identifierOf,
-  findAutoInventoryMatch, decideAutoInventory, autoInventoryPurchaseDrawerEffect, isPrivateBatch,
+  findAutoInventoryMatch, decideAutoInventory, findDuplicateDevice, autoInventoryPurchaseDrawerEffect, isPrivateBatch,
 } from './autoInventory';
 import { InventoryItem } from '../types';
 
@@ -187,5 +187,52 @@ describe('autoInventoryPurchaseDrawerEffect', () => {
     expect(autoInventoryPurchaseDrawerEffect({ purchaseCost: 0, purchasePaidBy: 'store' })).toBeNull();
     expect(autoInventoryPurchaseDrawerEffect({ purchaseCost: 0.001, purchasePaidBy: 'store' })).toBeNull();
     expect(autoInventoryPurchaseDrawerEffect({ purchasePaidBy: 'store' })).toBeNull();
+  });
+});
+
+// --- Manual Add/Edit Item duplicate guard ------------------------------------
+describe('findDuplicateDevice', () => {
+  const dev = (id: string, imei: string, sku?: string): InventoryItem => ({
+    id, kind: 'device', sku, date: '2026-01-01', item: 'Phone', imei,
+    boughtFrom: '', purchaseCost: 0, repairCost: 0, soldDate: '', soldTo: '', salePrice: 0, notes: '',
+  });
+
+  it('finds an existing device with the same IMEI, ignoring spacing and case', () => {
+    const inv = [dev('a', '35 3915 0987 6543 2', 'PHN-1')];
+    expect(findDuplicateDevice('353915098765432', inv)?.sku).toBe('PHN-1');
+    expect(findDuplicateDevice(' 353915098765432 ', inv)?.sku).toBe('PHN-1');
+  });
+
+  it('matches serials case-insensitively', () => {
+    const inv = [dev('a', 'c02xk1abcdef', 'MAC-1')];
+    expect(findDuplicateDevice('C02XK1ABCDEF', inv)?.sku).toBe('MAC-1');
+  });
+
+  it('returns nothing when the identifier is new', () => {
+    expect(findDuplicateDevice('353915098765432', [dev('a', '111111111111111')])).toBeUndefined();
+  });
+
+  it('never treats a blank identifier as a duplicate, however many blanks exist', () => {
+    const inv = [dev('a', ''), dev('b', ''), dev('c', '   ')];
+    expect(findDuplicateDevice('', inv)).toBeUndefined();
+    expect(findDuplicateDevice('   ', inv)).toBeUndefined();
+  });
+
+  it('excludes the row being edited — an item is not a duplicate of itself', () => {
+    const inv = [dev('a', '353915098765432', 'PHN-1')];
+    expect(findDuplicateDevice('353915098765432', inv, 'a')).toBeUndefined();
+    // …but a DIFFERENT row with the same identifier still trips it.
+    expect(findDuplicateDevice('353915098765432', [...inv, dev('b', '353915098765432', 'PHN-2')], 'b')?.sku).toBe('PHN-1');
+  });
+
+  it('matches rows that predate imeiNormalized (recomputed live, not index-only)', () => {
+    const legacy = dev('a', '353915098765432', 'PHN-1');
+    delete (legacy as Partial<InventoryItem>).imeiNormalized;
+    expect(findDuplicateDevice('353915098765432', [legacy])?.sku).toBe('PHN-1');
+  });
+
+  it('ignores accessories — only serialized devices have an identity to collide', () => {
+    const acc: InventoryItem = { ...dev('x', '353915098765432'), kind: 'accessory' };
+    expect(findDuplicateDevice('353915098765432', [acc])).toBeUndefined();
   });
 });

@@ -3,6 +3,7 @@ import { ScrollText, Search, X, Download, ShieldAlert } from 'lucide-react';
 import { AuditEntry, AppUser } from '../types';
 import { auditActionLabel, auditChangeSummary, auditExportRows, isCriticalAuditAction } from '../domain/audit';
 import { toCSV, triggerDownload } from '../services/backup';
+import { todayISO } from '../domain/dates';
 
 interface Props {
   logs: AuditEntry[];
@@ -38,7 +39,7 @@ export const AuditLogView: React.FC<Props> = ({ logs, users, onLoadMore, hasMore
   }, [logs, q, userId, action, entity, criticalOnly, from, to]);
 
   const exportCsv = () => {
-    triggerDownload(`audit-log-${new Date().toISOString().split('T')[0]}.csv`, toCSV(auditExportRows(filtered)), 'text/csv;charset=utf-8;');
+    triggerDownload(`audit-log-${todayISO()}.csv`, toCSV(auditExportRows(filtered)), 'text/csv;charset=utf-8;');
   };
 
   const sel = 'p-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm';

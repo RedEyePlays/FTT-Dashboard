@@ -1,5 +1,7 @@
 import React, { useMemo } from 'react';
-import { InventoryItem, SalesTransaction, ActivityEntry, Repair, RepairBatch } from '../types';
+import { InventoryItem, SalesTransaction, ActivityEntry, Repair, RepairBatch, CashReconciliation } from '../types';
+import { unreconciledDays } from '../domain/reports';
+import { todayISO } from '../domain/dates';
 import { kindOf } from '../domain/inventory';
 import { isInProgress } from '../domain/repairs';
 import { printSalesReceipt } from '../services/salesReceipt';
@@ -19,6 +21,11 @@ interface DashboardProps {
   canViewProfit?: boolean;
   onViewAnalytics?: () => void;
   onViewRepairs?: () => void;
+  // Unreconciled-cash flag (owner/manager — same tier as cash.reconcile).
+  // Omitted for anyone who can't reconcile, so no one sees a warning they
+  // have no way to act on.
+  cashReconciliations?: CashReconciliation[];
+  onViewCash?: () => void;
 }
 
 // --- date helpers (all comparisons are on local YYYY-MM-DD strings) ---
@@ -36,8 +43,12 @@ const relTime = (ts: number) => {
 };
 const platformLabel = (p?: string) => (p && p !== 'None / In-Store' ? p : 'In-Store');
 
-export const Dashboard: React.FC<DashboardProps> = ({ data, salesTransactions, activity, repairs = [], repairBatches = [], canViewProfit = true, onViewAnalytics, onViewRepairs }) => {
+export const Dashboard: React.FC<DashboardProps> = ({ data, salesTransactions, activity, repairs = [], repairBatches = [], canViewProfit = true, onViewAnalytics, onViewRepairs, cashReconciliations, onViewCash }) => {
   const mask = (v: string) => (canViewProfit ? v : '•••');
+  const staleCash = useMemo(
+    () => (cashReconciliations ? unreconciledDays(cashReconciliations, todayISO()) : []),
+    [cashReconciliations],
+  );
 
   const rep = useMemo(() => {
     const todayStr = ymd(new Date());
@@ -158,6 +169,28 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, salesTransactions, a
           </button>
         )}
       </div>
+
+      {/* Days whose drawer was started but never counted. Real cash movement
+          nobody reconciled, otherwise invisible once the date rolls over. */}
+      {staleCash.length > 0 && (
+        <button
+          onClick={onViewCash}
+          disabled={!onViewCash}
+          className={`w-full flex items-center gap-3 text-left rounded-xl border border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-900/20 px-4 py-3 ${onViewCash ? 'hover:border-amber-400 cursor-pointer' : 'cursor-default'}`}
+        >
+          <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0" />
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-semibold text-amber-800 dark:text-amber-200">
+              {staleCash.length === 1 ? '1 day has unreconciled cash' : `${staleCash.length} days have unreconciled cash`}
+            </span>
+            <span className="block text-xs text-amber-700/80 dark:text-amber-300/80 truncate">
+              Drawer activity was recorded but never counted — {staleCash.slice(0, 3).map(r => r.date).join(', ')}
+              {staleCash.length > 3 ? ` +${staleCash.length - 3} more` : ''}
+            </span>
+          </span>
+          {onViewCash && <ArrowRight className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />}
+        </button>
+      )}
 
       {/* Period performance */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">

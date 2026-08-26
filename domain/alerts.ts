@@ -1,5 +1,6 @@
 import { InventoryItem, Repair, ViewState } from '../types';
 import { kindOf, getDeviceDisplayName } from './inventory';
+import { toISODate } from './dates';
 
 // --- Actionable alerts ------------------------------------------------------
 //
@@ -29,7 +30,7 @@ export interface Alert {
   view: ViewState;      // where to go to act on it
 }
 
-const todayISO = (now: number): string => new Date(now).toISOString().split('T')[0];
+const todayISO = (now: number): string => toISODate(now);
 
 // --- Predicates (reused from the Inventory / Repairs views) -----------------
 

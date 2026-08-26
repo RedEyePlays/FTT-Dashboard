@@ -87,6 +87,7 @@ const PAGE_TITLES: Record<ViewState, string> = {
   settings: 'Settings', timeclock: 'Time Clock', closeout: 'Close Out',
 };
 import { LoadingScreen, LoadingSkeleton, DbErrorScreen } from './components/StatusScreens';
+import { todayISO } from './domain/dates';
 
 // Suspense fallback for lazily-loaded views — reuses LoadingScreen's spinner
 // style, but sized to sit inside the content area rather than full-screen.
@@ -596,14 +597,14 @@ const App: React.FC = () => {
   const handleQuickPurchase = async (input: QuickPurchaseSaveInput) => {
     if (!uid || !allow('inventory.add')) return;
     const sku = await handleGenerateSku('device');
-    const item = buildQuickPurchaseItem(input, { id: newId(), sku }, new Date().toISOString().split('T')[0]);
+    const item = buildQuickPurchaseItem(input, { id: newId(), sku }, todayISO());
     logActivity(`${item.sku} added — quick purchase ($${item.purchaseCost.toFixed(2)})`);
     audit('inventory.add', 'inventory', item.id, undefined, item);
     saveItem(uid, 'inventory', item);
 
     const purchaseEffect = quickPurchaseDrawerEffect(input.purchaseCost, input.paidBy);
     if (purchaseEffect) {
-      const date = new Date().toISOString().split('T')[0];
+      const date = todayISO();
       const existing = cashReconciliations.find(rec => rec.date === date);
       const listKey: 'cashIn' | 'cashOut' = purchaseEffect.kind;
       const entry = { id: newId(), amount: purchaseEffect.amount, note: `Quick Purchase — ${item.item}` };
@@ -675,7 +676,7 @@ const App: React.FC = () => {
   // voided (kept for audit). Does NOT touch custom lines (no inventoryId).
   const handleVoidSale = (tx: SalesTransaction) => {
     if (!uid || !appUser || !allow('sales.void')) return;
-    if (!canVoidSale(tx, new Date().toISOString().split('T')[0], settings.operations.voidWindowDays)) return;
+    if (!canVoidSale(tx, todayISO(), settings.operations.voidWindowDays)) return;
 
     // Device lines are the actual sold inventory rows (still carrying this txn id).
     // Restore each device's listedPlatforms snapshot (SalesLine.listedPlatforms,
@@ -705,7 +706,7 @@ const App: React.FC = () => {
     // e-transfer sale never touches the drawer at all.
     const voidCashEffect = saleRefundDrawerEffect(cashCollectedOnSale(tx));
     if (voidCashEffect) {
-      const date = new Date().toISOString().split('T')[0];
+      const date = todayISO();
       const existing = cashReconciliations.find(r => r.date === date);
       const entry = { id: newId(), amount: voidCashEffect.amount, note: `Sale ${tx.id.slice(0, 8)} voided — refund` };
       commitDrawerRecord(date, { cashOut: [...(existing?.cashOut || []), entry] });
@@ -719,7 +720,7 @@ const App: React.FC = () => {
   // inventoryId) are not touched, same as Void.
   const handleReturnSale = (tx: SalesTransaction, opts: { restockingFee?: number; disposition: 'resell' | 'defective' }) => {
     if (!uid || !appUser || !allow('sales.return')) return;
-    if (!canReturnSale(tx, new Date().toISOString().split('T')[0], settings.operations.voidWindowDays)) return;
+    if (!canReturnSale(tx, todayISO(), settings.operations.voidWindowDays)) return;
 
     // Restore each device's listedPlatforms snapshot (see handleVoidSale) rather
     // than leaving it cleared.
@@ -750,7 +751,7 @@ const App: React.FC = () => {
     // fee-clamping), so a card/e-transfer sale still never touches the drawer.
     const returnCashEffect = saleRefundDrawerEffect(returnRefund(cashCollectedOnSale(tx), restockingFee));
     if (returnCashEffect) {
-      const date = new Date().toISOString().split('T')[0];
+      const date = todayISO();
       const existing = cashReconciliations.find(r => r.date === date);
       const entry = { id: newId(), amount: returnCashEffect.amount, note: `Sale ${tx.id.slice(0, 8)} returned — refund` };
       commitDrawerRecord(date, { cashOut: [...(existing?.cashOut || []), entry] });
@@ -803,7 +804,7 @@ const App: React.FC = () => {
   // the reconciled-by/at markers. Owner/manager only (cash.reconcile).
   const handleCloseDrawer = (countedCash: number, note?: string) => {
     if (!uid || !appUser || !allow('cash.reconcile')) return;
-    const date = new Date().toISOString().split('T')[0];
+    const date = todayISO();
     const saved = commitDrawerRecord(date, {
       countedCash, note,
       reconciledAt: Date.now(), reconciledBy: appUser.id, reconciledByEmail: appUser.email,
@@ -823,7 +824,7 @@ const App: React.FC = () => {
   // staying stuck showing "Closed today" with no way back.
   const handleOpenDrawer = (openingFloat: number) => {
     if (!uid || !appUser || !allow('cash.log')) return;
-    const date = new Date().toISOString().split('T')[0];
+    const date = todayISO();
     const existing = cashReconciliations.find(r => r.date === date);
     commitDrawerRecord(date, openDrawerPatch(openingFloat, { id: appUser.id, email: appUser.email }, existing));
     logActivity(`Drawer opened with $${openingFloat.toFixed(2)}`);
@@ -836,7 +837,7 @@ const App: React.FC = () => {
   // so a movement never masquerades as a completed reconciliation.
   const handleLogCashMovement = ({ kind, amount, note }: { kind: CashMovementKind; amount: number; note?: string }) => {
     if (!uid || !appUser || !allow('cash.log') || !(amount > 0)) return;
-    const date = new Date().toISOString().split('T')[0];
+    const date = todayISO();
     const existing = cashReconciliations.find(r => r.date === date);
     const listKey: 'cashIn' | 'cashOut' | 'withdrawals' = kind === 'cashIn' ? 'cashIn' : kind === 'cashOut' ? 'cashOut' : 'withdrawals';
     const list = [...(existing?.[listKey] || []), { id: newId(), amount, note }];
@@ -849,10 +850,10 @@ const App: React.FC = () => {
   // Today's live drawer (shared math) — drives the POS running total and the
   // quick-log modal's before/after figures.
   const todayDrawer = useMemo(() => {
-    const date = new Date().toISOString().split('T')[0];
+    const date = todayISO();
     return cashDrawerSummary(cashReconciliations.find(r => r.date === date), expectedCashForDate(salesTransactions, date));
   }, [cashReconciliations, salesTransactions]);
-  const todayRecon = cashReconciliations.find(r => r.date === new Date().toISOString().split('T')[0]);
+  const todayRecon = cashReconciliations.find(r => r.date === todayISO());
 
   const handleBulkImport = (items: InventoryItem[]) => {
     if (uid) items.forEach(it => saveItem(uid, collectionFor(it), it));
@@ -882,7 +883,7 @@ const App: React.FC = () => {
     if (!uid || !allow('dropoffs.manage')) return;
     const runner = runnersRef.current.find(r => r.id === d.runnerId);
     const newItem: InventoryItem = {
-      id: newId(), kind: 'device', date: d.dateDropped || new Date().toISOString().split('T')[0],
+      id: newId(), kind: 'device', date: d.dateDropped || todayISO(),
       item: d.item, imei: d.imei, boughtFrom: d.sellerName || 'Marketplace (drop-off)',
       // Acquisition cost = price paid to the seller + the runner's fee (both are
       // real costs and both are what the settlement pays the runner).
@@ -915,7 +916,7 @@ const App: React.FC = () => {
   const saveDropOffs = (next: DropOff[]) => {
     if (!uid || !allow('dropoffs.manage')) return;
     const prev = dropOffsRef.current;
-    const date = new Date().toISOString().split('T')[0];
+    const date = todayISO();
     next.forEach(d => {
       const before = prev.find(p => p.id === d.id);
       if (before?.status === 'accepted' || d.status !== 'accepted') return; // not a fresh accept
@@ -949,7 +950,7 @@ const App: React.FC = () => {
     });
     const effect = settlementDrawerEffect(settlement);
     if (effect) {
-      const date = new Date().toISOString().split('T')[0];
+      const date = todayISO();
       const existing = cashReconciliations.find(r => r.date === date);
       const listKey: 'cashIn' | 'cashOut' = effect.kind;
       const entry = { id: newId(), amount: effect.amount, note: `Runner settlement — ${settlement.id}` };
@@ -1104,14 +1105,14 @@ const App: React.FC = () => {
   const handleExportJson = async () => {
     if (!uid || !allow('backup.export')) return;
     const dump = await exportWorkspaceData(uid);
-    downloadJson(`ftt-backup-${new Date().toISOString().split('T')[0]}.json`, { exportedAt: new Date().toISOString(), workspaceId: uid, data: dump });
+    downloadJson(`ftt-backup-${todayISO()}.json`, { exportedAt: new Date().toISOString(), workspaceId: uid, data: dump });
     await recordBackup(uid, Date.now());
     audit('backup.export', 'backup', undefined, undefined, { format: 'json' });
   };
   const handleExportCsv = async () => {
     if (!uid || !allow('backup.export')) return;
     const dump = await exportWorkspaceData(uid);
-    Object.entries(dump).forEach(([name, rows]) => { if (rows.length) triggerDownload(`ftt-${name}-${new Date().toISOString().split('T')[0]}.csv`, toCSV(rows), 'text/csv;charset=utf-8;'); });
+    Object.entries(dump).forEach(([name, rows]) => { if (rows.length) triggerDownload(`ftt-${name}-${todayISO()}.csv`, toCSV(rows), 'text/csv;charset=utf-8;'); });
     await recordBackup(uid, Date.now());
     audit('backup.export', 'backup', undefined, undefined, { format: 'csv' });
   };
@@ -1173,7 +1174,7 @@ const App: React.FC = () => {
         // accepted gap, same as any other SKU counter race.
         const sku = await handleGenerateSku('device', next.deviceType);
         const candidate: InventoryItem = {
-          id: newId(), kind: 'device', sku, date: next.date || new Date().toISOString().split('T')[0],
+          id: newId(), kind: 'device', sku, date: next.date || todayISO(),
           item: [next.brand, next.model].filter(Boolean).join(' ') || next.model || next.deviceType || 'Device',
           imei: next.imei || '', boughtFrom: '', purchaseCost: next.purchaseCost || 0, repairCost: 0,
           soldDate: '', soldTo: '', salePrice: 0, notes: '',
@@ -1192,7 +1193,7 @@ const App: React.FC = () => {
           // record, never a later ticket that just attaches to it.
           const purchaseEffect = autoInventoryPurchaseDrawerEffect(next);
           if (purchaseEffect) {
-            const date = new Date().toISOString().split('T')[0];
+            const date = todayISO();
             const existing = cashReconciliations.find(rec => rec.date === date);
             const listKey: 'cashIn' | 'cashOut' = purchaseEffect.kind;
             const entry = { id: newId(), amount: purchaseEffect.amount, note: `Device purchase — ${next.repairNumber || candidate.item}` };
@@ -1364,7 +1365,7 @@ const App: React.FC = () => {
     if (!allow('repairs.manage')) return;
     const repair: Repair = {
       id: newId(), repairNumber: '', type: 'internal', inventoryId: item.id,
-      createdAt: Date.now(), date: new Date().toISOString().split('T')[0],
+      createdAt: Date.now(), date: todayISO(),
       deviceType: item.deviceType, brand: item.brand || '', model: item.model || item.item || '',
       storage: item.storage, color: item.color, imei: item.imei || '',
       issue: '', repairPrice: 0, status: 'received',
@@ -1512,7 +1513,9 @@ const App: React.FC = () => {
           <Suspense fallback={<ViewLoader />}>
           {view === 'dashboard' && (
             allow('reports.view')
-              ? <Dashboard data={data} salesTransactions={salesTransactions} activity={activityLog} repairs={repairs} repairBatches={repairBatches} canViewProfit={allow('reports.profit.summary')} onViewAnalytics={() => navigate('analytics')} onViewRepairs={allow('repairs.manage') ? () => navigate('repairs') : undefined} />
+              ? <Dashboard data={data} salesTransactions={salesTransactions} activity={activityLog} repairs={repairs} repairBatches={repairBatches} canViewProfit={allow('reports.profit.summary')} onViewAnalytics={() => navigate('analytics')} onViewRepairs={allow('repairs.manage') ? () => navigate('repairs') : undefined}
+                  cashReconciliations={allow('cash.reconcile') ? cashReconciliations : undefined}
+                  onViewCash={allow('cash.reconcile') ? () => navigate('reports') : undefined} />
               : <div className="text-center text-slate-400 py-20">You don't have access to reports.</div>
           )}
           {view === 'analytics' && (
@@ -1543,9 +1546,9 @@ const App: React.FC = () => {
               onStartSale={allow('sales.complete') ? startSaleFor : undefined}
               onCreateRepair={allow('repairs.manage') ? createRepairFor : undefined}
               onVoidSale={allow('sales.void') ? handleVoidSale : undefined}
-              canVoidSale={(tx) => allow('sales.void') && canVoidSale(tx, new Date().toISOString().split('T')[0], settings.operations.voidWindowDays)}
+              canVoidSale={(tx) => allow('sales.void') && canVoidSale(tx, todayISO(), settings.operations.voidWindowDays)}
               onReturnSale={allow('sales.return') ? handleReturnSale : undefined}
-              canReturnSale={(tx) => allow('sales.return') && canReturnSale(tx, new Date().toISOString().split('T')[0], settings.operations.voidWindowDays)}
+              canReturnSale={(tx) => allow('sales.return') && canReturnSale(tx, todayISO(), settings.operations.voidWindowDays)}
               defaultRestockingFeePercent={settings.operations.returnRestockingFeePercent}
               notes={notes}
               onOpenNote={openNote}
@@ -1583,6 +1586,7 @@ const App: React.FC = () => {
               initialData={editingItem} 
               onSave={handleSaveItem}
               onCancel={() => navigate('grid')}
+              inventory={data}
             />
           )}
           {view === 'grid' && (
