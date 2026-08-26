@@ -27,7 +27,16 @@ export interface LabelContent {
 }
 
 export interface LabelImages { qr?: string; barcode?: string; }
-export interface LabelOpts { showBarcode: boolean; showStatus: boolean; barcodeOnly?: boolean }
+export interface LabelOpts {
+  showBarcode: boolean;
+  showStatus: boolean;
+  barcodeOnly?: boolean;
+  // Owner-configurable overrides (Settings → Labels & Printing) for the
+  // non-Dymo (inch/ZP 450) templates only — undefined uses the built-in
+  // default. Dymo keeps its own separately-tuned constants.
+  padMm?: number;
+  lineGapMm?: number;
+}
 
 const IN = 25.4; // mm per inch
 export const mmOf = (m: LabelMedia) => ({ w: +(m.w * IN).toFixed(2), h: +(m.h * IN).toFixed(2) });
@@ -53,7 +62,7 @@ function labelBody(u: U, m: LabelMedia, c: LabelContent, img: LabelImages, o: La
   // made no visible difference) and there's spare room at the bottom, so the
   // top clipping on the first line ("org"/store name) was this content
   // padding being too tight, not a print calibration issue.
-  const pad = dymo ? 1.3 : 2.0;
+  const pad = dymo ? 1.3 : (o.padMm ?? 2.0);
 
   // Barcode-only label (accessories): the UPC barcode fills the whole label,
   // centered, with its human-readable digits (baked into the image). No QR,
@@ -107,16 +116,23 @@ function labelBody(u: U, m: LabelMedia, c: LabelContent, img: LabelImages, o: La
   const large = m.w >= 4;
   const fOrg = large ? 3.2 : 2.6;
   const fCode = large ? 7.5 : 5.2;
-  const fDevice = large ? 4.6 : 3.4;
-  const fSub = large ? 3.4 : 2.6;
-  const fSerial = large ? 4.4 : 3.4;
+  const fDevice = large ? 4.6 : 3.6;
+  const fSub = large ? 3.4 : 2.8;
+  const fSerial = large ? 4.4 : 3.6;
   const qrS = +(Math.min(w, h) * (m.h >= 3 ? 0.42 : 0.6)).toFixed(2);
   const bcH = showBarcode ? h * 0.14 : 0;
+  // Vertical gap between content lines (org/code/device/sub/serial). The
+  // smaller inch templates (2×1") used to leave noticeable dead space below
+  // the last line at pad=2.0 — a bigger default gap here spreads the same
+  // content more evenly across the full label height instead of leaving it
+  // clumped in the center. Owner-configurable in Settings; falls back to
+  // this size-aware default when unset.
+  const lineGap = o.lineGapMm ?? (large ? 1.1 : 1.6);
   return `
     <div style="box-sizing:border-box;width:100%;height:100%;padding:${u(pad)};background:#fff;color:#000;
       font-family:'Inter',system-ui,Arial,sans-serif;display:flex;flex-direction:column;gap:${u(1)};overflow:hidden;">
       <div style="flex:1;min-height:0;display:flex;gap:${u(2)};">
-        <div style="flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:${u(1.1)};">
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:${u(lineGap)};">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:${u(1.2)};">
             <span style="font-weight:800;font-size:${u(fOrg)};letter-spacing:.5px;line-height:1;">${esc(c.org)}</span>
             ${pill}

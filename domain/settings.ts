@@ -88,6 +88,13 @@ export interface AppSettings {
     qrContent: 'sku' | 'id' | 'url' | 'imei';
     marginMm: number;
     density: number;       // Zebra ^MD darkness (-30..30)
+    // Content padding + inter-line spacing for the non-Dymo (inch/ZP 450) HTML
+    // label templates — self-serve tuning knobs since getting these right has
+    // taken several rounds of physical print calibration. Undefined/omitted
+    // means "use the built-in default" (labelLayout.ts / shelf/PDF paths each
+    // fall back sensibly); Dymo labels keep their own separately-tuned constants.
+    paddingMm?: number;
+    lineSpacingMm?: number;
   };
   customers: {
     requirePhone: boolean;

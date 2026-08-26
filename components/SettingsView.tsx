@@ -318,6 +318,17 @@ const LabelsSection: React.FC<{ draft: AppSettings; patch: PatchFn }> = ({ draft
         <SettingsTextField label="Print density (Zebra ^MD)" type="number" min={-30} max={30} step={1} value={draft.labels.density} onChange={v => patch('labels', { density: Math.round(parseFloat(v) || 0) })} hint="-30 (light) to 30 (dark)." />
       </SettingsCard>
 
+      <SettingsCard title="Label content spacing" description="Fine-tune the ZP 450 (2×1&Prime;, 2×2&Prime;, 2×3&Prime;, 4×6&Prime;) label layout — Dymo labels are unaffected. Leave blank to use the built-in default.">
+        <SettingsTextField label="Content padding (mm)" type="number" min={0} max={6} step={0.1}
+          value={draft.labels.paddingMm ?? ''} placeholder="Default (2.0mm)"
+          onChange={v => patch('labels', { paddingMm: v === '' ? undefined : (parseFloat(v) || 0) })}
+          hint="Space around the label content on all sides." />
+        <SettingsTextField label="Line spacing (mm)" type="number" min={0} max={4} step={0.1}
+          value={draft.labels.lineSpacingMm ?? ''} placeholder="Default (1.1–1.6mm)"
+          onChange={v => patch('labels', { lineSpacingMm: v === '' ? undefined : (parseFloat(v) || 0) })}
+          hint="Gap between the org/code/device/sub/serial lines." />
+      </SettingsCard>
+
       <SettingsCard>
         <div className="py-2">
           <p className="text-sm font-medium text-slate-700 dark:text-slate-200">Label sizes</p>

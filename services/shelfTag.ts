@@ -1,3 +1,4 @@
+import QRCode from 'qrcode';
 import { InventoryItem } from '../types';
 import { kindOf, getDeviceDisplayName } from '../domain/inventory';
 import { BUILT_IN_LABEL_SIZES } from '../domain/settings';
@@ -37,7 +38,10 @@ const shelfPrice = (i: InventoryItem): number =>
 
 // One tag's inner markup, sized in mm to fill its W_MM × H_MM box exactly —
 // shared by the single-item print and the batch print so the two never drift.
-const tagBody = (item: InventoryItem, store: string): string => {
+// `qr` is a small IMEI/serial QR data URL — only rendered when the item has
+// one, positioned as a corner overlay so it never crowds the centered
+// price/name stack.
+const tagBody = (item: InventoryItem, store: string, qr?: string): string => {
   const name = getDeviceDisplayName(item);
   const specs: string[] = [];
   if (item.storage) specs.push(esc(item.storage));
@@ -47,28 +51,36 @@ const tagBody = (item: InventoryItem, store: string): string => {
   if (item.condition) specs.push(esc(item.condition));
   const specLine = specs.join(' · ');
   return `
-    <div class="tag-body">
-      <div class="store">${esc(store)}</div>
-      <div class="name">${esc(name)}</div>
-      ${specLine ? `<div class="specs">${specLine}</div>` : ''}
-      <div class="price">${money(shelfPrice(item))}</div>
-      ${item.sku ? `<div class="sku">${esc(item.sku)}</div>` : ''}
+    <div class="tag-page-inner">
+      <div class="tag-body">
+        <div class="store">${esc(store)}</div>
+        <div class="name">${esc(name)}</div>
+        ${specLine ? `<div class="specs">${specLine}</div>` : ''}
+        <div class="price">${money(shelfPrice(item))}</div>
+        ${item.sku ? `<div class="sku">${esc(item.sku)}</div>` : ''}
+      </div>
+      ${qr ? `<img class="tag-qr" src="${qr}" alt="" />` : ''}
     </div>`;
 };
 
 const TAG_STYLE = `
   * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   html, body { margin: 0; padding: 0; background: #fff; }
+  .tag-page-inner { position: relative; width: 100%; height: 100%; }
   .tag-body {
     width: 100%; height: 100%; padding: 1.5mm 2mm;
     display: flex; flex-direction: column; justify-content: center; align-items: center;
     font-family: 'Inter', system-ui, Arial, sans-serif; color: #000; overflow: hidden;
   }
-  .store { font-size: 2.4mm; letter-spacing: 0.3mm; text-transform: uppercase; color: #666; line-height: 1; }
-  .name { font-size: 4.6mm; font-weight: 800; line-height: 1.1; margin-top: 0.8mm; text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .specs { font-size: 2.8mm; color: #333; margin-top: 0.5mm; text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .price { font-size: 8.5mm; font-weight: 900; letter-spacing: -0.2mm; border-top: 0.3mm solid #000; border-bottom: 0.3mm solid #000; padding: 0.8mm 0; margin-top: 1mm; }
-  .sku { font-family: 'SF Mono', ui-monospace, Menlo, Consolas, monospace; font-size: 2.6mm; letter-spacing: 0.3mm; margin-top: 0.8mm; }
+  .store { font-size: 2.6mm; letter-spacing: 0.3mm; text-transform: uppercase; color: #666; line-height: 1; }
+  .name { font-size: 5.2mm; font-weight: 800; line-height: 1.1; margin-top: 0.8mm; text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .specs { font-size: 3.1mm; color: #333; margin-top: 0.5mm; text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .price { font-size: 10mm; font-weight: 900; letter-spacing: -0.2mm; border-top: 0.3mm solid #000; border-bottom: 0.3mm solid #000; padding: 0.8mm 0; margin-top: 1mm; }
+  .sku { font-family: 'SF Mono', ui-monospace, Menlo, Consolas, monospace; font-size: 2.9mm; letter-spacing: 0.3mm; margin-top: 0.8mm; }
+  /* Small IMEI/serial QR — a corner overlay, well clear of the centered
+     price/name stack. Sized just large enough to scan reliably, nowhere
+     near the full-size QR on the ZP 450 inventory label. */
+  .tag-qr { position: absolute; top: 1.2mm; right: 1.2mm; width: 7mm; height: 7mm; image-rendering: pixelated; }
 `;
 
 // Wraps tag content for the DYMO portrait-native page: one .tag-page per
@@ -94,11 +106,24 @@ const printDoc = (title: string, pages: string[]): string => {
     </body></html>`;
 };
 
-export function printShelfTag(item: InventoryItem, opts: { storeName?: string } = {}): boolean {
+// Small IMEI/serial QR for the corner overlay — only generated when the item
+// actually has one; a blank/missing IMEI omits the QR cleanly rather than
+// encoding an empty string.
+const imeiQr = (item: InventoryItem): Promise<string | undefined> => {
+  const imei = (item.imei || '').trim();
+  if (!imei) return Promise.resolve(undefined);
+  return QRCode.toDataURL(imei, { margin: 1, width: 120, errorCorrectionLevel: 'M' }).catch(() => undefined);
+};
+
+export async function printShelfTag(item: InventoryItem, opts: { storeName?: string } = {}): Promise<boolean> {
   const store = opts.storeName || 'FlipThatTech';
+  // Open the window synchronously (in direct response to the click) so
+  // popup blockers don't kick in while the QR is generated, then write the
+  // document once it's ready.
   const win = window.open('', '_blank', 'width=380,height=260');
   if (!win) return false;
-  win.document.write(printDoc(`Shelf Tag ${item.sku || getDeviceDisplayName(item)}`, [tagBody(item, store)]));
+  const qr = await imeiQr(item);
+  win.document.write(printDoc(`Shelf Tag ${item.sku || getDeviceDisplayName(item)}`, [tagBody(item, store, qr)]));
   win.document.close();
   return true;
 }
@@ -106,12 +131,13 @@ export function printShelfTag(item: InventoryItem, opts: { storeName?: string } 
 // Print shelf tags for many items at once — one print job, one label per
 // physical page, so a bulk selection prints as a single job instead of one
 // popup per item (which browsers block after the first anyway).
-export function printShelfTagsBatch(items: InventoryItem[], opts: { storeName?: string } = {}): boolean {
+export async function printShelfTagsBatch(items: InventoryItem[], opts: { storeName?: string } = {}): Promise<boolean> {
   if (items.length === 0) return false;
   const store = opts.storeName || 'FlipThatTech';
   const win = window.open('', '_blank', 'width=380,height=260');
   if (!win) return false;
-  win.document.write(printDoc(`Shelf Tags (${items.length})`, items.map(i => tagBody(i, store))));
+  const qrs = await Promise.all(items.map(imeiQr));
+  win.document.write(printDoc(`Shelf Tags (${items.length})`, items.map((i, idx) => tagBody(i, store, qrs[idx]))));
   win.document.close();
   return true;
 }

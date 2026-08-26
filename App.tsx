@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef, useMemo, lazy, Suspense } from 'react';
 import { DataEntryForm } from './components/DataEntryForm';
 import { AuthScreen } from './components/AuthScreen';
-import { SettingsModal, cacheLabelSizes, cacheStoreProfile } from './components/SettingsModal';
+import { SettingsModal, cacheLabelSizes, cacheStoreProfile, cacheLabelSpacing } from './components/SettingsModal';
 import type { CartCheckout } from './components/CartSaleView';
 import { GlobalSearch } from './components/GlobalSearch';
 
@@ -398,6 +398,13 @@ const App: React.FC = () => {
   // modals (which don't receive settings as props) can read the merged list.
   useEffect(() => { cacheLabelSizes(settings.labels.customSizes); }, [settings.labels.customSizes]);
 
+  // Mirror the owner's label content padding / line-spacing overrides the same
+  // way, so the label modals' HTML/PDF paths apply them live without settings
+  // as props.
+  useEffect(() => {
+    cacheLabelSpacing({ paddingMm: settings.labels.paddingMm, lineSpacingMm: settings.labels.lineSpacingMm });
+  }, [settings.labels.paddingMm, settings.labels.lineSpacingMm]);
+
   // Mirror the store profile (business identity) into the local cache so the
   // checkout hook can print a proper invoice header without settings as props.
   useEffect(() => { cacheStoreProfile(settings.general); }, [settings.general]);
@@ -504,6 +511,7 @@ const App: React.FC = () => {
       const prevTpl = JSON.parse(localStorage.getItem('ftt_label_tpl_v1') || '{}');
       localStorage.setItem('ftt_label_tpl_v1', JSON.stringify({ ...prevTpl, template: next.labels.defaultSize }));
       cacheLabelSizes(next.labels.customSizes);
+      cacheLabelSpacing({ paddingMm: next.labels.paddingMm, lineSpacingMm: next.labels.lineSpacingMm });
     } catch { /* ignore */ }
   };
 
