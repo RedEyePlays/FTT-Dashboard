@@ -1,6 +1,6 @@
 import React from 'react';
-import { Note, NoteLinkType } from '../types';
-import { notesForRecord, checklistProgress, editedSummary } from '../domain/notes';
+import { Note, NoteLinkType, Role } from '../types';
+import { notesForRecord, checklistProgress, editedSummary, visibleNotes } from '../domain/notes';
 import { FileText, Pin, ExternalLink } from 'lucide-react';
 
 /**
@@ -10,15 +10,22 @@ import { FileText, Pin, ExternalLink } from 'lucide-react';
  *
  * Renders nothing at all when there are no linked notes, so it can be dropped
  * into a detail view without adding an empty section to every record.
+ *
+ * Per-note visibility is re-applied here rather than trusted from the caller.
+ * This panel is the one place a note surfaces OUTSIDE the Notes board — a
+ * technician opening a repair ticket must not see a Managers+ page attached to
+ * it — so the filter lives at the leaf where the notes are actually rendered.
+ * `role` is therefore required and fail-closed: an unknown role sees nothing.
  */
 export const LinkedNotes: React.FC<{
   notes?: Note[];
+  role: Role | undefined;
   linkType: NoteLinkType;
   linkId: string;
   onOpenNote?: (noteId: string) => void;
   className?: string;
-}> = ({ notes, linkType, linkId, onOpenNote, className }) => {
-  const linked = notesForRecord(notes || [], linkType, linkId);
+}> = ({ notes, role, linkType, linkId, onOpenNote, className }) => {
+  const linked = notesForRecord(visibleNotes(role, notes || []), linkType, linkId);
   if (linked.length === 0) return null;
 
   return (

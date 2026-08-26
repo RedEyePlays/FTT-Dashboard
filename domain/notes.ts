@@ -1,4 +1,4 @@
-import { Note, NoteLinkType } from '../types';
+import { Note, NoteLinkType, NoteVisibility, Role } from '../types';
 
 // Pure logic for the Notes workspace: a deliberately tiny markdown-ish block
 // format, checklist toggling, ordering, and record links. Kept here (not in the
@@ -136,4 +136,109 @@ export function editedSummary(note: Note, now: number): string | null {
   if (!note.updatedAt) return null;
   const who = note.updatedByEmail ? `by ${note.updatedByEmail} · ` : '';
   return `last edited ${who}${relativeTime(note.updatedAt, now)}`;
+}
+
+// --- Visibility --------------------------------------------------------------
+// Notes hold purchase prices, supplier settlements and personal numbers. Before
+// this, every workspace member could read every note — the Notes nav item was
+// unconditional and the view had no gate at all, which is out of step with how
+// the app treats the same data everywhere else (inventory cost column, AI
+// gating, reports).
+//
+// STORAGE DECISION: notes stay on the shared workspace meta doc (the same
+// document tasks/settings/skuCounters live on), not a split into their own
+// Firestore collection with per-doc rules. That means DB-level reads by any
+// active workspace member remain technically possible — the same accepted
+// tradeoff this app already makes for inventory's cost fields, which are also
+// UI-gated rather than collection-split. Enforcement here is therefore
+// UI/app-layer, consistently, at every surface a note can reach: the board
+// list, the board's search, and LinkedNotes on customer/inventory/repair
+// records (see visibleNotes below, and its call sites).
+//
+// Why not split it (considered, decided against for this change): a real
+// per-role `notes` collection needs firestore.rules that key off a
+// document-level `visibility` field per the same isManagerUp/isOwnerOf
+// primitives already in the ruleset — mechanically straightforward — but this
+// repo's own rules file says as much as a warning: "Test them in the Firebase
+// console Rules Playground before relying on them in production — they cannot
+// be exercised in CI." Getting a security-relevant rule wrong is a silent
+// failure mode (over-permissive: nothing breaks, it just leaks) that nothing
+// here would catch. It would also require a one-time migration off meta.notes
+// that must never re-run and must never resurrect a note deleted after the
+// migration — real invariants to get right blind, on shared production data,
+// without the ability to verify the rules that gate it in this environment.
+// Given that, the safer scope for this change is the tradeoff already accepted
+// elsewhere in the app (inventory cost fields) plus thorough UI/app-layer
+// enforcement — not a schema migration whose safety net can't be exercised
+// here. Revisit if per-role DB-level enforcement becomes a hard requirement.
+
+/**
+ * A note with no stored visibility is treated as Managers+, never Everyone.
+ * Notes written before this feature existed were authored with no expectation
+ * of being employee-visible, so the migration default has to be the
+ * restrictive one — defaulting to 'everyone' would retroactively leak them.
+ */
+export const DEFAULT_NOTE_VISIBILITY: NoteVisibility = 'managers';
+
+export const noteVisibility = (n: Pick<Note, 'visibility'>): NoteVisibility =>
+  n.visibility ?? DEFAULT_NOTE_VISIBILITY;
+
+export const NOTE_VISIBILITY_LABEL: Record<NoteVisibility, string> = {
+  everyone: 'Everyone',
+  managers: 'Managers+',
+  owner: 'Owner only',
+};
+
+/**
+ * Which audiences a role may read. Also the exact set the Firestore query
+ * filters on, so the client never asks for documents the rules would refuse
+ * (a query returning an unreadable doc fails outright rather than filtering).
+ */
+export function visibilitiesForRole(role: Role | undefined): NoteVisibility[] {
+  switch (role) {
+    case 'owner': return ['everyone', 'managers', 'owner'];
+    case 'manager': return ['everyone', 'managers'];
+    case 'employee':
+    case 'technician': return ['everyone'];
+    default: return [];
+  }
+}
+
+export function canSeeNote(role: Role | undefined, note: Pick<Note, 'visibility'>): boolean {
+  return visibilitiesForRole(role).includes(noteVisibility(note));
+}
+
+/** Every note this role may read, in the board's usual pinned-first order. */
+export function visibleNotes(role: Role | undefined, notes: Note[]): Note[] {
+  return sortNotes(notes.filter(n => canSeeNote(role, n)));
+}
+
+export function hasVisibleNotes(role: Role | undefined, notes: Note[]): boolean {
+  return notes.some(n => canSeeNote(role, n));
+}
+
+/**
+ * Technicians are read-only across the whole workspace — firestore.rules gates
+ * general shop writes (including the meta doc notes live on) behind isStaffOf,
+ * which excludes them by design. So a technician can never author a page, and
+ * the board is worth showing them only when something is already visible.
+ */
+export const canAuthorNotes = (role: Role | undefined): boolean =>
+  role === 'owner' || role === 'manager' || role === 'employee';
+
+/**
+ * Whether the Notes tab is worth showing at all — the nav item and the view
+ * itself are both gated on this, so the route can't be reached directly either.
+ *
+ * Deliberately not just hasVisibleNotes: a shop with no notes yet would
+ * otherwise have no way to reach the board and write the first one. Anyone who
+ * can author gets in; everyone else gets in only if there's something to read.
+ */
+export function canOpenNotes(role: Role | undefined, notes: Note[]): boolean {
+  return canAuthorNotes(role) || hasVisibleNotes(role, notes);
+}
+
+/** Only an owner may mark a note owner-only; everyone else can pick the rest. */
+export function assignableVisibilities(role: Role | undefined): NoteVisibility[] {
+  return role === 'owner' ? ['everyone', 'managers', 'owner'] : ['everyone', 'managers'];
 }

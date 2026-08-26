@@ -21,13 +21,15 @@ interface Props {
   onOpenSettings: () => void;
   onOpenBulk: () => void;
   onLock: () => void;
+  /** See AppHeader's showNotes — visibility is per note, so App decides. */
+  showNotes?: boolean;
 }
 
 // Slide-out navigation drawer for tablet/phone — the mobile counterpart of the
 // desktop top nav. Closes on select, backdrop, or Escape; traps initial focus.
 export const MobileDrawer: React.FC<Props> = ({
   open, onClose, view, onNavigate, allow, userRole, userEmail,
-  darkMode, onToggleTheme, onOpenFinder, onOpenSettings, onOpenBulk, onLock,
+  darkMode, onToggleTheme, onOpenFinder, onOpenSettings, onOpenBulk, onLock, showNotes = true,
 }) => {
   const panelRef = useRef<HTMLDivElement>(null);
   useLockBodyScroll(open);
@@ -54,7 +56,7 @@ export const MobileDrawer: React.FC<Props> = ({
     { label: 'Customers', icon: <Contact className="w-5 h-5" />, on: () => go('customers'), active: view === 'customers', show: allow('reports.view') },
     { label: 'Time Clock', icon: <Clock className="w-5 h-5" />, on: () => go('timeclock'), active: view === 'timeclock', show: allow('timeclock.use') },
     { label: 'Close Out', icon: <ClipboardCheck className="w-5 h-5" />, on: () => go('closeout'), active: view === 'closeout', show: allow('closeout.view') },
-    { label: 'Notes', icon: <StickyNote className="w-5 h-5" />, on: () => go('notes'), active: view === 'notes', show: true },
+    { label: 'Notes', icon: <StickyNote className="w-5 h-5" />, on: () => go('notes'), active: view === 'notes', show: showNotes },
     { label: 'Drop-Offs', icon: <Truck className="w-5 h-5" />, on: () => go('dropoff'), active: view === 'dropoff', show: allow('dropoffs.manage') },
     { label: 'Audit', icon: <ScrollText className="w-5 h-5" />, on: () => go('audit'), active: view === 'audit', show: allow('audit.view') },
     { label: 'Users', icon: <UsersIcon className="w-5 h-5" />, on: () => go('users'), active: view === 'users', show: allow('users.tech') },
