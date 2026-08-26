@@ -126,7 +126,11 @@ export const LabelModal: React.FC<Props> = ({ item, onClose }) => {
   // Owner-configured content padding / push-down offset (Settings → Labels &
   // Printing), applied to the non-Dymo templates only — undefined uses the
   // built-in default.
-  const spacing = useMemo(() => getLabelSpacing(), []);
+  // Not memoized: this must re-read on every render, not just on mount, so a
+  // spacing change saved in Settings during the same session (no page
+  // reload) shows up immediately next time this modal opens. It's a cheap
+  // localStorage read — not worth caching at the cost of going stale.
+  const spacing = getLabelSpacing();
   // Accessories: barcode-only label (no QR / text / status).
   const opts = isAccessory
     ? { showBarcode: true, showStatus: false, barcodeOnly: true }
