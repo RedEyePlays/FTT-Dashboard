@@ -111,7 +111,11 @@ export const RepairLabelModal: React.FC<Props> = ({ repair: r, context, onClose,
   const images = { qr, barcode };
   // Owner-configured content padding / push-down offset (Settings → Labels &
   // Printing), applied to the non-Dymo templates only.
-  const spacing = useMemo(() => getLabelSpacing(), []);
+  // Not memoized: this must re-read on every render, not just on mount, so a
+  // spacing change saved in Settings during the same session (no page
+  // reload) shows up immediately next time this modal opens. It's a cheap
+  // localStorage read — not worth caching at the cost of going stale.
+  const spacing = getLabelSpacing();
   const opts = { showBarcode: settings.showBarcode, showStatus: settings.showStatus, padMm: spacing.paddingMm, pushDownMm: spacing.pushDownMm };
 
   const handlePrint = () => {
