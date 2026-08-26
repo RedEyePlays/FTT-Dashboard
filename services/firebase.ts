@@ -3,7 +3,6 @@ import { initializeApp, getApp, getApps } from "firebase/app";
 import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 import { getFunctions } from "firebase/functions";
-import { getStorage } from "firebase/storage";
 
 // Your web app's Firebase configuration
 const firebaseConfig = {
@@ -23,7 +22,12 @@ const db = getFirestore(app);
 // `aiGenerate` callable, so no key is ever shipped to the browser.
 const functions = getFunctions(app);
 // Cloud Storage — holds the automated backup snapshots written by the
-// scheduledBackups Cloud Function under backups/{workspaceId}/.
-const storage = getStorage(app);
+// scheduledBackups Cloud Function under backups/{workspaceId}/. It is only
+// reached from the owner-only backup-history panel, so the SDK is imported on
+// demand rather than shipped in the first-load bundle for every user.
+export const loadStorage = async () => {
+  const { getStorage } = await import("firebase/storage");
+  return getStorage(app);
+};
 
-export { app, auth, db, functions, storage };
+export { app, auth, db, functions };
