@@ -1,8 +1,9 @@
 import React, { useState, useMemo, useEffect, lazy, Suspense } from 'react';
 import {
   Wrench, Plus, Search, X, Trash2, Printer, FileText, Receipt, History as HistoryIcon,
-  ArrowLeft, DollarSign, ChevronRight, Building2, ClipboardCheck, PackageCheck, ScrollText, QrCode, BarChart3, Link as LinkIcon, Check,
+  ArrowLeft, DollarSign, ChevronRight, Building2, ClipboardCheck, PackageCheck, ScrollText, QrCode, BarChart3, Link as LinkIcon, Check, Camera,
 } from 'lucide-react';
+import { ImeiScanner } from './ImeiScanner';
 import { Repair, RepairBatch, Customer, AuditEntry, RepairStatus, RepairType, DeviceType, RepairPart, AppUser, RepairPurchasePaidBy, Note, Role } from '../types';
 import { LinkedNotes } from './LinkedNotes';
 import {
@@ -580,6 +581,7 @@ const RepairDrawer: React.FC<{
 }> = ({ initial, isNew, canDelete, auditLogs, customers, privateBatch, notes, noteRole, onOpenNote, onClose, onSave, onCheckoutViaSale, onDelete, onPrint, onPrintSheet, onPrintLabel, onPrintEstimate }) => {
   const [f, setF] = useState<Repair>(initial);
   const [linkCopied, setLinkCopied] = useState(false);
+  const [showImeiScanner, setShowImeiScanner] = useState(false);
   // Snapshot the form state at mount for a dirty check, so a stray backdrop/X
   // click doesn't silently discard typed changes.
   const [snapshot] = useState(() => JSON.stringify(initial));
@@ -677,7 +679,15 @@ const RepairDrawer: React.FC<{
                   onChange={e => set({ date: e.target.value, createdAt: dateToEpochMs(e.target.value) })} />
               </Field>
               <Field label="Device Type"><select autoFocus={isNew && !isRetail} className={inputCls} value={f.deviceType || ''} onChange={e => set({ deviceType: e.target.value as DeviceType })}><option value="">—</option>{DEVICE_TYPES.map(d => <option key={d} value={d}>{d}</option>)}</select></Field>
-              <Field label="IMEI / Serial"><input className={inputCls} value={f.imei || ''} onChange={e => set({ imei: e.target.value })} /></Field>
+              <Field label="IMEI / Serial">
+                <div className="flex gap-2">
+                  <input className={`${inputCls} flex-1 min-w-0`} value={f.imei || ''} onChange={e => set({ imei: e.target.value })} />
+                  <button type="button" onClick={() => setShowImeiScanner(true)} title="Scan IMEI / serial with camera"
+                    className="shrink-0 px-3 rounded-md bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 text-slate-500 hover:text-indigo-600 hover:border-indigo-400 transition-colors">
+                    <Camera className="w-4 h-4" />
+                  </button>
+                </div>
+              </Field>
               <Field label="Brand / Model" className="col-span-2"><input className={inputCls} placeholder="e.g. Apple iPhone 14 Pro" value={[f.brand, f.model].filter(Boolean).join(' ')} onChange={e => set({ brand: '', model: e.target.value })} /></Field>
               {showDeviceDetail && <>
                 <Field label="Storage"><input className={inputCls} value={f.storage || ''} onChange={e => set({ storage: e.target.value })} /></Field>
@@ -798,6 +808,12 @@ const RepairDrawer: React.FC<{
           {canDelete && !isNew && <button onClick={onDelete} className="p-2 text-slate-400 hover:text-rose-500"><Trash2 className="w-4 h-4" /></button>}
         </div>
       </div>
+      {showImeiScanner && (
+        <ImeiScanner
+          onScan={(imei) => { set({ imei }); setShowImeiScanner(false); }}
+          onClose={() => setShowImeiScanner(false)}
+        />
+      )}
     </div>
   );
 };

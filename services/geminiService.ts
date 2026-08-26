@@ -61,11 +61,27 @@ export const parseBulkInventory = async (text: string): Promise<InventoryItem[]>
   }
 };
 
-export const extractImeiFromImage = async (base64Image: string): Promise<string> => {
+// Tier 3 (last resort) of the camera scanner — Gemini structured extraction.
+// Returns the raw, unvalidated fields the model read off the image;
+// domain/imeiScan.ts's validateExtractedFields is what actually checks Luhn
+// and normalizes before any of this reaches the UI as a trustworthy value.
+export interface ExtractedImeiFields {
+  imei1: string;
+  imei2: string;
+  serial: string;
+  eid: string;
+}
+
+export const extractImeiFromImage = async (base64Image: string): Promise<ExtractedImeiFields> => {
   try {
     const result = await aiGenerate({ op: "imeiExtract", base64Image });
-    const { text } = (result.data ?? {}) as { text?: string };
-    return text?.trim() || "";
+    const data = (result.data ?? {}) as Partial<ExtractedImeiFields>;
+    return {
+      imei1: (data.imei1 || "").trim(),
+      imei2: (data.imei2 || "").trim(),
+      serial: (data.serial || "").trim(),
+      eid: (data.eid || "").trim(),
+    };
   } catch (error) {
     console.error("Error processing image:", error);
     throw new Error("Failed to extract text from image.");

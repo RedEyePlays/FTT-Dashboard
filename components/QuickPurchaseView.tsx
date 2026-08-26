@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { ShoppingBag, AlertTriangle, CheckCircle } from 'lucide-react';
+import { ShoppingBag, AlertTriangle, CheckCircle, Camera } from 'lucide-react';
 import { InventoryItem } from '../types';
 import { findInventoryMatchByIdentifier, normalizeIdentifier } from '../domain/autoInventory';
 import { quickPurchaseImeiError, QuickPurchasePaidBy } from '../domain/quickPurchase';
 import { selectOnFocus } from '../hooks/selectOnFocus';
 import { useSubmitGuard } from '../hooks/useSubmitGuard';
+import { ImeiScanner } from './ImeiScanner';
 
 export interface QuickPurchaseSaveInput {
   device: string;
@@ -42,6 +43,7 @@ export const QuickPurchaseView: React.FC<Props> = ({ inventory, onSave }) => {
   const [f, setF] = useState(emptyForm());
   const [confirmDuplicate, setConfirmDuplicate] = useState(false);
   const [saved, setSaved] = useState<{ device: string; amount: number } | null>(null);
+  const [showImeiScanner, setShowImeiScanner] = useState(false);
   const set = (patch: Partial<ReturnType<typeof emptyForm>>) => setF(prev => ({ ...prev, ...patch }));
   // onSave logs a cash-out and creates an inventory record — a double-tap on
   // "Add to Inventory" before the form visibly clears would do both twice.
@@ -118,7 +120,13 @@ export const QuickPurchaseView: React.FC<Props> = ({ inventory, onSave }) => {
 
           <div className="mb-3">
             <label className={labelCls}>IMEI / Serial</label>
-            <input className={inputCls} placeholder="Optional" value={f.imei} onChange={e => set({ imei: e.target.value })} />
+            <div className="flex gap-2">
+              <input className={`${inputCls} flex-1 min-w-0`} placeholder="Optional" value={f.imei} onChange={e => set({ imei: e.target.value })} />
+              <button type="button" onClick={() => setShowImeiScanner(true)} title="Scan IMEI / serial with camera"
+                className="shrink-0 px-3 rounded-md bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 text-slate-500 hover:text-indigo-600 hover:border-indigo-400 transition-colors">
+                <Camera className="w-4 h-4" />
+              </button>
+            </div>
             {imeiError && <p className="text-xs text-rose-600 dark:text-rose-400 mt-1">{imeiError}</p>}
             {duplicate && (
               <div className="mt-2 bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-500/40 rounded-lg p-3 text-xs">
@@ -164,6 +172,12 @@ export const QuickPurchaseView: React.FC<Props> = ({ inventory, onSave }) => {
           {isSubmitting ? 'Adding…' : 'Add to Inventory'}
         </button>
       </div>
+      {showImeiScanner && (
+        <ImeiScanner
+          onScan={(imei) => { set({ imei }); setShowImeiScanner(false); }}
+          onClose={() => setShowImeiScanner(false)}
+        />
+      )}
     </div>
   );
 };
