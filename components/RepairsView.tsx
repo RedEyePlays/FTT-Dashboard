@@ -55,6 +55,17 @@ const money = (n?: number) => `$${(n || 0).toFixed(2)}`;
 const deviceName = (r: Repair) => [r.brand, r.model].filter(Boolean).join(' ') || r.deviceType || 'Device';
 
 const inputCls = 'w-full px-2.5 py-1.5 text-sm bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md outline-none focus:ring-2 focus:ring-indigo-500 text-slate-900 dark:text-slate-100 dark:[color-scheme:dark]';
+// Same look as inputCls, minus the baked-in `w-full`. Needed anywhere an
+// input sits in a flex row alongside a fixed/flex-grow width of its own
+// (e.g. `${inputClsRow} w-24` or `${inputClsRow} flex-1`) — combining
+// `w-full` with another width utility is NOT harmless: Tailwind's compiled
+// stylesheet orders width utilities with `w-full` after the fixed-size ones
+// (w-16, w-24, ...), so at equal specificity `w-full`'s width:100% silently
+// wins the cascade and the intended width never applies. That's what made
+// the Parts & Labor row's Cost/Qty inputs balloon to ~100% width each and
+// left the Name field (flex-basis 0, no shrink share left to claim) at a
+// real, DevTools-confirmed 0px.
+const inputClsRow = inputCls.replace('w-full ', '');
 
 const Field: React.FC<{ label: string; children: React.ReactNode; className?: string }> = ({ label, children, className }) => (
   <label className={`block ${className || ''}`}><span className="text-[11px] font-medium text-slate-500 dark:text-slate-400">{label}</span>{children}</label>
@@ -706,9 +717,9 @@ const RepairDrawer: React.FC<{
             <p className="text-xs text-slate-400 mb-2">Log each part used and its cost — the parts total feeds repair margin, separate from the price you charge.</p>
             {(f.parts || []).map(p => (
               <div key={p.id} className="flex items-center gap-2 mb-2">
-                <input className={`${inputCls} flex-1 min-w-0`} placeholder="Part (e.g. OLED screen)" value={p.name} onChange={e => updatePart(p.id, { name: e.target.value })} />
-                <input type="number" min="0" step="0.01" className={`${inputCls} w-24`} placeholder="Cost" value={p.unitCost || ''} onChange={e => updatePart(p.id, { unitCost: num(e.target.value) })} onFocus={selectOnFocus} />
-                <input type="number" min="1" step="1" className={`${inputCls} w-16`} placeholder="Qty" value={p.quantity || ''} onChange={e => updatePart(p.id, { quantity: Math.max(1, Math.round(num(e.target.value)) || 1) })} />
+                <input className={`${inputClsRow} flex-1 min-w-0`} placeholder="Part (e.g. OLED screen)" value={p.name} onChange={e => updatePart(p.id, { name: e.target.value })} />
+                <input type="number" min="0" step="0.01" className={`${inputClsRow} w-24 shrink-0`} placeholder="Cost" value={p.unitCost || ''} onChange={e => updatePart(p.id, { unitCost: num(e.target.value) })} onFocus={selectOnFocus} />
+                <input type="number" min="1" step="1" className={`${inputClsRow} w-16 shrink-0`} placeholder="Qty" value={p.quantity || ''} onChange={e => updatePart(p.id, { quantity: Math.max(1, Math.round(num(e.target.value)) || 1) })} />
                 <button type="button" onClick={() => removePart(p.id)} className="p-1.5 text-slate-400 hover:text-rose-500 shrink-0" aria-label="Remove part"><Trash2 className="w-4 h-4" /></button>
               </div>
             ))}
