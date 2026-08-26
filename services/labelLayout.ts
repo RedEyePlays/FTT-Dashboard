@@ -35,8 +35,9 @@ export interface LabelOpts {
   // non-Dymo (inch/ZP 450) templates only — undefined uses the built-in
   // default. Dymo keeps its own separately-tuned constants.
   padMm?: number;
-  // Shifts the whole text block down as one group (a paint-only transform,
-  // not a layout change) — see AppSettings.labels.contentPushDownMm.
+  // Shifts the whole text block down as one group, via a margin-box trick
+  // (not a `transform`, which real print drivers don't reliably honor) — see
+  // AppSettings.labels.contentPushDownMm.
   pushDownMm?: number;
   // Gap between content lines (org/code/device/sub/serial) on the non-Dymo
   // templates — see AppSettings.labels.lineSpacingMm. Clamped to [0, 1.5]
@@ -140,25 +141,45 @@ function labelBody(u: U, m: LabelMedia, c: LabelContent, img: LabelImages, o: La
   // clamped defensively even for a bad stored value.
   const lineGap = clamp(o.lineGapMm ?? 1.1, 0, 1.5);
   // Push the whole text block down as one group, without touching the gap
-  // between lines or the block's own height — a `transform`, not a layout
-  // change, so it can't trigger the browser's print auto-shrink-to-fit (that
-  // only reacts to content overflowing its layout box; a transform only
-  // repaints, it never resizes anything). Owner-configurable in Settings;
-  // 0 (no shift) when unset.
+  // between lines or the block's own height.
+  //
+  // Previously implemented as `transform: translateY(...)` on the centered
+  // column, reasoned to be safe because a transform is paint-only and can't
+  // trigger the browser's print auto-shrink-to-fit. That reasoning was
+  // verified correct for Chromium's own print/PDF pipeline (confirmed by
+  // inspecting the generated PDF's content-stream coordinates directly), but
+  // physical printing confirmed it produced ZERO visible shift on the real
+  // ZP 450 output — `transform` is a compositing-layer feature, and label
+  // printer drivers commonly flatten/rasterize HTML through a simplified
+  // box-model-only renderer that doesn't implement it, unlike padding/margin.
+  //
+  // Replaced with a margin-based technique that achieves the exact same
+  // result through the box model instead: wrap the lines in an inner block
+  // with `margin-top: N` and `margin-bottom: -N`. The two margins cancel in
+  // the outer column's `justify-content:center` centering math (its used
+  // "margin box" size is unchanged: height + N + -N = height), so the
+  // available row height this consumes doesn't grow — same overflow-safety
+  // as the transform had — but the inner block's own border box still gets
+  // positioned N further down, because margin-top is literally the offset
+  // before it. Verified pixel-for-pixel identical to translateY(N) in a
+  // real Chromium layout. Owner-configurable in Settings; 0 (no shift) when
+  // unset.
   const pushDown = o.pushDownMm ?? 0;
   return `
     <div style="box-sizing:border-box;width:100%;height:100%;padding:${u(pad)};background:#fff;color:#000;
       font-family:'Inter',system-ui,Arial,sans-serif;display:flex;flex-direction:column;gap:${u(1)};overflow:hidden;">
       <div style="flex:1;min-height:0;display:flex;gap:${u(2)};">
-        <div style="flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:${u(lineGap)};transform:translateY(${u(pushDown)});">
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:${u(1.2)};">
-            <span style="font-weight:800;font-size:${u(fOrg)};letter-spacing:.5px;line-height:1;">${esc(c.org)}</span>
-            ${pill}
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;overflow:hidden;">
+          <div style="display:flex;flex-direction:column;gap:${u(lineGap)};margin-top:${u(pushDown)};margin-bottom:${u(-pushDown)};">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:${u(1.2)};">
+              <span style="font-weight:800;font-size:${u(fOrg)};letter-spacing:.5px;line-height:1;">${esc(c.org)}</span>
+              ${pill}
+            </div>
+            <div style="font-family:'Courier New',monospace;font-weight:800;font-size:${u(fCode)};line-height:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(c.code)}</div>
+            <div style="font-weight:700;font-size:${u(fDevice)};line-height:1.05;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(c.device)}</div>
+            ${c.sub ? `<div style="font-size:${u(fSub)};font-weight:600;color:#000;line-height:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(c.sub)}</div>` : ''}
+            ${c.serial ? `<div style="font-family:'Courier New',monospace;font-weight:800;font-size:${u(fSerial)};color:#000;line-height:1.05;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(c.serial)}</div>` : ''}
           </div>
-          <div style="font-family:'Courier New',monospace;font-weight:800;font-size:${u(fCode)};line-height:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(c.code)}</div>
-          <div style="font-weight:700;font-size:${u(fDevice)};line-height:1.05;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(c.device)}</div>
-          ${c.sub ? `<div style="font-size:${u(fSub)};font-weight:600;color:#000;line-height:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(c.sub)}</div>` : ''}
-          ${c.serial ? `<div style="font-family:'Courier New',monospace;font-weight:800;font-size:${u(fSerial)};color:#000;line-height:1.05;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(c.serial)}</div>` : ''}
         </div>
         ${img.qr ? `<img src="${img.qr}" style="width:${u(qrS)};height:${u(qrS)};flex-shrink:0;align-self:center;image-rendering:pixelated;" />` : ''}
       </div>
