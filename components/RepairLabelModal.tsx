@@ -8,7 +8,7 @@ import { REPAIR_STATUS_LABEL } from '../domain/repairs';
 import { Dpi, buildZpl } from '../services/zpl';
 import { detectZebra, sendZpl, ZebraDetect } from '../services/zebra';
 import { LabelContent, labelPreview, labelPrintDoc, mmOf } from '../services/labelLayout';
-import { getLabelSizes, getStoreProfile } from './SettingsModal';
+import { getLabelSizes, getStoreProfile, getLabelSpacing } from './SettingsModal';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 
 interface Props {
@@ -109,7 +109,10 @@ export const RepairLabelModal: React.FC<Props> = ({ repair: r, context, onClose,
     status: statusLabel || undefined,
   };
   const images = { qr, barcode };
-  const opts = { showBarcode: settings.showBarcode, showStatus: settings.showStatus };
+  // Owner-configured content padding / line spacing (Settings → Labels &
+  // Printing), applied to the non-Dymo templates only.
+  const spacing = useMemo(() => getLabelSpacing(), []);
+  const opts = { showBarcode: settings.showBarcode, showStatus: settings.showStatus, padMm: spacing.paddingMm, lineGapMm: spacing.lineSpacingMm };
 
   const handlePrint = () => {
     const win = window.open('', '_blank', 'width=520,height=680');
@@ -144,15 +147,16 @@ export const RepairLabelModal: React.FC<Props> = ({ repair: r, context, onClose,
   const handlePdf = () => {
     const { w, h } = mmOf(media);
     const pdf = new jsPDF({ unit: 'mm', format: [w, h], orientation: w > h ? 'landscape' : 'portrait' });
-    const pad = media.dymo ? 1.3 : 1.6;
+    const pad = media.dymo ? 1.3 : (spacing.paddingMm ?? 2.0);
+    const lineGapExtra = media.dymo ? 0 : Math.max(0, (spacing.lineSpacingMm ?? 1.6) - 1.6);
     const qrS = media.dymo ? h - pad * 2 - (settings.showBarcode ? 6.5 : 0) : Math.min(w, h) * (media.h >= 3 ? 0.42 : 0.6);
     pdf.setFont('helvetica', 'bold'); pdf.setFontSize(7); pdf.text(storeName, pad, pad + 2.6);
     pdf.setFont('courier', 'bold'); pdf.setFontSize(media.dymo ? 20 : 14); pdf.text(repairId.slice(0, 22), pad, pad + 9);
     pdf.setFont('helvetica', 'bold'); pdf.setFontSize(media.dymo ? 12 : 10); pdf.text(device.slice(0, 30), pad, pad + 14.5);
     pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8);
     let y = pad + 19;
-    if (repairType) { pdf.text(repairType, pad, y); y += 4.5; }
-    if (r.imei) { pdf.setFont('courier', 'bold'); pdf.setFontSize(11); pdf.text(r.imei, pad, y); pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8); y += 5; }
+    if (repairType) { pdf.text(repairType, pad, y); y += 4.5 + lineGapExtra; }
+    if (r.imei) { pdf.setFont('courier', 'bold'); pdf.setFontSize(11); pdf.text(r.imei, pad, y); pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8); y += 5 + lineGapExtra; }
     if (settings.showStatus && statusLabel) { pdf.setFont('helvetica', 'bold'); pdf.text(statusLabel.toUpperCase(), pad, y); pdf.setFont('helvetica', 'normal'); }
     if (qr) pdf.addImage(qr, 'PNG', w - pad - qrS, pad, qrS, qrS);
     if (settings.showBarcode && barcode) pdf.addImage(barcode, 'PNG', pad, h - pad - 5.5, w - pad * 2, 5.5);

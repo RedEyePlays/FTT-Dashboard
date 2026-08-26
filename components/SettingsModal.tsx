@@ -53,6 +53,26 @@ export const getLabelSizes = (): LabelSize[] => {
   catch { return mergeLabelSizes(); }
 };
 
+// Client-side cache of the owner's label content padding / line-spacing
+// overrides (AppSettings.labels.paddingMm / lineSpacingMm) — same read-through
+// pattern as getLabelSizes, so the label modals can apply them without
+// threading settings through every parent. Both undefined means "use the
+// built-in defaults" (see labelLayout.ts / shelfTag.ts).
+export interface LabelSpacing { paddingMm?: number; lineSpacingMm?: number }
+const LABEL_SPACING_KEY = 'ftt_label_spacing_v1';
+export const cacheLabelSpacing = (s: LabelSpacing) => {
+  try { localStorage.setItem(LABEL_SPACING_KEY, JSON.stringify({ paddingMm: s.paddingMm, lineSpacingMm: s.lineSpacingMm })); } catch {}
+};
+export const getLabelSpacing = (): LabelSpacing => {
+  try {
+    const s = JSON.parse(localStorage.getItem(LABEL_SPACING_KEY) || '{}');
+    return {
+      paddingMm: typeof s.paddingMm === 'number' ? s.paddingMm : undefined,
+      lineSpacingMm: typeof s.lineSpacingMm === 'number' ? s.lineSpacingMm : undefined,
+    };
+  } catch { return {}; }
+};
+
 interface SettingsModalProps {
   onClose: () => void;
   currentData: AppData;

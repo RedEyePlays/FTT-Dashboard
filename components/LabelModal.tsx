@@ -6,7 +6,7 @@ import { jsPDF } from 'jspdf';
 import { InventoryItem, DeviceStatus } from '../types';
 import { getDeviceDisplayName, kindOf } from '../domain/inventory';
 import { LabelContent, labelPreview, labelPrintDoc, mmOf } from '../services/labelLayout';
-import { getLabelSizes, getStoreProfile } from './SettingsModal';
+import { getLabelSizes, getStoreProfile, getLabelSpacing } from './SettingsModal';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 
 interface Props {
@@ -123,10 +123,14 @@ export const LabelModal: React.FC<Props> = ({ item, onClose }) => {
   };
   // Devices may hide the QR (or barcode) independently; accessories never show QR.
   const images = { qr: (isAccessory || !prefs.showQR) ? '' : qr, barcode };
+  // Owner-configured content padding / line spacing (Settings → Labels &
+  // Printing), applied to the non-Dymo templates only — undefined uses the
+  // built-in default.
+  const spacing = useMemo(() => getLabelSpacing(), []);
   // Accessories: barcode-only label (no QR / text / status).
   const opts = isAccessory
     ? { showBarcode: true, showStatus: false, barcodeOnly: true }
-    : { showBarcode: prefs.showBarcode, showStatus: prefs.showStatus };
+    : { showBarcode: prefs.showBarcode, showStatus: prefs.showStatus, padMm: spacing.paddingMm, lineGapMm: spacing.lineSpacingMm };
 
   const handlePrint = () => {
     const win = window.open('', '_blank', 'width=520,height=680');
@@ -152,15 +156,19 @@ export const LabelModal: React.FC<Props> = ({ item, onClose }) => {
       return;
     }
 
-    const pad = media.dymo ? 1.3 : 1.6;
+    const pad = media.dymo ? 1.3 : (spacing.paddingMm ?? 2.0);
+    // Extra spacing above the built-in default is added between each line so
+    // the "Line spacing" setting visibly spreads the PDF layout too, not just
+    // the HTML/print preview.
+    const lineGapExtra = media.dymo ? 0 : Math.max(0, (spacing.lineSpacingMm ?? 1.6) - 1.6);
     const qrS = media.dymo ? h - pad * 2 - (prefs.showBarcode ? 6.5 : 0) : Math.min(w, h) * (media.h >= 3 ? 0.42 : 0.6);
     pdf.setFont('helvetica', 'bold'); pdf.setFontSize(7); pdf.text(storeName, pad, pad + 2.6);
     pdf.setFont('courier', 'bold'); pdf.setFontSize(media.dymo ? 20 : 14); pdf.text(sku, pad, pad + 9);
     pdf.setFont('helvetica', 'bold'); pdf.setFontSize(media.dymo ? 12 : 10); pdf.text(name.slice(0, 30), pad, pad + 14.5);
     pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8);
     let y = pad + 19;
-    if (content.sub) { pdf.text(content.sub, pad, y); y += 4.5; }
-    if (item.imei) { pdf.setFont('courier', 'bold'); pdf.setFontSize(11); pdf.text(item.imei, pad, y); pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8); y += 5; }
+    if (content.sub) { pdf.text(content.sub, pad, y); y += 4.5 + lineGapExtra; }
+    if (item.imei) { pdf.setFont('courier', 'bold'); pdf.setFontSize(11); pdf.text(item.imei, pad, y); pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8); y += 5 + lineGapExtra; }
     if (prefs.showStatus && status) { pdf.setFont('helvetica', 'bold'); pdf.text(status.toUpperCase(), pad, y); pdf.setFont('helvetica', 'normal'); }
     if (prefs.showQR && qr) pdf.addImage(qr, 'PNG', w - pad - qrS, pad, qrS, qrS);
     if (prefs.showBarcode && barcode) pdf.addImage(barcode, 'PNG', pad, h - pad - 5.5, w - pad * 2, 5.5);
