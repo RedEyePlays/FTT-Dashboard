@@ -12,6 +12,7 @@ import { jsPDF } from 'jspdf';
 import {
   computeAnalytics, presetRange, RangePreset, eodRows, eodCsv, AnalyticsInput,
 } from '../domain/analytics';
+import { todayISO } from '../domain/dates';
 
 interface Props {
   salesTransactions: SalesTransaction[];
@@ -48,7 +49,7 @@ export const OwnerAnalytics: React.FC<Props> = ({ salesTransactions, repairs, in
     const blob = new Blob([eodCsv(a.eod)], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    link.href = url; link.download = `ftt-eod-${new Date().toISOString().slice(0, 10)}.csv`; link.click();
+    link.href = url; link.download = `ftt-eod-${todayISO()}.csv`; link.click();
     URL.revokeObjectURL(url);
   };
   const exportPdf = () => {
@@ -61,7 +62,7 @@ export const OwnerAnalytics: React.FC<Props> = ({ salesTransactions, repairs, in
       pdf.setFont('helvetica', 'bold'); pdf.text(k, 40, y);
       pdf.setFont('helvetica', 'normal'); pdf.text(String(val), 300, y); y += 22;
     });
-    pdf.save(`ftt-eod-${new Date().toISOString().slice(0, 10)}.pdf`);
+    pdf.save(`ftt-eod-${todayISO()}.pdf`);
   };
 
   return (

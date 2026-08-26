@@ -19,6 +19,7 @@ import { getDeviceDisplayName, priceFieldFor, isCostRevealingColumn } from '../d
 import { listingPlatformsLabel } from '../domain/listing';
 import { clampWidth, fitWidths } from '../domain/columnLayout';
 import { usePersistedFilter } from '../hooks/usePersistedFilter';
+import { todayISO } from '../domain/dates';
 
 interface Props {
   inventory: InventoryItem[];
@@ -52,7 +53,7 @@ interface SavedView { name: string; page: Page; query: string; sort: Sort | null
 const PAGE_SIZE = 50; // rows per page in each sub-page table
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-const today = () => new Date().toISOString().split('T')[0];
+const today = () => todayISO();
 const kindOf = (i: InventoryItem): ItemKind => i.kind ?? 'device';
 const isSold = (i: InventoryItem) => kindOf(i) === 'device' && (!!i.soldDate || i.deviceStatus === 'sold');
 const isLow = (i: InventoryItem) => kindOf(i) === 'accessory' && (i.quantity ?? 0) <= (i.lowStockThreshold ?? 0);
@@ -764,7 +765,8 @@ export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, a
       {expandItem && <ItemFormModal initial={expandItem} runners={runners} onSave={onSave} onGenerateSku={onGenerateSku} onClose={() => setExpandItem(null)}
         linkedRepair={linkedRepairOf(expandItem.id)}
         onCreateRepair={onCreateRepair ? () => { onCreateRepair(expandItem); setExpandItem(null); } : undefined}
-        onOpenRepair={onOpenRepair ? (id: string) => { onOpenRepair(id); setExpandItem(null); } : undefined} />}
+        onOpenRepair={onOpenRepair ? (id: string) => { onOpenRepair(id); setExpandItem(null); } : undefined}
+        inventory={inventory} />}
       {labelItem && <Suspense fallback={null}><LabelModal item={labelItem} onClose={() => setLabelItem(null)} /></Suspense>}
       {historyItem && <HistoryModal item={historyItem.item} mode={historyItem.mode} activity={activity} auditLogs={auditLogs} onClose={() => setHistoryItem(null)} />}
     </div>

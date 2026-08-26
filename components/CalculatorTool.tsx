@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { X, DollarSign, Calculator, RefreshCw, Delete } from 'lucide-react';
+import { shouldIgnoreGlobalKey } from '../domain/keyboard';
 
 interface CalculatorToolProps {
   onClose: () => void;
@@ -80,6 +81,12 @@ export const CalculatorTool: React.FC<CalculatorToolProps> = ({ onClose }) => {
     if (mode !== 'standard') return;
 
     const handleKeyDown = (event: KeyboardEvent) => {
+      // This is a WINDOW-level handler, so it sees keystrokes meant for other
+      // fields too — and it preventDefault()s digits. Without this guard the
+      // calculator silently swallowed every digit typed anywhere on the page
+      // while it was open in Math mode, including an IMEI/serial being entered
+      // by hand or fired in by a keyboard-emulation barcode scanner.
+      if (shouldIgnoreGlobalKey(event)) return;
       const { key } = event;
 
       // Numbers

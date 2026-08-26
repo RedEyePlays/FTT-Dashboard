@@ -1,4 +1,5 @@
 import { InventoryItem, ItemKind } from '../types';
+import { toISODate } from './dates';
 
 // --- Item-kind vocabulary -------------------------------------------------
 //
@@ -69,7 +70,7 @@ export const isOversold = (onHand: number | undefined): boolean => (onHand ?? 0)
 // defaults to today. Accessories and unpriced devices pass through unchanged.
 export const applyDirectSale = (i: InventoryItem, now: number = Date.now()): InventoryItem => {
   if (kindOf(i) !== 'device' || (i.salePrice || 0) <= 0) return i;
-  const soldDate = i.soldDate || new Date(now).toISOString().split('T')[0];
+  const soldDate = i.soldDate || toISODate(now);
   return { ...i, soldDate, deviceStatus: 'sold' };
 };
 

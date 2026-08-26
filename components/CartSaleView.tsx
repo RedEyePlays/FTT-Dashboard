@@ -18,6 +18,7 @@ import { useCheckout, CustomCategory, CUSTOM_DEVICE_TYPES } from '../hooks/useCh
 import { PAYMENT_METHOD_LABEL } from '../services/salesReceipt';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 import { selectOnFocus } from '../hooks/selectOnFocus';
+import { todayISO } from '../domain/dates';
 
 export type { CartCheckout } from '../hooks/useCheckout';
 
@@ -391,7 +392,7 @@ export const CartSaleView: React.FC<Props> = (props) => {
           </select>
           <div className="grid grid-cols-2 gap-3">
             <div><label className={labelCls}>Fee %</label><input type="number" className={inputCls} value={platformFeePercent} onChange={e => setPlatformFeePercent(e.target.value)} /></div>
-            <div><label className={labelCls}>Sale Date</label><input type="date" max={new Date().toISOString().split('T')[0]} className={inputCls} value={soldDate} onChange={e => setSoldDate(e.target.value)} /></div>
+            <div><label className={labelCls}>Sale Date</label><input type="date" max={todayISO()} className={inputCls} value={soldDate} onChange={e => setSoldDate(e.target.value)} /></div>
           </div>
         </div>
 

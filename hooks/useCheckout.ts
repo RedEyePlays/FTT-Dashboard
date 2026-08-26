@@ -8,6 +8,7 @@ import { hasListedElsewhere } from '../domain/listing';
 import { RepairSalePrefill, repairSalePrefill, isRepairOpen, matchesRepair } from '../domain/repairs';
 import { printSalesReceipt, PAYMENT_METHOD_LABEL } from '../services/salesReceipt';
 import { PRINT_PREVIEW_BAR_STYLE, PRINT_PREVIEW_BAR_HTML } from '../services/printPreview';
+import { todayISO } from '../domain/dates';
 
 // All Quick Sale / checkout state, pricing math and the commit-payload builder
 // live here so the desktop CartSaleView and the mobile step flow share ONE
@@ -95,7 +96,7 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
 
   const [platformName, setPlatformName] = useState('None / In-Store');
   const [platformFeePercent, setPlatformFeePercent] = useState('0');
-  const [soldDate, setSoldDate] = useState(new Date().toISOString().split('T')[0]);
+  const [soldDate, setSoldDate] = useState(todayISO());
 
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
@@ -459,7 +460,7 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
       : undefined;
 
     const transaction: SalesTransaction = {
-      id: transactionId, date: soldDate,
+      id: transactionId, date: soldDate, createdAt: Date.now(),
       customerId: customer?.id, customerName: effectiveName, customerPhone: customerPhone || undefined, customerEmail: customerEmail || undefined,
       paymentMethod,
       cashAmount: paymentMethod === 'mixed' ? (parseFloat(cashAmount) || 0) : undefined,
@@ -486,7 +487,7 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
     setConfirmed(true);
     // A backdated sale must never silently carry its date into the next sale
     // rung up in the same session — reset to today now that this one's done.
-    setSoldDate(new Date().toISOString().split('T')[0]);
+    setSoldDate(todayISO());
     // Opt-in auto-print: only when the tech ticked "Print receipt" at checkout.
     // Prints the just-built transaction (state's lastTx isn't set yet this tick).
     if (printReceiptOnComplete) printReceipt(transaction);

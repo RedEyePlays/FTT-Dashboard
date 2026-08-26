@@ -88,6 +88,31 @@ export function findInventoryMatchByIdentifier(normalized: string, inventory: In
   return inventory.find(i => (i.kind ?? 'device') === 'device' && identifierOf(i) === normalized);
 }
 
+/**
+ * The existing device that already carries this IMEI/serial, for the plain
+ * Inventory → Add/Edit Item form.
+ *
+ * Auto-inventory and Quick Purchase have always normalized and matched
+ * identifiers before creating a record; the manual form did not, so the same
+ * physical device could be entered twice. This reuses the exact same
+ * normalization and live matching those paths use rather than adding a second
+ * notion of "same device".
+ *
+ * `excludeId` is the row being edited — an item is never a duplicate of itself.
+ * A blank identifier never matches: plenty of legitimate rows have no serial,
+ * and they must not all collide with each other.
+ */
+export function findDuplicateDevice(
+  rawIdentifier: string,
+  inventory: InventoryItem[],
+  excludeId?: string,
+): InventoryItem | undefined {
+  const { normalized } = normalizeIdentifier(rawIdentifier || '');
+  if (!normalized) return undefined;
+  const pool = excludeId ? inventory.filter(i => i.id !== excludeId) : inventory;
+  return findInventoryMatchByIdentifier(normalized, pool);
+}
+
 // A batch is private if explicitly flagged so, falling back to the legacy
 // `autoInventory` flag for a batch saved before this change (e.g. an old "FTT
 // Personal" batch with autoInventory: true) — so it reads as private with no

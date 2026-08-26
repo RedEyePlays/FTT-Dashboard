@@ -5,6 +5,7 @@ import { BackupPanel } from './BackupPanel';
 import { normalizeRestore, isRestorableBackup } from '../domain/restore';
 import { mergeLabelSizes, LabelSize } from '../domain/settings';
 import { useEscapeKey } from '../hooks/useEscapeKey';
+import { todayISO } from '../domain/dates';
 
 export const getPOSSettings = () => {
   try {
@@ -103,7 +104,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, currentDa
     const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(currentData, null, 2));
     const downloadAnchorNode = document.createElement('a');
     downloadAnchorNode.setAttribute("href", dataStr);
-    downloadAnchorNode.setAttribute("download", `biztrack_backup_${new Date().toISOString().split('T')[0]}.json`);
+    downloadAnchorNode.setAttribute("download", `biztrack_backup_${todayISO()}.json`);
     document.body.appendChild(downloadAnchorNode);
     downloadAnchorNode.click();
     downloadAnchorNode.remove();

@@ -1,15 +1,17 @@
 import React, { useMemo, useState } from 'react';
-import { Wallet, Receipt, Download, Save, AlertTriangle, CheckCircle2, Plus, Trash2, Scale, FileArchive, Truck, DoorOpen, History, LockOpen } from 'lucide-react';
+import { Wallet, Receipt, Download, Save, AlertTriangle, CheckCircle2, Plus, Trash2, Scale, FileArchive, Truck, DoorOpen, History, LockOpen, Banknote } from 'lucide-react';
 import { SalesTransaction, CashReconciliation, CashDrawerEntry, InventoryItem, PayPeriodPaid, Settlement, Runner, Repair, Customer, AuditEntry, ActivityEntry, TimeEntry, AppUser } from '../types';
 import {
   expectedCashForDate, expectedEndingCash, sumDrawerEntries, reconcileCash, taxRemittance, taxReportCsvRows, TaxGrouping,
   profitAndLoss, profitLossCsvRows, settlementHistory, yearEndSummary, yearEndCsvRows, ProfitLossInput, ReconciliationInput,
+  cashSalesAfterClose,
   cashDrawerSummary,
 } from '../domain/reports';
 import { computeAnalytics, presetRange } from '../domain/analytics';
 import { entriesOnDate, workedHours } from '../domain/timeclock';
 import { toCSV, triggerDownload } from '../services/backup';
 import { newId } from '../domain/ids';
+import { toISODate, todayISO } from '../domain/dates';
 
 type SaveReconciliation = (r: ReconciliationInput) => void;
 
@@ -43,8 +45,7 @@ const TABS: { id: TabId; label: string; icon: React.ReactNode }[] = [
 ];
 
 const money = (n: number) => `$${(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-const todayISO = () => new Date().toISOString().split('T')[0];
-const monthStartISO = () => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1).toISOString().split('T')[0]; };
+const monthStartISO = () => { const d = new Date(); return toISODate(new Date(d.getFullYear(), d.getMonth(), 1)); };
 
 const card = 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl';
 const input = 'px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500';
@@ -274,6 +275,13 @@ const CashReconTab: React.FC<{
   const [date, setDate] = useState(todayISO());
   const cashSales = useMemo(() => expectedCashForDate(salesTransactions, date), [salesTransactions, date]);
   const saved = cashReconciliations.find(r => r.date === date);
+  // Cash taken in after this day was counted. The sale still counts as that
+  // day's revenue and profit — this is only about the money not having been in
+  // the drawer at count time, which is otherwise an unexplainable variance.
+  const afterClose = useMemo(
+    () => cashSalesAfterClose(salesTransactions, date, saved?.reconciledAt),
+    [salesTransactions, date, saved?.reconciledAt],
+  );
   // The drawer must have been explicitly opened for this day; otherwise we flag
   // it rather than silently assuming a starting float.
   const wasOpened = !!saved?.openedAt;
@@ -327,6 +335,16 @@ const CashReconTab: React.FC<{
   return (
     <div className="space-y-6">
       <div className={`${card} p-5 space-y-4`}>
+        {afterClose > 0 && (
+          <div className="flex items-start gap-2 rounded-lg px-3 py-2 text-sm bg-indigo-50 dark:bg-indigo-900/20 text-indigo-800 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-900/40">
+            <Banknote className="w-4 h-4 shrink-0 mt-0.5" />
+            <span>
+              <strong>{money(afterClose)} in cash sales came in after this day was counted.</strong>{' '}
+              Those sales still count toward the day's revenue and profit — but that cash wasn't in the drawer when you
+              counted it, so expect the till to run over by this amount. Re-count and save again to fold it in.
+            </span>
+          </div>
+        )}
         {!wasOpened && (
           <div className="flex items-start gap-2 rounded-lg px-3 py-2 text-sm bg-amber-50 dark:bg-amber-900/20 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-900/40">
             <DoorOpen className="w-4 h-4 shrink-0 mt-0.5" />
@@ -414,7 +432,7 @@ const CashHistory: React.FC<{ cashReconciliations: CashReconciliation[]; onPick:
   const cutoff = useMemo(() => {
     if (!days) return '';
     const d = new Date(); d.setDate(d.getDate() - (days - 1));
-    return d.toISOString().split('T')[0];
+    return toISODate(d);
   }, [days]);
   const rows = useMemo(
     () => [...cashReconciliations].filter(r => !cutoff || r.date >= cutoff).sort((a, b) => b.date.localeCompare(a.date)),

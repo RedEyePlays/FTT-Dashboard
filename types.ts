@@ -323,7 +323,13 @@ export interface SalesLine {
 
 export interface SalesTransaction {
   id: string;
-  date: string;            // YYYY-MM-DD
+  date: string;            // YYYY-MM-DD (LOCAL calendar date — see domain/dates.ts)
+  // When the sale was actually rung up (epoch ms). `date` alone can't say
+  // whether a sale landed before or after the drawer was counted, which is what
+  // the reconciliation screen needs to explain a post-close cash difference
+  // (see domain/reports.ts's cashSalesAfterClose). Absent on rows written
+  // before this field existed.
+  createdAt?: number;
   customerId?: string;
   customerName: string;
   customerPhone?: string;

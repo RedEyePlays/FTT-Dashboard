@@ -38,6 +38,51 @@ export const cashCollectedOnTx = (t: SalesTransaction): number => {
 export const expectedCashForDate = (transactions: SalesTransaction[], dateISO: string): number =>
   round2(transactions.filter(t => t.date === dateISO).reduce((s, t) => s + cashCollectedOnTx(t), 0));
 
+/**
+ * Cash taken in on a day AFTER that day's drawer was counted and closed.
+ *
+ * Business hours don't stop because the till was counted — an evening wholesale
+ * deal is a real sale on that day and must still be recognized as revenue and
+ * profit. But the cash from it genuinely wasn't in the drawer at count time, so
+ * the reconciliation screen surfaces this figure instead of the sale being
+ * suppressed or the variance silently shifting under a closed day.
+ *
+ * Sales written before `createdAt` existed can't be placed relative to the
+ * close, so they're treated as pre-close (not counted here) rather than
+ * guessed at.
+ */
+export const cashSalesAfterClose = (
+  transactions: SalesTransaction[],
+  dateISO: string,
+  reconciledAt: number | undefined,
+): number => {
+  if (!reconciledAt) return 0;
+  return round2(transactions
+    .filter(t => t.date === dateISO && typeof t.createdAt === 'number' && t.createdAt > reconciledAt)
+    .reduce((s, t) => s + cashCollectedOnTx(t), 0));
+};
+
+/**
+ * Past days whose drawer was started (opened, or had cash logged against it) but
+ * never reconciled. A day like that holds real cash movement nobody ever counted,
+ * and nothing surfaces it once the date rolls over — so the Dashboard flags it.
+ *
+ * Only days with actual drawer activity qualify: a shop that simply didn't use
+ * the drawer feature on a given day is not "unreconciled", it's uninvolved.
+ * Today is always excluded — it isn't late until it's over.
+ */
+export const unreconciledDays = (
+  reconciliations: CashReconciliation[],
+  todayISO: string,
+): CashReconciliation[] =>
+  reconciliations
+    .filter(r => r.date < todayISO && !r.reconciledAt)
+    .filter(r => !!r.openedAt
+      || (r.cashIn?.length || 0) > 0
+      || (r.cashOut?.length || 0) > 0
+      || (r.withdrawals?.length || 0) > 0)
+    .sort((a, b) => a.date.localeCompare(b.date));
+
 export interface CashVariance { expected: number; counted: number; variance: number; direction: 'over' | 'short' | 'balanced' }
 
 /**
