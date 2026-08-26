@@ -2,11 +2,10 @@ import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react-swc';
 
 // Unit tests target the pure logic modules (services + domain helpers), which
-// run in a Node environment. A handful of suites need a DOM — the note editor's
-// markdown⇄HTML round-trip, and the component tests that prove a note's
-// visibility actually reaches rendered output — and opt in per file with
-// `// @vitest-environment happy-dom`. The React plugin is here so those .tsx
-// suites can compile JSX.
+// run in a Node environment. A handful of suites need a DOM or React rendering
+// (component/hook tests that assert on real mounted behaviour, not just a
+// predicate) and opt in per file with `// @vitest-environment happy-dom`. The
+// React plugin is here so those .tsx suites can compile JSX.
 export default defineConfig({
   // Cast: @vitejs/plugin-react-swc resolves against the root `vite` package,
   // while vitest's own `defineConfig` re-exports a nested `vite` copy from

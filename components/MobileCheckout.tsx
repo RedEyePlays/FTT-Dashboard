@@ -357,7 +357,7 @@ export const MobileCheckout: React.FC<Props> = (props) => {
         {step < 3 ? (
           <button onClick={next} disabled={!canNext} className="ml-auto px-6 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white rounded-xl text-sm font-semibold">Next</button>
         ) : (
-          <button onClick={cx.handleCheckout} disabled={cx.cart.length === 0 || cx.blockedByZeroPrice || cx.blockedByListedElsewhere || cx.mixedPaymentMismatch} className="ml-auto px-6 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white rounded-xl text-sm font-semibold flex items-center gap-2"><CheckCircle className="w-4 h-4" /> {cx.isLayaway ? 'Take Deposit' : 'Complete Sale'}</button>
+          <button onClick={cx.handleCheckout} disabled={cx.isSubmitting || cx.cart.length === 0 || cx.blockedByZeroPrice || cx.blockedByListedElsewhere || cx.mixedPaymentMismatch} className="ml-auto px-6 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white rounded-xl text-sm font-semibold flex items-center gap-2"><CheckCircle className="w-4 h-4" /> {cx.isSubmitting ? 'Processing…' : cx.isLayaway ? 'Take Deposit' : 'Complete Sale'}</button>
         )}
       </div>
 

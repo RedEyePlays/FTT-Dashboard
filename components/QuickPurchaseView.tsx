@@ -4,6 +4,7 @@ import { InventoryItem } from '../types';
 import { findInventoryMatchByIdentifier, normalizeIdentifier } from '../domain/autoInventory';
 import { quickPurchaseImeiError, QuickPurchasePaidBy } from '../domain/quickPurchase';
 import { selectOnFocus } from '../hooks/selectOnFocus';
+import { useSubmitGuard } from '../hooks/useSubmitGuard';
 
 export interface QuickPurchaseSaveInput {
   device: string;
@@ -42,6 +43,9 @@ export const QuickPurchaseView: React.FC<Props> = ({ inventory, onSave }) => {
   const [confirmDuplicate, setConfirmDuplicate] = useState(false);
   const [saved, setSaved] = useState<{ device: string; amount: number } | null>(null);
   const set = (patch: Partial<ReturnType<typeof emptyForm>>) => setF(prev => ({ ...prev, ...patch }));
+  // onSave logs a cash-out and creates an inventory record — a double-tap on
+  // "Add to Inventory" before the form visibly clears would do both twice.
+  const { isSubmitting, run } = useSubmitGuard();
 
   const imeiError = quickPurchaseImeiError(f.imei);
   const normalized = normalizeIdentifier(f.imei || '').normalized;
@@ -57,17 +61,19 @@ export const QuickPurchaseView: React.FC<Props> = ({ inventory, onSave }) => {
 
   const save = () => {
     if (!canSave) return;
-    onSave({
-      device: f.device.trim(), imei: f.imei.trim() || undefined, purchaseCost: cost, paidBy: f.paidBy,
-      boughtFrom: f.boughtFrom.trim() || undefined,
-      storage: f.storage.trim() || undefined, color: f.color.trim() || undefined,
-      batteryHealth: f.batteryHealth.trim() || undefined,
-      targetSalePrice: parseFloat(f.targetSalePrice) > 0 ? parseFloat(f.targetSalePrice) : undefined,
+    run(() => {
+      onSave({
+        device: f.device.trim(), imei: f.imei.trim() || undefined, purchaseCost: cost, paidBy: f.paidBy,
+        boughtFrom: f.boughtFrom.trim() || undefined,
+        storage: f.storage.trim() || undefined, color: f.color.trim() || undefined,
+        batteryHealth: f.batteryHealth.trim() || undefined,
+        targetSalePrice: parseFloat(f.targetSalePrice) > 0 ? parseFloat(f.targetSalePrice) : undefined,
+      });
+      setSaved({ device: f.device.trim(), amount: cost });
+      setF(emptyForm());
+      setConfirmDuplicate(false);
+      setTimeout(() => setSaved(null), 3000);
     });
-    setSaved({ device: f.device.trim(), amount: cost });
-    setF(emptyForm());
-    setConfirmDuplicate(false);
-    setTimeout(() => setSaved(null), 3000);
   };
 
   return (
@@ -153,9 +159,9 @@ export const QuickPurchaseView: React.FC<Props> = ({ inventory, onSave }) => {
           </div>
         </div>
 
-        <button onClick={save} disabled={!canSave}
+        <button onClick={save} disabled={!canSave || isSubmitting}
           className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg text-sm font-semibold">
-          Add to Inventory
+          {isSubmitting ? 'Adding…' : 'Add to Inventory'}
         </button>
       </div>
     </div>

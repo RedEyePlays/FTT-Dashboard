@@ -171,6 +171,13 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
   // full. Blank/0 = paid in full (unchanged behaviour).
   const [deposit, setDeposit] = useState('');
 
+  // Re-entrancy guard for handleCheckout (see below) — a ref because state
+  // updates are async and a rapid double-invocation can slip between renders;
+  // isSubmitting (state) exists only so the UI can disable the button/show a
+  // "Processing…" label. The ref is the actual protection.
+  const isSubmittingRef = useRef(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
   const [scan, setScan] = useState('');
   const [scanMsg, setScanMsg] = useState<string | null>(null);
   const scanRef = useRef<HTMLInputElement>(null);
@@ -382,8 +389,34 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
   };
 
   // ---- checkout ----
+  //
+  // handleCheckout writes the whole sale — transaction, device sold-marking,
+  // accessory stock decrement, cash-drawer effect, repair linking — with no
+  // re-entrancy guard of its own to rely on. A second call while the first is
+  // still in flight (an awaited custom-device SKU generation, or just two
+  // click events landing before the button disables) would run all of that
+  // twice: two SalesTransactions for one real sale, cash counted twice in the
+  // drawer, accessory stock double-decremented. isSubmittingRef is set here
+  // as the very first thing — before the validity checks even — and checked
+  // first, so a second call while the first is mid-flight is a no-op rather
+  // than a second full write. It's a ref (not just isSubmitting state)
+  // specifically because state updates are async: a synchronous double-
+  // invocation in the same tick would slip between renders and see the same
+  // stale state twice.
   const handleCheckout = async () => {
+    if (isSubmittingRef.current) return;
     if (cart.length === 0 || blockedByZeroPrice || blockedByListedElsewhere || mixedPaymentMismatch) return;
+    isSubmittingRef.current = true;
+    setIsSubmitting(true);
+    try {
+      await handleCheckoutInner();
+    } finally {
+      isSubmittingRef.current = false;
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleCheckoutInner = async () => {
     const transactionId = uid();
     const soldRows: InventoryItem[] = [];
     const accessoryQtys: Record<string, number> = {};
@@ -632,7 +665,7 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
     lineSubtotal, subtotal, discountTotal, purchaseCostTotal, repairCostTotal, totalCost, taxableBase, taxApplies, tax, platformFee, totalPaid, netProfit,
     isZeroPricedDevice, hasZeroPricedDevice, allowZeroPrice, setAllowZeroPrice, blockedByZeroPrice,
     hasListedElsewhereDevice, allowListedElsewhereSale, setAllowListedElsewhereSale, blockedByListedElsewhere, delistReminders,
-    addDevice, addAccessory, updateLine, removeLine, num, addCustomItem, handleScan, handleCheckout, reset, printReceipt, printInvoice, emailReceipt, soldDeviceRows,
+    addDevice, addAccessory, updateLine, removeLine, num, addCustomItem, handleScan, handleCheckout, isSubmitting, reset, printReceipt, printInvoice, emailReceipt, soldDeviceRows,
     scanResults, addScanResult,
     eligibleRepairs, repairMatches, addRepair,
     printReceiptOnComplete, setPrintReceiptOnComplete,

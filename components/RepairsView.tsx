@@ -18,6 +18,7 @@ import { formatPhoneInput } from '../domain/phone';
 import { usePersistedFilter } from '../hooks/usePersistedFilter';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 import { selectOnFocus } from '../hooks/selectOnFocus';
+import { useSubmitGuard } from '../hooks/useSubmitGuard';
 import { AutoInventoryNotice, isPrivateBatch } from '../domain/autoInventory';
 // Lazy: the repair label modal pulls in jsPDF (~390 kB); load it on demand.
 const RepairLabelModal = lazy(() => import('./RepairLabelModal').then(m => ({ default: m.RepairLabelModal })));
@@ -597,6 +598,13 @@ const RepairDrawer: React.FC<{
   const dirty = JSON.stringify(f) !== snapshot;
   const requestClose = () => { if (!dirty || window.confirm('Discard unsaved changes to this repair?')) onClose(); };
   useEscapeKey(requestClose);
+  // Save and Check Out both ultimately call onSave (App.tsx's
+  // handleSaveRepair), which for a brand-new wholesale ticket can run the
+  // auto-inventory create/attach flow and log a cash-drawer effect — a
+  // double-tap before this ticket's own re-render reflects the save could
+  // re-run that. One shared guard for both buttons, since either one writes
+  // the same repair doc.
+  const { isSubmitting: savePending, run: runSave } = useSubmitGuard();
 
   // Check out: retail repairs go through the shared Quick Sale flow (so the money
   // lands in the sales P&L / cash reconciliation / dashboard totals like any sale
@@ -611,8 +619,10 @@ const RepairDrawer: React.FC<{
 
   const checkOut = () => {
     if (!canSave) return;
-    if (isRetail && onCheckoutViaSale) { onSave(f); onCheckoutViaSale(f); }
-    else onSave(completeRepair(f, dateToEpochMs(completionDate), 'completed'));
+    runSave(() => {
+      if (isRetail && onCheckoutViaSale) { onSave(f); onCheckoutViaSale(f); }
+      else onSave(completeRepair(f, dateToEpochMs(completionDate), 'completed'));
+    });
   };
 
   return (
@@ -759,9 +769,9 @@ const RepairDrawer: React.FC<{
         </div>
 
         <div className="px-5 py-3 border-t border-slate-100 dark:border-slate-800 flex items-center gap-2 flex-wrap">
-          <button onClick={() => canSave && onSave(f)} disabled={!canSave}
+          <button onClick={() => canSave && runSave(() => onSave(f))} disabled={!canSave || savePending}
             title={canSave ? undefined : (f.parts || []).some(p => !p.name?.trim()) ? 'Name every part before saving' : 'Enter a customer name first'}
-            className="flex-1 min-w-[110px] px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg text-sm font-medium">Save</button>
+            className="flex-1 min-w-[110px] px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg text-sm font-medium">{savePending ? 'Saving…' : 'Save'}</button>
           {!isTerminal && !isRetail && (
             <label className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400" title="Backdate if this repair was already finished before it got entered">
               Completed
@@ -770,8 +780,8 @@ const RepairDrawer: React.FC<{
             </label>
           )}
           {!isTerminal && (
-            <button onClick={checkOut} disabled={!canSave}
-              className="flex-1 min-w-[110px] px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white rounded-lg text-sm font-medium flex items-center justify-center gap-1.5"><ClipboardCheck className="w-4 h-4" /> {isRetail && onCheckoutViaSale ? 'Check Out' : 'Mark Complete'}</button>
+            <button onClick={checkOut} disabled={!canSave || savePending}
+              className="flex-1 min-w-[110px] px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white rounded-lg text-sm font-medium flex items-center justify-center gap-1.5"><ClipboardCheck className="w-4 h-4" /> {savePending ? 'Working…' : isRetail && onCheckoutViaSale ? 'Check Out' : 'Mark Complete'}</button>
           )}
           {!isNew && (
             <div className="flex items-center gap-1">
