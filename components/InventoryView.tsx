@@ -5,7 +5,7 @@ import {
   ChevronLeft, ChevronRight, CheckSquare, Square, Boxes,
   Pencil, MoreVertical, Printer, History, ScrollText, Wrench, Tag, DollarSign, CheckCircle2, AlertCircle,
 } from 'lucide-react';
-import { InventoryItem, Runner, ItemKind, DeviceType, DeviceStatus, ActivityEntry, AuditEntry, Repair } from '../types';
+import { InventoryItem, Runner, ItemKind, DeviceType, DeviceStatus, ActivityEntry, AuditEntry, Repair, Note } from '../types';
 import { linkedRepairFor, REPAIR_STATUS_LABEL } from '../domain/repairs';
 import { printShelfTag, printShelfTagsBatch } from '../services/shelfTag';
 import { getStoreProfile } from './SettingsModal';
@@ -42,6 +42,8 @@ interface Props {
   repairs?: Repair[];
   onCreateRepair?: (item: InventoryItem) => void;
   onOpenRepair?: (repairId: string) => void;
+  notes?: Note[];                        // workspace notes, for the linked-notes panel
+  onOpenNote?: (noteId: string) => void; // jump to a linked note in the Notes board
 }
 
 // Each section is an independent view with its own table, controls, pagination,
@@ -258,7 +260,7 @@ const parseCSV = (text: string): Record<string, string>[] => {
   return rows.filter(r => r.some(x => x !== '')).map(r => Object.fromEntries(header.map((h, i) => [h.trim(), r[i] ?? ''])));
 };
 
-export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, auditLogs = [], canViewCost = false, userId, section, onSelectSection, onSave, onUpdate, onDelete, onGenerateSku, onSeed, repairs = [], onCreateRepair, onOpenRepair }) => {
+export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, auditLogs = [], canViewCost = false, userId, section, onSelectSection, onSave, onUpdate, onDelete, onGenerateSku, onSeed, repairs = [], onCreateRepair, onOpenRepair, notes, onOpenNote }) => {
   const linkedRepairOf = (id: string): Repair | undefined => linkedRepairFor(id, repairs);
   const isMobile = useIsMobile();
   const [selectMode, setSelectMode] = useState(false); // mobile multi-select
@@ -766,7 +768,8 @@ export const InventoryView: React.FC<Props> = ({ inventory, runners, activity, a
         linkedRepair={linkedRepairOf(expandItem.id)}
         onCreateRepair={onCreateRepair ? () => { onCreateRepair(expandItem); setExpandItem(null); } : undefined}
         onOpenRepair={onOpenRepair ? (id: string) => { onOpenRepair(id); setExpandItem(null); } : undefined}
-        inventory={inventory} />}
+        inventory={inventory}
+        notes={notes} onOpenNote={onOpenNote ? (id: string) => { onOpenNote(id); setExpandItem(null); } : undefined} />}
       {labelItem && <Suspense fallback={null}><LabelModal item={labelItem} onClose={() => setLabelItem(null)} /></Suspense>}
       {historyItem && <HistoryModal item={historyItem.item} mode={historyItem.mode} activity={activity} auditLogs={auditLogs} onClose={() => setHistoryItem(null)} />}
     </div>

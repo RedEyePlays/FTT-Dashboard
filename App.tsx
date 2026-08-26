@@ -134,6 +134,9 @@ const App: React.FC = () => {
   // Deep-link targets from Global Search (open a specific record on the target view).
   const [focusRepairId, setFocusRepairId] = useState<string | undefined>(undefined);
   const [focusCustomerId, setFocusCustomerId] = useState<string | undefined>(undefined);
+  // Set when opening a linked note from a record's detail view, so the Notes
+  // board knows which page to select on arrival.
+  const [focusNoteId, setFocusNoteId] = useState<string | undefined>(undefined);
 
   // AI Chat State (Shared between Sidebar and Tab)
   const [aiMessages, setAiMessages] = useState<ChatMessage[]>([{
@@ -896,6 +899,8 @@ const App: React.FC = () => {
 
   // Persisted notes/tasks (meta) + array-synced runner data
   const saveNotes = (n: Note[]) => { setNotes(n); if (uid) saveMeta(uid, { notes: n }); };
+  // Jump from a record's linked-notes panel to that page in the Notes board.
+  const openNote = (noteId: string) => { setFocusNoteId(noteId); navigate('notes'); };
   const saveTasks = (t: Task[]) => { setTasks(t); if (uid) saveMeta(uid, { tasks: t }); };
   const saveRunners = (r: Runner[]) => { if (uid && allow('dropoffs.manage')) { syncArray(uid, 'runners', r, runnersRef.current); audit('runner.edit', 'runner'); } };
   // Save the drop-off list (any status change or field edit routes through
@@ -1500,7 +1505,10 @@ const App: React.FC = () => {
       )}
 
       {/* Main Content */}
-      <main className={`mx-auto px-3 sm:px-6 lg:px-8 py-6 sm:py-8 flex-1 w-full flex flex-col ${view === 'grid' || view === 'ai' ? 'max-w-[98%]' : 'max-w-7xl'}`}>
+      {/* Inventory, the AI chat and Notes are working surfaces (wide tables, a
+          three-column editor) that earn the full window; every other view keeps
+          the readable constrained width. */}
+      <main className={`mx-auto px-3 sm:px-6 lg:px-8 py-6 sm:py-8 flex-1 w-full flex flex-col ${view === 'grid' || view === 'ai' || view === 'notes' ? 'max-w-[98%]' : 'max-w-7xl'}`}>
         <div className="animate-fadeIn flex-1 flex flex-col">
           <Suspense fallback={<ViewLoader />}>
           {view === 'dashboard' && (
@@ -1542,6 +1550,8 @@ const App: React.FC = () => {
               onReturnSale={allow('sales.return') ? handleReturnSale : undefined}
               canReturnSale={(tx) => allow('sales.return') && canReturnSale(tx, todayISO(), settings.operations.voidWindowDays)}
               defaultRestockingFeePercent={settings.operations.returnRestockingFeePercent}
+              notes={notes}
+              onOpenNote={openNote}
             />
           )}
           {view === 'repairs' && allow('repairs.manage') && (
@@ -1567,6 +1577,8 @@ const App: React.FC = () => {
               onPrintAudit={handleRepairPrintAudit}
               users={workspaceUsers}
               canViewPerformance={allow('repairs.performance')}
+              notes={notes}
+              onOpenNote={openNote}
             />
           )}
           {(view === 'entry' || view === 'edit') && (
@@ -1595,6 +1607,8 @@ const App: React.FC = () => {
               repairs={repairs}
               onCreateRepair={allow('repairs.manage') ? handleCreateInternalRepair : undefined}
               onOpenRepair={allow('repairs.tech') ? handleOpenRepair : undefined}
+              notes={notes}
+              onOpenNote={openNote}
             />
           )}
           {view === 'pos' && (
@@ -1637,6 +1651,12 @@ const App: React.FC = () => {
               tasks={tasks}
               onUpdateNotes={saveNotes}
               onUpdateTasks={saveTasks}
+              currentUser={appUser ? { id: appUser.id, email: appUser.email } : null}
+              customers={customers}
+              inventory={data}
+              repairs={repairs}
+              initialNoteId={focusNoteId}
+              onConsumeInitial={() => setFocusNoteId(undefined)}
             />
           )}
           {view === 'ai' && (

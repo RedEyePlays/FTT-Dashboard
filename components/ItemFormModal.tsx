@@ -2,7 +2,8 @@ import React, { useState, useMemo, FocusEventHandler } from 'react';
 import { X, Wand2, Smartphone, Package, Barcode, Camera, Tag } from 'lucide-react';
 import { printShelfTag } from '../services/shelfTag';
 import { getStoreProfile } from './SettingsModal';
-import { InventoryItem, ItemKind, DeviceType, DeviceStatus, Runner, Repair, ListingPlatform } from '../types';
+import { InventoryItem, ItemKind, DeviceType, DeviceStatus, Runner, Repair, ListingPlatform, Note } from '../types';
+import { LinkedNotes } from './LinkedNotes';
 import { REPAIR_STATUS_LABEL } from '../domain/repairs';
 import { LISTING_PLATFORMS } from '../domain/listing';
 import { findDuplicateDevice } from '../domain/autoInventory';
@@ -30,6 +31,8 @@ interface Props {
   // form still renders for callers that don't have the list; the guard simply
   // doesn't engage without it.
   inventory?: InventoryItem[];
+  notes?: Note[];                        // workspace notes, for the linked-notes panel
+  onOpenNote?: (noteId: string) => void; // jump to a linked note in the Notes board
 }
 
 const DEVICE_TYPES: DeviceType[] = ['Phone', 'Tablet', 'Laptop', 'Console', 'Watch', 'Other'];
@@ -61,7 +64,7 @@ const Field: React.FC<{ label: string; value: unknown; onChange: (v: string) => 
   </div>
 );
 
-export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, runners, onSave, onGenerateSku, onClose, linkedRepair, onCreateRepair, onOpenRepair, inventory = [] }) => {
+export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, runners, onSave, onGenerateSku, onClose, linkedRepair, onCreateRepair, onOpenRepair, inventory = [], notes, onOpenNote }) => {
   const [kind, setKind] = useState<ItemKind>(initial?.kind ?? initialKind ?? 'device');
   const [f, setF] = useState<InventoryItem>(() => initial ?? {
     id: uid(), kind: initialKind ?? 'device', sku: '', manufacturerBarcode: '',
@@ -313,6 +316,8 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, runners, 
               )}
             </div>
           )}
+
+          {initial && <LinkedNotes notes={notes} linkType="inventory" linkId={f.id} onOpenNote={onOpenNote} />}
         </div>
 
         <div className="px-5 py-3 border-t border-slate-100 dark:border-slate-800 flex justify-end gap-2 sticky bottom-0 bg-white dark:bg-slate-900">
