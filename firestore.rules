@@ -213,12 +213,43 @@ service cloud.firestore {
         allow delete: if isOwnerOf(ws);
       }
 
-      // Everything else in the workspace (customers, timeEntries already
-      // handled above, payPeriods…): active staff read/write; technicians
-      // read-only. The sensitive collections above are carved out from this
-      // catch-all specifically because it grants isStaffOf() — which includes
-      // employees — write access with no further restriction.
-      match /{document=**} {
+      // ---- Remaining collections with no restriction beyond isStaffOf ----
+      //
+      // SECURITY: there used to be a single `match /{document=**}` catch-all
+      // here instead of the three blocks below. Firestore rules are OR'd —
+      // "any matching rule that allows it, allows it" — and a recursive
+      // wildcard matches every document in the workspace, INCLUDING the ones
+      // under the dedicated, more restrictive blocks above (cashReconciliations,
+      // salesTransactions, meta's settings gate, staffNotes, etc). A comment
+      // saying those were "carved out" did nothing: the catch-all's blanket
+      // `allow write: if isStaffOf(ws)` and `allow read: if activeMemberOf(ws)`
+      // independently permitted every operation those dedicated blocks exist
+      // to deny — an employee could reconcile the drawer or void a sale, and
+      // any active member (including technicians) could read staffNotes,
+      // entirely through this one rule, regardless of what the specific block
+      // said. Every stricter block above was dead code for those paths.
+      //
+      // The fix is enumeration, not a wildcard: only the collections listed
+      // explicitly below get access, and only the access spelled out here.
+      // A future collection gets NO access — not even read — until a rule is
+      // added for it. That is the deliberate posture now, not an oversight;
+      // see services/firestoreDb.ts's COLLECTIONS for the full inventory of
+      // what the client actually writes, and cross-check any addition there
+      // against a rule here before shipping it.
+      match /customers/{id} {
+        allow read: if activeMemberOf(ws);
+        allow write: if isStaffOf(ws);
+      }
+      // General activity feed (services/firestoreDb.ts's logActivityDoc) —
+      // distinct from auditLogs above, which is the append-only compliance
+      // trail. This one is a lighter-weight UI feed staff may write/prune.
+      match /activityLog/{id} {
+        allow read: if activeMemberOf(ws);
+        allow write: if isStaffOf(ws);
+      }
+      // Pay-period sign-off records (services/firestoreDb.ts's
+      // savePayPeriodPaid/deletePayPeriodPaid).
+      match /payPeriods/{id} {
         allow read: if activeMemberOf(ws);
         allow write: if isStaffOf(ws);
       }

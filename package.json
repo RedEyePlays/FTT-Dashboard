@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit && tsc -p status-page/tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:rules": "firebase emulators:exec --only firestore \"vitest run --root rules-tests\"",
     "dev:status": "vite --config vite.status.config.ts",
     "build:status": "vite build --config vite.status.config.ts",
     "preview:status": "vite preview --config vite.status.config.ts"
@@ -28,11 +29,13 @@
     "recharts": "^3.5.1"
   },
   "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.2",
     "@types/jsbarcode": "^3.11.4",
     "@types/node": "^22.14.0",
     "@types/qrcode": "^1.5.6",
     "@vitejs/plugin-react-swc": "^3.7.0",
     "autoprefixer": "^10.5.2",
+    "firebase-tools": "^15.28.1",
     "happy-dom": "^20.11.6",
     "postcss": "^8.5.15",
     "tailwindcss": "^3.4.19",
