@@ -88,6 +88,7 @@ const PAGE_TITLES: Record<ViewState, string> = {
 };
 import { LoadingScreen, LoadingSkeleton, DbErrorScreen } from './components/StatusScreens';
 import { todayISO } from './domain/dates';
+import { canOpenNotes } from './domain/notes';
 
 // Suspense fallback for lazily-loaded views — reuses LoadingScreen's spinner
 // style, but sized to sit inside the content area rather than full-screen.
@@ -300,6 +301,10 @@ const App: React.FC = () => {
 
   // --- Global Search: permission-scoped data (empty categories = no results) ---
   const canAnalytics = (appUser?.role === 'owner' || appUser?.role === 'manager') && allow('reports.profit.detailed');
+  // Notes are the one surface with no permission of its own — a page's audience
+  // is set per note, so "can this role reach Notes at all" is a data question,
+  // not an rbac one. A role with nothing visible gets no nav item and no route.
+  const canSeeAnyNote = useMemo(() => canOpenNotes(appUser?.role, notes), [appUser?.role, notes]);
   const searchPages: SearchPage[] = useMemo(() => {
     const p: SearchPage[] = [{ id: 'dashboard', label: 'Dashboard', keywords: 'home overview', view: 'dashboard' }];
     if (canAnalytics) p.push({ id: 'analytics', label: 'Analytics', keywords: 'reports owner profit', view: 'analytics' });
@@ -313,13 +318,13 @@ const App: React.FC = () => {
     if (allow('dropoffs.manage')) p.push({ id: 'dropoff', label: 'Drop-Offs', view: 'dropoff' });
     if (allow('audit.view')) p.push({ id: 'audit', label: 'Audit Log', view: 'audit' });
     if (allow('users.tech')) p.push({ id: 'users', label: 'Users', keywords: 'staff roles permissions', view: 'users' });
-    p.push({ id: 'notes', label: 'Notes', view: 'notes' });
+    if (canSeeAnyNote) p.push({ id: 'notes', label: 'Notes', view: 'notes' });
     if (allow('reports.profit.summary')) p.push({ id: 'ai', label: 'AI Assistant', view: 'ai' });
     p.push({ id: 'labels', label: 'Labels', keywords: 'print qr barcode', view: 'grid' });
     p.push({ id: 'settings', label: 'Settings', keywords: 'backup preferences', action: 'settings' });
     return p;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [appUser?.role, appUser?.allowProfit]);
+  }, [appUser?.role, appUser?.allowProfit, canSeeAnyNote]);
 
   const searchData: SearchData = useMemo(() => ({
     inventory: data,
@@ -1469,6 +1474,7 @@ const App: React.FC = () => {
         alerts={alerts}
         notifSeenTs={appUser.notifSeenTs ?? 0}
         onMarkNotificationsSeen={handleMarkNotificationsSeen}
+        showNotes={canSeeAnyNote}
       />
 
       {/* Mobile slide-out nav (all destinations + actions) */}
@@ -1486,6 +1492,7 @@ const App: React.FC = () => {
         onOpenSettings={() => navigate('settings')}
         onOpenBulk={() => setShowBulkModal(true)}
         onLock={handleLock}
+        showNotes={canSeeAnyNote}
       />
 
       {/* Mobile bottom navigation (top 5 destinations) */}
@@ -1551,6 +1558,7 @@ const App: React.FC = () => {
               canReturnSale={(tx) => allow('sales.return') && canReturnSale(tx, todayISO(), settings.operations.voidWindowDays)}
               defaultRestockingFeePercent={settings.operations.returnRestockingFeePercent}
               notes={notes}
+              noteRole={appUser?.role}
               onOpenNote={openNote}
             />
           )}
@@ -1578,6 +1586,7 @@ const App: React.FC = () => {
               users={workspaceUsers}
               canViewPerformance={allow('repairs.performance')}
               notes={notes}
+              noteRole={appUser?.role}
               onOpenNote={openNote}
             />
           )}
@@ -1608,6 +1617,7 @@ const App: React.FC = () => {
               onCreateRepair={allow('repairs.manage') ? handleCreateInternalRepair : undefined}
               onOpenRepair={allow('repairs.tech') ? handleOpenRepair : undefined}
               notes={notes}
+              noteRole={appUser?.role}
               onOpenNote={openNote}
             />
           )}
@@ -1645,9 +1655,10 @@ const App: React.FC = () => {
               onAddToInventory={handleAddDropOffToInventory}
             />
           )}
-          {view === 'notes' && (
+          {view === 'notes' && canSeeAnyNote && (
             <NotesBoard
               notes={notes}
+              role={appUser?.role}
               tasks={tasks}
               onUpdateNotes={saveNotes}
               onUpdateTasks={saveTasks}
