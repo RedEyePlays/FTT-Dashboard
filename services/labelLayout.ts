@@ -47,7 +47,13 @@ const mkU = (unit: 'px' | 'mm', pxPerMm: number): U =>
  */
 function labelBody(u: U, m: LabelMedia, c: LabelContent, img: LabelImages, o: LabelOpts): string {
   const dymo = !!m.dymo;
-  const pad = dymo ? 1.3 : 1.6; // minimal margins, mm
+  // Minimal margins, mm. The non-Dymo (inch/ZP 450) templates need a bit more
+  // than this used to give — confirmed via a physical test print that the
+  // printer/driver side is correctly calibrated (a driver-level top offset
+  // made no visible difference) and there's spare room at the bottom, so the
+  // top clipping on the first line ("org"/store name) was this content
+  // padding being too tight, not a print calibration issue.
+  const pad = dymo ? 1.3 : 2.0;
 
   // Barcode-only label (accessories): the UPC barcode fills the whole label,
   // centered, with its human-readable digits (baked into the image). No QR,
