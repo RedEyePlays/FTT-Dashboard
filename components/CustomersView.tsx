@@ -4,7 +4,7 @@ import {
   ChevronRight, Receipt, Pencil, X, Clock, Smartphone, ShieldCheck, AlertTriangle,
   Copy, PlusCircle, Printer, FileText, Merge, Hash, Check, Ban, RotateCcw,
 } from 'lucide-react';
-import { Customer, SalesTransaction, Repair, RepairBatch, InventoryItem, AuditEntry, Note } from '../types';
+import { Customer, SalesTransaction, Repair, RepairBatch, InventoryItem, AuditEntry, Note, Role } from '../types';
 import { LinkedNotes } from './LinkedNotes';
 import {
   customerStats, customerTimeline, customerDevices, customerSearchMatch,
@@ -44,6 +44,7 @@ interface Props {
   canReturnSale?: (tx: SalesTransaction) => boolean;   // after-void-window + permission check
   defaultRestockingFeePercent?: number;                // pre-filled restocking fee % when processing a return
   notes?: Note[];                                      // workspace notes, for the linked-notes panel
+  noteRole?: Role;                                     // viewer's role, gates which linked notes show
   onOpenNote?: (noteId: string) => void;               // jump to a linked note in the Notes board
 }
 
@@ -208,7 +209,7 @@ export const CustomersView: React.FC<Props> = (props) => {
 
 /* ---------------- Profile ---------------- */
 const CustomerProfile: React.FC<Props & { customer: Customer; data: CustomerData; onBack: () => void }> = (
-  { customer, data, canViewProfit, canEdit, auditLogs, inventory, onBack, onSaveCustomer, onStartSale, onCreateRepair, onVoidSale, canVoidSale, onReturnSale, canReturnSale, defaultRestockingFeePercent, notes, onOpenNote },
+  { customer, data, canViewProfit, canEdit, auditLogs, inventory, onBack, onSaveCustomer, onStartSale, onCreateRepair, onVoidSale, canVoidSale, onReturnSale, canReturnSale, defaultRestockingFeePercent, notes, noteRole, onOpenNote },
 ) => {
   const s = useMemo(() => customerStats(customer, data), [customer, data]);
   const timeline = useMemo(() => customerTimeline(s), [s]);
@@ -330,7 +331,7 @@ const CustomerProfile: React.FC<Props & { customer: Customer; data: CustomerData
           </Panel>
           <Panel title="Internal notes" className="md:col-span-2">
             {customer.notes ? <p className="text-sm text-slate-600 dark:text-slate-300 whitespace-pre-wrap">{customer.notes}</p> : <Empty text="No notes. Use Edit to add internal notes." />}
-            <LinkedNotes notes={notes} linkType="customer" linkId={customer.id} onOpenNote={onOpenNote} className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800" />
+            <LinkedNotes notes={notes} role={noteRole} linkType="customer" linkId={customer.id} onOpenNote={onOpenNote} className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800" />
           </Panel>
         </div>
       )}

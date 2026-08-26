@@ -50,7 +50,90 @@ function blockToHtml(b: NoteBlock): string {
 /** Markdown note body → contentEditable HTML. */
 export function markdownToHtml(md: string): string {
   const blocks = parseNoteBlocks(md ?? '');
-  return blocks.map(blockToHtml).join('');
+  // Every text run passes through escapeHtml above, and the only elements
+  // ever emitted are the fixed set below with no dynamic attributes, so this
+  // is already safe by construction. sanitizeNoteHtml is still applied here —
+  // not just at the innerHTML boundary in NoteEditor.tsx — so that property
+  // holds for every current AND future call site without each one having to
+  // remember to sanitize separately, and survives a mistake in this function
+  // itself (a new block kind that forgets to escape, a template literal typo)
+  // rather than relying on getting blockToHtml/inlineToHtml right forever.
+  return sanitizeNoteHtml(blocks.map(blockToHtml).join(''));
+}
+
+// --- Sanitization ------------------------------------------------------------
+// Notes are shared across staff — whatever HTML this produces runs in a
+// manager's or owner's session the moment their board loads. Belt-and-braces
+// on top of the escaping above: an explicit allowlist of exactly the elements
+// and attributes this editor itself ever emits (see blockToHtml). Anything
+// else — <script>, <img onerror=...>, a stray style/href/on* attribute,
+// javascript: URIs, whatever a future bug or a hand-crafted Firestore write
+// contains — never reaches innerHTML. Hand-rolled rather than pulling in
+// DOMPurify for the same reason NoteEditor.tsx is hand-rolled instead of a
+// rich-text library: the surface here is small and fixed, so an allowlist is
+// ~30 lines against a bundle-size cost of zero, versus DOMPurify's ~20kB for
+// a general-purpose sanitizer this app doesn't need the generality of.
+
+/** Tag → the exact attributes that tag is allowed to carry. Nothing else survives. */
+const ALLOWED_ATTRS: Record<string, ReadonlySet<string>> = {
+  H1: new Set([BLOCK_ATTR]),
+  H2: new Set([BLOCK_ATTR]),
+  H3: new Set([BLOCK_ATTR]),
+  DIV: new Set([BLOCK_ATTR, 'data-checked']),
+  SPAN: new Set(['class', 'contenteditable', 'role', 'aria-checked']),
+  STRONG: new Set([]),
+  B: new Set([]),
+  BR: new Set([]),
+};
+
+// Tags whose entire subtree must be discarded outright — never unwrapped to
+// plain text, since for these the "text" (script source, style rules) is
+// itself the dangerous part.
+const DROP_SUBTREE = new Set(['SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'EMBED', 'NOSCRIPT', 'LINK', 'META']);
+
+function sanitizeElement(root: Element): void {
+  for (const node of Array.from(root.childNodes)) {
+    if (node.nodeType === 8 /* comment */) { root.removeChild(node); continue; }
+    if (node.nodeType !== 1 /* element */) continue;
+    const el = node as Element;
+    const tag = el.tagName.toUpperCase();
+    if (DROP_SUBTREE.has(tag)) { el.remove(); continue; }
+    const allowed = ALLOWED_ATTRS[tag];
+    if (!allowed) {
+      // Not a tag this editor emits — sanitize its children, then unwrap:
+      // keep any legitimate text/content, drop the wrapper element (and
+      // every attribute riding on it, since the element itself is gone).
+      sanitizeElement(el);
+      while (el.firstChild) root.insertBefore(el.firstChild, el);
+      el.remove();
+      continue;
+    }
+    for (const attr of Array.from(el.attributes)) {
+      if (!allowed.has(attr.name.toLowerCase())) el.removeAttribute(attr.name);
+    }
+    sanitizeElement(el);
+  }
+}
+
+/**
+ * Strip everything except the small fixed set of elements/attributes this
+ * editor itself ever produces. Safe to run on ANY string, including one that
+ * didn't come from markdownToHtml (a stored note edited outside the app, an
+ * older/different code path) — the allowlist has no notion of "trusted
+ * input," it only recognises shapes and discards everything it doesn't.
+ *
+ * Parsed via DOMParser rather than `el.innerHTML = html` on a live element:
+ * a live (even detached) element can still kick off side effects while
+ * merely PARSING hostile markup — an <img onerror=...> can fire its handler
+ * as soon as the broken image load resolves, independent of whether the
+ * element is attached to the document. A DOMParser document is inert; it
+ * never triggers resource loads or fires events, so untrusted HTML can be
+ * parsed and picked apart with nothing able to execute along the way.
+ */
+export function sanitizeNoteHtml(html: string): string {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  sanitizeElement(doc.body);
+  return doc.body.innerHTML;
 }
 
 // --- HTML → markdown --------------------------------------------------------

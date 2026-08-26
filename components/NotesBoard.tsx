@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Note, Task, NoteLinkType, Customer, InventoryItem, Repair } from '../types';
+import { Note, Task, NoteLinkType, Customer, InventoryItem, Repair, Role, NoteVisibility } from '../types';
 import {
-  checklistProgress, sortNotes, stampNoteEdit, editedSummary,
+  checklistProgress, stampNoteEdit, editedSummary,
+  visibleNotes, noteVisibility, assignableVisibilities, NOTE_VISIBILITY_LABEL,
+  DEFAULT_NOTE_VISIBILITY,
 } from '../domain/notes';
 import { NoteEditor, applyBold, applyBlockKind } from './NoteEditor';
 import { htmlToMarkdown } from '../domain/notesHtml';
@@ -9,16 +11,26 @@ import { getDeviceDisplayName } from '../domain/inventory';
 import {
   Plus, X, Check, Trash2, FileText,
   CheckSquare, Calendar, Clock, Search, File, Pin, Bold, Heading1, Heading2,
-  List, Link2, User, Package, Wrench,
+  List, Link2, User, Package, Wrench, Globe, ShieldCheck, Lock, ChevronDown,
 } from 'lucide-react';
 
 interface NotesBoardProps {
+  /**
+   * EVERY note in the workspace, not just the ones this role may read.
+   *
+   * The board filters for display itself (see `ordered` below) but hands the
+   * full array back through onUpdateNotes — because that callback replaces the
+   * stored list wholesale. Passing a pre-filtered array here would make every
+   * save silently delete the notes the current user can't see.
+   */
   notes: Note[];
   tasks: Task[];
   onUpdateNotes: (notes: Note[]) => void;
   onUpdateTasks: (tasks: Task[]) => void;
   /** Signed-in user, recorded as the editor on every note save. */
   currentUser?: { id: string; email: string } | null;
+  /** Drives which notes are listed and which audiences may be assigned. */
+  role?: Role;
   // Records the link picker can point at. Optional so the board still renders
   // if a caller doesn't have them loaded.
   customers?: Customer[];
@@ -45,7 +57,7 @@ const LINK_META: Record<NoteLinkType, { label: string; icon: React.ReactNode }> 
 };
 
 export const NotesBoard: React.FC<NotesBoardProps> = ({
-  notes, tasks, onUpdateNotes, onUpdateTasks, currentUser,
+  notes, tasks, onUpdateNotes, onUpdateTasks, currentUser, role,
   customers = [], inventory = [], repairs = [], initialNoteId, onConsumeInitial,
 }) => {
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
@@ -56,21 +68,24 @@ export const NotesBoard: React.FC<NotesBoardProps> = ({
   // is no longer an edit/preview split to coordinate.
   const editorRef = useRef<HTMLDivElement>(null);
 
-  const ordered = useMemo(() => sortNotes(notes), [notes]);
+  // Only what this role may read. Everything the board shows or opens is drawn
+  // from here — never from the raw `notes` array, which still holds the notes
+  // this user can't see so that saves don't drop them.
+  const ordered = useMemo(() => visibleNotes(role, notes), [role, notes]);
 
   // Deep link from a record's linked-notes panel.
   useEffect(() => {
-    if (initialNoteId && notes.some(n => n.id === initialNoteId)) {
+    if (initialNoteId && ordered.some(n => n.id === initialNoteId)) {
       setSelectedNoteId(initialNoteId);
       onConsumeInitial?.();
     }
-  }, [initialNoteId, notes, onConsumeInitial]);
+  }, [initialNoteId, ordered, onConsumeInitial]);
 
   useEffect(() => {
     if (!selectedNoteId && ordered.length > 0) setSelectedNoteId(ordered[0].id);
   }, [ordered, selectedNoteId]);
 
-  const activeNote = notes.find(n => n.id === selectedNoteId);
+  const activeNote = ordered.find(n => n.id === selectedNoteId);
 
   const filteredNotes = ordered.filter(n =>
     n.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -86,6 +101,9 @@ export const NotesBoard: React.FC<NotesBoardProps> = ({
     const now = Date.now();
     const newNote: Note = stampNoteEdit({
       id: now.toString(), title: '', content: '', color: 'slate', date: new Date(now).toISOString(),
+      // New pages start restricted, matching how untagged legacy notes read.
+      // Sharing with the whole shop is a deliberate act, not the default.
+      visibility: DEFAULT_NOTE_VISIBILITY,
     }, currentUser, now);
     onUpdateNotes([newNote, ...notes]);
     setSelectedNoteId(newNote.id);
@@ -95,7 +113,7 @@ export const NotesBoard: React.FC<NotesBoardProps> = ({
     e.stopPropagation();
     const newNotes = notes.filter(n => n.id !== id);
     onUpdateNotes(newNotes);
-    if (selectedNoteId === id) setSelectedNoteId(sortNotes(newNotes)[0]?.id ?? null);
+    if (selectedNoteId === id) setSelectedNoteId(visibleNotes(role, newNotes)[0]?.id ?? null);
   };
 
   const cycleColor = (id: string, currentColor: string) => {
@@ -207,6 +225,11 @@ export const NotesBoard: React.FC<NotesBoardProps> = ({
                   <File className="w-8 h-8" />
                 </button>
                 <div className="flex items-center gap-1">
+                  <NoteVisibilityPicker
+                    value={noteVisibility(activeNote)}
+                    role={role}
+                    onChange={(v) => patchNote(activeNote.id, { visibility: v })}
+                  />
                   <NoteLinkPicker
                     note={activeNote} open={linkPickerOpen} onOpenChange={setLinkPickerOpen}
                     customers={customers} inventory={inventory} repairs={repairs}
@@ -323,6 +346,71 @@ export const NotesBoard: React.FC<NotesBoardProps> = ({
         </div>
       </div>
 
+    </div>
+  );
+};
+
+const VISIBILITY_META: Record<NoteVisibility, { icon: React.ReactNode; hint: string }> = {
+  everyone: { icon: <Globe className="w-3.5 h-3.5" />, hint: 'Any signed-in member of the shop can read this page.' },
+  managers: { icon: <ShieldCheck className="w-3.5 h-3.5" />, hint: 'Owners and managers only. Employees and technicians never see it.' },
+  owner: { icon: <Lock className="w-3.5 h-3.5" />, hint: 'Only the shop owner can read this page.' },
+};
+
+/**
+ * Who may read this page. Sits beside Pin/Link because it's the same kind of
+ * per-page property, and it's always visible rather than tucked in a menu — the
+ * audience of a note holding costs or supplier terms shouldn't need hunting for.
+ *
+ * A non-owner can't grant 'owner' (they'd be writing a page they can no longer
+ * read), so that option is simply absent for them — see assignableVisibilities.
+ */
+const NoteVisibilityPicker: React.FC<{
+  value: NoteVisibility;
+  role?: Role;
+  onChange: (v: NoteVisibility) => void;
+}> = ({ value, role, onChange }) => {
+  const [open, setOpen] = useState(false);
+  const options = assignableVisibilities(role);
+  // An owner-only page opened by... an owner is the only case; but if a note
+  // already carries a value this role couldn't assign, keep showing it rather
+  // than silently mislabelling the page.
+  const shown = options.includes(value) ? options : [...options, value];
+
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setOpen(!open)}
+        title="Who can see this page"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-colors ${value === 'everyone' ? 'border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 hover:border-indigo-400' : 'bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800 text-amber-700 dark:text-amber-300'}`}
+      >
+        {VISIBILITY_META[value].icon}
+        {NOTE_VISIBILITY_LABEL[value]}
+        <ChevronDown className="w-3 h-3 opacity-60" />
+      </button>
+
+      {open && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+          <div role="listbox" className="absolute right-0 top-full mt-1 z-20 w-64 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl p-1.5">
+            {shown.map(v => (
+              <button
+                key={v}
+                role="option"
+                aria-selected={v === value}
+                onClick={() => { onChange(v); setOpen(false); }}
+                className={`w-full text-left px-2.5 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 ${v === value ? 'bg-indigo-50 dark:bg-indigo-900/20' : ''}`}
+              >
+                <span className="flex items-center gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-200">
+                  {VISIBILITY_META[v].icon}{NOTE_VISIBILITY_LABEL[v]}
+                </span>
+                <span className="block text-[11px] text-slate-400 mt-0.5">{VISIBILITY_META[v].hint}</span>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 };
