@@ -2,7 +2,8 @@ import React, { useRef, useState } from 'react';
 import { Download, Upload, X, ShieldCheck, AlertTriangle, FileJson, Percent } from 'lucide-react';
 import { AppData } from '../types';
 import { BackupPanel } from './BackupPanel';
-import { normalizeRestore, isRestorableBackup } from '../domain/restore';
+import { RestoreConfirmModal } from './RestoreConfirmModal';
+import { normalizeRestore, isRestorableBackup, backupExportedAtMs } from '../domain/restore';
 import { mergeLabelSizes, LabelSize } from '../domain/settings';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 import { todayISO } from '../domain/dates';
@@ -79,7 +80,12 @@ export const getLabelSpacing = (): LabelSpacing => {
 interface SettingsModalProps {
   onClose: () => void;
   currentData: AppData;
-  onRestore: (data: AppData) => void;
+  // Performs the pre-restore safety snapshot and the actual write (see
+  // App.tsx's handleRestoreData) — 'merge' upserts without deleting
+  // anything; 'replace' matches the backup exactly, deleting whatever isn't
+  // in it. Returns a promise so RestoreConfirmModal can show a working state
+  // and surface a failure without silently closing.
+  onRestore: (data: AppData, mode: 'merge' | 'replace') => Promise<void>;
   backup?: { lastBackup?: number; onExportJson: () => Promise<void>; onExportCsv: () => Promise<void> };
   canManageSettings?: boolean;
 }
@@ -87,6 +93,10 @@ interface SettingsModalProps {
 export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, currentData, onRestore, backup, canManageSettings = true }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [restoreError, setRestoreError] = useState<string | null>(null);
+  // Set once a file has been parsed and validated — this is what actually
+  // opens RestoreConfirmModal. Nothing destructive (or non-destructive) ever
+  // runs from a bare confirm(); this is the only path to onRestore now.
+  const [pendingRestore, setPendingRestore] = useState<{ data: AppData; exportedAtMs?: number } | null>(null);
   const [taxRate, setTaxRate] = useState(() => String(getPOSSettings().taxRate));
   const [taxSaved, setTaxSaved] = useState(false);
 
@@ -128,17 +138,29 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, currentDa
             // Preserve every collection (inventory, accessories, sales history,
             // customers, runners, drop-offs, settlements, notes, tasks).
             const restoredData: AppData = normalizeRestore(parsed);
-
-            if (confirm("WARNING: This will overwrite all current data with the backup file. Are you sure?")) {
-               onRestore(restoredData);
-               onClose();
-            }
+            setRestoreError(null);
+            // Opens RestoreConfirmModal — nothing destructive happens from
+            // this handler itself; that modal owns the actual confirmation
+            // and the merge/replace choice.
+            setPendingRestore({ data: restoredData, exportedAtMs: backupExportedAtMs(parsed) });
           }
         } catch (err) {
           setRestoreError("Invalid JSON file. Please upload a valid BizTrack backup.");
+        } finally {
+          // Allow re-selecting the same file (e.g. after Cancel) — a file
+          // input doesn't fire onChange again for an identical selection
+          // unless its value is cleared first.
+          if (fileInputRef.current) fileInputRef.current.value = '';
         }
       };
     }
+  };
+
+  const handleConfirmRestore = async (mode: 'merge' | 'replace') => {
+    if (!pendingRestore) return;
+    await onRestore(pendingRestore.data, mode);
+    setPendingRestore(null);
+    onClose();
   };
 
   return (
@@ -218,44 +240,48 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, currentDa
              </button>
           </div>
 
-          <div className="h-px bg-slate-100 dark:bg-slate-800 w-full" />
+          {canManageSettings && (
+            <>
+              <div className="h-px bg-slate-100 dark:bg-slate-800 w-full" />
 
-          {/* Restore Section */}
-          <div className="space-y-3">
-             <div className="flex items-center gap-3">
-               <div className="p-2 bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 rounded-lg">
-                 <Upload className="w-5 h-5" />
-               </div>
-               <div>
-                 <h3 className="font-medium text-slate-900 dark:text-white">Restore Data</h3>
-                 <p className="text-xs text-slate-500 dark:text-slate-400">Import a backup file to restore functionality.</p>
-               </div>
-             </div>
-             
-             <input 
-               type="file" 
-               accept=".json" 
-               ref={fileInputRef} 
-               onChange={handleFileChange} 
-               className="hidden" 
-             />
-             
-             <button 
-               onClick={() => fileInputRef.current?.click()}
-               className="w-full flex items-center justify-center gap-2 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium transition-colors shadow-sm"
-             >
-               <Upload className="w-4 h-4" />
-               Select Backup File
-             </button>
+              {/* Restore Section */}
+              <div className="space-y-3">
+                 <div className="flex items-center gap-3">
+                   <div className="p-2 bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 rounded-lg">
+                     <Upload className="w-5 h-5" />
+                   </div>
+                   <div>
+                     <h3 className="font-medium text-slate-900 dark:text-white">Restore Data</h3>
+                     <p className="text-xs text-slate-500 dark:text-slate-400">Import a backup file to restore functionality.</p>
+                   </div>
+                 </div>
 
-             {restoreError && (
-               <div className="flex items-center gap-2 text-rose-600 dark:text-rose-400 text-xs bg-rose-50 dark:bg-rose-900/20 p-3 rounded-lg">
-                  <AlertTriangle className="w-3 h-3" />
-                  {restoreError}
-               </div>
-             )}
-          </div>
-          
+                 <input
+                   type="file"
+                   accept=".json"
+                   ref={fileInputRef}
+                   onChange={handleFileChange}
+                   className="hidden"
+                 />
+
+                 <button
+                   onClick={() => fileInputRef.current?.click()}
+                   className="w-full flex items-center justify-center gap-2 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium transition-colors shadow-sm"
+                 >
+                   <Upload className="w-4 h-4" />
+                   Select Backup File
+                 </button>
+
+                 {restoreError && (
+                   <div className="flex items-center gap-2 text-rose-600 dark:text-rose-400 text-xs bg-rose-50 dark:bg-rose-900/20 p-3 rounded-lg">
+                      <AlertTriangle className="w-3 h-3" />
+                      {restoreError}
+                   </div>
+                 )}
+              </div>
+            </>
+          )}
+
           <div className="bg-amber-50 dark:bg-amber-900/10 p-3 rounded-lg border border-amber-100 dark:border-amber-900/20">
              <p className="text-xs text-amber-800 dark:text-amber-500 flex gap-2">
                <AlertTriangle className="w-4 h-4 flex-shrink-0" />
@@ -264,6 +290,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, currentDa
           </div>
         </div>
       </div>
+
+      {pendingRestore && (
+        <RestoreConfirmModal
+          data={pendingRestore.data}
+          exportedAtMs={pendingRestore.exportedAtMs}
+          onCancel={() => setPendingRestore(null)}
+          onConfirm={handleConfirmRestore}
+        />
+      )}
     </div>
   );
 };

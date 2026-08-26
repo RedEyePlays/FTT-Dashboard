@@ -90,6 +90,7 @@ const PAGE_TITLES: Record<ViewState, string> = {
 };
 import { LoadingScreen, LoadingSkeleton, DbErrorScreen } from './components/StatusScreens';
 import { todayISO } from './domain/dates';
+import { mergeById, mergeSkuCounters } from './domain/restore';
 
 // Suspense fallback for lazily-loaded views — reuses LoadingScreen's spinner
 // style, but sized to sit inside the content area rather than full-screen.
@@ -862,19 +863,76 @@ const App: React.FC = () => {
     goInventory(DEFAULT_INV_SECTION);
   };
 
-  const handleRestoreData = async (restoredData: AppData) => {
+  // Restoring a backup used to be an unconditional full replace: syncArray
+  // reconciles a collection to EXACTLY match the uploaded file, deleting any
+  // record not present in it. Restoring an older backup to recover one
+  // deleted item therefore silently wiped every sale/repair/customer/
+  // inventory record created since that backup was taken — no undo, whole
+  // dataset, owner-triggered by a one-line browser confirm() that's easy to
+  // reflex-dismiss. Two things fix that:
+  //
+  //  1. A real safety snapshot of the CURRENT live data is exported and
+  //     downloaded — same full Firestore export as Settings → Backup →
+  //     Export JSON — immediately before anything is touched, on EVERY
+  //     restore (merge included: a merge can still overwrite a record present
+  //     in both by id, so it's cheap insurance regardless of mode). If the
+  //     restore turns out to be a mistake, that file is the recovery point.
+  //  2. `mode` — 'merge' adds/updates every record the backup carries by id
+  //     and deletes nothing (domain/restore.ts's mergeById/mergeSkuCounters);
+  //     'replace' is the old exact-match behavior, now requiring the typed
+  //     confirmation in RestoreConfirmModal rather than a dismissable
+  //     confirm(). The scary confirmation copy and the typed-confirmation gate
+  //     live in that modal — this function trusts that gate already happened
+  //     and only enforces the one thing that can't be delegated to the UI:
+  //     settings.manage.
+  const handleRestoreData = async (restoredData: AppData, mode: 'merge' | 'replace') => {
     if (!uid || !allow('settings.manage')) return;
+
+    const snapshot = await exportWorkspaceData(uid);
+    downloadJson(`ftt-pre-restore-safety-snapshot-${todayISO()}-${Date.now()}.json`,
+      { exportedAt: new Date().toISOString(), workspaceId: uid, reason: 'auto-snapshot-before-restore', data: snapshot });
+    await recordBackup(uid, Date.now());
+    audit('backup.export', 'backup', undefined, undefined, { format: 'json', reason: 'pre-restore-safety-snapshot' });
+
     const inv = restoredData.inventory || [];
-    await syncArray(uid, 'inventory', inv.filter(i => (i.kind ?? 'device') === 'device'), dataRef.current.filter(i => (i.kind ?? 'device') === 'device'));
-    await syncArray(uid, 'accessories', inv.filter(i => i.kind === 'accessory'), dataRef.current.filter(i => i.kind === 'accessory'));
-    await syncArray(uid, 'runners', restoredData.runners || [], runnersRef.current);
-    await syncArray(uid, 'dropOffs', restoredData.dropOffs || [], dropOffsRef.current);
-    await syncArray(uid, 'settlements', restoredData.settlements || [], settlementsRef.current);
-    await syncArray(uid, 'customers', restoredData.customers || [], customersRef.current);
-    await syncArray(uid, 'salesTransactions', restoredData.salesTransactions || [], salesTransactionsRef.current);
-    await syncArray(uid, 'repairs', restoredData.repairs || [], repairsRef.current);
-    await syncArray(uid, 'repairBatches', restoredData.repairBatches || [], repairBatchesRef.current);
-    await saveMeta(uid, { notes: restoredData.notes || [], tasks: restoredData.tasks || [], skuCounters: restoredData.skuCounters || {} });
+    const currentDevices = dataRef.current.filter(i => (i.kind ?? 'device') === 'device');
+    const currentAccessories = dataRef.current.filter(i => i.kind === 'accessory');
+    const incomingDevices = inv.filter(i => (i.kind ?? 'device') === 'device');
+    const incomingAccessories = inv.filter(i => i.kind === 'accessory');
+
+    if (mode === 'replace') {
+      await syncArray(uid, 'inventory', incomingDevices, currentDevices);
+      await syncArray(uid, 'accessories', incomingAccessories, currentAccessories);
+      await syncArray(uid, 'runners', restoredData.runners || [], runnersRef.current);
+      await syncArray(uid, 'dropOffs', restoredData.dropOffs || [], dropOffsRef.current);
+      await syncArray(uid, 'settlements', restoredData.settlements || [], settlementsRef.current);
+      await syncArray(uid, 'customers', restoredData.customers || [], customersRef.current);
+      await syncArray(uid, 'salesTransactions', restoredData.salesTransactions || [], salesTransactionsRef.current);
+      await syncArray(uid, 'repairs', restoredData.repairs || [], repairsRef.current);
+      await syncArray(uid, 'repairBatches', restoredData.repairBatches || [], repairBatchesRef.current);
+      await saveMeta(uid, { notes: restoredData.notes || [], tasks: restoredData.tasks || [], skuCounters: restoredData.skuCounters || {} });
+    } else {
+      // Merge: write the union back through the same syncArray path (still
+      // one atomic batch per collection), but since the union always contains
+      // every id syncArray's own "prev" snapshot has, its delete-diff never
+      // has anything left to delete — this is what makes reusing syncArray
+      // here safe rather than switching to a separate upsert-only writer.
+      await syncArray(uid, 'inventory', mergeById(currentDevices, incomingDevices), currentDevices);
+      await syncArray(uid, 'accessories', mergeById(currentAccessories, incomingAccessories), currentAccessories);
+      await syncArray(uid, 'runners', mergeById(runnersRef.current, restoredData.runners || []), runnersRef.current);
+      await syncArray(uid, 'dropOffs', mergeById(dropOffsRef.current, restoredData.dropOffs || []), dropOffsRef.current);
+      await syncArray(uid, 'settlements', mergeById(settlementsRef.current, restoredData.settlements || []), settlementsRef.current);
+      await syncArray(uid, 'customers', mergeById(customersRef.current, restoredData.customers || []), customersRef.current);
+      await syncArray(uid, 'salesTransactions', mergeById(salesTransactionsRef.current, restoredData.salesTransactions || []), salesTransactionsRef.current);
+      await syncArray(uid, 'repairs', mergeById(repairsRef.current, restoredData.repairs || []), repairsRef.current);
+      await syncArray(uid, 'repairBatches', mergeById(repairBatchesRef.current, restoredData.repairBatches || []), repairBatchesRef.current);
+      await saveMeta(uid, {
+        notes: mergeById(notes, restoredData.notes || []),
+        tasks: mergeById(tasks, restoredData.tasks || []),
+        skuCounters: mergeSkuCounters(skuCounters, restoredData.skuCounters),
+      });
+    }
+    audit('backup.restore', 'backup', undefined, undefined, { mode });
   };
 
   // Add an accepted drop-off into inventory, carrying runner + cost across.

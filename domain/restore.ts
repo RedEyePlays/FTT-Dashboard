@@ -69,3 +69,65 @@ export function isRestorableBackup(parsed: any): boolean {
     (d.repairBatches?.length ?? 0) > 0
   );
 }
+
+/**
+ * The full export wrapper ({ exportedAt, workspaceId, data }, see
+ * normalizeRestore's doc comment) carries a real timestamp of when the
+ * backup was taken; the simple "Download Backup" shape doesn't. Returns
+ * milliseconds since epoch, or undefined when the file carries no usable
+ * timestamp — callers must show "unknown" rather than guess.
+ */
+export function backupExportedAtMs(parsed: any): number | undefined {
+  const raw = parsed && typeof parsed === 'object' ? parsed.exportedAt : undefined;
+  if (typeof raw !== 'string') return undefined;
+  const ms = Date.parse(raw);
+  return Number.isFinite(ms) ? ms : undefined;
+}
+
+/** How many records of each kind a backup carries — shown in the restore
+ * confirmation so the owner can sanity-check "is this the file I think it
+ * is" before anything destructive happens. Only non-empty collections are
+ * included, so the summary stays short for an old/partial backup. */
+export function backupSummary(data: AppData): Record<string, number> {
+  const counts: Record<string, number> = {
+    inventory: data.inventory.length,
+    notes: data.notes.length,
+    tasks: data.tasks.length,
+    customers: data.customers?.length ?? 0,
+    salesTransactions: data.salesTransactions?.length ?? 0,
+    repairs: data.repairs?.length ?? 0,
+    repairBatches: data.repairBatches?.length ?? 0,
+    runners: data.runners?.length ?? 0,
+    dropOffs: data.dropOffs?.length ?? 0,
+    settlements: data.settlements?.length ?? 0,
+  };
+  return Object.fromEntries(Object.entries(counts).filter(([, n]) => n > 0));
+}
+
+/**
+ * Non-destructive restore: every record in `incoming` (keyed by id) is
+ * added/updated into `current`; anything already in `current` but absent
+ * from `incoming` is left untouched. This is what makes "merge" safe where
+ * a full replace isn't — restoring an old backup this way can't delete a
+ * single record created since the backup was taken, it can only add back
+ * what the backup remembers (and overwrite a record present in both, with
+ * the backup's version winning).
+ */
+export function mergeById<T extends { id: string }>(current: T[], incoming: T[]): T[] {
+  const byId = new Map(current.map(x => [x.id, x] as const));
+  for (const item of incoming) byId.set(item.id, item);
+  return Array.from(byId.values());
+}
+
+/** skuCounters merge: counters must stay monotonic, so take the larger of
+ * the two sides per prefix rather than letting an old backup roll one back
+ * (which would risk a newly-generated SKU colliding with one already used
+ * since the backup was taken). */
+export function mergeSkuCounters(
+  current: Record<string, number> | undefined,
+  incoming: Record<string, number> | undefined,
+): Record<string, number> {
+  const out: Record<string, number> = { ...(current || {}) };
+  for (const [k, v] of Object.entries(incoming || {})) out[k] = Math.max(out[k] || 0, v);
+  return out;
+}
