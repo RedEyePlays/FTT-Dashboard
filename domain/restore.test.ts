@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { normalizeRestore, isRestorableBackup } from './restore';
+import { normalizeRestore, isRestorableBackup, backupExportedAtMs, backupSummary, mergeById, mergeSkuCounters } from './restore';
 
 describe('normalizeRestore', () => {
   it('reads a simple top-level backup (inventory/notes/tasks)', () => {
@@ -102,5 +102,80 @@ describe('isRestorableBackup', () => {
     expect(isRestorableBackup({})).toBe(false);
     expect(isRestorableBackup(null)).toBe(false);
     expect(isRestorableBackup({ foo: 'bar' })).toBe(false);
+  });
+});
+
+describe('backupExportedAtMs', () => {
+  it('reads the full-export envelope timestamp', () => {
+    const ms = backupExportedAtMs({ exportedAt: '2026-07-05T12:00:00.000Z', data: {} });
+    expect(ms).toBe(Date.parse('2026-07-05T12:00:00.000Z'));
+  });
+
+  it('is undefined for the simple backup shape (no timestamp field)', () => {
+    expect(backupExportedAtMs({ inventory: [] })).toBeUndefined();
+  });
+
+  it('is undefined for a malformed/garbage exportedAt rather than NaN', () => {
+    expect(backupExportedAtMs({ exportedAt: 'not a date' })).toBeUndefined();
+    expect(backupExportedAtMs({ exportedAt: 12345 })).toBeUndefined();
+    expect(backupExportedAtMs(null)).toBeUndefined();
+    expect(backupExportedAtMs(undefined)).toBeUndefined();
+  });
+});
+
+describe('backupSummary', () => {
+  it('counts every populated collection and omits empty ones', () => {
+    const d = normalizeRestore({
+      inventory: [{ id: 'a' }, { id: 'b' }],
+      customers: [{ id: 'c' }],
+      salesTransactions: [],
+    });
+    const s = backupSummary(d);
+    expect(s.inventory).toBe(2);
+    expect(s.customers).toBe(1);
+    expect(s).not.toHaveProperty('salesTransactions');
+    expect(s).not.toHaveProperty('repairs');
+  });
+
+  it('is an empty object for a backup with nothing in it', () => {
+    expect(backupSummary(normalizeRestore({}))).toEqual({});
+  });
+});
+
+describe('mergeById', () => {
+  it('keeps every current record not present in incoming', () => {
+    const current = [{ id: 'a', v: 1 }, { id: 'b', v: 1 }];
+    const incoming = [{ id: 'a', v: 2 }];
+    const merged = mergeById(current, incoming);
+    expect(merged.find(x => x.id === 'a')).toEqual({ id: 'a', v: 2 });
+    expect(merged.find(x => x.id === 'b')).toEqual({ id: 'b', v: 1 });
+  });
+
+  it('adds records from incoming that current does not have', () => {
+    const merged = mergeById([{ id: 'a' }], [{ id: 'a' }, { id: 'z' }]);
+    expect(merged.map(x => x.id).sort()).toEqual(['a', 'z']);
+  });
+
+  it('never drops a current record — this is the whole point of merge over replace', () => {
+    const current = Array.from({ length: 5 }, (_, i) => ({ id: `c${i}` }));
+    const merged = mergeById(current, []); // an empty/older backup
+    expect(merged).toHaveLength(5);
+  });
+
+  it('is a no-op on two empty arrays', () => {
+    expect(mergeById([], [])).toEqual([]);
+  });
+});
+
+describe('mergeSkuCounters', () => {
+  it('takes the larger counter per prefix, never rolling one back', () => {
+    expect(mergeSkuCounters({ PHN: 10, TAB: 2 }, { PHN: 5, TAB: 7, LAP: 1 }))
+      .toEqual({ PHN: 10, TAB: 7, LAP: 1 });
+  });
+
+  it('tolerates missing sides', () => {
+    expect(mergeSkuCounters(undefined, { PHN: 3 })).toEqual({ PHN: 3 });
+    expect(mergeSkuCounters({ PHN: 3 }, undefined)).toEqual({ PHN: 3 });
+    expect(mergeSkuCounters(undefined, undefined)).toEqual({});
   });
 });
