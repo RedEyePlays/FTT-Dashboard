@@ -4,7 +4,8 @@ import {
   ChevronRight, Receipt, Pencil, X, Clock, Smartphone, ShieldCheck, AlertTriangle,
   Copy, PlusCircle, Printer, FileText, Merge, Hash, Check, Ban, RotateCcw,
 } from 'lucide-react';
-import { Customer, SalesTransaction, Repair, RepairBatch, InventoryItem, AuditEntry } from '../types';
+import { Customer, SalesTransaction, Repair, RepairBatch, InventoryItem, AuditEntry, Note } from '../types';
+import { LinkedNotes } from './LinkedNotes';
 import {
   customerStats, customerTimeline, customerDevices, customerSearchMatch,
   passesFilter, sortCustomers, findDuplicateGroups, planMerge,
@@ -42,6 +43,8 @@ interface Props {
   onReturnSale?: (tx: SalesTransaction, opts: { restockingFee?: number; disposition: 'resell' | 'defective' }) => void; // owner/manager: process a return
   canReturnSale?: (tx: SalesTransaction) => boolean;   // after-void-window + permission check
   defaultRestockingFeePercent?: number;                // pre-filled restocking fee % when processing a return
+  notes?: Note[];                                      // workspace notes, for the linked-notes panel
+  onOpenNote?: (noteId: string) => void;               // jump to a linked note in the Notes board
 }
 
 export type ReturnDisposition = 'resell' | 'defective';
@@ -205,7 +208,7 @@ export const CustomersView: React.FC<Props> = (props) => {
 
 /* ---------------- Profile ---------------- */
 const CustomerProfile: React.FC<Props & { customer: Customer; data: CustomerData; onBack: () => void }> = (
-  { customer, data, canViewProfit, canEdit, auditLogs, inventory, onBack, onSaveCustomer, onStartSale, onCreateRepair, onVoidSale, canVoidSale, onReturnSale, canReturnSale, defaultRestockingFeePercent },
+  { customer, data, canViewProfit, canEdit, auditLogs, inventory, onBack, onSaveCustomer, onStartSale, onCreateRepair, onVoidSale, canVoidSale, onReturnSale, canReturnSale, defaultRestockingFeePercent, notes, onOpenNote },
 ) => {
   const s = useMemo(() => customerStats(customer, data), [customer, data]);
   const timeline = useMemo(() => customerTimeline(s), [s]);
@@ -327,6 +330,7 @@ const CustomerProfile: React.FC<Props & { customer: Customer; data: CustomerData
           </Panel>
           <Panel title="Internal notes" className="md:col-span-2">
             {customer.notes ? <p className="text-sm text-slate-600 dark:text-slate-300 whitespace-pre-wrap">{customer.notes}</p> : <Empty text="No notes. Use Edit to add internal notes." />}
+            <LinkedNotes notes={notes} linkType="customer" linkId={customer.id} onOpenNote={onOpenNote} className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800" />
           </Panel>
         </div>
       )}
