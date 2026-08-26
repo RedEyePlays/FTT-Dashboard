@@ -1,6 +1,6 @@
 import { Customer, SalesTransaction, Repair, RepairBatch, InventoryItem } from '../types';
 import { isRepairOpen, balanceOwing, batchTotals } from './repairs';
-import { salesBalanceOwing, isReversed } from './pos';
+import { isReversed, isLayaway, collectedOnSale } from './pos';
 
 // All customer statistics are DERIVED from existing documents (salesTransactions
 // + repairs + repairBatches + inventory) — nothing is duplicated or stored on the
@@ -74,18 +74,34 @@ export function customerStats(c: Customer, data: CustomerData, now: number = Dat
 
   // Reversed sales (voided or returned) stay in the purchase history but must not
   // inflate money totals — the customer didn't ultimately spend that.
+  //
+  // lifetimeSpent is money actually PAID to date — collectedOnSale (a layaway
+  // still open counts its deposit plus any balance payments made since; once
+  // fully paid off it counts the full total, same as a sale paid in full at
+  // checkout). Using totalPaid here would count a $500 sale on a $150 deposit
+  // as $500 spent before the customer had actually paid that much.
+  //
+  // lifetimeProfit only counts a sale once it's fully recognized (not an open
+  // layaway) — mirrors domain/reports.ts's isRecognizedSale, so this and the
+  // P&L / Owner Analytics profit figures for the same customer's sales agree.
   const realized = purchases.filter(t => !isReversed(t));
-  const lifetimeSpent = realized.reduce((s, t) => s + (t.totalPaid || 0), 0);
-  const lifetimeProfit = realized.reduce((s, t) => s + (t.netProfit || 0), 0);
+  const lifetimeSpent = realized.reduce((s, t) => s + collectedOnSale(t), 0);
+  const lifetimeProfit = realized.filter(t => !isLayaway(t)).reduce((s, t) => s + (t.netProfit || 0), 0);
   const repairRevenue = repairs.reduce((s, r) => s + (r.repairPrice || 0), 0);
 
   // Outstanding = unpaid layaway sale balances + open-repair balances + wholesale
   // batch remainders. Layaway deposits leave a balance owing on the sale itself
   // (a voided sale owes nothing), so those must be counted here too or a customer
   // who put a deposit down would show $0 outstanding.
+  //
+  // Reads `t.balanceOwing` directly — the actively-maintained field, updated in
+  // place by domain/layaway.ts's applyBalancePayment as balance payments land —
+  // rather than recomputing from `t.deposit` (which is intentionally frozen at
+  // the original checkout amount and would make this figure ignore every later
+  // balance payment, understating what's actually still outstanding).
   const salesOwing = purchases
     .filter(t => !isReversed(t))
-    .reduce((s, t) => s + salesBalanceOwing(t.totalPaid || 0, t.deposit), 0);
+    .reduce((s, t) => s + Math.max(0, t.balanceOwing || 0), 0);
   const retailOwing = repairs
     .filter(r => r.type !== 'wholesale' && isRepairOpen(r))
     .reduce((s, r) => s + balanceOwing(r), 0);

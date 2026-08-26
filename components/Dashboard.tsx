@@ -1,6 +1,8 @@
 import React, { useMemo } from 'react';
 import { InventoryItem, SalesTransaction, ActivityEntry, Repair, RepairBatch, CashReconciliation } from '../types';
-import { unreconciledDays } from '../domain/reports';
+import { unreconciledDays, isRecognizedSale } from '../domain/reports';
+import { layawayTotals } from '../domain/layaway';
+import { isReversed } from '../domain/pos';
 import { todayISO } from '../domain/dates';
 import { kindOf } from '../domain/inventory';
 import { isInProgress } from '../domain/repairs';
@@ -10,6 +12,7 @@ import {
   DollarSign, TrendingUp, CalendarDays, CalendarRange, Calendar, Smartphone, Package,
   Tag, Wrench, ShoppingCart, AlertTriangle, Clock, Receipt, Activity as ActivityIcon,
   Store, BarChart3, ArrowRight, ClipboardCheck, PackageSearch, PackageCheck, Building2, CheckCircle2, CalendarClock, Printer,
+  HandCoins,
 } from 'lucide-react';
 
 interface DashboardProps {
@@ -26,6 +29,9 @@ interface DashboardProps {
   // have no way to act on.
   cashReconciliations?: CashReconciliation[];
   onViewCash?: () => void;
+  // Active-layaways tile (owner/manager tier, same as onViewCash) — omitted
+  // hides the tile for anyone who can't reach the list it links to.
+  onViewLayaways?: () => void;
 }
 
 // --- date helpers (all comparisons are on local YYYY-MM-DD strings) ---
@@ -43,7 +49,7 @@ const relTime = (ts: number) => {
 };
 const platformLabel = (p?: string) => (p && p !== 'None / In-Store' ? p : 'In-Store');
 
-export const Dashboard: React.FC<DashboardProps> = ({ data, salesTransactions, activity, repairs = [], repairBatches = [], canViewProfit = true, onViewAnalytics, onViewRepairs, cashReconciliations, onViewCash }) => {
+export const Dashboard: React.FC<DashboardProps> = ({ data, salesTransactions, activity, repairs = [], repairBatches = [], canViewProfit = true, onViewAnalytics, onViewRepairs, cashReconciliations, onViewCash, onViewLayaways }) => {
   const mask = (v: string) => (canViewProfit ? v : '•••');
   const staleCash = useMemo(
     () => (cashReconciliations ? unreconciledDays(cashReconciliations, todayISO()) : []),
@@ -74,10 +80,20 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, salesTransactions, a
 
     // Sales events, unioned & de-duplicated: every transaction, plus any device
     // sold directly on its inventory row that isn't already in a transaction.
+    //
+    // Only RECOGNIZED sales contribute (domain/reports.ts's isRecognizedSale —
+    // not voided/returned, and not an open layaway still owing a balance).
+    // This used to count every transaction's full subtotal/netProfit
+    // unconditionally, which meant a fresh $500 layaway that had only
+    // collected a $50 deposit inflated Today/This Week/This Month revenue by
+    // the full $500 the moment it was created — and a voided/returned sale
+    // did too, since neither was ever filtered out here (domain/reports.ts's
+    // P&L and domain/analytics.ts's Owner Analytics already did this
+    // correctly; this tile just hadn't been kept in sync with that rule).
     const txnInvIds = new Set<string>();
     salesTransactions.forEach(t => t.lines?.forEach(l => { if (l.inventoryId) txnInvIds.add(l.inventoryId); }));
     const events: { date: string; revenue: number; profit: number }[] = [];
-    salesTransactions.forEach(t => events.push({ date: t.date, revenue: t.subtotal || 0, profit: t.netProfit || 0 }));
+    salesTransactions.filter(isRecognizedSale).forEach(t => events.push({ date: t.date, revenue: t.subtotal || 0, profit: t.netProfit || 0 }));
     data.forEach(i => {
       if (kindOf(i) === 'device' && i.soldDate && !txnInvIds.has(i.id)) {
         const revenue = i.salePrice || 0;
@@ -115,9 +131,15 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, salesTransactions, a
       .sort((a, b) => (a.date !== b.date ? b.date.localeCompare(a.date) : b.id.localeCompare(a.id)))
       .slice(0, 6);
 
+    // Top-selling accessories + best platforms are money aggregations too, so
+    // they get the same recognized-sale filter as the period tiles above —
+    // an open layaway's line items/platform shouldn't count toward "top
+    // sellers" for money it hasn't actually collected yet.
+    const recognizedSales = salesTransactions.filter(isRecognizedSale);
+
     // Top-selling accessories (from transaction line items)
     const accAgg = new Map<string, { name: string; units: number; revenue: number }>();
-    salesTransactions.forEach(t => t.lines?.forEach(l => {
+    recognizedSales.forEach(t => t.lines?.forEach(l => {
       if (l.kind !== 'accessory') return;
       const key = l.sku || l.name;
       const cur = accAgg.get(key) || { name: l.name, units: 0, revenue: 0 };
@@ -129,13 +151,15 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, salesTransactions, a
 
     // Best platforms
     const platAgg = new Map<string, { name: string; count: number; revenue: number; profit: number }>();
-    salesTransactions.forEach(t => {
+    recognizedSales.forEach(t => {
       const name = platformLabel(t.platformName);
       const cur = platAgg.get(name) || { name, count: 0, revenue: 0, profit: 0 };
       cur.count += 1; cur.revenue += t.subtotal || 0; cur.profit += t.netProfit || 0;
       platAgg.set(name, cur);
     });
     const bestPlatforms = [...platAgg.values()].sort((a, b) => b.revenue - a.revenue).slice(0, 5);
+
+    const layaways = layawayTotals(salesTransactions);
 
     return {
       today: bucket(d => d === todayStr),
@@ -148,7 +172,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, salesTransactions, a
       pendingRepairs: pendingRepairsList.length, oldestRepair,
       pendingPurchases: devices.filter(i => i.deviceStatus === 'pending_purchase').length,
       lowStockList,
-      recentSales, topAccessories, bestPlatforms,
+      recentSales, topAccessories, bestPlatforms, layaways,
       maxPlatRev: Math.max(1, ...bestPlatforms.map(p => p.revenue)),
     };
   }, [data, salesTransactions]);
@@ -208,13 +232,19 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, salesTransactions, a
       </div>
 
       {/* Attention + expected profit */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
         <Tile icon={<TrendingUp className="w-5 h-5" />} accent="emerald" label="Expected Gross Profit"
           value={mask(money(m.expectedGross))} sub="Value − Cost" valueClass={m.expectedGross >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'} />
         <Tile icon={<Wrench className="w-5 h-5" />} accent="orange" label="Pending Repairs" value={String(m.pendingRepairs)}
           sub={m.oldestRepair ? `oldest ${daysAgo(m.oldestRepair)}d (${m.oldestRepair})` : undefined} />
         <Tile icon={<ShoppingCart className="w-5 h-5" />} accent="amber" label="Pending Purchases" value={String(m.pendingPurchases)} />
         <Tile icon={<AlertTriangle className="w-5 h-5" />} accent="rose" label="Low-Stock Accessories" value={String(m.lowStockList.length)} />
+        {onViewLayaways && (
+          <Tile icon={<HandCoins className="w-5 h-5" />} accent="blue" label="Active Layaways"
+            value={String(m.layaways.count)}
+            sub={m.layaways.count > 0 ? `${money(m.layaways.outstanding)} outstanding` : undefined}
+            onClick={onViewLayaways} />
+        )}
       </div>
 
       {/* Repairs */}
@@ -244,14 +274,21 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, salesTransactions, a
               {m.recentSales.map(t => (
                 <div key={t.id} className="py-2.5 flex items-center justify-between gap-3">
                   <div className="min-w-0">
-                    <p className="text-sm font-medium text-slate-800 dark:text-slate-100 truncate">{t.customerName || 'Walk-in'}</p>
+                    <p className="text-sm font-medium text-slate-800 dark:text-slate-100 truncate flex items-center gap-1.5">
+                      {t.customerName || 'Walk-in'}
+                      {(t.balanceOwing || 0) > 0 && !isReversed(t) && (
+                        <span className="shrink-0 text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300">Layaway</span>
+                      )}
+                    </p>
                     <p className="text-xs text-slate-400 flex items-center gap-1.5">
                       <span>{t.date}</span>·<span className="inline-flex items-center gap-1"><Store className="w-3 h-3" />{platformLabel(t.platformName)}</span>·<span>{t.lines?.length || 0} item{(t.lines?.length || 0) !== 1 ? 's' : ''}</span>
                     </p>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     <div className="text-right">
-                      <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">{money2(t.totalPaid)}</p>
+                      <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                        {(t.balanceOwing || 0) > 0 ? `${money2(t.deposit || 0)} of ${money2(t.totalPaid)}` : money2(t.totalPaid)}
+                      </p>
                       <p className={`text-xs font-medium ${(t.netProfit || 0) >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>{mask(`${(t.netProfit || 0) >= 0 ? '+' : ''}${money2(t.netProfit)}`)}</p>
                     </div>
                     <button onClick={() => printSalesReceipt(t, { storeName: getStoreProfile().storeName })}
@@ -365,16 +402,22 @@ const PeriodCard: React.FC<{ icon: React.ReactNode; title: string; revenue: numb
   </div>
 );
 
-const Tile: React.FC<{ icon: React.ReactNode; accent: string; label: string; value: string; sub?: string; valueClass?: string }> = ({ icon, accent, label, value, sub, valueClass }) => (
-  <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-4 shadow-sm flex items-center gap-3">
-    <div className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${ACCENTS[accent] || ACCENTS.slate}`}>{icon}</div>
-    <div className="min-w-0">
-      <p className="text-[11px] uppercase tracking-wide text-slate-400 truncate">{label}</p>
-      <p className={`text-lg font-bold leading-tight ${valueClass || 'text-slate-900 dark:text-white'}`}>{value}</p>
-      {sub && <p className="text-[11px] text-slate-400 truncate">{sub}</p>}
-    </div>
-  </div>
-);
+const Tile: React.FC<{ icon: React.ReactNode; accent: string; label: string; value: string; sub?: string; valueClass?: string; onClick?: () => void }> = ({ icon, accent, label, value, sub, valueClass, onClick }) => {
+  const Wrapper = onClick ? 'button' : 'div';
+  return (
+    <Wrapper
+      onClick={onClick}
+      className={`bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-4 shadow-sm flex items-center gap-3 w-full text-left ${onClick ? 'hover:border-indigo-400 cursor-pointer transition-colors' : ''}`}
+    >
+      <div className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${ACCENTS[accent] || ACCENTS.slate}`}>{icon}</div>
+      <div className="min-w-0">
+        <p className="text-[11px] uppercase tracking-wide text-slate-400 truncate">{label}</p>
+        <p className={`text-lg font-bold leading-tight ${valueClass || 'text-slate-900 dark:text-white'}`}>{value}</p>
+        {sub && <p className="text-[11px] text-slate-400 truncate">{sub}</p>}
+      </div>
+    </Wrapper>
+  );
+};
 
 const Panel: React.FC<{ icon: React.ReactNode; title: string; children: React.ReactNode }> = ({ icon, title, children }) => (
   <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shadow-sm p-5">

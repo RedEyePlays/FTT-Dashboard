@@ -402,6 +402,30 @@ export interface SalesTransaction {
   returnedByEmail?: string;
   restockingFee?: number;      // fee withheld from the refund (0 / absent = full refund)
   refundAmount?: number;       // actual amount refunded to the customer
+  // Layaway completion (domain/layaway.ts): every payment collected AFTER the
+  // original checkout, against `balanceOwing`. Each one is independently
+  // receiptable. `deposit` (above) always reflects the running total collected
+  // so far — this array is the itemized history behind that number, not a
+  // second source of truth for it.
+  balancePayments?: BalancePayment[];
+  // Stamped the moment `balanceOwing` reaches 0 through a balance payment —
+  // i.e. only for a sale that started as a layaway. A sale paid in full at
+  // checkout never has this set (it never had a balance to begin with).
+  layawayCompletedAt?: number;
+}
+
+/** One payment collected against a layaway's balanceOwing, after the original checkout. */
+export interface BalancePayment {
+  id: string;
+  amount: number;               // this payment's amount, whatever the method
+  paymentMethod: 'cash' | 'card' | 'mixed' | 'etransfer';
+  cashAmount?: number;          // only meaningful when paymentMethod === 'mixed'
+  cardAmount?: number;
+  etransferAmount?: number;
+  date: string;                 // YYYY-MM-DD, backdatable the same way a sale's date is
+  at: number;                   // epoch ms, when this payment was actually recorded
+  by?: string;                  // uid of the staff member who took it
+  byEmail?: string;
 }
 
 export interface AppData {
@@ -419,7 +443,7 @@ export interface AppData {
   activityLog?: ActivityEntry[];
 }
 
-export type ViewState = 'dashboard' | 'analytics' | 'reports' | 'entry' | 'edit' | 'grid' | 'notes' | 'ai' | 'pos' | 'quickpurchase' | 'dropoff' | 'repairs' | 'customers' | 'users' | 'audit' | 'settings' | 'timeclock' | 'closeout';
+export type ViewState = 'dashboard' | 'analytics' | 'reports' | 'entry' | 'edit' | 'grid' | 'notes' | 'ai' | 'pos' | 'quickpurchase' | 'dropoff' | 'repairs' | 'customers' | 'users' | 'audit' | 'settings' | 'timeclock' | 'closeout' | 'layaways';
 
 // A single cash movement in a day's drawer, logged as part of reconciliation:
 // a manual cash-in (top-up / tip / off-sale payment), a paid cash expense, or an

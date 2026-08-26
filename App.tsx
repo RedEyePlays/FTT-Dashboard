@@ -20,6 +20,7 @@ const InventoryView = lazy(() => import('./components/InventoryView').then(m => 
 const RepairsView = lazy(() => import('./components/RepairsView').then(m => ({ default: m.RepairsView })));
 const TechRepairsView = lazy(() => import('./components/TechRepairsView').then(m => ({ default: m.TechRepairsView })));
 const CustomersView = lazy(() => import('./components/CustomersView').then(m => ({ default: m.CustomersView })));
+const LayawaysView = lazy(() => import('./components/LayawaysView').then(m => ({ default: m.LayawaysView })));
 const OwnerAnalytics = lazy(() => import('./components/OwnerAnalytics').then(m => ({ default: m.OwnerAnalytics })));
 const ReportsView = lazy(() => import('./components/ReportsView').then(m => ({ default: m.ReportsView })));
 const LogCashMovementModal = lazy(() => import('./components/LogCashMovementModal').then(m => ({ default: m.LogCashMovementModal })));
@@ -35,7 +36,7 @@ const UsersView = lazy(() => import('./components/UsersView').then(m => ({ defau
 const AuditLogView = lazy(() => import('./components/AuditLogView').then(m => ({ default: m.AuditLogView })));
 const TimeClockView = lazy(() => import('./components/TimeClockView').then(m => ({ default: m.TimeClockView })));
 const CloseOutView = lazy(() => import('./components/CloseOutView').then(m => ({ default: m.CloseOutView })));
-import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, Runner, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission, Repair, RepairBatch, TimeEntry, PayPeriodPaid, BreakReason, SalesTransaction, CashReconciliation, StaffNote } from './types';
+import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, Runner, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission, Repair, RepairBatch, TimeEntry, PayPeriodPaid, BreakReason, SalesTransaction, CashReconciliation, StaffNote, BalancePayment } from './types';
 import { skuPrefix, nextSku } from './services/sku';
 import { REPAIR_PREFIX, BATCH_PREFIX, applyTechEdit, techUpdateAuditPlan, repairSalePrefill, completeRepair, completeRepairSale, dateToEpochMs } from './domain/repairs';
 import { MergePlan } from './domain/customers';
@@ -49,7 +50,7 @@ import { useInactivityTimer } from './hooks/useInactivityTimer';
 import { hashPin, verifyPin, canAssignPin, isValidPinFormat } from './domain/pin';
 import {
   saveMeta, saveItem, deleteItem, syncArray, allocateSku,
-  logActivityDoc, commitSale, voidSale, returnSale, saveCashReconciliation, seedSampleData,
+  logActivityDoc, commitSale, voidSale, returnSale, collectLayawayBalance, saveCashReconciliation, seedSampleData,
   updateUserDoc, setInvite, deleteInvite,
   logAudit, exportWorkspaceData, recordBackup, saveSettings,
   saveTimeEntry, savePayPeriodPaid, deletePayPeriodPaid,
@@ -65,6 +66,7 @@ import { useWorkspaceData } from './hooks/useWorkspaceData';
 import { newId, mkActivity } from './domain/ids';
 import { collectionFor, stockChange, applyDirectSale } from './domain/inventory';
 import { canVoidSale, canReturnSale, returnRefund, saleAccessoryRestock, saleDeviceListedPlatforms, collectedOnSale, cashCollectedOnSale, saleRefundDrawerEffect } from './domain/pos';
+import { applyBalancePayment, cashPortionOfPayment } from './domain/layaway';
 import { expectedCashForDate, expectedEndingCash, sumDrawerEntries, cashDrawerSummary, openDrawerPatch, ReconciliationInput } from './domain/reports';
 import type { CashMovementKind } from './components/LogCashMovementModal';
 const OpenDrawerModal = lazy(() => import('./components/OpenDrawerModal').then(m => ({ default: m.OpenDrawerModal })));
@@ -86,7 +88,7 @@ const PAGE_TITLES: Record<ViewState, string> = {
   dashboard: 'Dashboard', analytics: 'Analytics', reports: 'Reports', entry: 'Add Item', edit: 'Edit Item',
   grid: 'Inventory', notes: 'Notes', ai: 'AI Assistant', pos: 'Checkout', quickpurchase: 'Quick Purchase', dropoff: 'Drop-Offs',
   repairs: 'Repairs', customers: 'Customers', users: 'Users', audit: 'Audit Log',
-  settings: 'Settings', timeclock: 'Time Clock', closeout: 'Close Out',
+  settings: 'Settings', timeclock: 'Time Clock', closeout: 'Close Out', layaways: 'Layaways',
 };
 import { LoadingScreen, LoadingSkeleton, DbErrorScreen } from './components/StatusScreens';
 import { todayISO } from './domain/dates';
@@ -678,6 +680,83 @@ const App: React.FC = () => {
     });
   };
 
+  // Collect a payment against an open layaway's remaining balance (item 1 of
+  // the layaway-completion batch — before this there was no way to ever pay
+  // one off; the device stayed `reserved` forever). `input.date` backdates
+  // the payment record and the device's soldDate the same way a checkout's
+  // own Sale Date can be backdated — but the cash-drawer effect always posts
+  // to TODAY (todayISO()), never the backdated date, for the same reason
+  // handleVoidSale/handleReturnSale always post their refund entries to
+  // today: the cash physically enters the till today, and retroactively
+  // crediting an already-reconciled past day would silently corrupt it.
+  const handleCollectBalance = async (tx: SalesTransaction, input: {
+    amount: number; paymentMethod: 'cash' | 'card' | 'mixed' | 'etransfer';
+    cashAmount?: number; cardAmount?: number; etransferAmount?: number; date: string;
+  }): Promise<SalesTransaction> => {
+    if (!uid || !appUser || !allow('sales.complete')) throw new Error('Not permitted to collect payment on this sale.');
+
+    const payment: BalancePayment = {
+      id: newId(), amount: input.amount, paymentMethod: input.paymentMethod,
+      cashAmount: input.paymentMethod === 'mixed' ? input.cashAmount : undefined,
+      cardAmount: input.paymentMethod === 'mixed' ? input.cardAmount : undefined,
+      etransferAmount: input.paymentMethod === 'mixed' ? input.etransferAmount : undefined,
+      date: input.date, at: Date.now(), by: appUser.id, byEmail: appUser.email,
+    };
+    const { transaction, fullyPaid } = applyBalancePayment(tx, payment);
+
+    const activity: ActivityEntry[] = [
+      mkActivity(`${input.amount.toFixed(2)} collected on layaway ${tx.id.slice(0, 8)} (${tx.customerName || 'customer'})${fullyPaid ? ' — paid in full' : ` — ${(transaction.balanceOwing || 0).toFixed(2)} still owing`}`),
+    ];
+
+    let devices: InventoryItem[] | undefined;
+    let repair: Repair | undefined;
+
+    if (fullyPaid) {
+      // Only NOW does the reserved device actually become sold — matching
+      // the normal (non-layaway) checkout's own delist-reminder pattern
+      // (App.tsx's handleSellCart), since this device genuinely wasn't off
+      // the market anywhere else until this moment.
+      const reservedDevices = dataRef.current.filter(i => (i.kind ?? 'device') === 'device' && i.transactionId === tx.id);
+      if (reservedDevices.length) {
+        devices = reservedDevices.map(d => ({
+          ...d, deviceStatus: 'sold', soldDate: input.date, listedPlatforms: [],
+        }));
+        activity.push(...reservedDevices
+          .filter(d => (d.listedPlatforms?.length || 0) > 0)
+          .map(d => mkActivity(`Remember to delist ${d.sku || d.item} from: ${listingPlatformsLabel(d.listedPlatforms)}`)));
+      }
+
+      // Repair checkout deferred pending the layaway (handleSellCart skips
+      // completion entirely while isLayaway) — completes now, backdated to
+      // the same payoff date as the device.
+      if (tx.repairId) {
+        const rep = repairsRef.current.find(r => r.id === tx.repairId);
+        if (rep) {
+          const terminal = rep.type === 'retail' ? 'picked_up' : 'completed';
+          repair = { ...completeRepairSale(rep, tx.id, dateToEpochMs(input.date), terminal), completedBy: appUser.id };
+          activity.push(mkActivity(`${repair.repairNumber} checked out (${tx.customerName || 'customer'})`));
+        }
+      }
+    }
+
+    await collectLayawayBalance(uid, { transaction, devices, repair, activity });
+    audit('sale.layaway_payment', 'sale', tx.id, { balanceOwing: tx.balanceOwing }, { amount: input.amount, balanceOwing: transaction.balanceOwing, fullyPaid });
+    if (repair) {
+      audit('repair.status_change', 'repair', repair.id, { status: repairsRef.current.find(r => r.id === repair!.id)?.status }, { status: repair.status });
+      audit('repair.completed', 'repair', repair.id, undefined, { salesTransactionId: tx.id });
+    }
+
+    const cashPortion = cashPortionOfPayment(payment);
+    if (cashPortion >= 0.005) {
+      const date = todayISO();
+      const existing = cashReconciliations.find(r => r.date === date);
+      const entry = { id: newId(), amount: cashPortion, note: `Layaway balance collected — ${tx.id.slice(0, 8)} (${tx.customerName || 'customer'})` };
+      commitDrawerRecord(date, { cashIn: [...(existing?.cashIn || []), entry] });
+    }
+
+    return transaction;
+  };
+
   // Reverse a completed sale (owner/manager, same-day window). Returns sold
   // devices to stock, restocks accessories atomically, and flags the transaction
   // voided (kept for audit). Does NOT touch custom lines (no inventoryId).
@@ -697,7 +776,12 @@ const App: React.FC = () => {
     // Restock accessories by the quantity sold on each accessory line.
     const accessoryUpdates = saleAccessoryRestock(tx);
 
-    const activity: ActivityEntry[] = [mkActivity(`Sale ${tx.id.slice(0, 8)} voided (${tx.customerName || 'customer'})`)];
+    const isLayawayTx = (tx.balanceOwing || 0) > 0.005;
+    const activity: ActivityEntry[] = [mkActivity(
+      isLayawayTx
+        ? `Layaway ${tx.id.slice(0, 8)} cancelled — $${cashCollectedOnSale(tx).toFixed(2)} deposit refunded (${tx.customerName || 'customer'})`
+        : `Sale ${tx.id.slice(0, 8)} voided (${tx.customerName || 'customer'})`
+    )];
     voidSale(uid, {
       transactionId: tx.id, devices, accessoryUpdates,
       voided: { voidedAt: Date.now(), voidedBy: appUser.id, voidedByEmail: appUser.email },
@@ -744,7 +828,12 @@ const App: React.FC = () => {
     // back money that was never paid in (see domain/pos.ts's collectedOnSale).
     const refundAmount = returnRefund(collectedOnSale(tx), restockingFee);
 
-    const activity: ActivityEntry[] = [mkActivity(`Sale ${tx.id.slice(0, 8)} returned — refunded ${refundAmount.toFixed(2)} (${tx.customerName || 'customer'})`)];
+    const isLayawayReturn = (tx.balanceOwing || 0) > 0.005;
+    const activity: ActivityEntry[] = [mkActivity(
+      isLayawayReturn
+        ? `Layaway ${tx.id.slice(0, 8)} cancelled — refunded $${refundAmount.toFixed(2)} deposit (${tx.customerName || 'customer'})`
+        : `Sale ${tx.id.slice(0, 8)} returned — refunded ${refundAmount.toFixed(2)} (${tx.customerName || 'customer'})`
+    )];
     returnSale(uid, {
       transactionId: tx.id, resellDevices, defectiveDevices, accessoryUpdates,
       returned: { returnedAt: Date.now(), returnedBy: appUser.id, returnedByEmail: appUser.email, restockingFee, refundAmount },
@@ -1174,6 +1263,8 @@ const App: React.FC = () => {
       }
       if (decision.action === 'noIdentifier') {
         notice = { kind: 'warning', message: 'No IMEI or serial — device not added to inventory.' };
+      } else if (decision.action === 'blockedClaimed') {
+        return { kind: 'blocked', message: `This IMEI/serial matches an inventory record (${decision.match.sku || decision.match.item}) that is already ${decision.match.deviceStatus === 'sold' ? 'sold' : 'reserved for a customer'} — it can't be auto-attached to a new ticket. Double-check the IMEI/serial, or resolve the existing record first.` };
       } else if (decision.action === 'create' || decision.action === 'attach') {
         // SKU is pre-allocated outside commitAutoInventory's transaction (SKU
         // allocation runs its own transaction and Firestore doesn't nest them);
@@ -1524,8 +1615,19 @@ const App: React.FC = () => {
             allow('reports.view')
               ? <Dashboard data={data} salesTransactions={salesTransactions} activity={activityLog} repairs={repairs} repairBatches={repairBatches} canViewProfit={allow('reports.profit.summary')} onViewAnalytics={() => navigate('analytics')} onViewRepairs={allow('repairs.manage') ? () => navigate('repairs') : undefined}
                   cashReconciliations={allow('cash.reconcile') ? cashReconciliations : undefined}
-                  onViewCash={allow('cash.reconcile') ? () => navigate('reports') : undefined} />
+                  onViewCash={allow('cash.reconcile') ? () => navigate('reports') : undefined}
+                  onViewLayaways={allow('cash.reconcile') ? () => navigate('layaways') : undefined} />
               : <div className="text-center text-slate-400 py-20">You don't have access to reports.</div>
+          )}
+          {view === 'layaways' && allow('sales.complete') && (
+            <LayawaysView
+              salesTransactions={salesTransactions}
+              customers={customers}
+              staleThresholdDays={settings.operations.staleLayawayDays}
+              onBack={() => navigate('dashboard')}
+              onOpenCustomer={(customerId) => { setFocusCustomerId(customerId); navigate('customers'); }}
+              onCollectBalance={handleCollectBalance}
+            />
           )}
           {view === 'analytics' && (
             (appUser.role === 'owner' || appUser.role === 'manager') && allow('reports.profit.detailed')
@@ -1558,6 +1660,7 @@ const App: React.FC = () => {
               canVoidSale={(tx) => allow('sales.void') && canVoidSale(tx, todayISO(), settings.operations.voidWindowDays)}
               onReturnSale={allow('sales.return') ? handleReturnSale : undefined}
               canReturnSale={(tx) => allow('sales.return') && canReturnSale(tx, todayISO(), settings.operations.voidWindowDays)}
+              onCollectBalance={allow('sales.complete') ? handleCollectBalance : undefined}
               defaultRestockingFeePercent={settings.operations.returnRestockingFeePercent}
               notes={notes}
               noteRole={appUser?.role}

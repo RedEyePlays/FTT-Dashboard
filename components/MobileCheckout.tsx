@@ -2,7 +2,7 @@ import React, { useEffect, useState, lazy, Suspense } from 'react';
 import {
   ScanLine, Search, Plus, Minus, Trash2, Smartphone, Package, Sparkles, ShoppingCart,
   User, Phone, Mail, ChevronLeft, CheckCircle, Banknote, CreditCard, Blend, Send,
-  Printer, RotateCcw, Eye, X, AlertTriangle, FileText, Wrench, History,
+  Printer, RotateCcw, Eye, X, AlertTriangle, FileText, Wrench, History, HandCoins,
 } from 'lucide-react';
 import { InventoryItem, Customer, DeviceType, Repair } from '../types';
 import { RepairSalePrefill } from '../domain/repairs';
@@ -44,6 +44,10 @@ export const MobileCheckout: React.FC<Props> = (props) => {
   const [pick, setPick] = useState<null | 'device' | 'accessory'>(null);
   const [showCustom, setShowCustom] = useState(false);
   const [txModal, setTxModal] = useState(false);
+  // Off by default — same toggle as CartSaleView (item 8 of the layaway-
+  // completion batch): a normal full-payment checkout never sees a deposit
+  // field unless explicitly switched on.
+  const [layawayToggle, setLayawayToggle] = useState(false);
 
   // "Similar past sale" price hints per device line — suggestion only, applied on tap.
   const priceHints = React.useMemo(() => {
@@ -309,9 +313,18 @@ export const MobileCheckout: React.FC<Props> = (props) => {
             </p>
           )}
           <input value={cx.paymentNotes} onChange={e => cx.setPaymentNotes(e.target.value)} placeholder="Payment notes (optional)" className={input} />
-          <label className="block text-sm text-slate-500 dark:text-slate-400">Deposit / partial payment (optional)
-            <input type="number" inputMode="decimal" min="0" value={cx.deposit} onChange={e => cx.setDeposit(e.target.value)} onFocus={selectOnFocus} placeholder={`Blank if paying in full (${money(cx.totalPaid)})`} className={input} />
-          </label>
+          <button type="button" onClick={() => { const next = !layawayToggle; setLayawayToggle(next); if (!next) cx.setDeposit(''); }}
+            className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${layawayToggle ? 'bg-sky-50 dark:bg-sky-900/20 border-sky-300 dark:border-sky-700 text-sky-700 dark:text-sky-300' : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400'}`}>
+            <span className="flex items-center gap-1.5"><HandCoins className="w-3.5 h-3.5" /> Layaway / partial payment</span>
+            <span className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${layawayToggle ? 'bg-sky-600' : 'bg-slate-300 dark:bg-slate-700'}`}>
+              <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${layawayToggle ? 'translate-x-[18px]' : 'translate-x-[3px]'}`} />
+            </span>
+          </button>
+          {layawayToggle && (
+            <label className="block text-sm text-slate-500 dark:text-slate-400">Deposit / partial payment
+              <input type="number" inputMode="decimal" min="0" value={cx.deposit} onChange={e => cx.setDeposit(e.target.value)} onFocus={selectOnFocus} placeholder={`Blank if paying in full (${money(cx.totalPaid)})`} className={input} />
+            </label>
+          )}
           {cx.hasZeroPricedDevice && (
             <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-500/40 rounded-xl p-3 text-sm">
               <p className="flex items-center gap-2 font-semibold text-amber-800 dark:text-amber-300"><AlertTriangle className="w-4 h-4" /> A device has no sale price ($0.00)</p>

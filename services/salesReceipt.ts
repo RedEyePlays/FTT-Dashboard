@@ -1,4 +1,4 @@
-import { SalesTransaction } from '../types';
+import { SalesTransaction, BalancePayment } from '../types';
 import { PRINT_PREVIEW_BAR_STYLE, PRINT_PREVIEW_BAR_HTML } from './printPreview';
 
 // The thermal (80mm) sales receipt. Extracted here so it renders identically
@@ -46,6 +46,53 @@ export function printSalesReceipt(tx: SalesTransaction, opts: { storeName?: stri
       ${tx.balanceOwing ? `<div class="row" style="margin-top:1mm"><span>Deposit Paid</span><span>${money(tx.deposit || 0)}</span></div><div class="row b" style="color:#b45309"><span>Balance Owing</span><span>${money(tx.balanceOwing)}</span></div>` : ''}
       <div class="row" style="margin-top:1.5mm;color:#555"><span>Payment</span><span>${payParts}</span></div>
       ${tx.customerName ? `<div class="row" style="color:#555"><span>Customer</span><span>${tx.customerName}</span></div>` : ''}
+    </div>
+    <p style="text-align:center;font-size:2.7mm;color:#555;margin-top:3mm">Thank you!</p>
+    </body></html>`);
+  win.document.close();
+  return true;
+}
+
+// A layaway balance payment (domain/layaway.ts's applyBalancePayment) gets
+// its own receipt distinct from the original sale receipt above — same
+// thermal 80mm print path, but showing THIS payment plus the resulting
+// remaining balance, so a customer paying down a layaway in installments has
+// a paper trail for every visit, not just the first one (item 6 of the
+// layaway-completion batch: "each payment should be receiptable, showing new
+// remaining balance" — a dispute risk otherwise, same as the original
+// deposit itself, which printSalesReceipt above already covers via its own
+// Deposit Paid / Balance Owing rows).
+export function printBalancePaymentReceipt(
+  tx: SalesTransaction,
+  payment: BalancePayment,
+  remainingBalance: number,
+  opts: { storeName?: string } = {},
+): boolean {
+  const store = opts.storeName || 'FlipThatTech';
+  const money = (n: number) => `$${(n || 0).toFixed(2)}`;
+  const payLabel = PAYMENT_METHOD_LABEL[payment.paymentMethod] || payment.paymentMethod;
+  const payParts = payment.paymentMethod === 'mixed'
+    ? [['Cash', payment.cashAmount], ['Card', payment.cardAmount], ['E-transfer', payment.etransferAmount]]
+        .filter(([, v]) => v).map(([k, v]) => `${k}: ${money(Number(v))}`).join(' · ')
+    : payLabel;
+  const win = window.open('', '_blank', 'width=320,height=640');
+  if (!win) return false;
+  win.document.write(`<html><head><title>Payment Receipt ${tx.id}</title>
+    <style>
+    @page { size: 80mm auto; margin: 0; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; }
+    body{font-family:'Inter',system-ui,Arial,sans-serif;width:72mm;margin:0 auto;padding:2mm 0;color:#000;font-size:3mm;}
+    h2{text-align:center;margin:0 0 0.5mm;font-size:4.2mm;} .muted{color:#555;font-size:2.6mm;text-align:center;margin-bottom:2mm;}
+    .row{display:flex;justify-content:space-between;font-size:2.9mm;} .b{font-weight:800;}
+    ${PRINT_PREVIEW_BAR_STYLE}</style></head>
+    <body>${PRINT_PREVIEW_BAR_HTML}<h2>${store}</h2><div class="muted">Layaway Payment Receipt<br/>Sale ${tx.id.slice(0, 8)} · ${payment.date}</div>
+    <div style="margin-top:2mm">
+      ${tx.customerName ? `<div class="row" style="color:#555"><span>Customer</span><span>${tx.customerName}</span></div>` : ''}
+      <div class="row" style="margin-top:1mm"><span>Sale total</span><span>${money(tx.totalPaid)}</span></div>
+      <div class="row b" style="margin-top:1mm"><span>Payment received</span><span>${money(payment.amount)}</span></div>
+      <div class="row" style="color:#555"><span>Payment method</span><span>${payParts}</span></div>
+      <div class="row b" style="margin-top:2mm;${remainingBalance > 0.005 ? 'color:#b45309' : 'color:#059669'}"><span>${remainingBalance > 0.005 ? 'Balance remaining' : 'Paid in full'}</span><span>${money(remainingBalance)}</span></div>
     </div>
     <p style="text-align:center;font-size:2.7mm;color:#555;margin-top:3mm">Thank you!</p>
     </body></html>`);
