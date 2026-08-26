@@ -59,7 +59,7 @@ export const CartSaleView: React.FC<Props> = (props) => {
     lineSubtotal, subtotal, purchaseCostTotal, repairCostTotal, totalCost, taxApplies, tax, platformFee, totalPaid, netProfit,
     isZeroPricedDevice, hasZeroPricedDevice, allowZeroPrice, setAllowZeroPrice, blockedByZeroPrice,
     hasListedElsewhereDevice, allowListedElsewhereSale, setAllowListedElsewhereSale, blockedByListedElsewhere, delistReminders,
-    addDevice, addAccessory, updateLine, removeLine, num, addCustomItem, handleScan, handleCheckout, reset, printReceipt, printInvoice, emailReceipt, soldDeviceRows,
+    addDevice, addAccessory, updateLine, removeLine, num, addCustomItem, handleScan, handleCheckout, isSubmitting, reset, printReceipt, printInvoice, emailReceipt, soldDeviceRows,
     scanResults, addScanResult, repairMatches, addRepair,
     printReceiptOnComplete, setPrintReceiptOnComplete,
   } = cx;
@@ -427,9 +427,9 @@ export const CartSaleView: React.FC<Props> = (props) => {
           <Printer className="w-3.5 h-3.5 text-slate-400" /> Print receipt on completion
         </label>
 
-        <button onClick={handleCheckout} disabled={cart.length === 0 || blockedByZeroPrice || blockedByListedElsewhere || mixedPaymentMismatch}
+        <button onClick={handleCheckout} disabled={isSubmitting || cart.length === 0 || blockedByZeroPrice || blockedByListedElsewhere || mixedPaymentMismatch}
           className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold rounded-xl text-sm transition-colors flex items-center justify-center gap-2">
-          <ShoppingCart className="w-4 h-4" /> {isLayaway ? `Take Deposit · ${money(cx.depositAmount)}` : `Complete Sale · ${money(totalPaid)}`}
+          <ShoppingCart className="w-4 h-4" /> {isSubmitting ? 'Processing…' : isLayaway ? `Take Deposit · ${money(cx.depositAmount)}` : `Complete Sale · ${money(totalPaid)}`}
         </button>
       </div>
 
