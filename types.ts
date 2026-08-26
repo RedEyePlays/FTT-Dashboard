@@ -164,12 +164,29 @@ export interface Settlement {
   notes: string;
 }
 
+// A note can reference one record. This is a lightweight pointer, not an
+// owning relationship — the record knows nothing about it, and deleting the
+// note (or the record) leaves the other side intact.
+export type NoteLinkType = 'customer' | 'inventory' | 'repair';
+
 export interface Note {
   id: string;
   title: string;
   content: string;
   color: 'yellow' | 'blue' | 'green' | 'rose' | 'violet' | 'slate';
   date: string;
+  // Pinned pages always sort to the top of the list (see domain/notes.ts).
+  pinned?: boolean;
+  // Attribution. These pages are shared, so every save records who touched it.
+  updatedAt?: number;
+  updatedBy?: string;       // AppUser id
+  updatedByEmail?: string;
+  // Optional link to a customer / inventory item / repair. `linkLabel` is a
+  // denormalized display name so the notes list renders without a lookup; the
+  // record views resolve by linkType + linkId.
+  linkType?: NoteLinkType;
+  linkId?: string;
+  linkLabel?: string;
 }
 
 export interface Task {
