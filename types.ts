@@ -169,6 +169,16 @@ export interface Settlement {
 // note (or the record) leaves the other side intact.
 export type NoteLinkType = 'customer' | 'inventory' | 'repair';
 
+// Who may read a note. Notes routinely hold purchase prices, supplier
+// settlements and personal numbers — the same class of data the app already
+// hides from employees/technicians elsewhere (inventory cost column, AI
+// gating, reports) — so each note carries its own audience.
+//
+// An absent value reads as 'managers', NOT 'everyone': notes written before
+// this existed were authored with no expectation of being employee-visible,
+// so the safe default is the restrictive one. See DEFAULT_NOTE_VISIBILITY.
+export type NoteVisibility = 'everyone' | 'managers' | 'owner';
+
 export interface Note {
   id: string;
   title: string;
@@ -187,6 +197,8 @@ export interface Note {
   linkType?: NoteLinkType;
   linkId?: string;
   linkLabel?: string;
+  // Absent = 'managers' (see NoteVisibility / DEFAULT_NOTE_VISIBILITY).
+  visibility?: NoteVisibility;
 }
 
 export interface Task {

@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { describe, it, expect } from 'vitest';
-import { markdownToHtml, htmlToMarkdown, markdownAccelerator } from './notesHtml';
+import { markdownToHtml, htmlToMarkdown, markdownAccelerator, sanitizeNoteHtml } from './notesHtml';
 import { parseNoteBlocks, checklistProgress } from './notes';
 
 // The editor's whole safety property is that markdown survives a trip through
@@ -44,6 +44,89 @@ describe('markdownToHtml', () => {
 
   it('gives an empty line a caret target instead of collapsing it', () => {
     expect(markdownToHtml('a\n\nb')).toContain('<br>');
+  });
+});
+
+describe('sanitizeNoteHtml: allowlist defense-in-depth against stored XSS', () => {
+  // Notes are shared across staff — whatever this produces runs in a
+  // manager's/owner's session the moment their board loads. markdownToHtml
+  // already escapes text into entities, so these payloads can't occur from
+  // normal use; this pins down the independent second layer (sanitizeNoteHtml
+  // itself, and that markdownToHtml actually calls it) so a future bug in the
+  // generator — a new block kind that forgets to escape, a template typo —
+  // doesn't become a live stored-XSS hole.
+  it('markdownToHtml output never PARSES into a real dangerous element or a live event-handler attribute', () => {
+    // Typed as plain note text, this content is only ever escaped into inert
+    // entities (e.g. "onerror" surviving as the literal, visible WORD
+    // "onerror" inside escaped text — `&lt;img ... onerror=...&gt;` — is
+    // correct and safe; it's not a live attribute). The real property under
+    // test is what happens when this string is actually parsed as HTML: no
+    // element the browser would treat as a tag, no attribute it would treat
+    // as an event handler.
+    const payloads = [
+      '<script>alert(1)</script>',
+      '<img src=x onerror=alert(1)>',
+      '<svg onload=alert(1)>',
+      '<a href="javascript:alert(1)">click</a>',
+      '<div onclick="alert(1)">x</div>',
+      '<iframe src="javascript:alert(1)"></iframe>',
+      '<style>body{background:url(javascript:alert(1))}</style>',
+    ];
+    for (const p of payloads) {
+      const parsed = el(markdownToHtml(p));
+      expect(parsed.querySelector('script, iframe, object, embed, style, svg, img, a')).toBeNull();
+      for (const node of Array.from(parsed.querySelectorAll('*'))) {
+        for (const attr of Array.from(node.attributes)) {
+          expect(attr.name.toLowerCase().startsWith('on')).toBe(false);
+          expect((attr.value || '').toLowerCase()).not.toContain('javascript:');
+        }
+      }
+    }
+  });
+
+  it('a crafted note renders inert when actually inserted into a live DOM — no script element, no handler attributes anywhere in the subtree', () => {
+    const md = [
+      '# Report <script>window.__pwned = true</script>',
+      '[x] done <img src=x onerror="window.__pwned = true">',
+      'plain <svg/onload=alert(1)> text',
+    ].join('\n');
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    host.innerHTML = markdownToHtml(md);
+
+    expect(host.querySelector('script')).toBeNull();
+    expect(host.querySelector('iframe, object, embed, style, link, meta')).toBeNull();
+    const all = host.querySelectorAll('*');
+    for (const node of Array.from(all)) {
+      for (const attr of Array.from(node.attributes)) {
+        expect(attr.name.toLowerCase().startsWith('on')).toBe(false);
+      }
+    }
+    expect((window as any).__pwned).toBeUndefined();
+    host.remove();
+  });
+
+  it('strips a wrapper tag the editor never emits while keeping its legitimate text', () => {
+    // Something outside this editor's own output shape (a hand-edited
+    // Firestore doc, a future code path) — the element is discarded, the
+    // text inside it survives.
+    const out = sanitizeNoteHtml('<div data-nb="text"><font color="red">hello</font> world</div>');
+    expect(out).not.toContain('<font');
+    expect(out).toContain('hello');
+    expect(out).toContain('world');
+  });
+
+  it('drops attributes not on the allowlist for a tag this editor does emit', () => {
+    const out = sanitizeNoteHtml('<div data-nb="text" onclick="alert(1)" style="color:red">hi</div>');
+    expect(out).not.toContain('onclick');
+    expect(out).not.toContain('style');
+    expect(out).toContain('data-nb="text"');
+    expect(out).toContain('hi');
+  });
+
+  it('is safe to call on a string that never came from markdownToHtml at all', () => {
+    expect(sanitizeNoteHtml('<script>alert(1)</script>ignored')).not.toContain('<script');
+    expect(sanitizeNoteHtml('')).toBe('');
   });
 });
 

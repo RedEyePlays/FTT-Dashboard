@@ -36,6 +36,9 @@ interface AppHeaderProps {
   alerts?: Alert[];
   notifSeenTs?: number;
   onMarkNotificationsSeen?: (ts: number) => void;
+  /** Notes has no permission of its own — visibility is per note, so App
+   *  decides (domain/notes.ts's canOpenNotes) whether this role can reach it. */
+  showNotes?: boolean;
 }
 
 type NavItem = { key: string; label: string; icon: React.ReactNode; view: ViewState; show: boolean };
@@ -50,7 +53,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   view, onNavigate, allow, isTech, pageTitle, onOpenDrawer, userEmail, userRole,
   darkMode, onToggleTheme, onToggleAiSidebar, onOpenFinder,
   onOpenSettings, onOpenBulk, onStartAdd, onLock, activity = [],
-  alerts = [], notifSeenTs = 0, onMarkNotificationsSeen = () => {},
+  alerts = [], notifSeenTs = 0, onMarkNotificationsSeen = () => {}, showNotes = true,
 }) => {
   // Keyboard hint for the global-search bar (⌘K on Mac, Ctrl K elsewhere).
   const modKey = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl ';
@@ -61,7 +64,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     { key: 'customers', label: 'Customers', icon: <Contact className="w-4 h-4" />, view: 'customers', show: allow('reports.view') },
     { key: 'pos', label: 'Quick Sale', icon: <ShoppingCart className="w-4 h-4" />, view: 'pos', show: true },
     { key: 'quickpurchase', label: 'Quick Purchase', icon: <ShoppingBag className="w-4 h-4" />, view: 'quickpurchase', show: allow('inventory.add') },
-    { key: 'notes', label: 'Notes', icon: <StickyNote className="w-4 h-4" />, view: 'notes', show: true },
+    { key: 'notes', label: 'Notes', icon: <StickyNote className="w-4 h-4" />, view: 'notes', show: showNotes },
   ] as NavItem[]).filter(i => i.show);
 
   const more: NavItem[] = ([

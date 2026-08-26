@@ -3,7 +3,7 @@ import {
   Wrench, Plus, Search, X, Trash2, Printer, FileText, Receipt, History as HistoryIcon,
   ArrowLeft, DollarSign, ChevronRight, Building2, ClipboardCheck, PackageCheck, ScrollText, QrCode, BarChart3, Link as LinkIcon, Check,
 } from 'lucide-react';
-import { Repair, RepairBatch, Customer, AuditEntry, RepairStatus, RepairType, DeviceType, RepairPart, AppUser, RepairPurchasePaidBy, Note } from '../types';
+import { Repair, RepairBatch, Customer, AuditEntry, RepairStatus, RepairType, DeviceType, RepairPart, AppUser, RepairPurchasePaidBy, Note, Role } from '../types';
 import { LinkedNotes } from './LinkedNotes';
 import {
   REPAIR_STATUSES, REPAIR_STATUS_CELL,
@@ -51,6 +51,7 @@ interface Props {
   users?: AppUser[];
   canViewPerformance?: boolean;
   notes?: Note[];                        // workspace notes, for the linked-notes panel
+  noteRole?: Role;                       // viewer's role, gates which linked notes show
   onOpenNote?: (noteId: string) => void; // jump to a linked note in the Notes board
 }
 
@@ -439,7 +440,7 @@ export const RepairsView: React.FC<Props> = (props) => {
         <RepairDrawer key={drawer.repair.id} initial={drawer.repair} isNew={drawer.isNew} canDelete={canDelete}
           auditLogs={auditLogs} customers={props.customers}
           privateBatch={isPrivateBatch(drawer.repair.batchId ? batches.find(b => b.id === drawer.repair.batchId) : undefined)}
-          notes={props.notes} onOpenNote={props.onOpenNote}
+          notes={props.notes} noteRole={props.noteRole} onOpenNote={props.onOpenNote}
           onClose={() => setDrawer(null)}
           onSave={saveDrawer}
           onCheckoutViaSale={props.onCheckoutViaSale}
@@ -574,9 +575,9 @@ const RepairDrawer: React.FC<{
   // which in turn gates the Purchase Cost / Paid By fields. See App.tsx's
   // handleSaveRepair and domain/autoInventory.ts's isPrivateBatch.
   privateBatch: boolean;
-  notes?: Note[]; onOpenNote?: (noteId: string) => void;
+  notes?: Note[]; noteRole?: Role; onOpenNote?: (noteId: string) => void;
   onClose: () => void; onSave: (r: Repair) => void; onCheckoutViaSale?: (r: Repair) => void; onDelete: () => void; onPrint: (doc: 'intake' | 'repair' | 'pickup') => void; onPrintSheet: () => void; onPrintLabel: () => void; onPrintEstimate: () => void;
-}> = ({ initial, isNew, canDelete, auditLogs, customers, privateBatch, notes, onOpenNote, onClose, onSave, onCheckoutViaSale, onDelete, onPrint, onPrintSheet, onPrintLabel, onPrintEstimate }) => {
+}> = ({ initial, isNew, canDelete, auditLogs, customers, privateBatch, notes, noteRole, onOpenNote, onClose, onSave, onCheckoutViaSale, onDelete, onPrint, onPrintSheet, onPrintLabel, onPrintEstimate }) => {
   const [f, setF] = useState<Repair>(initial);
   const [linkCopied, setLinkCopied] = useState(false);
   // Snapshot the form state at mount for a dirty check, so a stray backdrop/X
@@ -751,7 +752,7 @@ const RepairDrawer: React.FC<{
               <Field label="Internal Notes"><textarea rows={2} className={inputCls} value={f.internalNotes || ''} onChange={e => set({ internalNotes: e.target.value })} /></Field>
               {isRetail && <Field label="Customer Notes"><textarea rows={2} className={inputCls} value={f.customerNotes || ''} onChange={e => set({ customerNotes: e.target.value })} /></Field>}
             </div>
-            <LinkedNotes notes={notes} linkType="repair" linkId={f.id} onOpenNote={onOpenNote} className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-800" />
+            <LinkedNotes notes={notes} role={noteRole} linkType="repair" linkId={f.id} onOpenNote={onOpenNote} className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-800" />
           </Section>
 
           {/* Audit history */}

@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   parseNoteBlocks, toggleChecklistItem, parseInlineSpans, checklistProgress,
   sortNotes, notesForRecord, stampNoteEdit, relativeTime, editedSummary,
+  noteVisibility, canSeeNote, visibleNotes, hasVisibleNotes, visibilitiesForRole, assignableVisibilities,
+  canOpenNotes, canAuthorNotes,
 } from './notes';
 import { Note } from '../types';
 
@@ -201,5 +203,128 @@ describe('relativeTime / editedSummary', () => {
 
   it('omits the attribution clause when the editor is unknown', () => {
     expect(editedSummary(note({ updatedAt: ago(60_000) }), now)).toBe('last edited 1m ago');
+  });
+});
+
+// --- Per-note visibility -----------------------------------------------------
+describe('note visibility', () => {
+  const n = (id: string, visibility?: Note['visibility']): Note => note({ id, visibility });
+  const all = [n('pub', 'everyone'), n('mgr', 'managers'), n('own', 'owner'), n('legacy')];
+
+  it('treats a note with no stored visibility as Managers+, never Everyone', () => {
+    // The whole point of the migration default: legacy notes must not
+    // retroactively become employee-visible.
+    expect(noteVisibility(note({}))).toBe('managers');
+    expect(canSeeNote('employee', note({}))).toBe(false);
+    expect(canSeeNote('technician', note({}))).toBe(false);
+    expect(canSeeNote('manager', note({}))).toBe(true);
+  });
+
+  it('gives an owner everything', () => {
+    expect(visibleNotes('owner', all).map(x => x.id).sort()).toEqual(['legacy', 'mgr', 'own', 'pub']);
+  });
+
+  it('gives a manager everyone + managers, but never owner-only', () => {
+    expect(visibleNotes('manager', all).map(x => x.id).sort()).toEqual(['legacy', 'mgr', 'pub']);
+    expect(canSeeNote('manager', n('own', 'owner'))).toBe(false);
+  });
+
+  it('gives an employee and a technician only Everyone notes', () => {
+    for (const role of ['employee', 'technician'] as const) {
+      expect(visibleNotes(role, all).map(x => x.id)).toEqual(['pub']);
+    }
+  });
+
+  it('shows nothing at all to an unknown/signed-out role', () => {
+    expect(visibleNotes(undefined, all)).toEqual([]);
+    expect(visibilitiesForRole(undefined)).toEqual([]);
+  });
+
+  it('keeps the pinned-first ordering within what a role can see', () => {
+    const rows = [n('a', 'everyone'), note({ id: 'b', visibility: 'everyone', pinned: true })];
+    expect(visibleNotes('employee', rows).map(x => x.id)).toEqual(['b', 'a']);
+  });
+
+  it('hasVisibleNotes drives the nav: false for a technician when nothing is public', () => {
+    const privateOnly = [n('mgr', 'managers'), n('own', 'owner'), n('legacy')];
+    expect(hasVisibleNotes('technician', privateOnly)).toBe(false);
+    expect(hasVisibleNotes('employee', privateOnly)).toBe(false);
+    expect(hasVisibleNotes('manager', privateOnly)).toBe(true);
+    expect(hasVisibleNotes('owner', privateOnly)).toBe(true);
+  });
+
+  it('hasVisibleNotes is true for a technician once one note is shared with everyone', () => {
+    expect(hasVisibleNotes('technician', [n('mgr', 'managers'), n('pub', 'everyone')])).toBe(true);
+  });
+
+  it('hasVisibleNotes is false for everyone when there are no notes at all', () => {
+    for (const role of ['owner', 'manager', 'employee', 'technician'] as const) {
+      expect(hasVisibleNotes(role, [])).toBe(false);
+    }
+  });
+
+  it('only an owner may assign owner-only visibility', () => {
+    expect(assignableVisibilities('owner')).toContain('owner');
+    for (const role of ['manager', 'employee', 'technician'] as const) {
+      expect(assignableVisibilities(role)).not.toContain('owner');
+    }
+  });
+
+  it('the query filter matches exactly what canSeeNote allows, per role', () => {
+    // These two must never drift: the Firestore query asks for
+    // visibilitiesForRole(role), and the rules enforce the same set. A
+    // mismatch would either leak or hard-fail the listener.
+    for (const role of ['owner', 'manager', 'employee', 'technician'] as const) {
+      const allowed = visibilitiesForRole(role);
+      for (const v of ['everyone', 'managers', 'owner'] as const) {
+        expect(canSeeNote(role, note({ visibility: v }))).toBe(allowed.includes(v));
+      }
+    }
+  });
+});
+
+describe('notesForRecord respects visibility when the caller pre-filters', () => {
+  it('a technician opening a repair does not see a Managers+ linked note', () => {
+    const linked = [
+      note({ id: 'pub', linkType: 'repair', linkId: 'r1', visibility: 'everyone' }),
+      note({ id: 'mgr', linkType: 'repair', linkId: 'r1', visibility: 'managers' }),
+      note({ id: 'legacy', linkType: 'repair', linkId: 'r1' }),
+    ];
+    const forTech = notesForRecord(visibleNotes('technician', linked), 'repair', 'r1');
+    expect(forTech.map(x => x.id)).toEqual(['pub']);
+    const forOwner = notesForRecord(visibleNotes('owner', linked), 'repair', 'r1');
+    expect(forOwner.map(x => x.id).sort()).toEqual(['legacy', 'mgr', 'pub']);
+  });
+});
+
+describe('canOpenNotes (nav + route gate)', () => {
+  const managersOnly = [note({ id: 'm', visibility: 'managers' })];
+  const shared = [note({ id: 'p', visibility: 'everyone' })];
+
+  it('hides Notes from a technician when nothing is visible to them', () => {
+    expect(canOpenNotes('technician', managersOnly)).toBe(false);
+    expect(hasVisibleNotes('technician', managersOnly)).toBe(false);
+  });
+
+  it('shows Notes to a technician once a page is shared with everyone', () => {
+    expect(canOpenNotes('technician', shared)).toBe(true);
+  });
+
+  it('keeps Notes reachable for authors even with no notes at all', () => {
+    // Otherwise the first page in a new shop could never be written — the nav
+    // item would be hidden precisely because there is nothing there yet.
+    for (const role of ['owner', 'manager', 'employee'] as const) {
+      expect(canOpenNotes(role, [])).toBe(true);
+    }
+    expect(canOpenNotes('technician', [])).toBe(false);
+  });
+
+  it('never lets a signed-out/unknown role in', () => {
+    expect(canOpenNotes(undefined, shared)).toBe(false);
+    expect(canAuthorNotes(undefined)).toBe(false);
+  });
+
+  it('does not treat technicians as authors (they cannot write shop data)', () => {
+    expect(canAuthorNotes('technician')).toBe(false);
   });
 });
