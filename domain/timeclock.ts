@@ -322,7 +322,7 @@ export const payrollFlagsFor = (
     if (u && !u.hourlyRate && workedHours(e, now) > 0) noRateUserIds.add(u.id);
   }
   return {
-    missedClockOuts: inPeriod.filter(e => isClockedIn(e) && toISODate(e.clockIn) !== toISODate(now)),
+    missedClockOuts: inPeriod.filter(e => isMissedClockOut(e, now)),
     correctedEntries: inPeriod.filter(isCorrectedEntry),
     noRateUsers: users.filter(u => noRateUserIds.has(u.id)),
   };

@@ -1250,13 +1250,20 @@ const App: React.FC = () => {
     if (!uid || !appUser || !allow('payroll.manage')) return;
     const target = timeEntries.find(e => e.id === entryId);
     if (!target || !isValidClockOutCorrection(target, newClockOut, Date.now())) return;
-    // If this entry's clock-in falls inside a period already marked paid for
-    // this user, warn before editing — the paid snapshot won't be touched
-    // (PayPeriodPaid is a frozen record), but the underlying hours would now
-    // disagree with what was already paid out.
+    // If this entry's clock-in falls inside a period already marked paid (or
+    // already approved but not yet paid) for this user, warn before editing.
+    // Neither PayPeriodPaid nor PayPeriodApproval get touched by this write —
+    // both are frozen snapshots — but the underlying hours would now
+    // disagree with what was reviewed/paid, and an approval reviewed before
+    // this correction would otherwise go stale with no visible sign of it.
     const period = payPeriodFor(target.clockIn, PAY_CYCLE_DAYS[settings.payroll.cycle], settings.payroll.anchorISO);
-    const alreadyPaid = payPeriods.some(p => p.userId === target.userId && p.periodStart === toISODate(period.start));
+    const periodStartISO = toISODate(period.start);
+    const alreadyPaid = payPeriods.some(p => p.userId === target.userId && p.periodStart === periodStartISO);
+    const alreadyApproved = payPeriodApprovals.some(a => a.userId === target.userId && a.periodStart === periodStartISO);
     if (alreadyPaid && !window.confirm('This shift was already paid out as part of a closed pay period. Editing it will not change the amount already paid. Continue anyway?')) {
+      return;
+    }
+    if (!alreadyPaid && alreadyApproved && !window.confirm('This shift is in a pay period that was already approved but not yet paid. The approved hours will no longer match once this is corrected — re-approve after saving. Continue anyway?')) {
       return;
     }
     const next = correctClockOut(target, newClockOut, appUser.id, Date.now(), { correctedByEmail: appUser.email });
@@ -1304,22 +1311,26 @@ const App: React.FC = () => {
   const handleMarkPaid = (targetUid: string, period: PayPeriod) => {
     if (!uid || !appUser || appUser.role !== 'owner') return;
     const startISO = toISODate(period.start);
-    const approved = payPeriodApprovals.some(a => a.userId === targetUid && a.periodStart === startISO);
-    if (!approved) return;
+    const approval = payPeriodApprovals.find(a => a.userId === targetUid && a.periodStart === startISO);
+    if (!approval) return;
     const key = `pay:${targetUid}:${startISO}`;
     payrollGuard.run(key, async () => {
-      const target = workspaceUsers.find(u => u.id === targetUid);
-      const pay = periodPayFor(timeEntries, targetUid, target?.hourlyRate, period, Date.now());
+      // Pay from the approval's own snapshot, not a fresh recompute off
+      // current timeEntries — a correction made after Approve but before
+      // Mark Paid must not silently change what gets recorded as paid
+      // without the reviewer seeing it again (handleCorrectClockOut warns
+      // on exactly this case; the reviewer must re-approve, which re-
+      // snapshots, before this can record different numbers).
       const rec: PayPeriodPaid = {
         id: paidKey(targetUid, startISO),
         userId: targetUid,
         periodStart: startISO,
-        periodEnd: toISODate(period.end - 1), // inclusive last calendar day
+        periodEnd: approval.periodEnd,
         markedBy: appUser.id, markedByEmail: appUser.email, markedAt: Date.now(),
-        hours: pay.hours, gross: pay.gross, rate: pay.rate,
+        hours: approval.hours, gross: approval.gross, rate: approval.rate,
       };
       await savePayPeriodPaid(uid, rec).catch(() => {});
-      audit('timeclock.mark_paid', 'payPeriod', rec.id, undefined, { hours: pay.hours, gross: pay.gross });
+      audit('timeclock.mark_paid', 'payPeriod', rec.id, undefined, { hours: rec.hours, gross: rec.gross });
     });
   };
   const handleUnmarkPaid = (targetUid: string, period: PayPeriod) => {

@@ -101,6 +101,17 @@ describe('timeEntries — ownership + skew enforcement', () => {
       { id: 'clockin-ok', userId: 'employee-uid', userEmail: 'employee@shop.test', clockIn: Date.now(), breaks: [], createdAt: Date.now() }));
   });
 
+  it('employee creating an entry with clockIn close to now but a far-future clockOut is DENIED', async () => {
+    // Regression: the create rule originally skew-checked only clockIn, not
+    // clockOut — a single create with a valid clockIn and an inflated
+    // clockOut would slip straight past it (the same inflation the update
+    // path already blocked, just via the create path instead).
+    const db = asEmployee();
+    const farFuture = Date.now() + 8 * 3600_000;
+    await assertFails(setDoc(doc(db, 'user_data', WORKSPACE, 'timeEntries', 'inflated-create'),
+      { id: 'inflated-create', userId: 'employee-uid', userEmail: 'employee@shop.test', clockIn: Date.now(), breaks: [], createdAt: Date.now(), clockOut: farFuture }));
+  });
+
   it('employee normal clock-out on their own open entry is ALLOWED', async () => {
     const db = asEmployee();
     await assertSucceeds(setDoc(doc(db, 'user_data', WORKSPACE, 'timeEntries', 'employee-open'),

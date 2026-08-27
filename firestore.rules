@@ -169,7 +169,15 @@ service cloud.firestore {
           || (isSelfServiceStaffOf(ws)
               && request.resource.data.userId == request.auth.uid
               && request.resource.data.keys().hasOnly(timeEntrySelfKeys())
-              && closeToNow(request.resource.data.clockIn));
+              && closeToNow(request.resource.data.clockIn)
+              // clockOut is optional on create (a fresh clock-in has none
+              // yet), but if it IS set it must be skew-checked too — a
+              // create with clockOut already hours in the future would
+              // otherwise self-record inflated hours in one write, since
+              // this path (unlike update below) previously checked no
+              // skew on clockOut at all.
+              && (!request.resource.data.keys().hasAny(['clockOut']) || request.resource.data.clockOut == null
+                  || closeToNow(request.resource.data.clockOut)));
         allow update: if isManagerUp(ws)
           || (isSelfServiceStaffOf(ws)
               && resource.data.userId == request.auth.uid
