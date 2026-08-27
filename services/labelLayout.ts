@@ -148,7 +148,7 @@ export function nonDymoFontSizesMm(m: LabelMedia): { fOrg: number; fCode: number
 // / 0.42 (3"+ stock) — even after the SKU display is shortened (see
 // shortLabelSku below), the QR was still claiming more of the text column's
 // width than a low-density alphanumeric SKU/IMEI needs to scan reliably.
-// These sizes stay well above the 7mm corner QR already shipped and used in
+// These sizes stay well above the 9mm corner QR already shipped and used in
 // production on the DYMO shelf tag (services/shelfTag.ts) for the same kind
 // of payload (an IMEI), which is the closest real-world precedent available
 // for "how small can this get and still scan" in this codebase — no
