@@ -1,3 +1,5 @@
+import { INVENTORY_SKU_PREFIX } from './sku';
+
 // Shared label rendering for the Inventory and Repair label modals so both stay
 // identical. All geometry is expressed in millimetres; the on-screen preview
 // scales mm→px, and print uses real mm units. The DYMO 36 × 89 mm label is the
@@ -110,12 +112,7 @@ export function maxSafePushDownMm(
   const bcH = showBarcode ? h * 0.14 : 0;
   const available = (h - pad * 2) - (showBarcode ? bcH + 1 : 0);
 
-  const large = m.w >= 4;
-  const fOrg = large ? 3.2 : 2.6;
-  const fCode = large ? 7.5 : 5.2;
-  const fDevice = large ? 4.6 : 3.6;
-  const fSub = large ? 3.4 : 2.8;
-  const fSerial = large ? 4.4 : 3.6;
+  const { fOrg, fCode, fDevice, fSub, fSerial } = nonDymoFontSizesMm(m);
   // Rendered line-box heights = font-size × line-height (matches the
   // line-height values labelBody actually sets on each line below).
   const lineHeights = [fOrg * 1, fCode * 1, fDevice * 1.05];
@@ -132,6 +129,74 @@ const IN = 25.4; // mm per inch
 export const mmOf = (m: LabelMedia) => ({ w: +(m.w * IN).toFixed(2), h: +(m.h * IN).toFixed(2) });
 
 const esc = (s?: string) => (s || '').replace(/[<>&]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c] as string));
+
+// Font sizes (mm) for the generic inch/ZP 450 templates — the single source
+// both labelBody and maxSafePushDownMm read, so the two can never drift.
+export function nonDymoFontSizesMm(m: LabelMedia): { fOrg: number; fCode: number; fDevice: number; fSub: number; fSerial: number } {
+  const large = m.w >= 4;
+  return {
+    fOrg: large ? 3.2 : 2.6,
+    fCode: large ? 7.5 : 5.2,
+    fDevice: large ? 4.6 : 3.6,
+    fSub: large ? 3.4 : 2.8,
+    fSerial: large ? 4.4 : 3.6,
+  };
+}
+
+// QR size (mm) for the generic inch/ZP 450 templates, as a fraction of the
+// label's shorter side. Reduced from the previous 0.6 (stock under 3" tall)
+// / 0.42 (3"+ stock) — even after the SKU display is shortened (see
+// shortLabelSku below), the QR was still claiming more of the text column's
+// width than a low-density alphanumeric SKU/IMEI needs to scan reliably.
+// These sizes stay well above the 7mm corner QR already shipped and used in
+// production on the DYMO shelf tag (services/shelfTag.ts) for the same kind
+// of payload (an IMEI), which is the closest real-world precedent available
+// for "how small can this get and still scan" in this codebase — no
+// physical ZP 450 print + phone-camera scan test was performed for this
+// change (not available in this environment); confirm on a real print
+// before relying on it, per the task's own instruction.
+export function nonDymoQrSizeMm(m: LabelMedia): number {
+  const { w, h } = mmOf(m);
+  return +(Math.min(w, h) * (m.h >= 3 ? 0.34 : 0.47)).toFixed(2);
+}
+
+// Approximate monospace glyph width as a fraction of font-size — the same
+// analytical-geometry approach maxSafePushDownMm already uses for vertical
+// headroom (no DOM/browser available in this codebase's test or PDF-export
+// paths). 0.6 is the standard approximation for a bold 'Courier New'-class
+// monospace face at normal tracking. Used only to prove, with real numbers,
+// that shortening the SKU + shrinking the QR actually buys back column
+// width — not just that the expected string shows up in the output.
+const MONO_CHAR_WIDTH_RATIO = 0.6;
+export const estimateTextWidthMm = (text: string, fontSizeMm: number): number =>
+  +(text.length * fontSizeMm * MONO_CHAR_WIDTH_RATIO).toFixed(2);
+
+// The text column's available width on a non-Dymo template: label width
+// minus padding on both sides, minus the QR (+ its row gap) when one is
+// shown — mirrors the subtraction labelBody's flex row performs, computed
+// standalone so tests (and PDF export) can work from the same real geometry.
+export function textColumnWidthMm(m: LabelMedia, opts: { padMm?: number; showQr: boolean }): number {
+  const { w } = mmOf(m);
+  const pad = opts.padMm ?? 2.0;
+  const qrGap = 2; // matches labelBody's `gap:${u(2)}` on the text/QR row
+  const qrW = opts.showQr ? nonDymoQrSizeMm(m) + qrGap : 0;
+  return +(w - pad * 2 - qrW).toFixed(2);
+}
+
+// Strip the shop's own SKU prefix + separator for on-label DISPLAY ONLY.
+// Every SKU this shop generates shares INVENTORY_SKU_PREFIX (services/sku.ts)
+// — repeating it on a label that already prints the store name above it is
+// pure wasted width, and it's 4 of ~11 characters on a typical SKU. Derived
+// from the shared constant (not the literal 'FTT-') so this keeps working if
+// the store's prefix is ever configured differently. The stored `sku` value,
+// the QR's encoded payload, receipts, reports, exports and search all keep
+// the full value — only what's rendered on the printed label is shortened.
+// A SKU that doesn't start with the current prefix (legacy data, or a
+// foreign value) is returned unchanged rather than guessed at.
+export function shortLabelSku(sku: string): string {
+  const prefix = `${INVENTORY_SKU_PREFIX}-`;
+  return sku.startsWith(prefix) ? sku.slice(prefix.length) : sku;
+}
 
 // A unit emitter: mm for print, px (scaled) for the preview.
 type U = (mm: number) => string;
@@ -203,13 +268,8 @@ function labelBody(u: U, m: LabelMedia, c: LabelContent, img: LabelImages, o: La
   // Generic layout for the inch (thermal roll) templates: branding row, text +
   // QR, optional barcode. Bigger, bolder, high-contrast — same content rules.
   const { w, h } = mmOf(m);
-  const large = m.w >= 4;
-  const fOrg = large ? 3.2 : 2.6;
-  const fCode = large ? 7.5 : 5.2;
-  const fDevice = large ? 4.6 : 3.6;
-  const fSub = large ? 3.4 : 2.8;
-  const fSerial = large ? 4.4 : 3.6;
-  const qrS = +(Math.min(w, h) * (m.h >= 3 ? 0.42 : 0.6)).toFixed(2);
+  const { fOrg, fCode, fDevice, fSub, fSerial } = nonDymoFontSizesMm(m);
+  const qrS = nonDymoQrSizeMm(m);
   const bcH = showBarcode ? h * 0.14 : 0;
   // Vertical gap between content lines (org/code/device/sub/serial). 1.1mm
   // is the physically-confirmed known-good default at pad=2.0 — a larger
@@ -290,10 +350,10 @@ function labelBody(u: U, m: LabelMedia, c: LabelContent, img: LabelImages, o: La
             <span style="font-weight:800;font-size:${u(fOrg)};letter-spacing:.5px;line-height:1;">${esc(c.org)}</span>
             ${pill}
           </div>
-          <div style="flex-shrink:0;font-family:'Courier New',monospace;font-weight:800;font-size:${u(fCode)};line-height:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(c.code)}</div>
+          <div style="flex-shrink:0;font-family:'Courier New',monospace;font-weight:800;font-size:${u(fCode)};line-height:1.05;max-height:${u(fCode * 2.1)};overflow-wrap:anywhere;word-break:break-all;overflow:hidden;">${esc(c.code)}</div>
           <div style="flex-shrink:0;font-weight:700;font-size:${u(fDevice)};line-height:1.05;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(c.device)}</div>
           ${c.sub ? `<div style="flex-shrink:0;font-size:${u(fSub)};font-weight:600;color:#000;line-height:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(c.sub)}</div>` : ''}
-          ${c.serial ? `<div style="flex-shrink:0;font-family:'Courier New',monospace;font-weight:800;font-size:${u(fSerial)};color:#000;line-height:1.05;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(c.serial)}</div>` : ''}
+          ${c.serial ? `<div style="flex-shrink:0;font-family:'Courier New',monospace;font-weight:800;font-size:${u(fSerial)};color:#000;line-height:1.05;max-height:${u(fSerial * 2.1)};overflow-wrap:anywhere;word-break:break-all;overflow:hidden;">${esc(c.serial)}</div>` : ''}
         </div>
         ${img.qr ? `<img src="${img.qr}" style="width:${u(qrS)};height:${u(qrS)};flex-shrink:0;align-self:center;image-rendering:pixelated;" />` : ''}
       </div>

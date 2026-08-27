@@ -25,6 +25,18 @@ describe('globalSearch', () => {
     expect(g.results[0].score).toBe(1030); // exact id + in-stock bonus
   });
 
+  it('finds the same device by the short (prefix-stripped) label form or the full SKU', () => {
+    // The printed label shows 'FTT-0000029' as '0000029' (services/labelLayout.ts's
+    // shortLabelSku, display-only). Staff reading that off a shelf must be able to
+    // type either form into Global Search and land on the same item.
+    const inv = [dev({ id: 'a', sku: 'FTT-0000029', item: 'iPhone 14 Pro Max' }), dev({ id: 'b', sku: 'FTT-0000030', item: 'iPhone 13' })];
+    const short = group(run('0000029', { inventory: inv }), 'inventory')!;
+    const full = group(run('FTT-0000029', { inventory: inv }), 'inventory')!;
+    expect(short.results[0].itemId).toBe('a');
+    expect(full.results[0].itemId).toBe('a');
+    expect(short.results.map(r => r.itemId)).not.toContain('b');
+  });
+
   it('exact IMEI match', () => {
     const inv = [dev({ id: 'a', imei: '356789012345678', item: 'Pixel' })];
     expect(group(run('356789012345678', { inventory: inv }), 'inventory')!.results[0].itemId).toBe('a');

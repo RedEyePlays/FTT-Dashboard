@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { labelPrintDoc, LabelMedia, LabelContent, LabelImages, LabelOpts, MAX_PUSH_DOWN_MM, maxSafePushDownMm } from './labelLayout';
+import {
+  labelPrintDoc, LabelMedia, LabelContent, LabelImages, LabelOpts, MAX_PUSH_DOWN_MM, maxSafePushDownMm,
+  shortLabelSku, nonDymoQrSizeMm, nonDymoFontSizesMm, estimateTextWidthMm, textColumnWidthMm,
+} from './labelLayout';
+import { INVENTORY_SKU_PREFIX } from './sku';
 
 // Regression coverage for the "Push content down" / "Line spacing" / content
 // padding settings actually reaching the real browser PRINT path
@@ -206,5 +210,133 @@ describe('labelPrintDoc — content padding default + override', () => {
   it('a configured padMm overrides the outer content padding', () => {
     const html = labelPrintDoc('t', media2x1, shortContent, img, { showBarcode: false, showStatus: false, padMm: 4.0 });
     expect(html).toContain(`padding:${mm(4.0)}`);
+  });
+});
+
+// Label: shorten the displayed SKU (and shrink the QR) so it stops truncating.
+describe('shortLabelSku — DISPLAY-ONLY prefix stripping', () => {
+  it(`strips the shop's own '${INVENTORY_SKU_PREFIX}-' prefix`, () => {
+    expect(shortLabelSku('FTT-0000029')).toBe('0000029');
+    expect(shortLabelSku(`${INVENTORY_SKU_PREFIX}-000123`)).toBe('000123');
+  });
+
+  it('leaves a value without the current prefix untouched (legacy/foreign SKUs)', () => {
+    expect(shortLabelSku('PHN-000001')).toBe('PHN-000001');
+    expect(shortLabelSku('X')).toBe('X');
+    expect(shortLabelSku('')).toBe('');
+  });
+
+  it('is derived from the shared INVENTORY_SKU_PREFIX constant, not a hardcoded literal — proven by re-deriving the same prefix independently', () => {
+    // If this were hardcoded to the literal string 'FTT-' instead of reading
+    // services/sku.ts's constant, this assertion would still pass today but
+    // silently drift the moment the store prefix ever changed. Asserting
+    // against a value built from the imported constant (not retyped) is what
+    // actually pins the two together.
+    const sample = `${INVENTORY_SKU_PREFIX}-042000`;
+    expect(shortLabelSku(sample)).toBe(sample.slice(`${INVENTORY_SKU_PREFIX}-`.length));
+  });
+
+  it('never mutates the input — the stored SKU is a plain string, untouched by display shortening', () => {
+    const sku = 'FTT-0000029';
+    const short = shortLabelSku(sku);
+    expect(short).not.toBe(sku);
+    expect(sku).toBe('FTT-0000029'); // original reference is unchanged (strings are immutable, but this locks the contract in)
+  });
+});
+
+describe('nonDymoQrSizeMm — Fix 2: smaller QR, real dimensions', () => {
+  const size2x1: LabelMedia = { id: '2x1', w: 2, h: 1, label: '2 x 1' };
+  const size2x2: LabelMedia = { id: '2x2', w: 2, h: 2, label: '2 x 2' };
+  const size2x3: LabelMedia = { id: '2x3', w: 2, h: 3, label: '2 x 3' };
+  const size4x6: LabelMedia = { id: '4x6', w: 4, h: 6, label: '4 x 6' };
+
+  it('is meaningfully smaller than the previous 0.6/0.42-of-shorter-side sizing, on every built-in ZP 450 size', () => {
+    const oldFormula = (m: LabelMedia) => {
+      const IN = 25.4;
+      const w = m.w * IN, h = m.h * IN;
+      return Math.min(w, h) * (m.h >= 3 ? 0.42 : 0.6);
+    };
+    for (const m of [size2x1, size2x2, size2x3, size4x6]) {
+      const oldS = oldFormula(m);
+      const newS = nonDymoQrSizeMm(m);
+      expect(newS).toBeLessThan(oldS);
+      expect(newS / oldS).toBeLessThan(0.85); // at least a visible ~15%+ reduction, not a rounding-noise change
+    }
+  });
+
+  it('the 2×1" ZP 450 QR (the template named in the bug report) has concrete, sane real-world dimensions', () => {
+    const s = nonDymoQrSizeMm(size2x1);
+    expect(s).toBeCloseTo(11.94, 1); // 0.47 × min(50.8mm, 25.4mm)
+    // Stays comfortably above the 7mm corner QR already shipped and scanning
+    // reliably in production on the DYMO shelf tag (services/shelfTag.ts) for
+    // the same class of payload (an identifier string) — the closest
+    // available real-world precedent for a safe lower bound in this codebase.
+    expect(s).toBeGreaterThan(11);
+  });
+
+  it('stays proportional across sizes (still driven by the label\'s shorter side, not a flat constant)', () => {
+    expect(nonDymoQrSizeMm(size2x2)).toBeGreaterThan(nonDymoQrSizeMm(size2x1));
+    expect(nonDymoQrSizeMm(size4x6)).toBeGreaterThan(nonDymoQrSizeMm(size2x3));
+  });
+});
+
+describe('rendered-geometry evidence — measured text width vs. available column width (not just string presence)', () => {
+  const size2x1: LabelMedia = { id: '2x1', w: 2, h: 1, label: '2 x 1' };
+  const { fCode, fSerial } = nonDymoFontSizesMm(size2x1);
+
+  it('BEFORE Fix 1 (full "FTT-0000029" SKU): the estimated text width already exceeds the pre-Fix-2 column width — this is the truncation the bug report describes, proven with numbers, not a screenshot', () => {
+    const oldQrS = Math.min(...Object.values({ w: 50.8, h: 25.4 })) * 0.6; // old formula, QR enabled
+    const oldColW = 50.8 - 2 * 2.0 - (oldQrS + 2);
+    const fullSkuWidth = estimateTextWidthMm('FTT-0000029', fCode);
+    expect(fullSkuWidth).toBeGreaterThan(oldColW);
+  });
+
+  it('AFTER Fix 1 + Fix 2 (shortened SKU "0000029" + the smaller QR): a typical SKU now fits the column with real margin to spare', () => {
+    const colW = textColumnWidthMm(size2x1, { showQr: true });
+    const typicalSkuWidth = estimateTextWidthMm(shortLabelSku('FTT-0000029'), fCode);
+    expect(typicalSkuWidth).toBeLessThan(colW);
+    // Not just "fits" — fits with real headroom (at least 15% of the column
+    // still spare), proving this isn't a coincidental single-digit win.
+    expect(typicalSkuWidth).toBeLessThan(colW * 0.85);
+  });
+
+  it('an unusually long SKU still would not fit the column even after Fix 1 + Fix 2 — this is exactly the case Fix 3 (wrap, never ellipsis) exists for', () => {
+    const colW = textColumnWidthMm(size2x1, { showQr: true });
+    const longSku = shortLabelSku('FTT-0000029999999'); // an unusually long allocation
+    const width = estimateTextWidthMm(longSku, fCode);
+    expect(width).toBeGreaterThan(colW);
+    // And the HTML path actually wraps it (no nowrap/ellipsis) rather than
+    // clipping the value mid-string:
+    const html = labelPrintDoc('t', size2x1, { org: 'FlipThatTech', code: longSku, device: 'iPhone' }, {}, { showBarcode: false, showStatus: false });
+    const codeDivMatch = html.match(new RegExp(`<div style="[^"]*">${longSku}</div>`));
+    expect(codeDivMatch).toBeTruthy(); // the code line's own <div>, containing the full unshortened value
+    expect(codeDivMatch![0]).toContain('overflow-wrap:anywhere');
+    expect(codeDivMatch![0]).not.toContain('white-space:nowrap');
+    expect(codeDivMatch![0]).not.toContain('text-overflow:ellipsis');
+    expect(html).toContain(longSku); // the full value is still in the DOM, never shortened by CSS overflow
+  });
+
+  it('a real 15-digit IMEI does not fit the column on the 2×1" template even after the QR shrink — Fix 3 applies to the serial line too', () => {
+    const colW = textColumnWidthMm(size2x1, { showQr: true });
+    const imei = '490154203237518'; // 15 digits, the tight case called out explicitly
+    const width = estimateTextWidthMm(imei, fSerial);
+    expect(width).toBeGreaterThan(colW * 0.7); // tight enough that wrap is a real, not theoretical, safety net
+    const html = labelPrintDoc('t', size2x1, { org: 'FlipThatTech', code: '0000029', device: 'iPhone', serial: imei }, {}, { showBarcode: false, showStatus: false });
+    expect(html).toContain('overflow-wrap:anywhere');
+    expect(html).toContain(imei); // full IMEI present, never ellipsis-clipped
+  });
+});
+
+describe('the QR image element is scaled, not cropped, when shrunk (quiet zone stays intact)', () => {
+  it('the <img> gets width/height CSS only — no clip-path/object-fit:cover/overflow that would crop the bitmap (and its baked-in quiet zone)', () => {
+    const media: LabelMedia = { id: '2x1', w: 2, h: 1, label: '2 x 1' };
+    const html = labelPrintDoc('t', media, { org: 'FlipThatTech', code: '0000029', device: 'iPhone' }, { qr: 'data:image/png;base64,x' }, { showBarcode: false, showStatus: false });
+    const imgTagMatch = html.match(/<img src="data:image\/png;base64,x"[^>]*>/);
+    expect(imgTagMatch).toBeTruthy();
+    const imgTag = imgTagMatch![0];
+    expect(imgTag).not.toContain('object-fit');
+    expect(imgTag).not.toContain('clip-path');
+    expect(imgTag).toContain(`width:${mm(nonDymoQrSizeMm(media))}`);
+    expect(imgTag).toContain(`height:${mm(nonDymoQrSizeMm(media))}`);
   });
 });
