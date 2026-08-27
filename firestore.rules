@@ -195,6 +195,18 @@ service cloud.firestore {
         allow read, write: if isOwnerOf(ws);
       }
 
+      // Expense ledger (domain/expenses.ts) — general business expenses, any
+      // payment method. Owner/manager tier only (expenses.manage in
+      // services/rbac.ts), same read+write gating as payroll.manage below —
+      // an employee/technician may not even read expense totals, since
+      // they're profit-sensitive.
+      match /expenses/{id} {
+        allow read, write: if isManagerUp(ws);
+      }
+      match /recurringExpenses/{id} {
+        allow read, write: if isManagerUp(ws);
+      }
+
       // Cash drawer: any staff (incl. employees, per cash.log) may log a
       // movement (open, cash in/out, withdrawal) or create the day's record,
       // but only owner/manager may touch the reconcile/close fields

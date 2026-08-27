@@ -7,7 +7,7 @@ const ALL: Permission[] = [
   'cash.log', 'cash.reconcile',
   'reports.view', 'reports.profit.summary', 'reports.profit.detailed',
   'users.manage', 'users.tech', 'users.pin', 'security.manage', 'timeclock.use', 'payroll.manage', 'closeout.view',
-  'audit.view', 'backup.export', 'settings.manage', 'staffNotes.manage',
+  'audit.view', 'backup.export', 'settings.manage', 'staffNotes.manage', 'expenses.manage',
 ];
 
 export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
@@ -17,7 +17,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     'sales.complete', 'sales.void', 'sales.return', 'dropoffs.manage', 'repairs.manage', 'repairs.tech', 'repairs.performance',
     'cash.log', 'cash.reconcile',
     'reports.view', 'audit.view', 'users.tech', 'users.pin', 'security.manage',
-    'timeclock.use', 'payroll.manage', 'closeout.view',
+    'timeclock.use', 'payroll.manage', 'closeout.view', 'expenses.manage',
     // NOTE: the profit permissions are handled specially in can() below, not
     // listed here. Managers get 'reports.profit.summary' by default (daily/weekly
     // totals), but 'reports.profit.detailed' (full history + per-record cost/

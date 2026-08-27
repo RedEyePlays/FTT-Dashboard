@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react';
 import {
   Store, Building2, Wrench, ShoppingCart, Percent, Tag, Contact, LayoutDashboard,
   Palette, ShieldCheck, DatabaseBackup, Info, Save, RotateCcw, Check, Lock, Plus, Trash2,
-  Download, RefreshCw, Loader2, CalendarClock, SlidersHorizontal, Copy, DollarSign,
+  Download, RefreshCw, Loader2, CalendarClock, SlidersHorizontal, Copy, DollarSign, Archive, ArchiveRestore, Star,
 } from 'lucide-react';
 import { Role, Permission } from '../types';
 import {
@@ -10,6 +10,8 @@ import {
   DASHBOARD_WIDGETS, STATUS_COLOR_OPTIONS, LabelSize, mergeLabelSizes,
 } from '../domain/settings';
 import { PayCycle, PAY_CYCLE_LABEL } from '../domain/timeclock';
+import { ExpenseCategory } from '../domain/expenses';
+import { newId } from '../domain/ids';
 import { MAX_PUSH_DOWN_MM } from '../services/labelLayout';
 import { ROLE_PERMISSIONS, ROLE_LABEL } from '../services/rbac';
 import { REPAIR_STATUS_LABEL } from '../domain/repairs';
@@ -27,7 +29,7 @@ import { BackupFileMeta } from '../services/backupStorage';
 
 type SectionId =
   | 'general' | 'store' | 'repairs' | 'checkout' | 'taxes' | 'labels'
-  | 'customers' | 'operations' | 'payroll' | 'dashboard' | 'appearance' | 'roles' | 'data' | 'about';
+  | 'customers' | 'operations' | 'payroll' | 'expenses' | 'reviews' | 'dashboard' | 'appearance' | 'roles' | 'data' | 'about';
 
 const SECTIONS: { id: SectionId; label: string; icon: React.ReactNode }[] = [
   { id: 'general', label: 'General', icon: <Store className="w-4 h-4" /> },
@@ -39,6 +41,8 @@ const SECTIONS: { id: SectionId; label: string; icon: React.ReactNode }[] = [
   { id: 'customers', label: 'Customers', icon: <Contact className="w-4 h-4" /> },
   { id: 'operations', label: 'Operations', icon: <SlidersHorizontal className="w-4 h-4" /> },
   { id: 'payroll', label: 'Payroll', icon: <DollarSign className="w-4 h-4" /> },
+  { id: 'expenses', label: 'Expense Categories', icon: <Archive className="w-4 h-4" /> },
+  { id: 'reviews', label: 'Google Reviews', icon: <Star className="w-4 h-4" /> },
   { id: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard className="w-4 h-4" /> },
   { id: 'appearance', label: 'Appearance', icon: <Palette className="w-4 h-4" /> },
   { id: 'roles', label: 'Security & Roles', icon: <ShieldCheck className="w-4 h-4" /> },
@@ -158,6 +162,8 @@ export const SettingsView: React.FC<Props> = ({ settings, onSave, canManage, rol
             {active === 'customers' && <CustomersSection draft={draft} patch={patch} />}
             {active === 'operations' && <OperationsSection draft={draft} patch={patch} />}
             {active === 'payroll' && <PayrollSection draft={draft} patch={patch} />}
+            {active === 'expenses' && <ExpenseCategoriesSection draft={draft} patch={patch} />}
+            {active === 'reviews' && <ReviewsSection draft={draft} patch={patch} />}
             {active === 'dashboard' && <DashboardSection draft={draft} patch={patch} />}
             {active === 'appearance' && <AppearanceSection draft={draft} patch={patch} />}
             {active === 'roles' && <RolesSection />}
@@ -428,6 +434,75 @@ const PayrollSection: React.FC<{ draft: AppSettings; patch: PatchFn }> = ({ draf
         hint="Any date that fell on the first day of a pay period. Periods are calculated forward and backward from this date at the cycle length above."
         value={draft.payroll.anchorISO}
         onChange={v => patch('payroll', { anchorISO: v })} />
+    </SettingsCard>
+  </SettingsSection>
+);
+
+// Add/rename/archive expense categories (domain/expenses.ts's ExpenseCategory).
+// Archiving hides a category from the "add expense" picker without deleting
+// it or its history — existing expenses already filed under it keep showing
+// their real category name, they just can't be picked again.
+const ExpenseCategoriesSection: React.FC<{ draft: AppSettings; patch: PatchFn }> = ({ draft, patch }) => {
+  const [newLabel, setNewLabel] = useState('');
+  const categories = draft.expenses.categories;
+  const setCategories = (next: ExpenseCategory[]) => patch('expenses', { categories: next });
+  const rename = (key: string, label: string) => setCategories(categories.map(c => c.key === key ? { ...c, label } : c));
+  const toggleArchived = (key: string) => setCategories(categories.map(c => c.key === key ? { ...c, archived: !c.archived } : c));
+  const add = () => {
+    const label = newLabel.trim();
+    if (!label) return;
+    const key = label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || newId();
+    if (categories.some(c => c.key === key)) return; // no duplicate keys
+    setCategories([...categories, { key, label }]);
+    setNewLabel('');
+  };
+  return (
+    <SettingsSection title="Expense Categories" description="Owner-editable categories for the expense ledger (Reports → Expenses). Archiving hides a category from new entries without touching its history.">
+      <SettingsCard>
+        <div className="space-y-1.5">
+          {categories.map(c => (
+            <div key={c.key} className={`flex items-center gap-2 py-1.5 ${c.archived ? 'opacity-50' : ''}`}>
+              <input value={c.label} onChange={e => rename(c.key, e.target.value)}
+                className="flex-1 px-2.5 py-1.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-900 dark:text-slate-100" />
+              {c.excludeFromPL && <span className="text-[10px] uppercase tracking-wide text-amber-500 font-semibold shrink-0" title="Excluded from net profit — already accounted for elsewhere">informational</span>}
+              <button onClick={() => toggleArchived(c.key)} title={c.archived ? 'Restore' : 'Archive'} className="p-1.5 text-slate-400 hover:text-indigo-600 shrink-0">
+                {c.archived ? <ArchiveRestore className="w-4 h-4" /> : <Archive className="w-4 h-4" />}
+              </button>
+            </div>
+          ))}
+        </div>
+        <div className="flex items-center gap-2 pt-3 mt-2 border-t border-slate-100 dark:border-slate-800">
+          <input value={newLabel} onChange={e => setNewLabel(e.target.value)} onKeyDown={e => e.key === 'Enter' && add()}
+            placeholder="New category name" className="flex-1 px-2.5 py-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-900 dark:text-slate-100" />
+          <button onClick={add} disabled={!newLabel.trim()} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white"><Plus className="w-3.5 h-3.5" /> Add</button>
+        </div>
+      </SettingsCard>
+    </SettingsSection>
+  );
+};
+
+// Google review requests (domain/reviews.ts) — hidden entirely in the app
+// until reviewLink is set here, so a shop that hasn't configured one never
+// sees a broken/placeholder link go out.
+const ReviewsSection: React.FC<{ draft: AppSettings; patch: PatchFn }> = ({ draft, patch }) => (
+  <SettingsSection title="Google Reviews" description="Ask happy customers for a Google review after a completed repair pickup or sale. Hidden from staff entirely until a review link is set below.">
+    <SettingsCard>
+      <SettingsTextField label="Google review link" value={draft.reviews.reviewLink} placeholder="https://g.page/r/…/review"
+        hint="The feature stays hidden until this is set — never sends a broken link."
+        onChange={v => patch('reviews', { reviewLink: v })} />
+      <SettingsToggle label="Prompt automatically on pickup/checkout" checked={draft.reviews.autoPromptOnComplete}
+        hint="Off by default — never auto-texts customers without you turning this on. Staff can always send a request manually regardless of this setting."
+        onChange={v => patch('reviews', { autoPromptOnComplete: v })} />
+      <SettingsTextField label="Repeat request window (days)" type="number" min={1} max={365} step={1}
+        hint="Never re-request a review from the same customer within this many days."
+        value={draft.reviews.repeatWindowDays}
+        onChange={v => patch('reviews', { repeatWindowDays: Math.max(1, Math.round(parseFloat(v) || 1)) })} />
+      <label className="block py-2">
+        <span className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Message template</span>
+        <span className="block text-xs text-slate-400 mb-1">Supports {'{shopName}'}, {'{name}'} and {'{link}'} placeholders.</span>
+        <textarea value={draft.reviews.template} onChange={e => patch('reviews', { template: e.target.value })} rows={3}
+          className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-900 dark:text-slate-100" />
+      </label>
     </SettingsCard>
   </SettingsSection>
 );

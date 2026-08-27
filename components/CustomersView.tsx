@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import {
   Users, Search, ArrowLeft, Phone, Mail, ShoppingCart, Wrench, DollarSign,
   ChevronRight, Receipt, Pencil, X, Clock, Smartphone, ShieldCheck, AlertTriangle,
-  Copy, PlusCircle, Printer, FileText, Merge, Hash, Check, Ban, RotateCcw,
+  Copy, PlusCircle, Printer, FileText, Merge, Hash, Check, Ban, RotateCcw, Star,
 } from 'lucide-react';
 import { Customer, SalesTransaction, Repair, RepairBatch, InventoryItem, AuditEntry, Note, Role } from '../types';
 import { LinkedNotes } from './LinkedNotes';
@@ -52,6 +52,9 @@ interface Props {
   notes?: Note[];                                      // workspace notes, for the linked-notes panel
   noteRole?: Role;                                     // viewer's role, gates which linked notes show
   onOpenNote?: (noteId: string) => void;               // jump to a linked note in the Notes board
+  // Google review request (domain/reviews.ts) — omitted entirely when the
+  // owner hasn't configured a review link in Settings.
+  onRequestReview?: (customer: Customer) => void;
 }
 
 export type ReturnDisposition = 'resell' | 'defective';
@@ -215,7 +218,7 @@ export const CustomersView: React.FC<Props> = (props) => {
 
 /* ---------------- Profile ---------------- */
 const CustomerProfile: React.FC<Props & { customer: Customer; data: CustomerData; onBack: () => void }> = (
-  { customer, data, canViewProfit, canEdit, auditLogs, inventory, onBack, onSaveCustomer, onStartSale, onCreateRepair, onVoidSale, canVoidSale, onReturnSale, canReturnSale, onCollectBalance, defaultRestockingFeePercent, notes, noteRole, onOpenNote },
+  { customer, data, canViewProfit, canEdit, auditLogs, inventory, onBack, onSaveCustomer, onStartSale, onCreateRepair, onVoidSale, canVoidSale, onReturnSale, canReturnSale, onCollectBalance, defaultRestockingFeePercent, notes, noteRole, onOpenNote, onRequestReview },
 ) => {
   const s = useMemo(() => customerStats(customer, data), [customer, data]);
   const timeline = useMemo(() => customerTimeline(s), [s]);
@@ -472,6 +475,7 @@ const CustomerProfile: React.FC<Props & { customer: Customer; data: CustomerData
         onVoid={onVoidSale && canVoidSale && canVoidSale(invoice) ? () => { onVoidSale(invoice); setInvoice(null); } : undefined}
         onReturn={onReturnSale && canReturnSale && canReturnSale(invoice) ? (opts) => { onReturnSale(invoice, opts); setInvoice(null); } : undefined}
         onCollectBalance={onCollectBalance && !isReversed(invoice) && (invoice.balanceOwing || 0) > 0.005 ? () => { setCollectingBalance(invoice); setInvoice(null); } : undefined}
+        onRequestReview={onRequestReview && !isReversed(invoice) && (invoice.balanceOwing || 0) <= 0.005 ? () => { onRequestReview(customer); setInvoice(null); } : undefined}
         defaultRestockingFeePercent={defaultRestockingFeePercent} />}
       {ticket && <TicketModal repair={ticket} tech={techFor.get(ticket.id)} customer={customer} onClose={() => setTicket(null)} />}
       {collectingBalance && onCollectBalance && (
@@ -505,7 +509,7 @@ const Row: React.FC<{ label: string; value: string }> = ({ label, value }) => (
 const Empty: React.FC<{ text: string }> = ({ text }) => <p className="text-sm text-slate-400 py-6 text-center">{text}</p>;
 
 /* ---------------- Invoice modal ---------------- */
-const InvoiceModal: React.FC<{ tx: SalesTransaction; customer: Customer; canViewProfit: boolean; onClose: () => void; onVoid?: () => void; onReturn?: (opts: { restockingFee?: number; disposition: ReturnDisposition }) => void; onCollectBalance?: () => void; defaultRestockingFeePercent?: number }> = ({ tx, customer, canViewProfit, onClose, onVoid, onReturn, onCollectBalance, defaultRestockingFeePercent }) => {
+const InvoiceModal: React.FC<{ tx: SalesTransaction; customer: Customer; canViewProfit: boolean; onClose: () => void; onVoid?: () => void; onReturn?: (opts: { restockingFee?: number; disposition: ReturnDisposition }) => void; onCollectBalance?: () => void; onRequestReview?: () => void; defaultRestockingFeePercent?: number }> = ({ tx, customer, canViewProfit, onClose, onVoid, onReturn, onCollectBalance, onRequestReview, defaultRestockingFeePercent }) => {
   // Still an OPEN layaway (not one that later got paid off) — that's the
   // case where voiding/returning must be clearly labeled as a layaway
   // cancellation and must refund only what was actually collected so far,
@@ -556,6 +560,12 @@ const InvoiceModal: React.FC<{ tx: SalesTransaction; customer: Customer; canView
         <button onClick={onCollectBalance}
           className="w-full flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-semibold bg-sky-50 dark:bg-sky-900/20 text-sky-700 dark:text-sky-300 border border-sky-200 dark:border-sky-800 hover:bg-sky-100 dark:hover:bg-sky-900/30">
           Collect Balance
+        </button>
+      )}
+      {onRequestReview && (
+        <button onClick={onRequestReview}
+          className="w-full flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 hover:bg-amber-100 dark:hover:bg-amber-900/30">
+          <Star className="w-4 h-4" /> Request Review
         </button>
       )}
       {onVoid && (

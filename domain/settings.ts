@@ -1,6 +1,7 @@
-import { ViewState, RepairStatus } from '../types';
+import { ViewState, RepairStatus, RecurringFrequency } from '../types';
 import { REPAIR_STATUSES } from './repairs';
 import { PayCycle, PAY_PERIOD_ANCHOR } from './timeclock';
+import { ExpenseCategory, DEFAULT_EXPENSE_CATEGORIES } from './expenses';
 
 // Central, owner-configurable business settings. Persisted in Firestore (the
 // workspace meta doc) so the shop can be configured without code changes.
@@ -150,6 +151,22 @@ export interface AppSettings {
     cycle: PayCycle;      // 'weekly' | 'biweekly' — see domain/timeclock.ts's PAY_CYCLE_DAYS
     anchorISO: string;    // YYYY-MM-DD — the start date of a period under the CURRENT cycle
   };
+  // Owner-editable expense categories (domain/expenses.ts's ExpenseCategory) —
+  // the seeded defaults cover a typical repair shop; owner can add/rename/
+  // archive from here. `excludeFromPL` (Wages by default) keeps a category
+  // out of net profit without deleting it, since it's already accounted for
+  // elsewhere (payroll).
+  expenses: {
+    categories: ExpenseCategory[];
+  };
+  // Google review requests (domain/reviews.ts). Hidden entirely in the UI
+  // until reviewLink is set — never send a broken/placeholder link.
+  reviews: {
+    reviewLink: string;               // the shop's Google review URL; '' = feature hidden
+    template: string;                 // supports {shopName}, {name} and {link} placeholders
+    autoPromptOnComplete: boolean;    // prompt automatically at pickup/checkout — default OFF
+    repeatWindowDays: number;         // never re-request the same customer within this many days
+  };
 }
 
 export const DASHBOARD_WIDGETS = ['periods', 'inventory', 'repairs', 'recentSales', 'lowStock', 'topPlatforms'] as const;
@@ -179,6 +196,13 @@ export const DEFAULT_SETTINGS: AppSettings = {
   backups: { enabled: false, frequency: 'daily', retention: 14 },
   operations: { openingFloatDefault: 0, voidWindowDays: 0, returnRestockingFeePercent: 0, agingInventoryDays: 30, staleLayawayDays: 60, autoLockMinutes: 4 },
   payroll: { cycle: 'biweekly', anchorISO: PAY_PERIOD_ANCHOR },
+  expenses: { categories: DEFAULT_EXPENSE_CATEGORIES },
+  reviews: {
+    reviewLink: '',
+    template: "Hi {name}, thanks for choosing {shopName}! If you have a minute, we'd really appreciate a quick Google review: {link}",
+    autoPromptOnComplete: false,
+    repeatWindowDays: 90,
+  },
 };
 
 // Deep-merge a stored partial over the defaults (one level per section is enough).
@@ -198,6 +222,11 @@ export function mergeSettings(partial?: DeepPartial<AppSettings>): AppSettings {
     backups: { ...d.backups, ...partial.backups },
     operations: { ...d.operations, ...partial.operations },
     payroll: { ...d.payroll, ...partial.payroll },
+    expenses: {
+      ...d.expenses, ...partial.expenses,
+      categories: (partial.expenses?.categories as ExpenseCategory[] | undefined)?.length ? partial.expenses!.categories as ExpenseCategory[] : d.expenses.categories,
+    },
+    reviews: { ...d.reviews, ...partial.reviews },
   };
 }
 

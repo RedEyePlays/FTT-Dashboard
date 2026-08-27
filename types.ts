@@ -233,6 +233,13 @@ export interface Customer {
   storeCredit?: number;          // store credit balance
   loyaltyPoints?: number;        // loyalty points balance
   giftCardIds?: string[];        // → gift cards issued to this customer
+
+  // Google review requests (domain/reviews.ts) — never send to an opted-out
+  // customer, and never re-request within the configured repeat window, so
+  // both need to be tracked directly on the customer record.
+  reviewOptOut?: boolean;
+  lastReviewRequestedAt?: number;              // epoch ms
+  lastReviewRequestChannel?: 'sms' | 'whatsapp' | 'email' | 'manual';
 }
 
 // Reserved for future customer interaction history (SMS / email / marketing /
@@ -245,6 +252,53 @@ export interface CustomerInteraction {
   direction?: 'in' | 'out';
   subject?: string;
   body?: string;
+}
+
+export type ExpensePaymentMethod = 'cash' | 'card' | 'etransfer' | 'debit' | 'other';
+export type RecurringFrequency = 'weekly' | 'monthly' | 'yearly';
+
+// General expense ledger (domain/expenses.ts) — the single source of truth
+// for every business expense regardless of how it was paid. A cash-paid
+// expense ALSO gets a matching CashDrawerEntry appended to that day's
+// CashReconciliation.cashOut (see App.tsx's handleSaveExpense) so the drawer
+// stays accurate — cashDrawerLinked just records that the drawer effect was
+// already applied, it isn't a second source of truth.
+export interface Expense {
+  id: string;
+  date: string;                  // YYYY-MM-DD
+  amount: number;
+  category: string;              // key into AppSettings.expenses.categories
+  paymentMethod: ExpensePaymentMethod;
+  payee?: string;                 // vendor/payee, free text
+  note?: string;
+  attachmentUrl?: string;         // receipt photo/document (Cloud Storage URL)
+  enteredBy: string;
+  enteredByEmail: string;
+  createdAt: number;
+  cashDrawerLinked?: boolean;     // true once its drawer cash-out effect was applied
+  recurringId?: string;           // set when auto-generated from a RecurringExpense
+  recurringPeriod?: string;       // the period key it was generated for, e.g. '2026-03'
+}
+
+// A template for an expense that recurs on a schedule (rent, subscriptions).
+// generatedPeriods/skippedPeriods make "one Expense per period, skippable"
+// idempotent — domain/expenses.ts's duePeriodsFor never re-offers a period
+// that's already in either list.
+export interface RecurringExpense {
+  id: string;
+  category: string;
+  amount: number;
+  paymentMethod: ExpensePaymentMethod;
+  payee?: string;
+  note?: string;
+  frequency: RecurringFrequency;
+  startDate: string;              // YYYY-MM-DD — first occurrence
+  active: boolean;
+  createdBy: string;
+  createdByEmail: string;
+  createdAt: number;
+  generatedPeriods?: string[];    // period keys already turned into an Expense
+  skippedPeriods?: string[];      // period keys explicitly skipped for this template
 }
 
 export interface ActivityEntry {
@@ -277,7 +331,8 @@ export type Permission =
   | 'payroll.manage'  // view the biweekly pay-period summary (owner + manager)
   | 'closeout.view'   // end-of-day close-out summary (owner + manager)
   | 'audit.view' | 'backup.export' | 'settings.manage'
-  | 'staffNotes.manage'; // owner-only internal staff shoutout/notes log
+  | 'staffNotes.manage' // owner-only internal staff shoutout/notes log
+  | 'expenses.manage';  // enter/edit/delete the expense ledger + viewing its totals (owner + manager)
 
 export interface AppUser {
   id: string;            // Firebase Auth uid
@@ -672,6 +727,11 @@ export interface Repair {
   deposit?: number;             // retail only
   warrantyDays?: number;
   warrantyUntil?: string;       // YYYY-MM-DD, stamped when completed
+  // Set at intake when this ticket IS a warranty return/redo against earlier
+  // work (not merely a device still under warranty) — an unhappy-path visit,
+  // so domain/reviews.ts excludes it from review requests same as a void/
+  // cancelled ticket.
+  isWarrantyClaim?: boolean;
   status: RepairStatus;
   photos?: string[];            // reserved for future uploads
   completedAt?: number;

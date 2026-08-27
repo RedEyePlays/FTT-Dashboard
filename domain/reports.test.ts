@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { SalesTransaction, InventoryItem, PayPeriodPaid, CashReconciliation, Settlement, Runner } from '../types';
+import { SalesTransaction, InventoryItem, PayPeriodPaid, CashReconciliation, Settlement, Runner, Expense } from '../types';
 import {
   cashCollectedOnTx, expectedCashForDate, reconcileCash,
   expectedEndingCash, sumDrawerEntries, cashDrawerSummary, openDrawerPatch,
@@ -7,6 +7,7 @@ import {
   profitAndLoss, profitLossCsvRows, settlementHistory, yearEndSummary, ProfitLossInput,
   cashSalesAfterClose, unreconciledDays,
 } from './reports';
+import { DEFAULT_EXPENSE_CATEGORIES } from './expenses';
 
 const tx = (p: Partial<SalesTransaction>): SalesTransaction => ({
   id: 't', date: '2026-07-20', customerName: '', subtotal: 0, tax: 0, platformFee: 0,
@@ -26,6 +27,10 @@ const settle = (p: Partial<Settlement>): Settlement => ({
   id: 's', runnerId: 'r1', date: '2026-07-05', dropOffIds: [], totalPurchaseFronted: 0, totalFees: 0, amountPaid: 0, notes: '', ...p,
 });
 const runner = (p: Partial<Runner>): Runner => ({ id: 'r1', name: 'Alex', phone: '', notes: '', ...p });
+const expense = (p: Partial<Expense>): Expense => ({
+  id: 'e', date: '2026-07-10', amount: 0, category: 'other', paymentMethod: 'cash',
+  enteredBy: 'o', enteredByEmail: 'o@shop.test', createdAt: 0, ...p,
+});
 
 describe('cashCollectedOnTx', () => {
   it('counts the full total of a cash sale', () => {
@@ -233,9 +238,12 @@ describe('taxRemittance', () => {
 });
 
 describe('profitAndLoss', () => {
-  const base: ProfitLossInput = { transactions: [], inventory: [], payPeriods: [], cashReconciliations: [], settlements: [] };
+  const base: ProfitLossInput = {
+    transactions: [], inventory: [], payPeriods: [], cashReconciliations: [], settlements: [],
+    expenses: [], expenseCategories: DEFAULT_EXPENSE_CATEGORIES,
+  };
 
-  it('builds a P&L: revenue − COGS − payroll − cash expenses − runner commissions', () => {
+  it('builds a P&L: revenue − COGS − payroll − expenses − runner commissions', () => {
     const input: ProfitLossInput = {
       ...base,
       transactions: [
@@ -250,7 +258,11 @@ describe('profitAndLoss', () => {
         dev({ id: 'unsold', soldDate: '', salePrice: 0, purchaseCost: 250 }),                           // not sold
       ],
       payPeriods: [paid({ periodStart: '2026-07-01', gross: 600 }), paid({ periodStart: '2026-06-01', gross: 999 })],
-      cashReconciliations: [recon({ date: '2026-07-08', cashOut: [{ id: 'c', amount: 40 }, { id: 'c2', amount: 10 }] })],
+      expenses: [
+        expense({ id: 'e1', date: '2026-07-08', amount: 40, category: 'rent' }),
+        expense({ id: 'e2', date: '2026-07-09', amount: 10, category: 'utilities' }),
+        expense({ id: 'wage', date: '2026-07-09', amount: 5000, category: 'wages' }), // excluded from P&L — payroll already subtracts it
+      ],
       settlements: [settle({ date: '2026-07-05', totalFees: 30, totalPurchaseFronted: 200, amountPaid: 230 })],
     };
     const pl = profitAndLoss(input, '2026-07-01', '2026-07-31');
@@ -258,7 +270,7 @@ describe('profitAndLoss', () => {
     expect(pl.costOfGoods).toBe(570);      // (400+50) + (100+20)
     expect(pl.grossProfit).toBe(730);
     expect(pl.payroll).toBe(600);          // only the in-range paid period
-    expect(pl.cashExpenses).toBe(50);      // 40 + 10
+    expect(pl.expenses).toBe(50);          // 40 + 10 — Wages excluded, not double-subtracted against payroll
     expect(pl.runnerCommissions).toBe(30); // fees only, not amountPaid (avoids double-counting COGS)
     expect(pl.netProfit).toBe(50);         // 730 − 600 − 50 − 30
   });
@@ -269,6 +281,56 @@ describe('profitAndLoss', () => {
     const rows = profitLossCsvRows(pl);
     expect(rows[0]).toEqual({ Line: 'Revenue', Amount: '0.00' });
     expect(rows[rows.length - 1]).toEqual({ Line: 'Net profit', Amount: '0.00' });
+  });
+
+  it('a cash-paid expense is counted exactly once in P&L, regardless of any cashOut entries also present on the drawer', () => {
+    // App.tsx's handleSaveExpense appends a matching cashOut drawer entry
+    // whenever an expense is paid in cash (so the till reflects it) — but
+    // profitAndLoss must sum P&L expenses from the Expense ledger ONLY,
+    // never from cashReconciliations.cashOut too, or a cash expense would be
+    // subtracted twice. This is the core anti-double-count contract.
+    const input: ProfitLossInput = {
+      ...base,
+      expenses: [expense({ id: 'e1', date: '2026-07-08', amount: 75, category: 'vehicle_fuel', paymentMethod: 'cash' })],
+      // The SAME $75 also shows up as a drawer cashOut entry (this is the
+      // expected, intentional drawer effect) — it must not be summed again.
+      cashReconciliations: [recon({ date: '2026-07-08', cashOut: [{ id: 'c1', amount: 75 }] })],
+    };
+    const pl = profitAndLoss(input, '2026-07-01', '2026-07-31');
+    expect(pl.expenses).toBe(75); // not 150
+  });
+
+  it('runner-settlement cash payouts (no backing Expense record) are counted once, via runnerCommissions only', () => {
+    // A runner settled in cash writes a cashOut entry too (App.tsx), but that
+    // call site deliberately never creates an Expense record — the cost is
+    // already fully represented by runnerCommissions (totalFees). Simulating
+    // that here: a cashOut entry exists with nothing in the expense ledger.
+    const input: ProfitLossInput = {
+      ...base,
+      cashReconciliations: [recon({ date: '2026-07-05', cashOut: [{ id: 'c1', amount: 230 }] })], // runner paid in cash
+      settlements: [settle({ date: '2026-07-05', totalFees: 30, totalPurchaseFronted: 200, amountPaid: 230 })],
+    };
+    const pl = profitAndLoss(input, '2026-07-01', '2026-07-31');
+    expect(pl.expenses).toBe(0);           // the cashOut entry does not leak into expenses
+    expect(pl.runnerCommissions).toBe(30); // sole source for this cost
+    expect(pl.netProfit).toBe(-30);
+  });
+
+  it('breaks expenses out by category, including the excluded-from-PL ones for visibility', () => {
+    const input: ProfitLossInput = {
+      ...base,
+      expenses: [
+        expense({ id: 'e1', date: '2026-07-08', amount: 40, category: 'rent' }),
+        expense({ id: 'wage', date: '2026-07-09', amount: 5000, category: 'wages' }),
+      ],
+    };
+    const pl = profitAndLoss(input, '2026-07-01', '2026-07-31');
+    expect(pl.expensesByCategory).toEqual([
+      { category: 'wages', label: 'Wages', total: 5000, excludedFromPL: true },
+      { category: 'rent', label: 'Rent', total: 40, excludedFromPL: false },
+    ]);
+    const rows = profitLossCsvRows(pl);
+    expect(rows.find(r => (r as any).Line?.includes('Wages'))).toMatchObject({ Amount: '-5000.00' });
   });
 });
 
@@ -312,14 +374,16 @@ describe('yearEndSummary', () => {
       ],
       inventory: [],
       payPeriods: [paid({ periodStart: '2026-05-01', gross: 800 })],
-      cashReconciliations: [recon({ date: '2026-06-01', cashOut: [{ id: 'c', amount: 25 }] })],
+      cashReconciliations: [],
+      expenses: [expense({ id: 'e1', date: '2026-06-01', amount: 25, category: 'rent' })],
+      expenseCategories: DEFAULT_EXPENSE_CATEGORIES,
       settlements: [settle({ date: '2026-08-01', totalFees: 45, amountPaid: 45 })],
     };
     const s = yearEndSummary(input, 2026);
     expect(s.revenue).toBe(1000);
     expect(s.salesTaxCollected).toBe(130);
     expect(s.payrollPaid).toBe(800);
-    expect(s.cashExpenses).toBe(25);
+    expect(s.expenses).toBe(25);
     expect(s.runnerCommissions).toBe(45);
     expect(s.netProfit).toBe(1000 - 400 - 800 - 25 - 45);
   });
