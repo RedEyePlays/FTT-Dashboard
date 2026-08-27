@@ -1,6 +1,7 @@
 import { httpsCallable } from "firebase/functions";
 import { functions } from "./firebase";
 import { InventoryItem, ChatMessage } from "../types";
+import { assertOnline } from "./functionsGuard";
 
 // All Gemini calls now go through the `aiGenerate` Cloud Function, which holds
 // the API key server-side (Firebase Secret Manager) and requires an
@@ -14,6 +15,7 @@ interface ChatTurn {
 }
 
 export const getFinancialInsights = async (data: InventoryItem[]): Promise<string> => {
+  assertOnline();
   try {
     const result = await aiGenerate({ op: "insights", data });
     const { text } = (result.data ?? {}) as { text?: string };
@@ -25,6 +27,7 @@ export const getFinancialInsights = async (data: InventoryItem[]): Promise<strin
 };
 
 export const parseBulkInventory = async (text: string): Promise<InventoryItem[]> => {
+  assertOnline();
   try {
     const result = await aiGenerate({ op: "bulkParse", text });
     const { items } = (result.data ?? {}) as { items?: any[] };
@@ -73,6 +76,7 @@ export interface ExtractedImeiFields {
 }
 
 export const extractImeiFromImage = async (base64Image: string): Promise<ExtractedImeiFields> => {
+  assertOnline();
   try {
     const result = await aiGenerate({ op: "imeiExtract", base64Image });
     const data = (result.data ?? {}) as Partial<ExtractedImeiFields>;
@@ -97,6 +101,7 @@ export const generateChatResponse = async (
   inventory: InventoryItem[],
   messages: ChatMessage[]
 ): Promise<string> => {
+  assertOnline();
   const history: ChatTurn[] = messages
     .filter((m) => m.id !== "welcome")
     .map((m) => ({ role: m.role, parts: [{ text: m.text }] }));

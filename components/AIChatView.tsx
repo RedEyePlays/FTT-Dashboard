@@ -2,6 +2,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { InventoryItem, ChatMessage } from '../types';
 import { generateChatResponse } from '../services/geminiService';
+import { OfflineError } from '../services/functionsGuard';
+import { useConnectionStatus } from '../hooks/useConnectionStatus';
 import { Send, Bot, User, Loader2, Sparkles, Trash2, X, Maximize2 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 
@@ -22,6 +24,10 @@ export const AIChatView: React.FC<AIChatViewProps> = ({
 }) => {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  // The AI Assistant runs entirely through the aiGenerate Cloud Function —
+  // there's no offline queue behind it, so it's disabled outright rather
+  // than appearing to send and then failing.
+  const isOffline = useConnectionStatus() === 'offline';
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -34,7 +40,7 @@ export const AIChatView: React.FC<AIChatViewProps> = ({
   }, [messages, variant]);
 
   const handleSend = async () => {
-    if (!input.trim() || isLoading) return;
+    if (!input.trim() || isLoading || isOffline) return;
 
     const userMsg: ChatMessage = {
       id: Date.now().toString(),
@@ -71,7 +77,9 @@ export const AIChatView: React.FC<AIChatViewProps> = ({
       const errorMsg: ChatMessage = {
         id: (Date.now() + 1).toString(),
         role: 'model',
-        text: "Sorry, I encountered an error connecting to the AI service. Please check your network or API key.",
+        text: error instanceof OfflineError
+          ? "You're offline — the AI Assistant needs an internet connection."
+          : "Sorry, I encountered an error connecting to the AI service. Please check your network or API key.",
         timestamp: new Date()
       };
       onUpdateMessages([...newHistory, errorMsg]);
@@ -199,23 +207,30 @@ export const AIChatView: React.FC<AIChatViewProps> = ({
                   e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`;
               }}
               onKeyDown={handleKeyDown}
-              placeholder="Ask AI..."
-              className="w-full pl-3 pr-10 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-slate-700 dark:text-slate-200 text-sm resize-none max-h-[100px] custom-scrollbar"
+              placeholder={isOffline ? "Unavailable offline" : "Ask AI..."}
+              disabled={isOffline}
+              className="w-full pl-3 pr-10 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-slate-700 dark:text-slate-200 text-sm resize-none max-h-[100px] custom-scrollbar disabled:opacity-50 disabled:cursor-not-allowed"
               rows={1}
             />
           </div>
           <button
             onClick={handleSend}
-            disabled={!input.trim() || isLoading}
+            disabled={!input.trim() || isLoading || isOffline}
+            title={isOffline ? "Unavailable offline" : undefined}
             className={`p-2.5 rounded-xl flex-shrink-0 transition-all ${
-                input.trim() && !isLoading
-                 ? 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-md' 
+                input.trim() && !isLoading && !isOffline
+                 ? 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-md'
                  : 'bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-600 cursor-not-allowed'
             }`}
           >
             {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
           </button>
         </div>
+        {isOffline && (
+          <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-1.5 text-center">
+            You're offline — the AI Assistant needs an internet connection.
+          </p>
+        )}
       </div>
     </div>
   );

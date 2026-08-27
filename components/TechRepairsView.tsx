@@ -7,6 +7,7 @@ import {
 } from '../domain/repairs';
 import { RepairLabelModal } from './RepairLabelModal';
 import { useEscapeKey } from '../hooks/useEscapeKey';
+import { useConnectionStatus } from '../hooks/useConnectionStatus';
 
 interface Props {
   repairs: Repair[];
@@ -166,6 +167,11 @@ const TechRepairDrawer: React.FC<{
   onSave: (stored: Repair, draft: Partial<Repair>) => void;
   onPrintAudit?: (entityType: string, id: string, docName: string) => void;
 }> = ({ repair: r, batches, auditLogs, onClose, onSave, onPrintAudit }) => {
+  // A technician's edits go through the techUpdateRepair Cloud Function
+  // (services/repairFunctions.ts), not a plain Firestore write — there is no
+  // offline queue behind it, so it's disabled outright while offline rather
+  // than appearing to save and then silently failing.
+  const isOffline = useConnectionStatus() === 'offline';
   const [status, setStatus] = useState<RepairStatus>(r.status);
   const [techNotes, setTechNotes] = useState(r.techNotes || '');
   const [diagnostics, setDiagnostics] = useState(r.diagnostics || '');
@@ -305,8 +311,14 @@ const TechRepairDrawer: React.FC<{
             )}
           </section>
 
+          {isOffline && (
+            <p className="text-xs text-amber-600 dark:text-amber-400 text-center">
+              You're offline — saving ticket changes needs a connection.
+            </p>
+          )}
           <div className="flex gap-2 pt-1">
-            <button onClick={save} className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium"><Save className="w-4 h-4" /> Save changes</button>
+            <button onClick={save} disabled={isOffline} title={isOffline ? "Unavailable offline" : undefined}
+              className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg text-sm font-medium"><Save className="w-4 h-4" /> Save changes</button>
             <button onClick={() => setLabel(true)} className="flex items-center justify-center gap-2 px-4 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-lg text-sm font-medium hover:border-indigo-400"><Printer className="w-4 h-4" /> Label</button>
           </div>
         </div>
