@@ -5,7 +5,7 @@ import JsBarcode from 'jsbarcode';
 import { jsPDF } from 'jspdf';
 import { InventoryItem, DeviceStatus } from '../types';
 import { getDeviceDisplayName, kindOf } from '../domain/inventory';
-import { LabelContent, labelPreview, labelPrintDoc, mmOf, maxSafePushDownMm, shortLabelSku, nonDymoQrSizeMm } from '../services/labelLayout';
+import { LabelContent, labelPreview, labelPrintDoc, mmOf, maxSafePushDownMm, shortLabelSku, nonDymoQrSizeMm, deviceSubLine } from '../services/labelLayout';
 import { getLabelSizes, getStoreProfile, getLabelSpacing } from './SettingsModal';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 
@@ -123,7 +123,7 @@ export const LabelModal: React.FC<Props> = ({ item, onClose }) => {
     org: storeName,
     code: shortLabelSku(isAccessory ? (upc || sku) : sku),
     device: name,
-    sub: [item.storage, item.color].filter(Boolean).join(' · ') || undefined,
+    sub: deviceSubLine(item),
     serial: item.imei || undefined,
     status: status || undefined,
   };

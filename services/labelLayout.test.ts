@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   labelPrintDoc, LabelMedia, LabelContent, LabelImages, LabelOpts, MAX_PUSH_DOWN_MM, maxSafePushDownMm,
-  shortLabelSku, nonDymoQrSizeMm, nonDymoFontSizesMm, estimateTextWidthMm, textColumnWidthMm,
+  shortLabelSku, nonDymoQrSizeMm, nonDymoFontSizesMm, estimateTextWidthMm, textColumnWidthMm, deviceSubLine,
 } from './labelLayout';
 import { INVENTORY_SKU_PREFIX } from './sku';
 
@@ -324,6 +324,29 @@ describe('rendered-geometry evidence — measured text width vs. available colum
     const html = labelPrintDoc('t', size2x1, { org: 'FlipThatTech', code: '0000029', device: 'iPhone', serial: imei }, {}, { showBarcode: false, showStatus: false });
     expect(html).toContain('overflow-wrap:anywhere');
     expect(html).toContain(imei); // full IMEI present, never ellipsis-clipped
+  });
+});
+
+describe('deviceSubLine — battery health added to the printed (QR) label', () => {
+  it('joins storage · color · battery health, in that order', () => {
+    expect(deviceSubLine({ storage: '256GB', color: 'Silver', batteryHealth: '89%' })).toBe('256GB · Silver · Batt 89%');
+  });
+
+  it('skips whichever parts are unset, without leaving stray separators', () => {
+    expect(deviceSubLine({ storage: '256GB' })).toBe('256GB');
+    expect(deviceSubLine({ batteryHealth: '89%' })).toBe('Batt 89%');
+    expect(deviceSubLine({ color: 'Silver', batteryHealth: '89%' })).toBe('Silver · Batt 89%');
+  });
+
+  it('returns undefined (not an empty string) when nothing is set, so LabelContent.sub is correctly omitted', () => {
+    expect(deviceSubLine({})).toBeUndefined();
+  });
+
+  it('the battery value reaches the actual rendered label document', () => {
+    const html = labelPrintDoc('t', { id: '2x1', w: 2, h: 1, label: '2 x 1' },
+      { org: 'FlipThatTech', code: '0000029', device: 'iPhone 14 Pro Max', sub: deviceSubLine({ storage: '256GB', color: 'Silver', batteryHealth: '89%' }) },
+      {}, { showBarcode: false, showStatus: false });
+    expect(html).toContain('Batt 89%');
   });
 });
 
