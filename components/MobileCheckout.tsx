@@ -2,8 +2,12 @@ import React, { useEffect, useState, lazy, Suspense } from 'react';
 import {
   ScanLine, Search, Plus, Minus, Trash2, Smartphone, Package, Sparkles, ShoppingCart,
   User, Phone, Mail, ChevronLeft, CheckCircle, Banknote, CreditCard, Blend, Send,
-  Printer, RotateCcw, Eye, X, AlertTriangle, FileText, Wrench, History, HandCoins,
+  Printer, RotateCcw, Eye, X, AlertTriangle, FileText, Wrench, History, HandCoins, Camera,
 } from 'lucide-react';
+// Lazy: pulls in the camera viewport/detection code only when actually opened
+// — the mobile checkout flow otherwise assumes a keyboard-wedge barcode
+// scanner gun (real POS hardware), so most sessions never touch this at all.
+const QRScanner = lazy(() => import('./QRScanner').then(m => ({ default: m.QRScanner })));
 import { InventoryItem, Customer, DeviceType, Repair } from '../types';
 import { RepairSalePrefill } from '../domain/repairs';
 import { getDeviceDisplayName, suggestedSalePrice, PriceSuggestion } from '../domain/inventory';
@@ -48,6 +52,11 @@ export const MobileCheckout: React.FC<Props> = (props) => {
   // completion batch): a normal full-payment checkout never sees a deposit
   // field unless explicitly switched on.
   const [layawayToggle, setLayawayToggle] = useState(false);
+  // Camera fallback for scanning — most stores use a keyboard-wedge scanner
+  // gun (handleScan / the "Scan / Add" button just read whatever's already in
+  // the text field), but a phone running this mobile flow has no such
+  // hardware, only its own camera.
+  const [showCamera, setShowCamera] = useState(false);
 
   // "Similar past sale" price hints per device line — suggestion only, applied on tap.
   const priceHints = React.useMemo(() => {
@@ -158,7 +167,11 @@ export const MobileCheckout: React.FC<Props> = (props) => {
               onChange={e => { cx.setScan(e.target.value); cx.setScanMsg(null); }}
               onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); cx.handleScan(cx.scan); } }}
               placeholder="Scan a code, or type a name / repair # to search"
-              className="w-full pl-10 pr-3 py-3.5 bg-white dark:bg-slate-900 border-2 border-indigo-200 dark:border-indigo-800 rounded-xl text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+              className="w-full pl-10 pr-11 py-3.5 bg-white dark:bg-slate-900 border-2 border-indigo-200 dark:border-indigo-800 rounded-xl text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+            <button type="button" onClick={() => setShowCamera(true)} title="Scan with camera" aria-label="Scan with camera"
+              className="absolute right-2 top-1/2 -translate-y-1/2 p-2 text-indigo-500 hover:text-indigo-700 dark:hover:text-indigo-300">
+              <Camera className="w-5 h-5" />
+            </button>
             {cx.scan.trim() && (cx.scanResults.length > 0 || cx.repairMatches.length > 0) && (
               <div className="absolute left-0 right-0 top-full mt-1 z-20 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl overflow-hidden">
                 {cx.repairMatches.map(r => (
@@ -421,6 +434,15 @@ export const MobileCheckout: React.FC<Props> = (props) => {
           )}
         </div>
       </ResponsiveDialog>
+
+      {showCamera && (
+        <Suspense fallback={null}>
+          <QRScanner
+            onScan={value => cx.handleScan(value)}
+            onClose={() => setShowCamera(false)}
+          />
+        </Suspense>
+      )}
     </div>
   );
 };

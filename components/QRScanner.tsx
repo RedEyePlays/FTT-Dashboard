@@ -15,6 +15,18 @@ export const QRScanner: React.FC<Props> = ({ onScan, onClose }) => {
   const [error, setError] = useState<string | null>(null);
   const [detected, setDetected] = useState<string | null>(null);
 
+  // Callers pass onScan/onClose as inline arrow functions (a fresh identity
+  // every render). Keeping those directly in the mount effect's dependency
+  // array would tear the camera down and re-request getUserMedia on every
+  // parent re-render — on a slow permission prompt or a parent that
+  // re-renders while the modal is open, that can restart the request loop
+  // fast enough that the camera never visibly opens. Refs give the effect a
+  // stable identity to close over while always calling the latest callback.
+  const onScanRef = useRef(onScan);
+  onScanRef.current = onScan;
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
   const stopCamera = useCallback(() => {
     cancelAnimationFrame(rafRef.current);
     if (videoRef.current?.srcObject) {
@@ -43,8 +55,8 @@ export const QRScanner: React.FC<Props> = ({ onScan, onClose }) => {
           setDetected(value);
           stopCamera();
           setTimeout(() => {
-            onScan(value);
-            onClose();
+            onScanRef.current(value);
+            onCloseRef.current();
           }, 600);
           return;
         }
@@ -57,7 +69,7 @@ export const QRScanner: React.FC<Props> = ({ onScan, onClose }) => {
     }
 
     rafRef.current = requestAnimationFrame(scan);
-  }, [onScan, onClose, stopCamera]);
+  }, [stopCamera]);
 
   useEffect(() => {
     const start = async () => {
@@ -76,9 +88,12 @@ export const QRScanner: React.FC<Props> = ({ onScan, onClose }) => {
     };
     start();
     return () => stopCamera();
-  }, [scan, stopCamera]);
+    // Runs once on mount / cleans up once on unmount — see the onScanRef/
+    // onCloseRef comment above for why props aren't in this list.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  const handleClose = useCallback(() => { stopCamera(); onClose(); }, [stopCamera, onClose]);
+  const handleClose = useCallback(() => { stopCamera(); onCloseRef.current(); }, [stopCamera]);
 
   useEscapeKey(handleClose);
 
