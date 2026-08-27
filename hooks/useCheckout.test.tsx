@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import React from 'react';
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createRoot } from 'react-dom/client';
 import { act } from 'react';
 import { useCheckout } from './useCheckout';
@@ -26,23 +26,30 @@ const device: InventoryItem = {
   soldDate: '', soldTo: '', salePrice: 0, notes: '',
 };
 
-function Harness({ onComplete, onGenerateSku, onReady }: {
+function Harness({ inventory, onComplete, onGenerateSku, persist, onReady }: {
+  inventory: InventoryItem[];
   onComplete: (p: any) => void;
   onGenerateSku?: (t?: any) => Promise<string>;
+  persist?: { workspaceId: string; userId: string } | null;
   onReady: (cx: ReturnType<typeof useCheckout>) => void;
 }) {
-  const cx = useCheckout({ inventory: [device], onComplete, onGenerateSku });
+  const cx = useCheckout({ inventory, onComplete, onGenerateSku, persist });
   onReady(cx);
   return null;
 }
 
-function mount(props: { onComplete: (p: any) => void; onGenerateSku?: (t?: any) => Promise<string> }) {
+function mount(props: {
+  inventory?: InventoryItem[];
+  onComplete: (p: any) => void;
+  onGenerateSku?: (t?: any) => Promise<string>;
+  persist?: { workspaceId: string; userId: string } | null;
+}) {
   let cx!: ReturnType<typeof useCheckout>;
   const host = document.createElement('div');
   document.body.appendChild(host);
   const root = createRoot(host);
   act(() => {
-    root.render(<Harness onComplete={props.onComplete} onGenerateSku={props.onGenerateSku} onReady={c => { cx = c; }} />);
+    root.render(<Harness inventory={props.inventory ?? [device]} onComplete={props.onComplete} onGenerateSku={props.onGenerateSku} persist={props.persist} onReady={c => { cx = c; }} />);
   });
   return { get cx() { return cx; }, unmount: () => { act(() => root.unmount()); host.remove(); } };
 }
@@ -148,5 +155,199 @@ describe('useCheckout re-entrancy guard', () => {
     await act(async () => { resolveSku('SKU-1'); await checkoutPromise; });
     expect(h.cx.isSubmitting).toBe(false);
     h.unmount();
+  });
+});
+
+// "Keep the cart when navigating away and back": leaving Quick Sale (the view
+// unmounting) used to lose the whole in-progress cart. These tests exercise
+// the real unmount → sessionStorage save → fresh-hook-instance restore path
+// end to end, the same way navigating to Inventory and back to Quick Sale
+// actually unmounts/remounts this hook in the app.
+describe('useCheckout cart persistence (survive navigating away and back)', () => {
+  const persistScope = { workspaceId: 'ws1', userId: 'user1' };
+  const device2: InventoryItem = { ...device, id: 'dev-2', sku: 'FTT-0002' };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    sessionStorage.clear();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // Advances the fake clock and lets the debounced save effect's setTimeout
+  // actually fire, wrapped in act() since it triggers no state change here
+  // but keeps React's test utilities happy about updates happening outside act.
+  const flushDebounce = () => act(() => { vi.advanceTimersByTime(450); });
+
+  it('a cart survives unmounting Quick Sale and mounting it again (leaving and coming back)', () => {
+    const onComplete = vi.fn();
+    const h1 = mount({ onComplete, persist: persistScope });
+    act(() => { h1.cx.addDevice(device); });
+    act(() => { h1.cx.setCustomerName('Jane Doe'); });
+    flushDebounce();
+    h1.unmount(); // simulates navigating away from Quick Sale
+
+    // A fresh hook instance — exactly what remounting Quick Sale produces.
+    const h2 = mount({ onComplete, persist: persistScope });
+    expect(h2.cx.cart.map(l => l.inventoryId)).toEqual(['dev-1']);
+    expect(h2.cx.customerName).toBe('Jane Doe');
+    h2.unmount();
+  });
+
+  it('is cleared after a completed sale — a sold cart is never restored', async () => {
+    const onComplete = vi.fn();
+    const h1 = mount({ onComplete, persist: persistScope });
+    act(() => { h1.cx.addDevice(device); });
+    flushDebounce();
+    await act(async () => { await h1.cx.handleCheckout(); });
+    h1.unmount();
+
+    const h2 = mount({ onComplete, persist: persistScope });
+    expect(h2.cx.cart).toEqual([]);
+    h2.unmount();
+  });
+
+  it('an explicit reset()/"Clear cart" also clears the persisted save', () => {
+    const onComplete = vi.fn();
+    const h1 = mount({ onComplete, persist: persistScope });
+    act(() => { h1.cx.addDevice(device); });
+    flushDebounce();
+    act(() => { h1.cx.reset(); });
+    h1.unmount();
+
+    const h2 = mount({ onComplete, persist: persistScope });
+    expect(h2.cx.cart).toEqual([]);
+    h2.unmount();
+  });
+
+  it('is never restored for a different user id on the same device (shared terminal)', () => {
+    const onComplete = vi.fn();
+    const h1 = mount({ onComplete, persist: { workspaceId: 'ws1', userId: 'employeeA' } });
+    act(() => { h1.cx.addDevice(device); });
+    flushDebounce();
+    h1.unmount();
+
+    const h2 = mount({ onComplete, persist: { workspaceId: 'ws1', userId: 'employeeB' } });
+    expect(h2.cx.cart).toEqual([]);
+    h2.unmount();
+  });
+
+  it('is never restored across a workspace mismatch', () => {
+    const onComplete = vi.fn();
+    const h1 = mount({ onComplete, persist: { workspaceId: 'ws1', userId: 'user1' } });
+    act(() => { h1.cx.addDevice(device); });
+    flushDebounce();
+    h1.unmount();
+
+    const h2 = mount({ onComplete, persist: { workspaceId: 'ws2', userId: 'user1' } });
+    expect(h2.cx.cart).toEqual([]);
+    h2.unmount();
+  });
+
+  it('is not restored when the saved cart has expired (older than the persistence window)', () => {
+    const onComplete = vi.fn();
+    vi.setSystemTime(1_700_000_000_000);
+    const h1 = mount({ onComplete, persist: persistScope });
+    act(() => { h1.cx.addDevice(device); });
+    flushDebounce();
+    h1.unmount();
+
+    // Jump the clock forward past the persistence window before reopening.
+    vi.setSystemTime(1_700_000_000_000 + 5 * 60 * 60 * 1000); // +5h > the 4h TTL
+    const h2 = mount({ onComplete, persist: persistScope });
+    expect(h2.cx.cart).toEqual([]);
+    h2.unmount();
+  });
+
+  it('a cart within the persistence window (a couple hours later) IS restored', () => {
+    const onComplete = vi.fn();
+    vi.setSystemTime(1_700_000_000_000);
+    const h1 = mount({ onComplete, persist: persistScope });
+    act(() => { h1.cx.addDevice(device); });
+    flushDebounce();
+    h1.unmount();
+
+    vi.setSystemTime(1_700_000_000_000 + 2 * 60 * 60 * 1000); // +2h, still under the 4h TTL
+    const h2 = mount({ onComplete, persist: persistScope });
+    expect(h2.cx.cart.map(l => l.inventoryId)).toEqual(['dev-1']);
+    h2.unmount();
+  });
+
+  it('a line whose device was sold in the meantime is dropped on restore, with a clear notice', () => {
+    const onComplete = vi.fn();
+    const h1 = mount({ onComplete, inventory: [device, device2], persist: persistScope });
+    act(() => { h1.cx.addDevice(device); h1.cx.addDevice(device2); });
+    flushDebounce();
+    h1.unmount();
+
+    // Live data has since changed: `device` was sold elsewhere before this
+    // tab reopened Quick Sale; `device2` is still available.
+    const soldDevice = { ...device, soldDate: '2026-08-01', deviceStatus: 'sold' as const };
+    const h2 = mount({ onComplete, inventory: [soldDevice, device2], persist: persistScope });
+    expect(h2.cx.cart.map(l => l.inventoryId)).toEqual(['dev-2']);
+    expect(h2.cx.restoreNotice).toBe('1 item is no longer available and was removed: iPhone 13.');
+    h2.unmount();
+  });
+
+  it('soldDate resets to today on restore, never resurrecting a previously backdated date', () => {
+    const onComplete = vi.fn();
+    vi.setSystemTime(new Date('2026-08-20T12:00:00Z'));
+    const h1 = mount({ onComplete, persist: persistScope });
+    act(() => { h1.cx.addDevice(device); });
+    act(() => { h1.cx.setSoldDate('2026-01-01'); }); // an intentionally backdated sale
+    flushDebounce();
+    h1.unmount();
+
+    // Reopen a couple hours later — still well within the persistence window.
+    vi.setSystemTime(new Date('2026-08-20T14:00:00Z'));
+    const h2 = mount({ onComplete, persist: persistScope });
+    expect(h2.cx.cart.map(l => l.inventoryId)).toEqual(['dev-1']); // cart itself still restored
+    expect(h2.cx.soldDate).toBe('2026-08-20'); // but the date is today's, not the backdated 2026-01-01
+    h2.unmount();
+  });
+
+  it('a restored cart still respects the $0-price checkout block', async () => {
+    const onComplete = vi.fn();
+    const zeroPriceDevice: InventoryItem = { ...device, id: 'dev-3', sku: 'FTT-0003', targetSalePrice: 0 };
+    const h1 = mount({ onComplete, inventory: [zeroPriceDevice], persist: persistScope });
+    act(() => { h1.cx.addDevice(zeroPriceDevice); });
+    flushDebounce();
+    h1.unmount();
+
+    const h2 = mount({ onComplete, inventory: [zeroPriceDevice], persist: persistScope });
+    expect(h2.cx.blockedByZeroPrice).toBe(true);
+    await act(async () => { await h2.cx.handleCheckout(); });
+    expect(onComplete).not.toHaveBeenCalled(); // blocked, exactly like an unrestored $0 cart would be
+    h2.unmount();
+  });
+
+  it('the double-submit re-entrancy guard still applies to a restored cart', async () => {
+    const onComplete = vi.fn();
+    const h1 = mount({ onComplete, persist: persistScope });
+    act(() => { h1.cx.addDevice(device); });
+    flushDebounce();
+    h1.unmount();
+
+    const h2 = mount({ onComplete, persist: persistScope });
+    await act(async () => {
+      const p1 = h2.cx.handleCheckout();
+      const p2 = h2.cx.handleCheckout();
+      await Promise.all([p1, p2]);
+    });
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    h2.unmount();
+  });
+
+  it('an unauthenticated/preview session (persist omitted) never saves or restores anything', () => {
+    const onComplete = vi.fn();
+    const h1 = mount({ onComplete }); // no persist option at all
+    act(() => { h1.cx.addDevice(device); });
+    flushDebounce();
+    h1.unmount();
+
+    const h2 = mount({ onComplete });
+    expect(h2.cx.cart).toEqual([]);
+    h2.unmount();
   });
 });
