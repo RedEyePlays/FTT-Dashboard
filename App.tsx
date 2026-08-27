@@ -103,6 +103,8 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { setErrorContext, captureError } from './services/errorReporting';
 import { OfflineError } from './services/functionsGuard';
 import { todayISO } from './domain/dates';
+import { checkoutStorageKey } from './domain/checkoutPersistence';
+import { clearCheckoutState } from './services/checkoutPersistence';
 import { mergeById, mergeSkuCounters } from './domain/restore';
 import { canOpenNotes } from './domain/notes';
 
@@ -207,6 +209,14 @@ const App: React.FC = () => {
 
   const handleLock = async () => {
     setAppLocked(false); // signing out fully — nothing to stay "locked" over
+    // The in-progress Quick Sale cart (hooks/useCheckout.ts's sessionStorage
+    // auto-save) must never survive a sign-out — the storage key is already
+    // namespaced by workspace+user so a DIFFERENT user signing in afterward
+    // would never read it anyway, but this covers the SAME user signing back
+    // in too: without this, they'd otherwise see their old cart restored,
+    // which is surprising after an explicit sign-out (vs. the whole point of
+    // this feature, which is restoring across a same-session navigation).
+    if (uid && appUser) clearCheckoutState(checkoutStorageKey(uid, appUser.id));
     try { await signOut(auth); } catch (e) { console.error("Error signing out: ", e); }
   };
 
@@ -499,11 +509,15 @@ const App: React.FC = () => {
   };
   // Navigation wrapper for every nav surface: clicking Inventory opens Devices;
   // every other page pushes its own path so a refresh / shared link restores it.
-  // Leaving Quick Sale with items still in the cart (never rung up) warns first,
-  // same pattern as ItemFormModal's unsaved-changes guard.
+  // Leaving Quick Sale used to warn first if the cart had items (never rung
+  // up) — removed now that the cart auto-saves (hooks/useCheckout.ts's
+  // persist option) and is restored, re-validated against live data, the
+  // next time Quick Sale is reopened in this tab. Leaving really is safe now,
+  // so the redundant confirm() is gone; cartDirtyRef/onCartDirtyChange stay
+  // wired only for the beforeunload handler below, which guards an actual
+  // browser tab close — that genuinely still loses the sessionStorage-backed
+  // save, unlike in-app navigation.
   const navigate = (v: ViewState) => {
-    if (view === 'pos' && v !== 'pos' && cartDirtyRef.current
-      && !window.confirm('You have items in the Quick Sale cart that haven\'t been sold yet. Leave anyway?')) return;
     if (v === 'grid') { goInventory(DEFAULT_INV_SECTION); return; }
     const path = viewPath(v);
     if (isRoutableView(v) && window.location.pathname !== path) window.history.pushState(null, '', path);
@@ -2074,6 +2088,7 @@ const App: React.FC = () => {
               onCloseDrawer={allow('cash.reconcile') ? () => setShowCloseDrawer(true) : undefined}
               reconciledToday={!!todayRecon?.reconciledAt}
               onCartDirtyChange={(d) => { cartDirtyRef.current = d; }}
+              persist={uid && appUser ? { workspaceId: uid, userId: appUser.id } : null}
             />
           )}
           {view === 'quickpurchase' && (

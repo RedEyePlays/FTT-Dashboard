@@ -9,6 +9,8 @@ import { RepairSalePrefill, repairSalePrefill, isRepairOpen, matchesRepair } fro
 import { printSalesReceipt, PAYMENT_METHOD_LABEL } from '../services/salesReceipt';
 import { PRINT_PREVIEW_BAR_STYLE, PRINT_PREVIEW_BAR_HTML } from '../services/printPreview';
 import { todayISO } from '../domain/dates';
+import { PersistedCheckoutState, revalidateRestoredCart, describeDroppedLines, checkoutStorageKey } from '../domain/checkoutPersistence';
+import { saveCheckoutState, loadCheckoutState, clearCheckoutState } from '../services/checkoutPersistence';
 
 // All Quick Sale / checkout state, pricing math and the commit-payload builder
 // live here so the desktop CartSaleView and the mobile step flow share ONE
@@ -74,11 +76,17 @@ interface Args {
   // generator). Used to give a custom device opted into inventory a proper SKU
   // instead of a blank one.
   onGenerateSku?: (deviceType?: DeviceType) => Promise<string>;
+  // Enables auto-save/restore of the in-progress cart (domain/checkoutPersistence.ts)
+  // when set, scoped to exactly this workspace+user — a different user or an
+  // unauthenticated/preview session (undefined/null) never restores anyone's
+  // cart. Both ids are required together so a caller can't build a
+  // half-scoped key by accident.
+  persist?: { workspaceId: string; userId: string } | null;
 }
 
 const uid = newId;
 
-export function useCheckout({ inventory, customers = [], repairs = [], initialCustomer, onConsumeInitial, initialRepair, onConsumeInitialRepair, onComplete, onGenerateSku }: Args) {
+export function useCheckout({ inventory, customers = [], repairs = [], initialCustomer, onConsumeInitial, initialRepair, onConsumeInitialRepair, onComplete, onGenerateSku, persist }: Args) {
   const [cart, setCart] = useState<CartLine[]>([]);
   const [picker, setPicker] = useState<null | ItemKind>(null);
   const [search, setSearch] = useState('');
@@ -170,6 +178,109 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
   // Deposit / layaway: amount collected now when the customer isn't paying in
   // full. Blank/0 = paid in full (unchanged behaviour).
   const [deposit, setDeposit] = useState('');
+
+  // ---- cart auto-save / restore (domain/checkoutPersistence.ts) ----
+  //
+  // Leaving Quick Sale to look something up used to lose the whole
+  // in-progress cart (the view unmounts, this hook's state goes with it), so
+  // staff either lost work or were blocked by the old "unsaved changes"
+  // navigate-away prompt. Instead the cart is auto-saved (debounced) to
+  // sessionStorage under a key scoped to this exact workspace+user, and
+  // restored — re-validated against live inventory first — the next time
+  // Quick Sale mounts in the same tab.
+  const persistKey = persist ? checkoutStorageKey(persist.workspaceId, persist.userId) : null;
+  // Message for what got dropped on restore (e.g. "1 item is no longer
+  // available…") — null when nothing needs saying, including the common case
+  // of a clean restore with no drops (this is meant to be quiet, not a
+  // "welcome back" banner every time).
+  const [restoreNotice, setRestoreNotice] = useState<string | null>(null);
+  // Only ever attempt a restore once per mount. Starts pre-satisfied when
+  // there's no persistKey (nothing to restore, e.g. an unauthenticated
+  // preview) so the save effect below isn't blocked forever.
+  const restoredRef = useRef(!persistKey);
+  // Read fresh inside the restore effect without adding `inventory` (which
+  // changes on every Firestore update) to its dependency array — this must
+  // run exactly once, using whatever inventory data is available at that
+  // moment, not re-run every time inventory changes.
+  const inventoryRef = useRef(inventory);
+  useEffect(() => { inventoryRef.current = inventory; }, [inventory]);
+
+  useEffect(() => {
+    if (!persistKey || restoredRef.current) return;
+    restoredRef.current = true;
+    const saved = loadCheckoutState(persistKey, Date.now());
+    if (!saved) return;
+    const { cart: revalidated, droppedNames } = revalidateRestoredCart(saved.cart, inventoryRef.current);
+    if (revalidated.length === 0) {
+      // Nothing survived re-validation — restoring an empty cart (plus
+      // whatever customer/payment fields happened to be filled in) would be
+      // more confusing than just starting fresh, so drop the save entirely
+      // rather than half-restoring it.
+      clearCheckoutState(persistKey);
+      return;
+    }
+    setCart(revalidated);
+    setCustomerName(saved.customerName);
+    setCustomerPhone(saved.customerPhone);
+    setCustomerEmail(saved.customerEmail);
+    setCustomerNotes(saved.customerNotes);
+    setSelectedCustomerId(saved.selectedCustomerId);
+    setLinkedRepairId(saved.linkedRepairId);
+    setPaymentMethod(saved.paymentMethod);
+    setCashTaxStatus(saved.cashTaxStatus);
+    setEtransferTaxStatus(saved.etransferTaxStatus);
+    setPaymentNotes(saved.paymentNotes);
+    setCashAmount(saved.cashAmount);
+    setCardAmount(saved.cardAmount);
+    setEtransferAmount(saved.etransferAmount);
+    setTaxCollected(saved.taxCollected);
+    setDeposit(saved.deposit);
+    setPlatformName(saved.platformName);
+    setPlatformFeePercent(saved.platformFeePercent);
+    // soldDate is deliberately NOT restored — it stays today's date (its
+    // useState initializer above), never a previously chosen/backdated value.
+    if (droppedNames.length > 0) setRestoreNotice(describeDroppedLines(droppedNames));
+    // Intentionally run once per mount only — see restoredRef above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [persistKey]);
+
+  // Debounced auto-save: fires ~400ms after the last change to any persisted
+  // field, so typing in the customer name box doesn't hit sessionStorage on
+  // every keystroke. Waits for the restore attempt to finish first so the
+  // very first render (cart still []) can never stomp a not-yet-read saved
+  // blob. An empty cart clears the saved state instead of writing one —
+  // nothing "in progress" to resume once the cart's been emptied out.
+  //
+  // `confirmed` is in the guard AND the dependency array specifically to
+  // close a race with handleCheckoutInner's explicit clearCheckoutState
+  // call: without it, a debounce timer already armed by an edit made just
+  // before "Complete Sale" was clicked could still fire AFTER that explicit
+  // clear and silently re-persist the just-completed (and therefore
+  // never-restorable) cart. Adding `confirmed` here means the moment
+  // handleCheckoutInner sets it, this effect re-runs — its cleanup cancels
+  // any pending timer, and the new run sees confirmed=true and skips
+  // scheduling another one.
+  useEffect(() => {
+    if (!persistKey || !restoredRef.current || confirmed) return;
+    const t = setTimeout(() => {
+      if (cart.length === 0) { clearCheckoutState(persistKey); return; }
+      const state: PersistedCheckoutState = {
+        savedAt: Date.now(), cart,
+        customerName, customerPhone, customerEmail, customerNotes, selectedCustomerId, linkedRepairId,
+        paymentMethod, cashTaxStatus, etransferTaxStatus, paymentNotes,
+        cashAmount, cardAmount, etransferAmount, taxCollected, deposit,
+        platformName, platformFeePercent,
+      };
+      saveCheckoutState(persistKey, state);
+    }, 400);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    persistKey, confirmed, cart, customerName, customerPhone, customerEmail, customerNotes, selectedCustomerId, linkedRepairId,
+    paymentMethod, cashTaxStatus, etransferTaxStatus, paymentNotes,
+    cashAmount, cardAmount, etransferAmount, taxCollected, deposit,
+    platformName, platformFeePercent,
+  ]);
 
   // Re-entrancy guard for handleCheckout (see below) — a ref because state
   // updates are async and a rapid double-invocation can slip between renders;
@@ -521,11 +632,21 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
     // A backdated sale must never silently carry its date into the next sale
     // rung up in the same session — reset to today now that this one's done.
     setSoldDate(todayISO());
+    // A completed sale must never be restorable — this cart is now history,
+    // not "in progress". Clear the persisted save immediately (don't wait for
+    // the debounced save effect, which would otherwise re-persist this exact
+    // cart moments after it was rung up).
+    if (persistKey) clearCheckoutState(persistKey);
     // Opt-in auto-print: only when the tech ticked "Print receipt" at checkout.
     // Prints the just-built transaction (state's lastTx isn't set yet this tick).
     if (printReceiptOnComplete) printReceipt(transaction);
   };
 
+  // Used both after a completed sale ("Sell Another" / "New Sale") and as the
+  // explicit mid-sale "Clear cart" action — either way, an empty cart has
+  // nothing left to persist, so the saved state is cleared here too (not
+  // just left to the debounced save effect to notice the empty cart on its
+  // own next tick).
   const reset = () => {
     setCart([]); setLinkedRepairId(undefined); setCustomerName(''); setCustomerPhone(''); setCustomerEmail(''); setCustomerNotes(''); setSelectedCustomerId(undefined);
     setPaymentNotes(''); setPaymentMethod('cash'); setCashTaxStatus('none'); setEtransferTaxStatus('none');
@@ -533,7 +654,8 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
     setPlatformName('None / In-Store'); setPlatformFeePercent('0');
     setLastTx(null); setShowTx(false); setConfirmed(false);
     setCustom(emptyCustom()); setShowCustom(false); setAllowZeroPrice(false);
-    setAllowListedElsewhereSale(false); setDelistReminders([]);
+    setAllowListedElsewhereSale(false); setDelistReminders([]); setRestoreNotice(null);
+    if (persistKey) clearCheckoutState(persistKey);
     setTimeout(() => scanRef.current?.focus(), 0);
   };
 
@@ -659,6 +781,7 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
     cashAmount, setCashAmount, cardAmount, setCardAmount, etransferAmount, setEtransferAmount, taxCollected, setTaxCollected,
     deposit, setDeposit, depositAmount, balanceOwing, isLayaway, effectiveName,
     mixedPaymentTotal, mixedPaymentMismatch,
+    restoreNotice, setRestoreNotice,
     scan, setScan, scanMsg, setScanMsg, scanRef, lastTx, showTx, setShowTx, labelItem, setLabelItem,
     emptyCustom, showCustom, setShowCustom, custom, setCustom,
     taxRate, feePercent, previousPurchases, availableDevices, availableAccessories,

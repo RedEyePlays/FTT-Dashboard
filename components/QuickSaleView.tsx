@@ -30,14 +30,18 @@ interface Props {
   onCloseDrawer?: () => void;
   reconciledToday?: boolean;
   onCartDirtyChange?: (dirty: boolean) => void; // reports whether the Quick Sale cart has unsaved items
+  // Enables cart auto-save/restore across navigation (hooks/useCheckout.ts),
+  // scoped to exactly this workspace+user. Omit/null for an unauthenticated
+  // preview, where there's no user id to scope a save to.
+  persist?: { workspaceId: string; userId: string } | null;
 }
 
 // Quick Sale = the desktop split-screen cart on ≥md, a step-based flow on phones.
 // Both share the same checkout logic (hooks/useCheckout) — no duplicated business
 // logic; only the presentation differs, and only one renders at a time.
-export const QuickSaleView: React.FC<Props> = ({ inventory, customers, repairs, initialCustomer, onConsumeInitial, initialRepair, onConsumeInitialRepair, onSellCart, canViewProfit = true, onGenerateSku, cashDrawer, onOpenDrawer, onLogCash, onCloseDrawer, reconciledToday, onCartDirtyChange }) => {
+export const QuickSaleView: React.FC<Props> = ({ inventory, customers, repairs, initialCustomer, onConsumeInitial, initialRepair, onConsumeInitialRepair, onSellCart, canViewProfit = true, onGenerateSku, cashDrawer, onOpenDrawer, onLogCash, onCloseDrawer, reconciledToday, onCartDirtyChange, persist }) => {
   const isMobile = useIsMobile();
-  const common = { inventory, customers, repairs, initialCustomer, onConsumeInitial, initialRepair, onConsumeInitialRepair, canViewProfit, onGenerateSku, onDirtyChange: onCartDirtyChange } as const;
+  const common = { inventory, customers, repairs, initialCustomer, onConsumeInitial, initialRepair, onConsumeInitialRepair, canViewProfit, onGenerateSku, onDirtyChange: onCartDirtyChange, persist } as const;
   const checkout = isMobile
     ? <MobileCheckout {...common} onComplete={onSellCart} />
     : <CartSaleView {...common} onComplete={onSellCart} />;

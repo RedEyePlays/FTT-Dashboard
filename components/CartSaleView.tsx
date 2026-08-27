@@ -36,6 +36,7 @@ interface Props {
   canViewProfit?: boolean;      // gate cost/profit figures (same pattern as Dashboard)
   onGenerateSku?: (deviceType?: DeviceType) => Promise<string>;
   onDirtyChange?: (dirty: boolean) => void; // reports whether the cart has unsaved items
+  persist?: { workspaceId: string; userId: string } | null;
 }
 
 // Desktop split-screen Quick Sale. All state / pricing / checkout logic lives in
@@ -58,6 +59,7 @@ export const CartSaleView: React.FC<Props> = (props) => {
     paymentMethod, setPaymentMethod, cashTaxStatus, setCashTaxStatus, etransferTaxStatus, setEtransferTaxStatus, paymentNotes, setPaymentNotes,
     cashAmount, setCashAmount, cardAmount, setCardAmount, etransferAmount, setEtransferAmount, taxCollected, setTaxCollected,
     deposit, setDeposit, balanceOwing, isLayaway, mixedPaymentTotal, mixedPaymentMismatch,
+    restoreNotice, setRestoreNotice,
     scan, setScan, scanMsg, scanRef, lastTx, showTx, setShowTx, labelItem, setLabelItem,
     emptyCustom, showCustom, setShowCustom, custom, setCustom,
     taxRate, feePercent, previousPurchases, availableDevices, availableAccessories,
@@ -173,7 +175,14 @@ export const CartSaleView: React.FC<Props> = (props) => {
   const items = picker === 'device' ? availableDevices : availableAccessories;
 
   return (
-    <div className="flex flex-col lg:flex-row gap-6 h-full min-h-[calc(100vh-14rem)]">
+    <div className="flex flex-col gap-3 h-full min-h-[calc(100vh-14rem)]">
+      {restoreNotice && (
+        <div className="bg-sky-50 dark:bg-sky-900/20 border border-sky-300 dark:border-sky-500/40 rounded-xl p-3 text-sm flex items-start justify-between gap-3">
+          <p className="flex items-center gap-2 text-sky-800 dark:text-sky-300"><AlertTriangle className="w-4 h-4 shrink-0" /> Restored your in-progress cart — {restoreNotice}</p>
+          <button onClick={() => setRestoreNotice(null)} aria-label="Dismiss" className="text-sky-500 hover:text-sky-700 dark:hover:text-sky-300 shrink-0"><X className="w-4 h-4" /></button>
+        </div>
+      )}
+      <div className="flex flex-col lg:flex-row gap-6 flex-1 min-h-0">
       {/* Left: cart */}
       <div className="flex-1 flex flex-col gap-3">
         {/* Scan / search to add — works with USB/Bluetooth wedge scanners */}
@@ -226,6 +235,12 @@ export const CartSaleView: React.FC<Props> = (props) => {
           <button onClick={() => { setPicker('device'); setSearch(''); }} className="flex items-center gap-2 px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium"><Smartphone className="w-4 h-4" /> Add Device</button>
           <button onClick={() => { setPicker('accessory'); setSearch(''); }} className="flex items-center gap-2 px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-lg text-sm font-medium hover:border-indigo-400"><Package className="w-4 h-4" /> Add Accessory</button>
           <button onClick={() => { setCustom(emptyCustom()); setShowCustom(true); }} className="flex items-center gap-2 px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-lg text-sm font-medium hover:border-indigo-400"><Sparkles className="w-4 h-4" /> Add Custom Item</button>
+          {cart.length > 0 && (
+            <button onClick={() => { if (window.confirm('Clear the whole cart? This removes every item and customer/payment field entered so far.')) reset(); }}
+              className="ml-auto flex items-center gap-2 px-3 py-2 text-rose-600 dark:text-rose-400 rounded-lg text-sm font-medium hover:bg-rose-50 dark:hover:bg-rose-900/20">
+              <Trash2 className="w-4 h-4" /> Clear Cart
+            </button>
+          )}
         </div>
 
         {cart.length === 0 && (
@@ -531,6 +546,7 @@ export const CartSaleView: React.FC<Props> = (props) => {
           </div>
         </div>
       )}
+    </div>
     </div>
   );
 };
