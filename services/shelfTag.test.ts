@@ -40,6 +40,28 @@ describe('shelf tag styling — bold numbers, price no longer needs to be oversi
   });
 });
 
+describe('shelf tag — no rule around the price, condition dropped, bigger specs/SKU text', () => {
+  it('the price has no top/bottom border rule anymore', () => {
+    const priceRule = TAG_STYLE.match(/\.price\s*\{[^}]*\}/)?.[0] || '';
+    expect(priceRule).not.toMatch(/border/);
+  });
+
+  it('condition is left out of the specs line even when set — storage/color/battery are kept', () => {
+    const html = tagBody(dev({ storage: '256GB', color: 'Silver', batteryHealth: '89%', condition: 'Excellent' }), 'FlipThatTech');
+    expect(html).toContain('256GB');
+    expect(html).toContain('Silver');
+    expect(html).toContain('89%');
+    expect(html).not.toContain('Excellent');
+  });
+
+  it('specs and SKU font-size grew again from the previous pass', () => {
+    const specsSize = parseFloat(TAG_STYLE.match(/\.specs\s*\{[^}]*font-size:\s*([\d.]+)mm/)![1]);
+    const skuSize = parseFloat(TAG_STYLE.match(/\.sku\s*\{[^}]*font-size:\s*([\d.]+)mm/)![1]);
+    expect(specsSize).toBeGreaterThan(3.4);
+    expect(skuSize).toBeGreaterThan(3.2);
+  });
+});
+
 describe('shelf tag — bigger QR, all-bold text, pushed-down content, and larger line gaps', () => {
   it('the QR is bigger than before (9mm → 20mm)', () => {
     const rule = TAG_STYLE.match(/\.tag-qr\s*\{[^}]*\}/)?.[0] || '';
