@@ -184,6 +184,38 @@ describe('legitimate flows still work after removing the catch-all', () => {
   });
 });
 
+describe('expense ledger (expenses.manage tier — owner/manager only)', () => {
+  it('manager can write and read expenses', async () => {
+    await assertSucceeds(setDoc(doc(asManager(), 'user_data', WORKSPACE, 'expenses', 'e1'),
+      { id: 'e1', date: '2026-07-01', amount: 40, category: 'rent', paymentMethod: 'cash', enteredBy: 'manager-uid', enteredByEmail: 'manager@shop.test', createdAt: Date.now() }));
+    const { getDoc } = await import('firebase/firestore');
+    await assertSucceeds(getDoc(doc(asManager(), 'user_data', WORKSPACE, 'expenses', 'e1')));
+  });
+
+  it('employee cannot write expenses', async () => {
+    await assertFails(setDoc(doc(asEmployee(), 'user_data', WORKSPACE, 'expenses', 'e2'),
+      { id: 'e2', date: '2026-07-01', amount: 40, category: 'rent', paymentMethod: 'cash', enteredBy: 'employee-uid', enteredByEmail: 'employee@shop.test', createdAt: Date.now() }));
+  });
+
+  it('employee cannot even read expense totals — profit-sensitive, same tier as payroll', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'user_data', WORKSPACE, 'expenses', 'e3'), { id: 'e3', date: '2026-07-01', amount: 40, category: 'rent' });
+    });
+    const { getDoc } = await import('firebase/firestore');
+    await assertFails(getDoc(doc(asEmployee(), 'user_data', WORKSPACE, 'expenses', 'e3')));
+  });
+
+  it('technician cannot write or read expenses', async () => {
+    await assertFails(setDoc(doc(asTech(), 'user_data', WORKSPACE, 'expenses', 'e4'), { id: 'e4', amount: 10 }));
+  });
+
+  it('recurringExpenses is gated the same as expenses', async () => {
+    await assertSucceeds(setDoc(doc(asOwner(), 'user_data', WORKSPACE, 'recurringExpenses', 'r1'),
+      { id: 'r1', category: 'rent', amount: 1500, paymentMethod: 'etransfer', frequency: 'monthly', startDate: '2026-01-01', active: true, createdBy: WORKSPACE, createdByEmail: 'owner@shop.test', createdAt: Date.now() }));
+    await assertFails(setDoc(doc(asEmployee(), 'user_data', WORKSPACE, 'recurringExpenses', 'r2'), { id: 'r2', amount: 10 }));
+  });
+});
+
 describe('auditLogs stays append-only (tightened while here)', () => {
   it('create is ALLOWED for any active member', async () => {
     await assertSucceeds(setDoc(doc(asTech(), 'user_data', WORKSPACE, 'auditLogs', 'log1'), { ts: Date.now(), action: 'clock_in' }));

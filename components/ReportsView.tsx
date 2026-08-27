@@ -1,6 +1,8 @@
 import React, { useMemo, useState } from 'react';
-import { Wallet, Receipt, Download, Save, AlertTriangle, CheckCircle2, Plus, Trash2, Scale, FileArchive, Truck, DoorOpen, History, LockOpen, Banknote } from 'lucide-react';
-import { SalesTransaction, CashReconciliation, CashDrawerEntry, InventoryItem, PayPeriodPaid, Settlement, Runner, Repair, Customer, AuditEntry, ActivityEntry, TimeEntry, AppUser } from '../types';
+import { Wallet, Receipt, Download, Save, AlertTriangle, CheckCircle2, Plus, Trash2, Scale, FileArchive, Truck, DoorOpen, History, LockOpen, Banknote, Pencil, Repeat, SkipForward } from 'lucide-react';
+import { SalesTransaction, CashReconciliation, CashDrawerEntry, InventoryItem, PayPeriodPaid, Settlement, Runner, Repair, Customer, AuditEntry, ActivityEntry, TimeEntry, AppUser, Expense, RecurringExpense, ExpensePaymentMethod, RecurringFrequency } from '../types';
+import { ExpenseCategory, duePeriodsFor, DuePeriod } from '../domain/expenses';
+import { useEscapeKey } from '../hooks/useEscapeKey';
 import {
   expectedCashForDate, expectedEndingCash, sumDrawerEntries, reconcileCash, taxRemittance, taxReportCsvRows, TaxGrouping,
   profitAndLoss, profitLossCsvRows, settlementHistory, yearEndSummary, yearEndCsvRows, ProfitLossInput, ReconciliationInput,
@@ -22,6 +24,16 @@ interface Props {
   payPeriods: PayPeriodPaid[];
   settlements: Settlement[];
   runners: Runner[];
+  expenses: Expense[];
+  expenseCategories: ExpenseCategory[];
+  recurringExpenses: RecurringExpense[];
+  canManageExpenses: boolean;
+  onSaveExpense: (e: Expense, isNew: boolean) => void;
+  onDeleteExpense: (e: Expense) => void;
+  onSaveRecurringExpense: (r: RecurringExpense, isNew: boolean) => void;
+  onDeleteRecurringExpense: (id: string) => void;
+  onGenerateRecurringExpense: (r: RecurringExpense, period: DuePeriod) => void;
+  onSkipRecurringPeriod: (r: RecurringExpense, periodKey: string) => void;
   onSaveReconciliation: SaveReconciliation;
   defaultOpeningFloat?: number;
   // Daily History tab — everything that happened on a given day, reusing the
@@ -34,12 +46,13 @@ interface Props {
   users: AppUser[];
 }
 
-type TabId = 'history' | 'cash' | 'tax' | 'pnl' | 'yearend' | 'settlements';
+type TabId = 'history' | 'cash' | 'tax' | 'pnl' | 'expenses' | 'yearend' | 'settlements';
 const TABS: { id: TabId; label: string; icon: React.ReactNode }[] = [
   { id: 'history', label: 'Daily History', icon: <History className="w-4 h-4" /> },
   { id: 'cash', label: 'Cash Reconciliation', icon: <Wallet className="w-4 h-4" /> },
   { id: 'tax', label: 'Sales Tax', icon: <Receipt className="w-4 h-4" /> },
   { id: 'pnl', label: 'Profit & Loss', icon: <Scale className="w-4 h-4" /> },
+  { id: 'expenses', label: 'Expenses', icon: <Banknote className="w-4 h-4" /> },
   { id: 'settlements', label: 'Runner Settlements', icon: <Truck className="w-4 h-4" /> },
   { id: 'yearend', label: 'Year-End Export', icon: <FileArchive className="w-4 h-4" /> },
 ];
@@ -53,15 +66,18 @@ const label = 'block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1
 
 export const ReportsView: React.FC<Props> = ({
   salesTransactions, cashReconciliations, inventory, payPeriods, settlements, runners, onSaveReconciliation,
-  repairs, customers, auditLogs, activity, timeEntries, users,
+  repairs, customers, auditLogs, activity, timeEntries, users, expenses, expenseCategories,
+  recurringExpenses, canManageExpenses, onSaveExpense, onDeleteExpense,
+  onSaveRecurringExpense, onDeleteRecurringExpense, onGenerateRecurringExpense, onSkipRecurringPeriod,
 }) => {
   const [tab, setTab] = useState<TabId>('history');
   // Shared input set for the P&L / settlement / year-end reports.
-  const plInput: ProfitLossInput = { transactions: salesTransactions, inventory, payPeriods, cashReconciliations, settlements };
+  const plInput: ProfitLossInput = { transactions: salesTransactions, inventory, payPeriods, cashReconciliations, settlements, expenses, expenseCategories };
+  const tabs = TABS.filter(t => t.id !== 'expenses' || canManageExpenses);
   return (
     <div className="max-w-5xl mx-auto space-y-6">
       <div className="flex flex-wrap items-center gap-2">
-        {TABS.map(t => (
+        {tabs.map(t => (
           <button key={t.id} onClick={() => setTab(t.id)} className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium ${tab === t.id ? 'bg-indigo-600 text-white' : 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200'}`}>
             {t.icon} {t.label}
           </button>
@@ -77,6 +93,14 @@ export const ReportsView: React.FC<Props> = ({
       {tab === 'cash' && <CashReconTab salesTransactions={salesTransactions} cashReconciliations={cashReconciliations} onSave={onSaveReconciliation} />}
       {tab === 'tax' && <TaxReportTab salesTransactions={salesTransactions} />}
       {tab === 'pnl' && <ProfitLossTab plInput={plInput} />}
+      {tab === 'expenses' && canManageExpenses && (
+        <ExpensesTab
+          expenses={expenses} categories={expenseCategories} recurringExpenses={recurringExpenses}
+          onSaveExpense={onSaveExpense} onDeleteExpense={onDeleteExpense}
+          onSaveRecurringExpense={onSaveRecurringExpense} onDeleteRecurringExpense={onDeleteRecurringExpense}
+          onGenerateRecurringExpense={onGenerateRecurringExpense} onSkipRecurringPeriod={onSkipRecurringPeriod}
+        />
+      )}
       {tab === 'settlements' && <SettlementsTab settlements={settlements} runners={runners} />}
       {tab === 'yearend' && <YearEndTab plInput={plInput} />}
     </div>
@@ -600,7 +624,9 @@ const ProfitLossTab: React.FC<{ plInput: ProfitLossInput }> = ({ plInput }) => {
           <PLRow label="Cost of goods sold" value={pl.costOfGoods} negative />
           <PLRow label="Gross profit" value={pl.grossProfit} bold />
           <PLRow label="Payroll" value={pl.payroll} negative />
-          <PLRow label="Cash expenses" value={pl.cashExpenses} negative />
+          {pl.expensesByCategory.map(c => (
+            <PLRow key={c.category} label={`Expense: ${c.label}${c.excludedFromPL ? ' (informational)' : ''}`} value={c.total} negative={!c.excludedFromPL} />
+          ))}
           <PLRow label="Runner commissions" value={pl.runnerCommissions} negative />
           <PLRow label="Net profit" value={pl.netProfit} total />
         </div>
@@ -702,7 +728,7 @@ const YearEndTab: React.FC<{ plInput: ProfitLossInput }> = ({ plInput }) => {
     { label: 'Cost of goods sold', value: summary.costOfGoods },
     { label: 'Gross profit', value: summary.grossProfit, strong: true },
     { label: 'Payroll paid', value: summary.payrollPaid },
-    { label: 'Cash expenses', value: summary.cashExpenses },
+    ...summary.expensesByCategory.map(c => ({ label: `Expense: ${c.label}${c.excludedFromPL ? ' (informational)' : ''}`, value: c.total })),
     { label: 'Runner commissions', value: summary.runnerCommissions },
     { label: 'Net profit', value: summary.netProfit, strong: true },
     { label: 'Sales tax collected', value: summary.salesTaxCollected },
@@ -735,6 +761,247 @@ const YearEndTab: React.FC<{ plInput: ProfitLossInput }> = ({ plInput }) => {
           ))}
         </div>
       </div>
+    </div>
+  );
+};
+
+/* ---------------- Expenses ---------------- */
+const PAYMENT_METHOD_LABEL: Record<ExpensePaymentMethod, string> = {
+  cash: 'Cash', card: 'Card', etransfer: 'E-transfer', debit: 'Debit', other: 'Other',
+};
+const FREQUENCY_LABEL: Record<RecurringFrequency, string> = { weekly: 'Weekly', monthly: 'Monthly', yearly: 'Yearly' };
+
+const emptyExpenseDraft = (categories: ExpenseCategory[]): Omit<Expense, 'id' | 'enteredBy' | 'enteredByEmail' | 'createdAt'> => ({
+  date: todayISO(), amount: 0, category: categories.find(c => !c.archived)?.key || 'other', paymentMethod: 'cash', payee: '', note: '',
+});
+
+const ExpenseModal: React.FC<{
+  categories: ExpenseCategory[];
+  initial?: Expense;
+  onClose: () => void;
+  onSave: (e: Expense, isNew: boolean) => void;
+}> = ({ categories, initial, onClose, onSave }) => {
+  const [draft, setDraft] = useState(initial || { id: newId(), ...emptyExpenseDraft(categories), enteredBy: '', enteredByEmail: '', createdAt: 0 } as Expense);
+  useEscapeKey(onClose);
+  const activeCategories = categories.filter(c => !c.archived || c.key === draft.category);
+  const save = () => { if (draft.amount > 0 && draft.category) { onSave(draft, !initial); onClose(); } };
+  return (
+    <div className="fixed inset-0 z-[80] flex items-center justify-center p-4 bg-black/40">
+      <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-3">
+        <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100">{initial ? 'Edit expense' : 'Add expense'}</h3>
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className={label}>Date</label><input type="date" value={draft.date} onChange={e => setDraft(d => ({ ...d, date: e.target.value }))} className={`${input} w-full`} /></div>
+          <div><label className={label}>Amount ($)</label><input type="number" min={0} step={0.01} value={draft.amount || ''} onChange={e => setDraft(d => ({ ...d, amount: parseFloat(e.target.value) || 0 }))} className={`${input} w-full`} /></div>
+          <div>
+            <label className={label}>Category</label>
+            <select value={draft.category} onChange={e => setDraft(d => ({ ...d, category: e.target.value }))} className={`${input} w-full`}>
+              {activeCategories.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className={label}>Payment method</label>
+            <select value={draft.paymentMethod} onChange={e => setDraft(d => ({ ...d, paymentMethod: e.target.value as ExpensePaymentMethod }))} className={`${input} w-full`}>
+              {Object.entries(PAYMENT_METHOD_LABEL).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+            </select>
+          </div>
+          <div className="col-span-2"><label className={label}>Payee / vendor (optional)</label><input value={draft.payee || ''} onChange={e => setDraft(d => ({ ...d, payee: e.target.value }))} className={`${input} w-full`} /></div>
+          <div className="col-span-2"><label className={label}>Note (optional)</label><input value={draft.note || ''} onChange={e => setDraft(d => ({ ...d, note: e.target.value }))} className={`${input} w-full`} /></div>
+        </div>
+        {draft.paymentMethod === 'cash' && !initial && (
+          <p className="text-xs text-amber-600 dark:text-amber-400">This will also log a cash-out entry against {draft.date}'s drawer.</p>
+        )}
+        <div className="flex justify-end gap-2 pt-2">
+          <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800">Cancel</button>
+          <button onClick={save} disabled={!(draft.amount > 0)} className="px-4 py-2 rounded-lg text-sm font-medium bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white">Save</button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const RecurringModal: React.FC<{
+  categories: ExpenseCategory[];
+  onClose: () => void;
+  onSave: (r: RecurringExpense, isNew: boolean) => void;
+}> = ({ categories, onClose, onSave }) => {
+  const [draft, setDraft] = useState<Omit<RecurringExpense, 'id' | 'createdBy' | 'createdByEmail' | 'createdAt'>>({
+    category: categories.find(c => !c.archived)?.key || 'other', amount: 0, paymentMethod: 'etransfer',
+    payee: '', note: '', frequency: 'monthly', startDate: todayISO(), active: true,
+  });
+  useEscapeKey(onClose);
+  const save = () => {
+    if (draft.amount > 0) onSave({ id: newId(), createdBy: '', createdByEmail: '', createdAt: 0, ...draft }, true);
+    onClose();
+  };
+  return (
+    <div className="fixed inset-0 z-[80] flex items-center justify-center p-4 bg-black/40">
+      <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-3">
+        <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100">New recurring expense</h3>
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className={label}>Amount ($)</label><input type="number" min={0} step={0.01} value={draft.amount || ''} onChange={e => setDraft(d => ({ ...d, amount: parseFloat(e.target.value) || 0 }))} className={`${input} w-full`} /></div>
+          <div>
+            <label className={label}>Frequency</label>
+            <select value={draft.frequency} onChange={e => setDraft(d => ({ ...d, frequency: e.target.value as RecurringFrequency }))} className={`${input} w-full`}>
+              {Object.entries(FREQUENCY_LABEL).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className={label}>Category</label>
+            <select value={draft.category} onChange={e => setDraft(d => ({ ...d, category: e.target.value }))} className={`${input} w-full`}>
+              {categories.filter(c => !c.archived).map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className={label}>Payment method</label>
+            <select value={draft.paymentMethod} onChange={e => setDraft(d => ({ ...d, paymentMethod: e.target.value as ExpensePaymentMethod }))} className={`${input} w-full`}>
+              {Object.entries(PAYMENT_METHOD_LABEL).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+            </select>
+          </div>
+          <div><label className={label}>Start date</label><input type="date" value={draft.startDate} onChange={e => setDraft(d => ({ ...d, startDate: e.target.value }))} className={`${input} w-full`} /></div>
+          <div><label className={label}>Payee / vendor (optional)</label><input value={draft.payee || ''} onChange={e => setDraft(d => ({ ...d, payee: e.target.value }))} className={`${input} w-full`} /></div>
+        </div>
+        <p className="text-xs text-slate-400">One expense will be generated per {draft.frequency === 'monthly' ? 'month' : draft.frequency === 'yearly' ? 'year' : 'week'} starting {draft.startDate} — you'll approve or skip each period from the Expenses tab.</p>
+        <div className="flex justify-end gap-2 pt-2">
+          <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800">Cancel</button>
+          <button onClick={save} disabled={!(draft.amount > 0)} className="px-4 py-2 rounded-lg text-sm font-medium bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white">Create</button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const ExpensesTab: React.FC<{
+  expenses: Expense[];
+  categories: ExpenseCategory[];
+  recurringExpenses: RecurringExpense[];
+  onSaveExpense: (e: Expense, isNew: boolean) => void;
+  onDeleteExpense: (e: Expense) => void;
+  onSaveRecurringExpense: (r: RecurringExpense, isNew: boolean) => void;
+  onDeleteRecurringExpense: (id: string) => void;
+  onGenerateRecurringExpense: (r: RecurringExpense, period: DuePeriod) => void;
+  onSkipRecurringPeriod: (r: RecurringExpense, periodKey: string) => void;
+}> = ({ expenses, categories, recurringExpenses, onSaveExpense, onDeleteExpense, onSaveRecurringExpense, onDeleteRecurringExpense, onGenerateRecurringExpense, onSkipRecurringPeriod }) => {
+  const [start, setStart] = useState(monthStartISO());
+  const [end, setEnd] = useState(todayISO());
+  const [editing, setEditing] = useState<Expense | null | 'new'>(null);
+  const [addingRecurring, setAddingRecurring] = useState(false);
+
+  const inRange = useMemo(() => expenses.filter(e => e.date >= start && e.date <= end).sort((a, b) => b.date.localeCompare(a.date)), [expenses, start, end]);
+  const total = inRange.reduce((s, e) => s + e.amount, 0);
+  const categoryLabel = (key: string) => categories.find(c => c.key === key)?.label || key;
+
+  const exportCsv = () => {
+    const rows = inRange.map(e => ({ Date: e.date, Category: categoryLabel(e.category), Amount: e.amount.toFixed(2), 'Payment method': PAYMENT_METHOD_LABEL[e.paymentMethod], Payee: e.payee || '', Note: e.note || '' }));
+    triggerDownload(`expenses_${start}_to_${end}.csv`, toCSV(rows), 'text/csv;charset=utf-8;');
+  };
+
+  const now = Date.now();
+  const dueByRecurring = useMemo(
+    () => recurringExpenses.filter(r => r.active).map(r => ({ r, due: duePeriodsFor(r, now) })).filter(x => x.due.length > 0),
+    [recurringExpenses, now],
+  );
+
+  return (
+    <div className="space-y-6">
+      <div className={`${card} p-5`}>
+        <RangeControls start={start} end={end} setStart={setStart} setEnd={setEnd}>
+          <button onClick={() => setEditing('new')} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-indigo-600 hover:bg-indigo-700 text-white"><Plus className="w-4 h-4" /> Add expense</button>
+          <button onClick={exportCsv} disabled={inRange.length === 0} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white"><Download className="w-4 h-4" /> Export CSV</button>
+        </RangeControls>
+      </div>
+
+      {dueByRecurring.length > 0 && (
+        <div className={`${card} p-5`}>
+          <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200 mb-3 flex items-center gap-2"><Repeat className="w-4 h-4 text-indigo-500" /> Recurring expenses due</h3>
+          <div className="space-y-2">
+            {dueByRecurring.map(({ r, due }) => (
+              <div key={r.id} className="flex flex-wrap items-center justify-between gap-2 py-1.5 border-b border-slate-100 dark:border-slate-800 last:border-0">
+                <span className="text-sm text-slate-700 dark:text-slate-200">{categoryLabel(r.category)}{r.payee ? ` · ${r.payee}` : ''} — {money(r.amount)}/{FREQUENCY_LABEL[r.frequency].toLowerCase()}</span>
+                <div className="flex items-center gap-2 flex-wrap">
+                  {due.map(p => (
+                    <span key={p.key} className="inline-flex items-center gap-1 text-xs bg-slate-100 dark:bg-slate-800 rounded-full pl-2 pr-1 py-0.5">
+                      {p.key}
+                      <button onClick={() => onGenerateRecurringExpense(r, p)} title="Generate this period" className="p-1 text-emerald-600 hover:text-emerald-700"><CheckCircle2 className="w-3.5 h-3.5" /></button>
+                      <button onClick={() => onSkipRecurringPeriod(r, p.key)} title="Skip this period" className="p-1 text-slate-400 hover:text-rose-500"><SkipForward className="w-3.5 h-3.5" /></button>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className={`${card} p-5`}>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200">Expenses · {start} → {end}</h3>
+          <span className="text-sm font-bold text-slate-900 dark:text-white tabular-nums">{money(total)}</span>
+        </div>
+        {inRange.length === 0 ? (
+          <p className="text-sm text-slate-400 py-6 text-center">No expenses in this range.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead><tr className="text-left text-slate-500 dark:text-slate-400 border-b border-slate-200 dark:border-slate-800">
+                <th className="py-2 pr-3 font-medium">Date</th><th className="py-2 pr-3 font-medium">Category</th>
+                <th className="py-2 pr-3 font-medium">Payee</th><th className="py-2 pr-3 font-medium">Method</th>
+                <th className="py-2 px-2 font-medium text-right">Amount</th><th className="py-2 pl-2 font-medium text-right">Actions</th>
+              </tr></thead>
+              <tbody>
+                {inRange.map(e => (
+                  <tr key={e.id} className="border-b border-slate-100 dark:border-slate-800/60">
+                    <td className="py-2 pr-3 text-slate-600 dark:text-slate-300 tabular-nums">{e.date}</td>
+                    <td className="py-2 pr-3 text-slate-700 dark:text-slate-200">{categoryLabel(e.category)}{e.recurringId && <Repeat className="w-3 h-3 inline ml-1 text-indigo-400" aria-label="recurring" />}</td>
+                    <td className="py-2 pr-3 text-slate-500 dark:text-slate-400">{e.payee || '—'}</td>
+                    <td className="py-2 pr-3 text-slate-500 dark:text-slate-400">{PAYMENT_METHOD_LABEL[e.paymentMethod]}</td>
+                    <td className="py-2 px-2 text-right tabular-nums font-semibold text-slate-800 dark:text-slate-100">{money(e.amount)}</td>
+                    <td className="py-2 pl-2 text-right">
+                      <button onClick={() => setEditing(e)} className="p-1 text-slate-400 hover:text-indigo-600"><Pencil className="w-3.5 h-3.5" /></button>
+                      <button onClick={() => onDeleteExpense(e)} className="p-1 text-slate-400 hover:text-rose-500"><Trash2 className="w-3.5 h-3.5" /></button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <div className={`${card} p-5`}>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200 flex items-center gap-2"><Repeat className="w-4 h-4 text-indigo-500" /> Recurring templates</h3>
+          <button onClick={() => setAddingRecurring(true)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:text-indigo-600"><Plus className="w-3.5 h-3.5" /> New</button>
+        </div>
+        {recurringExpenses.length === 0 ? (
+          <p className="text-sm text-slate-400 py-2">No recurring expenses set up — rent, subscriptions, etc. can auto-generate here each period.</p>
+        ) : (
+          <div className="divide-y divide-slate-100 dark:divide-slate-800">
+            {recurringExpenses.map(r => (
+              <div key={r.id} className="flex items-center justify-between py-2 gap-2">
+                <span className={`text-sm ${r.active ? 'text-slate-700 dark:text-slate-200' : 'text-slate-400 line-through'}`}>
+                  {categoryLabel(r.category)}{r.payee ? ` · ${r.payee}` : ''} — {money(r.amount)}/{FREQUENCY_LABEL[r.frequency].toLowerCase()}
+                </span>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => onSaveRecurringExpense({ ...r, active: !r.active }, false)} className="text-xs text-slate-500 hover:text-indigo-600">{r.active ? 'Pause' : 'Resume'}</button>
+                  <button onClick={() => onDeleteRecurringExpense(r.id)} className="p-1 text-slate-400 hover:text-rose-500"><Trash2 className="w-3.5 h-3.5" /></button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {editing && (
+        <ExpenseModal
+          categories={categories}
+          initial={editing === 'new' ? undefined : editing}
+          onClose={() => setEditing(null)}
+          onSave={onSaveExpense}
+        />
+      )}
+      {addingRecurring && (
+        <RecurringModal categories={categories} onClose={() => setAddingRecurring(false)} onSave={onSaveRecurringExpense} />
+      )}
     </div>
   );
 };

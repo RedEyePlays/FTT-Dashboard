@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect, lazy, Suspense } from 'react';
 import {
   Wrench, Plus, Search, X, Trash2, Printer, FileText, Receipt, History as HistoryIcon,
-  ArrowLeft, DollarSign, ChevronRight, Building2, ClipboardCheck, PackageCheck, ScrollText, QrCode, BarChart3, Link as LinkIcon, Check, Camera,
+  ArrowLeft, DollarSign, ChevronRight, Building2, ClipboardCheck, PackageCheck, ScrollText, QrCode, BarChart3, Link as LinkIcon, Check, Camera, Star,
 } from 'lucide-react';
 import { ImeiScanner } from './ImeiScanner';
 import { Repair, RepairBatch, Customer, AuditEntry, RepairStatus, RepairType, DeviceType, RepairPart, AppUser, RepairPurchasePaidBy, Note, Role } from '../types';
@@ -54,6 +54,10 @@ interface Props {
   notes?: Note[];                        // workspace notes, for the linked-notes panel
   noteRole?: Role;                       // viewer's role, gates which linked notes show
   onOpenNote?: (noteId: string) => void; // jump to a linked note in the Notes board
+  // Google review request (domain/reviews.ts) — omitted entirely (undefined)
+  // when the owner hasn't configured a review link in Settings, so a shop
+  // that never set one up never even sees the button (App.tsx).
+  onRequestReview?: (r: Repair) => void;
 }
 
 const DEVICE_TYPES: DeviceType[] = ['Phone', 'Tablet', 'Laptop', 'Console', 'Watch', 'Other'];
@@ -106,7 +110,7 @@ const SummaryCard: React.FC<{ icon: React.ReactNode; accent: string; label: stri
 );
 
 export const RepairsView: React.FC<Props> = (props) => {
-  const { repairs, batches, auditLogs, canDelete, userId, onSaveRepair, onDeleteRepair, onSaveBatch, onDeleteBatch, onRecordPayment, onPrintAudit } = props;
+  const { repairs, batches, auditLogs, canDelete, userId, onSaveRepair, onDeleteRepair, onSaveBatch, onDeleteBatch, onRecordPayment, onPrintAudit, onRequestReview } = props;
   type Filter = 'all' | 'active' | 'overdue' | RepairStatus;
   const { users = [], canViewPerformance = false } = props;
   const [tab, setTab] = useState<'tickets' | 'batches' | 'performance'>('tickets');
@@ -447,6 +451,7 @@ export const RepairsView: React.FC<Props> = (props) => {
           onCheckoutViaSale={props.onCheckoutViaSale}
           onDelete={() => { onDeleteRepair(drawer.repair.id); setDrawer(null); }}
           onPrint={(doc) => { printRetailReceipt(drawer.repair, doc, { storeName: getStoreProfile().storeName }); onPrintAudit('repair', drawer.repair.id, doc); }}
+          onRequestReview={onRequestReview}
           onPrintSheet={() => printSheet(drawer.repair)}
           onPrintLabel={() => openLabel(drawer.repair)}
           onPrintEstimate={() => { printRepairEstimate(drawer.repair, { storeName: getStoreProfile().storeName }); onPrintAudit('repair', drawer.repair.id, 'estimate'); }} />
@@ -578,7 +583,11 @@ const RepairDrawer: React.FC<{
   privateBatch: boolean;
   notes?: Note[]; noteRole?: Role; onOpenNote?: (noteId: string) => void;
   onClose: () => void; onSave: (r: Repair) => void; onCheckoutViaSale?: (r: Repair) => void; onDelete: () => void; onPrint: (doc: 'intake' | 'repair' | 'pickup') => void; onPrintSheet: () => void; onPrintLabel: () => void; onPrintEstimate: () => void;
-}> = ({ initial, isNew, canDelete, auditLogs, customers, privateBatch, notes, noteRole, onOpenNote, onClose, onSave, onCheckoutViaSale, onDelete, onPrint, onPrintSheet, onPrintLabel, onPrintEstimate }) => {
+  // Only offered when set (owner/manager, reviews.reviewLink configured — see
+  // App.tsx). Not offered on a warranty claim or cancelled ticket — those are
+  // unhappy paths (domain/reviews.ts).
+  onRequestReview?: (r: Repair) => void;
+}> = ({ initial, isNew, canDelete, auditLogs, customers, privateBatch, notes, noteRole, onOpenNote, onClose, onSave, onCheckoutViaSale, onDelete, onPrint, onPrintSheet, onPrintLabel, onPrintEstimate, onRequestReview }) => {
   const [f, setF] = useState<Repair>(initial);
   const [linkCopied, setLinkCopied] = useState(false);
   const [showImeiScanner, setShowImeiScanner] = useState(false);
@@ -713,6 +722,12 @@ const RepairDrawer: React.FC<{
               {isRetail && <Field label="Warranty (days)"><input type="number" min="0" className={inputCls} value={f.warrantyDays ?? 0} onChange={e => set({ warrantyDays: num(e.target.value) })} /></Field>}
               {isRetail && <Field label="Est. Completion" className="col-span-2"><input type="date" className={inputCls} value={f.estimatedCompletion || ''} onChange={e => set({ estimatedCompletion: e.target.value })} /></Field>}
             </div>
+            {isRetail && (
+              <label className="flex items-start gap-2 text-xs text-slate-600 dark:text-slate-300 mt-3">
+                <input type="checkbox" className="mt-0.5" checked={!!f.isWarrantyClaim} onChange={e => set({ isWarrantyClaim: e.target.checked })} />
+                <span>This is a warranty claim / redo against earlier work — not a happy-path visit; skipped from Google review requests.</span>
+              </label>
+            )}
             {isNew && privateBatch && (
               <div className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-800">
                 <label className="flex items-start gap-2 text-xs text-slate-600 dark:text-slate-300">
@@ -792,6 +807,12 @@ const RepairDrawer: React.FC<{
           {!isTerminal && (
             <button onClick={checkOut} disabled={!canSave || savePending}
               className="flex-1 min-w-[110px] px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white rounded-lg text-sm font-medium flex items-center justify-center gap-1.5"><ClipboardCheck className="w-4 h-4" /> {savePending ? 'Working…' : isRetail && onCheckoutViaSale ? 'Check Out' : 'Mark Complete'}</button>
+          )}
+          {!isNew && isRetail && (f.status === 'picked_up' || f.status === 'completed') && onRequestReview && (
+            <button onClick={() => onRequestReview(f)} title="Request a Google review"
+              className="px-3 py-2 border border-amber-300 dark:border-amber-700 rounded-lg text-amber-600 dark:text-amber-400 hover:border-amber-400 text-sm font-medium flex items-center gap-1.5">
+              <Star className="w-4 h-4" /> Request review
+            </button>
           )}
           {!isNew && (
             <div className="flex items-center gap-1">

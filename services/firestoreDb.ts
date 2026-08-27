@@ -5,6 +5,7 @@ import { db } from './firebase';
 import {
   InventoryItem, Runner, DropOff, Settlement, Customer, SalesTransaction, ActivityEntry, Note, Task,
   AppUser, WorkspaceInvite, AuditEntry, TimeEntry, PayPeriodPaid, PayPeriodApproval, CashReconciliation, StaffNote, ListingPlatform, Repair,
+  Expense, RecurringExpense,
 } from '../types';
 import { collectionFor } from '../domain/inventory';
 import { AppSettings } from '../domain/settings';
@@ -16,6 +17,7 @@ export const COLLECTIONS = [
   'inventory', 'accessories', 'salesTransactions', 'customers',
   'dropOffs', 'runners', 'settlements', 'activityLog', 'auditLogs',
   'repairs', 'repairBatches', 'timeEntries', 'payPeriods', 'payPeriodApprovals', 'cashReconciliations', 'staffNotes',
+  'expenses', 'recurringExpenses',
 ] as const;
 export type CollName = typeof COLLECTIONS[number];
 
@@ -288,6 +290,14 @@ export async function migrateLegacyIfNeeded(uid: string, legacy: {
 // collection — access is enforced by firestore.rules, not by this file.
 export const saveStaffNote = (uid: string, n: StaffNote) => saveItem(uid, 'staffNotes', n);
 export const deleteStaffNote = (uid: string, id: string) => deleteItem(uid, 'staffNotes', id);
+
+// Expense ledger (domain/expenses.ts) — general business expenses, any
+// payment method. Access gated to payroll.manage tier by firestore.rules,
+// same as payPeriods.
+export const saveExpense = (uid: string, e: Expense) => saveItem(uid, 'expenses', e);
+export const deleteExpense = (uid: string, id: string) => deleteItem(uid, 'expenses', id);
+export const saveRecurringExpense = (uid: string, r: RecurringExpense) => saveItem(uid, 'recurringExpenses', r);
+export const deleteRecurringExpense = (uid: string, id: string) => deleteItem(uid, 'recurringExpenses', id);
 
 export const saveTimeEntry = (uid: string, e: TimeEntry) => saveItem(uid, 'timeEntries', e);
 export const deleteTimeEntry = (uid: string, id: string) => deleteItem(uid, 'timeEntries', id);

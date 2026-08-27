@@ -4,6 +4,7 @@ import { doc, getDoc } from 'firebase/firestore';
 import {
   InventoryItem, Note, Task, Runner, DropOff, Settlement, Customer, SalesTransaction,
   ActivityEntry, AppUser, WorkspaceInvite, AuditEntry, Repair, RepairBatch, TimeEntry, PayPeriodPaid, PayPeriodApproval, CashReconciliation, StaffNote,
+  Expense, RecurringExpense,
 } from '../types';
 import { decryptData } from '../services/security';
 import { AppSettings, mergeSettings } from '../domain/settings';
@@ -55,6 +56,8 @@ export function useWorkspaceData() {
   const [payPeriodApprovals, setPayPeriodApprovals] = useState<PayPeriodApproval[]>([]);
   const [cashReconciliations, setCashReconciliations] = useState<CashReconciliation[]>([]);
   const [staffNotes, setStaffNotes] = useState<StaffNote[]>([]);
+  const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [recurringExpenses, setRecurringExpenses] = useState<RecurringExpense[]>([]);
   const [skuCounters, setSkuCounters] = useState<Record<string, number>>({});
   const [activityLog, setActivityLog] = useState<ActivityEntry[]>([]);
   const [lastBackup, setLastBackup] = useState<number | undefined>(undefined);
@@ -246,6 +249,22 @@ export function useWorkspaceData() {
     return subscribeCollection<StaffNote>(workspaceId, 'staffNotes', setStaffNotes, onErr);
   }, [user, appUser, workspaceId, reconnectKey]);
 
+  // Expense ledger (owner/manager only, matches expenses.manage in
+  // services/rbac.ts and firestore.rules) — its own effect, role-gated like
+  // staffNotes, so an employee/technician never even attempts a subscription
+  // firestore.rules would reject anyway.
+  useEffect(() => {
+    if (!user || !appUser || !workspaceId || (appUser.role !== 'owner' && appUser.role !== 'manager')) {
+      setExpenses([]); setRecurringExpenses([]); return;
+    }
+    const onErr = (e: Error) => { console.error('Firestore error (expenses):', e); };
+    const subs = [
+      subscribeCollection<Expense>(workspaceId, 'expenses', setExpenses, onErr),
+      subscribeCollection<RecurringExpense>(workspaceId, 'recurringExpenses', setRecurringExpenses, onErr),
+    ];
+    return () => subs.forEach(u => u());
+  }, [user, appUser, workspaceId, reconnectKey]);
+
   // Retry a failed connection (used by the DB-error screen's Retry button).
   const reconnect = () => { setDbError(null); setDbLoading(true); setReconnectKey(k => k + 1); };
 
@@ -265,6 +284,7 @@ export function useWorkspaceData() {
     devices, accessories, data, notes, setNotes, tasks, setTasks,
     runners, dropOffs, settlements, customers, salesTransactions,
     repairs, repairBatches, timeEntries, payPeriods, payPeriodApprovals, cashReconciliations, staffNotes,
+    expenses, recurringExpenses,
     skuCounters, setSkuCounters, activityLog, lastBackup, settings,
     // connection status
     dbLoading, dbError, setDbError, reconnect,

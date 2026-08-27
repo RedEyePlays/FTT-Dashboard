@@ -173,4 +173,12 @@ describe('can()', () => {
     expect(can('technician', 'staffNotes.manage')).toBe(false);
     expect(can(undefined, 'staffNotes.manage')).toBe(false);
   });
+
+  it('the expense ledger (expenses.manage) is owner + manager only — mirrors payroll.manage, no employee/technician override', () => {
+    expect(can('owner', 'expenses.manage')).toBe(true);
+    expect(can('manager', 'expenses.manage')).toBe(true);
+    expect(can('employee', 'expenses.manage')).toBe(false);
+    expect(can('technician', 'expenses.manage')).toBe(false);
+    expect(can(undefined, 'expenses.manage')).toBe(false);
+  });
 });

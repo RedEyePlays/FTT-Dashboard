@@ -36,7 +36,7 @@ const UsersView = lazy(() => import('./components/UsersView').then(m => ({ defau
 const AuditLogView = lazy(() => import('./components/AuditLogView').then(m => ({ default: m.AuditLogView })));
 const TimeClockView = lazy(() => import('./components/TimeClockView').then(m => ({ default: m.TimeClockView })));
 const CloseOutView = lazy(() => import('./components/CloseOutView').then(m => ({ default: m.CloseOutView })));
-import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, Runner, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission, Repair, RepairBatch, TimeEntry, PayPeriodPaid, PayPeriodApproval, BreakReason, SalesTransaction, CashReconciliation, StaffNote, BalancePayment } from './types';
+import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, Runner, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission, Repair, RepairBatch, TimeEntry, PayPeriodPaid, PayPeriodApproval, BreakReason, SalesTransaction, CashReconciliation, StaffNote, BalancePayment, Expense, RecurringExpense } from './types';
 import { skuPrefix, nextSku } from './services/sku';
 import { REPAIR_PREFIX, BATCH_PREFIX, applyTechEdit, techUpdateAuditPlan, repairSalePrefill, completeRepair, completeRepairSale, dateToEpochMs } from './domain/repairs';
 import { MergePlan } from './domain/customers';
@@ -55,6 +55,7 @@ import {
   logAudit, exportWorkspaceData, recordBackup, saveSettings,
   saveTimeEntry, savePayPeriodPaid, deletePayPeriodPaid, savePayPeriodApproval, deletePayPeriodApproval,
   saveStaffNote, deleteStaffNote, commitAutoInventory, settleRunner,
+  saveExpense, deleteExpense, saveRecurringExpense, deleteRecurringExpense,
 } from './services/firestoreDb';
 import { decideAutoInventory, autoInventoryPurchaseDrawerEffect, AutoInventoryNotice } from './domain/autoInventory';
 import { buildQuickPurchaseItem, quickPurchaseDrawerEffect } from './domain/quickPurchase';
@@ -68,6 +69,9 @@ import { collectionFor, stockChange, applyDirectSale } from './domain/inventory'
 import { canVoidSale, canReturnSale, returnRefund, saleAccessoryRestock, saleDeviceListedPlatforms, collectedOnSale, cashCollectedOnSale, saleRefundDrawerEffect } from './domain/pos';
 import { applyBalancePayment, cashPortionOfPayment } from './domain/layaway';
 import { expectedCashForDate, expectedEndingCash, sumDrawerEntries, cashDrawerSummary, openDrawerPatch, ReconciliationInput } from './domain/reports';
+import { duePeriodsFor, buildRecurringExpense } from './domain/expenses';
+import { isEligibleForReviewRequest, ReviewEligibility, reviewRequestsSentOn, underDailyReviewRequestCap } from './domain/reviews';
+const RequestReviewModal = lazy(() => import('./components/RequestReviewModal').then(m => ({ default: m.RequestReviewModal })));
 import type { CashMovementKind } from './components/LogCashMovementModal';
 const OpenDrawerModal = lazy(() => import('./components/OpenDrawerModal').then(m => ({ default: m.OpenDrawerModal })));
 const CloseDrawerModal = lazy(() => import('./components/CloseDrawerModal').then(m => ({ default: m.CloseDrawerModal })));
@@ -117,7 +121,7 @@ const App: React.FC = () => {
     appUser, roleLoading, workspaceId, workspaceUsers, invites, auditLogs, loadMoreAuditLogs, auditHasMore,
     data, notes, setNotes, tasks, setTasks,
     runners, dropOffs, settlements, salesTransactions, customers, repairs, repairBatches,
-    timeEntries, payPeriods, payPeriodApprovals, cashReconciliations, staffNotes,
+    timeEntries, payPeriods, payPeriodApprovals, cashReconciliations, staffNotes, expenses, recurringExpenses,
     skuCounters, setSkuCounters, activityLog, lastBackup, settings,
     dbLoading, dbError, reconnect, enableExtendedData, enableCashData,
     runnersRef, dropOffsRef, settlementsRef, customersRef, salesTransactionsRef,
@@ -711,6 +715,13 @@ const App: React.FC = () => {
       saveItem(uid, collectionFor(withSku), withSku);
       logActivity(`${withSku.sku || withSku.item} added from custom sale`);
     });
+
+    // Auto-prompt (off by default) — only for an actually-completed sale
+    // (never a layaway deposit, which isn't "done" yet) with a real
+    // identified customer (never a walk-in with no record to update).
+    if (!isLayaway && payload.customer?.id) {
+      autoPromptReviewRequest(payload.customer, {});
+    }
   };
 
   // Collect a payment against an open layaway's remaining balance (item 1 of
@@ -974,6 +985,135 @@ const App: React.FC = () => {
     const label = kind === 'cashIn' ? 'in' : kind === 'cashOut' ? 'paid out' : 'withdrawal';
     logActivity(`Cash ${label} $${amount.toFixed(2)}${note ? ` — ${note}` : ''}`);
     audit('cash.log', 'cashReconciliation', date, undefined, { kind, amount });
+
+    // "Cash out" is a general same-till payout (rent, supplies, paying a
+    // runner COD, misc) — the same concept as the new expense ledger. Only
+    // back it with an Expense record when the actor actually holds
+    // expenses.manage (owner/manager): cash.log itself is open to employees
+    // too, but firestore.rules gates the expenses collection to
+    // expenses.manage, so an employee-written Expense would just be
+    // rejected. An employee's "Cash out" therefore stays a raw drawer entry
+    // only, exactly as it behaved before this PR — not part of the unified
+    // ledger's P&L line, a stated, deliberate limitation (see the PR
+    // description), not a bug.
+    if (kind === 'cashOut' && allow('expenses.manage')) {
+      const rec: Expense = {
+        id: newId(), date, amount, category: 'other', paymentMethod: 'cash', payee: note,
+        enteredBy: appUser.id, enteredByEmail: appUser.email, createdAt: Date.now(), cashDrawerLinked: true,
+      };
+      saveExpense(uid, rec).catch(e => console.error('Expense save failed', e));
+      audit('expense.create', 'expense', rec.id, undefined, { amount, category: 'other', paymentMethod: 'cash', viaCashLog: true });
+    }
+  };
+
+  // Owner/manager expense ledger (expenses.manage — mirrors payroll.manage).
+  // A cash-paid expense ALSO appends a matching drawer cash-out entry via the
+  // SAME commitDrawerRecord helper every other cash effect in this file uses
+  // — never a parallel write path — so the till and the ledger can't drift.
+  // Editing an expense's amount/paymentMethod does NOT retroactively touch a
+  // previously-applied drawer entry (that would silently rewrite a day that
+  // may already be reconciled/closed); cashDrawerLinked simply records that
+  // the effect was applied once, at creation.
+  const handleSaveExpense = (expense: Expense, isNew: boolean) => {
+    if (!uid || !appUser || !allow('expenses.manage')) return;
+    const before = isNew ? undefined : expenses.find(e => e.id === expense.id);
+    const next: Expense = isNew
+      ? { ...expense, enteredBy: appUser.id, enteredByEmail: appUser.email, createdAt: Date.now() }
+      : expense;
+    if (isNew && next.paymentMethod === 'cash') {
+      const existing = cashReconciliations.find(r => r.date === next.date);
+      const entry = { id: newId(), amount: next.amount, note: `${next.category} — ${next.payee || next.note || 'expense'}` };
+      commitDrawerRecord(next.date, { cashOut: [...(existing?.cashOut || []), entry] });
+      next.cashDrawerLinked = true;
+    }
+    saveExpense(uid, next).catch(e => console.error('Expense save failed', e));
+    audit(isNew ? 'expense.create' : 'expense.update', 'expense', next.id, before, next);
+  };
+
+  const handleDeleteExpense = (expense: Expense) => {
+    if (!uid || !allow('expenses.manage')) return;
+    deleteExpense(uid, expense.id).catch(e => console.error('Expense delete failed', e));
+    // Deleting an expense never reaches back to reverse its drawer effect
+    // (same reasoning as edits above — the drawer entry is a historical
+    // record of cash that genuinely left the till that day); an owner who
+    // needs to correct that too uses the existing cash-drawer correction
+    // path, same as any other drawer entry.
+    audit('expense.delete', 'expense', expense.id, expense, undefined);
+  };
+
+  const handleSaveRecurringExpense = (r: RecurringExpense, isNew: boolean) => {
+    if (!uid || !appUser || !allow('expenses.manage')) return;
+    const next = isNew ? { ...r, createdBy: appUser.id, createdByEmail: appUser.email, createdAt: Date.now() } : r;
+    saveRecurringExpense(uid, next).catch(e => console.error('Recurring expense save failed', e));
+    audit(isNew ? 'expense.recurring_create' : 'expense.recurring_update', 'recurringExpense', next.id, undefined, next);
+  };
+
+  const handleDeleteRecurringExpense = (id: string) => {
+    if (!uid || !allow('expenses.manage')) return;
+    deleteRecurringExpense(uid, id).catch(e => console.error('Recurring expense delete failed', e));
+    audit('expense.recurring_delete', 'recurringExpense', id);
+  };
+
+  // Turns every currently-due period (domain/expenses.ts's duePeriodsFor)
+  // into a real Expense — same drawer-linking as handleSaveExpense for cash
+  // ones — and records the period as generated on the template so it's
+  // never offered again. Skipping is the same idea without creating an
+  // Expense: the period still gets recorded so it stops being "due".
+  const handleGenerateRecurringExpense = (r: RecurringExpense, period: { key: string; date: string }) => {
+    if (!uid || !appUser || !allow('expenses.manage')) return;
+    const draft = buildRecurringExpense(r, period, { id: appUser.id, email: appUser.email }, Date.now());
+    const expense: Expense = { ...draft, id: newId() };
+    if (expense.paymentMethod === 'cash') {
+      const existing = cashReconciliations.find(rec => rec.date === expense.date);
+      const entry = { id: newId(), amount: expense.amount, note: `${expense.category} — ${expense.payee || 'recurring expense'}` };
+      commitDrawerRecord(expense.date, { cashOut: [...(existing?.cashOut || []), entry] });
+      expense.cashDrawerLinked = true;
+    }
+    saveExpense(uid, expense).catch(e => console.error('Expense save failed', e));
+    audit('expense.create', 'expense', expense.id, undefined, { ...expense, recurring: true });
+    saveRecurringExpense(uid, { ...r, generatedPeriods: [...(r.generatedPeriods || []), period.key] })
+      .catch(e => console.error('Recurring expense update failed', e));
+  };
+
+  const handleSkipRecurringPeriod = (r: RecurringExpense, periodKey: string) => {
+    if (!uid || !allow('expenses.manage')) return;
+    saveRecurringExpense(uid, { ...r, skippedPeriods: [...(r.skippedPeriods || []), periodKey] })
+      .catch(e => console.error('Recurring expense update failed', e));
+    audit('expense.recurring_skip', 'recurringExpense', r.id, undefined, { periodKey });
+  };
+
+  // --- Google review requests (domain/reviews.ts) ---
+  // Manual open: always shows the modal, which itself displays an
+  // ineligibility reason if the eligibility check fails — useful feedback
+  // rather than a button that mysteriously does nothing.
+  const [reviewRequest, setReviewRequest] = useState<{ customer: Customer; eligibility: ReviewEligibility } | null>(null);
+  const openReviewRequest = (customer: Customer | undefined, ctx: { isWarrantyClaim?: boolean; isCancelled?: boolean; isReversed?: boolean }) => {
+    if (!customer || !settings.reviews.reviewLink) return;
+    const eligibility = isEligibleForReviewRequest({ customer, now: Date.now(), repeatWindowDays: settings.reviews.repeatWindowDays, ...ctx });
+    setReviewRequest({ customer, eligibility });
+  };
+  // Automatic prompt at pickup/checkout completion — settings.reviews.
+  // autoPromptOnComplete is OFF by default and must be explicitly turned on
+  // by the owner. Unlike the manual open above, this NEVER shows the modal
+  // for an ineligible customer — an automatic popup explaining "we didn't
+  // ask because X" would itself be an unwanted interruption; it just stays
+  // silent. Also respects the daily send-rate cap.
+  const autoPromptReviewRequest = (customer: Customer | undefined, ctx: { isWarrantyClaim?: boolean; isCancelled?: boolean; isReversed?: boolean }) => {
+    if (!settings.reviews.autoPromptOnComplete || !customer || !settings.reviews.reviewLink) return;
+    const eligibility = isEligibleForReviewRequest({ customer, now: Date.now(), repeatWindowDays: settings.reviews.repeatWindowDays, ...ctx });
+    if (!eligibility.eligible) return;
+    const sentToday = reviewRequestsSentOn(customers, todayISO());
+    if (!underDailyReviewRequestCap(sentToday)) return;
+    setReviewRequest({ customer, eligibility });
+  };
+  // Records the outcome on the customer record (never verifies/scrapes
+  // whether a review was actually left) and audits it.
+  const handleReviewRequestSent = (customer: Customer, channel: 'sms' | 'whatsapp' | 'email' | 'manual') => {
+    if (!uid) return;
+    saveItem(uid, 'customers', { ...customer, lastReviewRequestedAt: Date.now(), lastReviewRequestChannel: channel })
+      .catch(e => console.error('Customer save failed', e));
+    audit('review.request_sent', 'customer', customer.id, undefined, { channel });
+    setReviewRequest(null);
   };
 
   // Today's live drawer (shared math) — drives the POS running total and the
@@ -1495,6 +1635,15 @@ const App: React.FC = () => {
       }
       if (prev && prev.repairPrice !== next.repairPrice) audit('repair.price_change', 'repair', next.id, { repairPrice: prev.repairPrice }, { repairPrice: next.repairPrice });
       if (prev && (prev.customerName !== next.customerName || prev.customerPhone !== next.customerPhone)) audit('repair.customer_update', 'repair', next.id);
+      // Auto-prompt (off by default, settings.reviews.autoPromptOnComplete) —
+      // only on the actual transition INTO a terminal pickup state, never on
+      // every subsequent edit to an already-completed ticket.
+      if (prev.status !== next.status && (next.status === 'completed' || next.status === 'picked_up') && next.type === 'retail') {
+        autoPromptReviewRequest(
+          next.customerId ? customers.find(c => c.id === next.customerId) : undefined,
+          { isWarrantyClaim: next.isWarrantyClaim },
+        );
+      }
     }
     return notice;
   };
@@ -1808,7 +1957,12 @@ const App: React.FC = () => {
           {view === 'reports' && (
             allow('cash.reconcile')
               ? <ReportsView salesTransactions={salesTransactions} cashReconciliations={cashReconciliations} inventory={data} payPeriods={payPeriods} settlements={settlements} runners={runners} onSaveReconciliation={handleSaveReconciliation} defaultOpeningFloat={settings.operations.openingFloatDefault}
-                  repairs={repairs} customers={customers} auditLogs={auditLogs} activity={activityLog} timeEntries={timeEntries} users={workspaceUsers} />
+                  repairs={repairs} customers={customers} auditLogs={auditLogs} activity={activityLog} timeEntries={timeEntries} users={workspaceUsers}
+                  expenses={expenses} expenseCategories={settings.expenses.categories}
+                  canManageExpenses={allow('expenses.manage')} recurringExpenses={recurringExpenses}
+                  onSaveExpense={handleSaveExpense} onDeleteExpense={handleDeleteExpense}
+                  onSaveRecurringExpense={handleSaveRecurringExpense} onDeleteRecurringExpense={handleDeleteRecurringExpense}
+                  onGenerateRecurringExpense={handleGenerateRecurringExpense} onSkipRecurringPeriod={handleSkipRecurringPeriod} />
               : <div className="text-center text-slate-400 py-20">Reports are restricted to owners and managers.</div>
           )}
           {view === 'customers' && allow('reports.view') && (
@@ -1836,6 +1990,7 @@ const App: React.FC = () => {
               notes={notes}
               noteRole={appUser?.role}
               onOpenNote={openNote}
+              onRequestReview={settings.reviews.reviewLink ? (c: Customer) => openReviewRequest(c, {}) : undefined}
             />
           )}
           {view === 'repairs' && allow('repairs.manage') && (
@@ -1864,6 +2019,10 @@ const App: React.FC = () => {
               notes={notes}
               noteRole={appUser?.role}
               onOpenNote={openNote}
+              onRequestReview={settings.reviews.reviewLink ? (r: Repair) => openReviewRequest(
+                r.customerId ? customers.find(c => c.id === r.customerId) : undefined,
+                { isWarrantyClaim: r.isWarrantyClaim, isCancelled: r.status === 'cancelled' },
+              ) : undefined}
             />
           )}
           {(view === 'entry' || view === 'edit') && (
@@ -2070,6 +2229,16 @@ const App: React.FC = () => {
 
       {/* Calculator Overlay */}
       {showCalculator && <Suspense fallback={null}><CalculatorTool onClose={() => setShowCalculator(false)} /></Suspense>}
+
+      {reviewRequest && (
+        <Suspense fallback={null}>
+          <RequestReviewModal
+            customer={reviewRequest.customer} eligibility={reviewRequest.eligibility}
+            shopName={settings.general.storeName} reviewLink={settings.reviews.reviewLink} template={settings.reviews.template}
+            onClose={() => setReviewRequest(null)} onSend={handleReviewRequestSent}
+          />
+        </Suspense>
+      )}
 
       {cashLogKind && allow('cash.log') && (
         <Suspense fallback={null}>

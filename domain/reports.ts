@@ -1,6 +1,7 @@
-import { SalesTransaction, InventoryItem, PayPeriodPaid, CashReconciliation, CashDrawerEntry, Settlement, Runner } from '../types';
+import { SalesTransaction, InventoryItem, PayPeriodPaid, CashReconciliation, CashDrawerEntry, Settlement, Runner, Expense } from '../types';
 import { isReversed } from './pos';
 import { kindOf } from './inventory';
+import { ExpenseCategory, plExpenseTotal, expenseTotalsByCategory, CategoryTotal } from './expenses';
 
 // Back-office filing reports — daily cash reconciliation and sales-tax
 // remittance — derived purely from salesTransactions. Repairs have no separate
@@ -378,6 +379,16 @@ export interface ProfitLossInput {
   payPeriods: PayPeriodPaid[];       // paid pay-period snapshots (gross pay)
   cashReconciliations: CashReconciliation[];
   settlements: Settlement[];
+  // The general expense ledger (domain/expenses.ts) — every business expense
+  // regardless of payment method. This REPLACES the old cashReconciliations-
+  // only cashExpenses figure: a cash-paid expense entered through the ledger
+  // also appends a matching cashOut entry to that day's drawer (App.tsx's
+  // handleSaveExpense), so cashReconciliations.cashOut is no longer summed
+  // independently here — doing so would double-count it. See the PR
+  // description for the full double-counting analysis (cash expenses,
+  // payroll, runner commissions).
+  expenses: Expense[];
+  expenseCategories: ExpenseCategory[];
 }
 
 export interface ProfitLoss {
@@ -387,14 +398,15 @@ export interface ProfitLoss {
   costOfGoods: number;       // device purchaseCost + repairCost of goods sold
   grossProfit: number;       // revenue − costOfGoods
   payroll: number;           // gross pay of pay periods paid in range
-  cashExpenses: number;      // cash-out entries logged on the cash drawer
+  expenses: number;          // expense ledger total in range, any payment method, excl. Wages-flagged categories
+  expensesByCategory: CategoryTotal[];
   runnerCommissions: number; // settlement fees (commission only — see note in PR)
-  netProfit: number;         // grossProfit − payroll − cashExpenses − runnerCommissions
+  netProfit: number;         // grossProfit − payroll − expenses − runnerCommissions
 }
 
 export const profitAndLoss = (input: ProfitLossInput, start: string, end: string): ProfitLoss => {
   const [lo, hi] = order(start, end);
-  const { transactions, inventory, payPeriods, cashReconciliations, settlements } = input;
+  const { transactions, inventory, payPeriods, settlements, expenses, expenseCategories } = input;
 
   // Every inventory id referenced by any transaction line, so a device captured
   // in a POS sale isn't also counted as a standalone sold device (mirrors analytics).
@@ -420,26 +432,33 @@ export const profitAndLoss = (input: ProfitLossInput, start: string, end: string
     .filter(p => inDateRange(p.periodStart, lo, hi))
     .reduce((s, p) => s + (p.gross || 0), 0));
 
-  const cashExpenses = round2(cashReconciliations
-    .filter(r => inDateRange(r.date, lo, hi))
-    .reduce((s, r) => s + sumDrawerEntries(r.cashOut), 0));
+  const expensesTotal = plExpenseTotal(expenses, expenseCategories, lo, hi);
+  const expensesByCategory = expenseTotalsByCategory(expenses, expenseCategories, lo, hi);
 
   const runnerCommissions = round2(settlements
     .filter(s => inDateRange(s.date, lo, hi))
     .reduce((s, x) => s + (x.totalFees || 0), 0));
 
   const grossProfit = round2(revenue - costOfGoods);
-  const netProfit = round2(grossProfit - payroll - cashExpenses - runnerCommissions);
-  return { start: lo, end: hi, revenue, costOfGoods, grossProfit, payroll, cashExpenses, runnerCommissions, netProfit };
+  const netProfit = round2(grossProfit - payroll - expensesTotal - runnerCommissions);
+  return {
+    start: lo, end: hi, revenue, costOfGoods, grossProfit, payroll,
+    expenses: expensesTotal, expensesByCategory, runnerCommissions, netProfit,
+  };
 };
 
-/** Flatten a P&L to labelled CSV rows. */
+/** Flatten a P&L to labelled CSV rows — one row per expense category between
+ * gross profit and net profit, so the accountant export shows the same
+ * gross profit → expenses → net profit walk the report screen does. */
 export const profitLossCsvRows = (pl: ProfitLoss): Record<string, string | number>[] => [
   { Line: 'Revenue', Amount: pl.revenue.toFixed(2) },
   { Line: 'Cost of goods sold', Amount: (-pl.costOfGoods).toFixed(2) },
   { Line: 'Gross profit', Amount: pl.grossProfit.toFixed(2) },
   { Line: 'Payroll', Amount: (-pl.payroll).toFixed(2) },
-  { Line: 'Cash expenses', Amount: (-pl.cashExpenses).toFixed(2) },
+  ...pl.expensesByCategory.map(c => ({
+    Line: `Expense: ${c.label}${c.excludedFromPL ? ' (informational — not in net profit)' : ''}`,
+    Amount: (-c.total).toFixed(2),
+  })),
   { Line: 'Runner commissions', Amount: (-pl.runnerCommissions).toFixed(2) },
   { Line: 'Net profit', Amount: pl.netProfit.toFixed(2) },
 ];
@@ -452,7 +471,8 @@ export interface YearEndSummary {
   costOfGoods: number;
   grossProfit: number;
   payrollPaid: number;
-  cashExpenses: number;
+  expenses: number;
+  expensesByCategory: CategoryTotal[];
   runnerCommissions: number;
   netProfit: number;
   salesTaxCollected: number;
@@ -469,7 +489,8 @@ export const yearEndSummary = (input: ProfitLossInput, year: number): YearEndSum
     costOfGoods: pl.costOfGoods,
     grossProfit: pl.grossProfit,
     payrollPaid: pl.payroll,
-    cashExpenses: pl.cashExpenses,
+    expenses: pl.expenses,
+    expensesByCategory: pl.expensesByCategory,
     runnerCommissions: pl.runnerCommissions,
     netProfit: pl.netProfit,
     salesTaxCollected: tax.totalTaxCollected,
@@ -483,7 +504,7 @@ export const yearEndCsvRows = (s: YearEndSummary): Record<string, string | numbe
   { Metric: 'Cost of goods sold', Value: s.costOfGoods.toFixed(2) },
   { Metric: 'Gross profit', Value: s.grossProfit.toFixed(2) },
   { Metric: 'Payroll paid', Value: s.payrollPaid.toFixed(2) },
-  { Metric: 'Cash expenses', Value: s.cashExpenses.toFixed(2) },
+  ...s.expensesByCategory.map(c => ({ Metric: `Expense: ${c.label}${c.excludedFromPL ? ' (informational)' : ''}`, Value: c.total.toFixed(2) })),
   { Metric: 'Runner commissions', Value: s.runnerCommissions.toFixed(2) },
   { Metric: 'Net profit', Value: s.netProfit.toFixed(2) },
   { Metric: 'Sales tax collected', Value: s.salesTaxCollected.toFixed(2) },
