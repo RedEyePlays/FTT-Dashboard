@@ -3,11 +3,12 @@ import {
   workedMs, workedHours, totalBreakMs, breakMs, shiftEnd,
   isClockedIn, isOnBreak, openEntryFor,
   msToHours, HOUR_MS, grossPay, round2,
-  payPeriodFor, recentPayPeriods, periodEndInclusive, PAY_PERIOD_DAYS,
+  payPeriodFor, recentPayPeriods, periodEndInclusive, PAY_PERIOD_DAYS, PAY_CYCLE_DAYS,
   dayRange, weekRange, hoursInRange, periodPayFor, paidKey, entriesOnDate, toISODate,
   isMissedClockOut, missedClockOuts, isValidClockOutCorrection, correctClockOut,
+  isCorrectedEntry, payrollFlagsFor, payrollDue,
 } from './timeclock';
-import { TimeEntry, TimeBreak } from '../types';
+import { TimeEntry, TimeBreak, AppUser, PayPeriodPaid } from '../types';
 
 // Build timestamps with the LOCAL Date constructor so they line up with the
 // local-time helpers (startOfDay, payPeriodFor, …) regardless of the CI timezone.
@@ -221,6 +222,41 @@ describe('pay periods', () => {
     expect(periods[2].end).toBe(periods[1].start);
     expect(periods[1].index).toBe(periods[0].index - 1);
   });
+
+  it('a configurable weekly cycle produces correct 7-day boundaries, distinct from the biweekly default', () => {
+    const ms = at(2024, 5, 10, 12);
+    const weekly = payPeriodFor(ms, PAY_CYCLE_DAYS.weekly);
+    const biweekly = payPeriodFor(ms, PAY_CYCLE_DAYS.biweekly);
+    expect(Math.round((weekly.end - weekly.start) / 86_400_000)).toBe(7);
+    expect(Math.round((biweekly.end - biweekly.start) / 86_400_000)).toBe(14);
+    // Same anchor, so the weekly period nests inside (or aligns with) the
+    // wider biweekly one — never contradicts it.
+    expect(weekly.start).toBeGreaterThanOrEqual(biweekly.start);
+    expect(weekly.end).toBeLessThanOrEqual(biweekly.end);
+  });
+
+  it('an anchor shifted by exactly one full cycle produces an identical period grid', () => {
+    const ms = at(2024, 5, 10, 12);
+    const defaultAnchor = payPeriodFor(ms, PAY_PERIOD_DAYS, '2024-01-01');
+    const shiftedAnchor = payPeriodFor(ms, PAY_PERIOD_DAYS, '2024-01-15'); // +14 days = one full cycle later
+    expect(shiftedAnchor.start).toBe(defaultAnchor.start);
+    expect(shiftedAnchor.end).toBe(defaultAnchor.end);
+  });
+
+  it('a genuinely different anchor (half a cycle off) produces different, non-overlapping boundaries than the default', () => {
+    const ms = at(2024, 5, 10, 12);
+    const defaultAnchor = payPeriodFor(ms, PAY_PERIOD_DAYS, '2024-01-01');
+    const offsetAnchor = payPeriodFor(ms, PAY_PERIOD_DAYS, '2024-01-08'); // +7 days = half a biweekly cycle
+    expect(offsetAnchor.start).not.toBe(defaultAnchor.start);
+  });
+
+  it('recentPayPeriods honors a configured non-default cycle', () => {
+    const now = at(2024, 5, 20, 12);
+    const periods = recentPayPeriods(now, 3, PAY_CYCLE_DAYS.weekly);
+    expect(periods).toHaveLength(3);
+    expect(Math.round((periods[0].end - periods[0].start) / 86_400_000)).toBe(7);
+    expect(periods[1].end).toBe(periods[0].start);
+  });
 });
 
 describe('periodPayFor', () => {
@@ -252,6 +288,122 @@ describe('paidKey', () => {
     expect(paidKey('u1', '2024-06-10')).toBe('u1__2024-06-10');
     expect(paidKey('u1', '2024-06-10')).toBe(paidKey('u1', '2024-06-10'));
     expect(paidKey('u2', '2024-06-10')).not.toBe(paidKey('u1', '2024-06-10'));
+  });
+});
+
+describe('isCorrectedEntry', () => {
+  it('is true only once a manager correction has been applied', () => {
+    const e = entry({ clockIn: at(2024, 5, 10, 9) });
+    expect(isCorrectedEntry(e)).toBe(false);
+    const corrected = correctClockOut(e, at(2024, 5, 10, 17), 'mgr-uid', at(2024, 5, 11, 0));
+    expect(isCorrectedEntry(corrected)).toBe(true);
+  });
+});
+
+const user = (p: Partial<AppUser> & { id: string }): AppUser => ({ email: `${p.id}@shop.test`, role: 'employee', workspaceId: 'ws', ...p });
+
+describe('payrollFlagsFor', () => {
+  it('flags a still-open shift within the period as a missed clock-out', () => {
+    const period = payPeriodFor(at(2024, 5, 10, 12));
+    const openShift = entry({ id: 'open1', userId: 'u1', clockIn: at(2024, 5, 11, 9) }); // no clockOut
+    const now = at(2024, 5, 15, 0); // well after the shift's own day
+    const flags = payrollFlagsFor([openShift], [user({ id: 'u1', hourlyRate: 20 })], period, now);
+    expect(flags.missedClockOuts.map(e => e.id)).toEqual(['open1']);
+  });
+
+  it('flags a manager-corrected entry within the period', () => {
+    const period = payPeriodFor(at(2024, 5, 10, 12));
+    const corrected = correctClockOut(
+      entry({ id: 'c1', userId: 'u1', clockIn: at(2024, 5, 11, 9) }),
+      at(2024, 5, 11, 17), 'mgr-uid', at(2024, 5, 11, 18),
+    );
+    const flags = payrollFlagsFor([corrected], [user({ id: 'u1', hourlyRate: 20 })], period, at(2024, 5, 15, 0));
+    expect(flags.correctedEntries.map(e => e.id)).toEqual(['c1']);
+  });
+
+  it('flags an active user with hours in the period but no hourly rate set — never silently $0', () => {
+    const period = payPeriodFor(at(2024, 5, 10, 12));
+    const worked = entry({ id: 'w1', userId: 'u1', clockIn: at(2024, 5, 11, 9), clockOut: at(2024, 5, 11, 17) });
+    const flags = payrollFlagsFor([worked], [user({ id: 'u1' /* no hourlyRate */ })], period, at(2024, 5, 15, 0));
+    expect(flags.noRateUsers.map(u => u.id)).toEqual(['u1']);
+  });
+
+  it('does NOT flag a user with a rate set, or one with zero hours in the period', () => {
+    const period = payPeriodFor(at(2024, 5, 10, 12));
+    const worked = entry({ id: 'w1', userId: 'u1', clockIn: at(2024, 5, 11, 9), clockOut: at(2024, 5, 11, 17) });
+    const flags = payrollFlagsFor(
+      [worked],
+      [user({ id: 'u1', hourlyRate: 20 }), user({ id: 'u2' /* no rate, but no hours either */ })],
+      period, at(2024, 5, 15, 0),
+    );
+    expect(flags.noRateUsers).toEqual([]);
+  });
+});
+
+describe('payrollDue', () => {
+  it('flags the most recently ENDED period when a worked user has no PayPeriodPaid record yet', () => {
+    const now = at(2024, 5, 20, 12); // mid-current-period
+    const current = payPeriodFor(now);
+    const lastEnded = payPeriodFor(current.start - 1);
+    const worked = entry({ id: 'w1', userId: 'u1', clockIn: lastEnded.start + HOUR_MS, clockOut: lastEnded.start + 9 * HOUR_MS });
+    const due = payrollDue([worked], [user({ id: 'u1', hourlyRate: 20 })], [], now);
+    expect(due).not.toBeNull();
+    expect(due!.period.start).toBe(lastEnded.start);
+    expect(due!.employeeCount).toBe(1);
+    expect(due!.totalGross).toBeCloseTo(8 * 20, 5);
+  });
+
+  it('is null once every worked user in that period is already marked paid', () => {
+    const now = at(2024, 5, 20, 12);
+    const current = payPeriodFor(now);
+    const lastEnded = payPeriodFor(current.start - 1);
+    const worked = entry({ id: 'w1', userId: 'u1', clockIn: lastEnded.start + HOUR_MS, clockOut: lastEnded.start + 9 * HOUR_MS });
+    const paidRecord: PayPeriodPaid = {
+      id: paidKey('u1', toISODate(lastEnded.start)), userId: 'u1',
+      periodStart: toISODate(lastEnded.start), periodEnd: toISODate(periodEndInclusive(lastEnded)),
+      markedBy: 'owner-uid', markedAt: now, hours: 8, gross: 160, rate: 20,
+    };
+    const due = payrollDue([worked], [user({ id: 'u1', hourlyRate: 20 })], [paidRecord], now);
+    expect(due).toBeNull();
+  });
+
+  it('is null when nobody worked in the last-ended period', () => {
+    const now = at(2024, 5, 20, 12);
+    const due = payrollDue([], [user({ id: 'u1', hourlyRate: 20 })], [], now);
+    expect(due).toBeNull();
+  });
+
+  it('ignores a disabled user even if they have unpaid hours', () => {
+    const now = at(2024, 5, 20, 12);
+    const current = payPeriodFor(now);
+    const lastEnded = payPeriodFor(current.start - 1);
+    const worked = entry({ id: 'w1', userId: 'u1', clockIn: lastEnded.start + HOUR_MS, clockOut: lastEnded.start + 9 * HOUR_MS });
+    const due = payrollDue([worked], [user({ id: 'u1', hourlyRate: 20, disabled: true })], [], now);
+    expect(due).toBeNull();
+  });
+});
+
+describe('historical paid periods after a schedule change', () => {
+  it('an already-paid period keeps its own frozen dates/snapshot regardless of a later cycle/anchor change', () => {
+    // The period the record was paid under (old biweekly schedule).
+    const oldPeriod = payPeriodFor(at(2024, 5, 10, 12), PAY_PERIOD_DAYS, '2024-01-01');
+    const paidRecord: PayPeriodPaid = {
+      id: paidKey('u1', toISODate(oldPeriod.start)), userId: 'u1',
+      periodStart: toISODate(oldPeriod.start), periodEnd: toISODate(periodEndInclusive(oldPeriod)),
+      markedBy: 'owner-uid', markedAt: at(2024, 5, 25, 0), hours: 40, gross: 800, rate: 20,
+    };
+    // The owner now switches to a weekly schedule with a different anchor —
+    // recomputing "the period containing that same date" under the NEW
+    // schedule yields different boundaries...
+    const recomputedUnderNewSchedule = payPeriodFor(at(2024, 5, 10, 12), PAY_CYCLE_DAYS.weekly, '2024-02-01');
+    expect(recomputedUnderNewSchedule.start).not.toBe(oldPeriod.start);
+    // ...but the stored PayPeriodPaid record is a frozen snapshot keyed by
+    // its OWN periodStart — never recomputed, so it's still found by its
+    // original key and still reports its original numbers, unaffected by
+    // the schedule change.
+    expect(paidRecord.id).toBe(paidKey('u1', toISODate(oldPeriod.start)));
+    expect(paidRecord.hours).toBe(40);
+    expect(paidRecord.gross).toBe(800);
   });
 });
 

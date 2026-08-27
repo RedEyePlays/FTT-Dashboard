@@ -35,6 +35,27 @@ service cloud.firestore {
     // for cashReconciliations/salesTransactions/dropOffs/runners/settlements
     // close).
     function isManagerUp(ws) { return activeMemberOf(ws) && (myRole() == 'owner' || myRole() == 'manager'); }
+    // Employee or technician — active staff who are NOT manager/owner tier.
+    // Both are trusted with ONLY their own timeEntries (see the match block
+    // below) — an employee is not more trusted than a technician here, unlike
+    // the old isStaffOf() split which let any employee write ANY coworker's
+    // hours with no ownership check at all.
+    function isSelfServiceStaffOf(ws) { return activeMemberOf(ws) && !isManagerUp(ws); }
+
+    // The exact field set the real clock-in/clock-out/break UI writes
+    // (App.tsx's handleClockIn/handleClockOut/handleStartBreak/handleEndBreak)
+    // — self-service creates/updates may touch ONLY these, so an employee or
+    // technician writing directly (bypassing the UI) can't sneak in
+    // `corrections`/audit fields that only the manager-correction flow may set.
+    function timeEntrySelfKeys() { return ['id', 'userId', 'userEmail', 'clockIn', 'clockOut', 'breaks', 'createdAt']; }
+    // Fields a self-service UPDATE may actually CHANGE (not just carry over
+    // unchanged from a prior manager correction) — clockIn and userId can
+    // never change after creation via this path.
+    function timeEntrySelfUpdateKeys() { return ['clockOut', 'breaks', 'userEmail']; }
+    // +/- 10 minutes of clock skew/network latency allowance — generous
+    // enough for a real device, tight enough that a self-service write can't
+    // backdate a shift or extend a clock-out to inflate pay.
+    function closeToNow(ms) { return ms > request.time.toMillis() - 600000 && ms < request.time.toMillis() + 600000; }
 
     // Role rank for PIN assignment (domain/pin.ts mirrors this exactly): an
     // owner/manager may set a PIN only for someone STRICTLY below their own
@@ -120,13 +141,42 @@ service cloud.firestore {
         allow delete: if isOwnerOf(ws);
       }
 
-      // Time clock: staff manage any shift; a technician may create/update only
-      // their OWN shifts (userId == their uid) so they can clock in without the
-      // broader write access technicians are otherwise denied. Owner-only delete.
+      // Time clock: manager/owner (payroll.manage tier — mirrors
+      // services/rbac.ts) may write ANY entry, which is what the missed-
+      // clock-out correction flow (App.tsx's handleCorrectClockOut, itself
+      // audited via 'timeclock.correct_clock_out') needs. Employee AND
+      // technician are both self-service ONLY — an employee is not more
+      // trusted than a technician here. This closes a real hole: the old
+      // isStaffOf() catch-all covered owner/manager/employee with no
+      // ownership check at all, so an employee could write ANY coworker's
+      // timeEntry directly (bypassing the UI) to backdate/extend their own
+      // hours or alter someone else's — backwards from every other
+      // trust boundary in this file, where technician is the MORE
+      // restricted role.
+      //
+      // Read stays workspace-wide (activeMemberOf) — a deliberate choice,
+      // not an oversight: timeEntries are fetched as one shared collection
+      // at the app level for every active role (missed-clock-out flags,
+      // the payroll review screen, etc.), and splitting that into a
+      // per-user query for employee/technician vs. a full query for
+      // manager/owner would be a real architectural change for a field
+      // (coworkers' clock-in/out times) that isn't especially sensitive
+      // compared to the financial/inventory data already gated more
+      // tightly elsewhere in this file.
       match /timeEntries/{id} {
         allow read: if activeMemberOf(ws);
-        allow create, update: if isStaffOf(ws)
-          || (isTechOf(ws) && request.resource.data.userId == request.auth.uid);
+        allow create: if isManagerUp(ws)
+          || (isSelfServiceStaffOf(ws)
+              && request.resource.data.userId == request.auth.uid
+              && request.resource.data.keys().hasOnly(timeEntrySelfKeys())
+              && closeToNow(request.resource.data.clockIn));
+        allow update: if isManagerUp(ws)
+          || (isSelfServiceStaffOf(ws)
+              && resource.data.userId == request.auth.uid
+              && request.resource.data.userId == request.auth.uid
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(timeEntrySelfUpdateKeys())
+              && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['clockOut'])
+                  || closeToNow(request.resource.data.clockOut)));
         allow delete: if isOwnerOf(ws);
       }
 
@@ -248,10 +298,23 @@ service cloud.firestore {
         allow write: if isStaffOf(ws);
       }
       // Pay-period sign-off records (services/firestoreDb.ts's
-      // savePayPeriodPaid/deletePayPeriodPaid).
+      // savePayPeriodPaid/deletePayPeriodPaid) — this is the "mark paid"
+      // acknowledgment, gated owner-only (App.tsx's handleMarkPaid), same as
+      // this rule now enforces server-side. Previously `isStaffOf(ws)` let
+      // ANY employee mark (or unmark) a period paid directly, bypassing the
+      // UI entirely — the same class of rules/UI mismatch closed for
+      // timeEntries above.
       match /payPeriods/{id} {
         allow read: if activeMemberOf(ws);
-        allow write: if isStaffOf(ws);
+        allow write: if isOwnerOf(ws);
+      }
+      // Pay-period APPROVAL records — a distinct, earlier step than
+      // payPeriods above: manager/owner (payroll.manage tier) sign off that
+      // one employee's numbers for a period are correct, before the owner
+      // marks it paid. See App.tsx's handleApprovePayPeriod.
+      match /payPeriodApprovals/{id} {
+        allow read: if activeMemberOf(ws);
+        allow write: if isManagerUp(ws);
       }
     }
 

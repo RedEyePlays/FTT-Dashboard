@@ -160,8 +160,21 @@ describe('legitimate flows still work after removing the catch-all', () => {
   it('staff write to activityLog is ALLOWED', async () => {
     await assertSucceeds(setDoc(doc(asEmployee(), 'user_data', WORKSPACE, 'activityLog', 'a1'), { ts: Date.now(), type: 'sale' }));
   });
-  it('staff write to payPeriods is ALLOWED', async () => {
-    await assertSucceeds(setDoc(doc(asManager(), 'user_data', WORKSPACE, 'payPeriods', 'p1'), { periodEnd: '2026-01-15' }));
+  // payPeriods (mark-paid records) is owner-only, matching the app's own
+  // canMarkPaid gating: only the owner may sign a period off as paid.
+  // Manager (payroll.manage tier) can approve (payPeriodApprovals below)
+  // but not mark paid.
+  it('owner write to payPeriods is ALLOWED', async () => {
+    await assertSucceeds(setDoc(doc(asOwner(), 'user_data', WORKSPACE, 'payPeriods', 'p1'), { periodEnd: '2026-01-15' }));
+  });
+  it('manager write to payPeriods is DENIED (owner-only, matches canMarkPaid in the UI)', async () => {
+    await assertFails(setDoc(doc(asManager(), 'user_data', WORKSPACE, 'payPeriods', 'p1'), { periodEnd: '2026-01-15' }));
+  });
+  it('manager write to payPeriodApprovals is ALLOWED (payroll.manage tier)', async () => {
+    await assertSucceeds(setDoc(doc(asManager(), 'user_data', WORKSPACE, 'payPeriodApprovals', 'a1'), { periodEnd: '2026-01-15' }));
+  });
+  it('employee write to payPeriodApprovals is DENIED', async () => {
+    await assertFails(setDoc(doc(asEmployee(), 'user_data', WORKSPACE, 'payPeriodApprovals', 'a1'), { periodEnd: '2026-01-15' }));
   });
 
   // A collection that genuinely has no rule at all must now be denied outright

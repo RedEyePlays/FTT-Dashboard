@@ -1,4 +1,4 @@
-import { TimeEntry, TimeBreak, BreakReason, TimeEntryCorrection } from '../types';
+import { TimeEntry, TimeBreak, BreakReason, TimeEntryCorrection, AppUser, PayPeriodPaid } from '../types';
 
 // --- Time clock: pure hours & pay math --------------------------------------
 //
@@ -13,11 +13,27 @@ export const MINUTE_MS = 60_000;
 export const HOUR_MS = 3_600_000;
 export const DAY_MS = 86_400_000;
 
-// Biweekly pay periods. The anchor is a fixed reference Monday; every period is a
-// contiguous 14-day window measured from it, so periods never overlap and each
-// shift belongs to exactly one (bucketed by its clock-in — see hoursInRange).
+// Pay periods: a contiguous, fixed-length window measured from an anchor
+// date, so periods never overlap and each shift belongs to exactly one
+// (bucketed by its clock-in — see hoursInRange). These were the hardcoded
+// defaults; owner-configurable cycle/anchor now live in
+// domain/settings.ts's AppSettings.payroll and are threaded through as
+// explicit params below (defaulting to these same values, so nothing
+// changes for a workspace until the owner actually edits the setting).
 export const PAY_PERIOD_DAYS = 14;
 export const PAY_PERIOD_ANCHOR = '2024-01-01'; // a Monday
+
+// Weekly and bi-weekly both fall out cleanly from the same fixed-day-count
+// anchor math below — just a different day count. Semi-monthly (1st–15th /
+// 16th–end) and monthly do NOT: they're variable-length (28–31 day months,
+// a 13–16 day second half), which this fixed-interval model can't represent
+// without real calendar-month arithmetic — a materially different
+// implementation, not a parameter change. Only weekly/bi-weekly ship here;
+// semi-monthly/monthly were evaluated and explicitly deferred rather than
+// bolted on incorrectly.
+export type PayCycle = 'weekly' | 'biweekly';
+export const PAY_CYCLE_DAYS: Record<PayCycle, number> = { weekly: 7, biweekly: 14 };
+export const PAY_CYCLE_LABEL: Record<PayCycle, string> = { weekly: 'Weekly', biweekly: 'Bi-weekly' };
 
 // Quick-tap break reasons for the kiosk UI — big buttons, no typing. Only 'other'
 // offers an optional note field.
@@ -124,26 +140,30 @@ export interface PayPeriod {
 }
 
 /**
- * The biweekly pay period containing `ms`. Periods are contiguous and
- * non-overlapping: `end` is exclusive and equals the next period's `start`, so a
- * timestamp exactly on a boundary belongs to the later period. A shift is always
- * assigned to a single period by its clock-in (see hoursInRange).
+ * The pay period containing `ms`, for a given cycle length. Periods are
+ * contiguous and non-overlapping: `end` is exclusive and equals the next
+ * period's `start`, so a timestamp exactly on a boundary belongs to the
+ * later period. A shift is always assigned to a single period by its
+ * clock-in (see hoursInRange). `days`/`anchorISO` default to the original
+ * hardcoded bi-weekly schedule so every existing call site (and every
+ * workspace that hasn't touched the new Settings field) behaves exactly as
+ * before.
  */
-export const payPeriodFor = (ms: number, anchorISO: string = PAY_PERIOD_ANCHOR): PayPeriod => {
+export const payPeriodFor = (ms: number, days: number = PAY_PERIOD_DAYS, anchorISO: string = PAY_PERIOD_ANCHOR): PayPeriod => {
   const anchor = anchorMs(anchorISO);
-  const index = Math.floor(dayDiff(ms, anchor) / PAY_PERIOD_DAYS);
-  const start = addDays(anchor, index * PAY_PERIOD_DAYS);
-  const end = addDays(start, PAY_PERIOD_DAYS);
+  const index = Math.floor(dayDiff(ms, anchor) / days);
+  const start = addDays(anchor, index * days);
+  const end = addDays(start, days);
   return { index, start, end };
 };
 
 /** The N most recent pay periods (newest first), for the summary period picker. */
-export const recentPayPeriods = (now: number, count: number, anchorISO: string = PAY_PERIOD_ANCHOR): PayPeriod[] => {
-  const current = payPeriodFor(now, anchorISO);
+export const recentPayPeriods = (now: number, count: number, days: number = PAY_PERIOD_DAYS, anchorISO: string = PAY_PERIOD_ANCHOR): PayPeriod[] => {
+  const current = payPeriodFor(now, days, anchorISO);
   const out: PayPeriod[] = [];
   for (let i = 0; i < count; i++) {
-    const start = addDays(current.start, -i * PAY_PERIOD_DAYS);
-    out.push({ index: current.index - i, start, end: addDays(start, PAY_PERIOD_DAYS) });
+    const start = addDays(current.start, -i * days);
+    out.push({ index: current.index - i, start, end: addDays(start, days) });
   }
   return out;
 };
@@ -270,3 +290,78 @@ export const periodPayFor = (
 /** Deterministic id for a per-user, per-period paid record (idempotent). */
 export const paidKey = (userId: string, periodStartISO: string): string =>
   `${userId}__${periodStartISO}`;
+
+/** Whether a shift was ever touched by a manager clock-out correction. */
+export const isCorrectedEntry = (e: TimeEntry): boolean => (e.corrections?.length ?? 0) > 0;
+
+// --- Payroll review flags ----------------------------------------------------
+
+export interface PayrollFlags {
+  missedClockOuts: TimeEntry[];   // still-open shifts within the period (bucketed by clock-in)
+  correctedEntries: TimeEntry[];  // shifts with at least one manager correction
+  noRateUsers: AppUser[];         // active users with hours in this period but no hourlyRate set
+}
+
+/**
+ * Everything the payroll review screen needs to flag BEFORE payout: missed
+ * clock-outs, manager-corrected entries, and anyone who worked hours with no
+ * hourly rate configured (would otherwise silently compute $0 gross rather
+ * than visibly warn the reviewer).
+ */
+export const payrollFlagsFor = (
+  entries: TimeEntry[],
+  users: AppUser[],
+  period: PayPeriod,
+  now: number,
+): PayrollFlags => {
+  const inPeriod = entries.filter(e => e.clockIn != null && e.clockIn >= period.start && e.clockIn < period.end);
+  const userById = new Map(users.map(u => [u.id, u]));
+  const noRateUserIds = new Set<string>();
+  for (const e of inPeriod) {
+    const u = userById.get(e.userId);
+    if (u && !u.hourlyRate && workedHours(e, now) > 0) noRateUserIds.add(u.id);
+  }
+  return {
+    missedClockOuts: inPeriod.filter(e => isClockedIn(e) && toISODate(e.clockIn) !== toISODate(now)),
+    correctedEntries: inPeriod.filter(isCorrectedEntry),
+    noRateUsers: users.filter(u => noRateUserIds.has(u.id)),
+  };
+};
+
+/**
+ * The most recently ENDED pay period that has at least one active user with
+ * hours but no matching PayPeriodPaid record for them — i.e. payroll that's
+ * due. Used for the Dashboard nudge. Only looks at the period immediately
+ * before the current (in-progress) one — a period that hasn't ended yet is
+ * never "due". Returns null when nothing is outstanding (every active
+ * worked user in that period is already marked paid, or nobody worked).
+ */
+export interface PayrollDue {
+  period: PayPeriod;
+  employeeCount: number;
+  totalGross: number;
+}
+export const payrollDue = (
+  entries: TimeEntry[],
+  users: AppUser[],
+  payPeriods: PayPeriodPaid[],
+  now: number,
+  days: number = PAY_PERIOD_DAYS,
+  anchorISO: string = PAY_PERIOD_ANCHOR,
+): PayrollDue | null => {
+  const current = payPeriodFor(now, days, anchorISO);
+  const lastEnded: PayPeriod = { index: current.index - 1, start: addDays(current.start, -days), end: current.start };
+  const paidIds = new Set(payPeriods.map(p => p.id));
+  const active = users.filter(u => !u.disabled);
+
+  let employeeCount = 0;
+  let totalGross = 0;
+  for (const u of active) {
+    const pay = periodPayFor(entries, u.id, u.hourlyRate, lastEnded, now);
+    if (pay.hours <= 0) continue;
+    if (paidIds.has(paidKey(u.id, toISODate(lastEnded.start)))) continue;
+    employeeCount++;
+    totalGross += pay.gross;
+  }
+  return employeeCount > 0 ? { period: lastEnded, employeeCount, totalGross: round2(totalGross) } : null;
+};

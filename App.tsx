@@ -36,7 +36,7 @@ const UsersView = lazy(() => import('./components/UsersView').then(m => ({ defau
 const AuditLogView = lazy(() => import('./components/AuditLogView').then(m => ({ default: m.AuditLogView })));
 const TimeClockView = lazy(() => import('./components/TimeClockView').then(m => ({ default: m.TimeClockView })));
 const CloseOutView = lazy(() => import('./components/CloseOutView').then(m => ({ default: m.CloseOutView })));
-import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, Runner, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission, Repair, RepairBatch, TimeEntry, PayPeriodPaid, BreakReason, SalesTransaction, CashReconciliation, StaffNote, BalancePayment } from './types';
+import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, Runner, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission, Repair, RepairBatch, TimeEntry, PayPeriodPaid, PayPeriodApproval, BreakReason, SalesTransaction, CashReconciliation, StaffNote, BalancePayment } from './types';
 import { skuPrefix, nextSku } from './services/sku';
 import { REPAIR_PREFIX, BATCH_PREFIX, applyTechEdit, techUpdateAuditPlan, repairSalePrefill, completeRepair, completeRepairSale, dateToEpochMs } from './domain/repairs';
 import { MergePlan } from './domain/customers';
@@ -53,7 +53,7 @@ import {
   logActivityDoc, commitSale, voidSale, returnSale, collectLayawayBalance, saveCashReconciliation, seedSampleData,
   updateUserDoc, setInvite, deleteInvite,
   logAudit, exportWorkspaceData, recordBackup, saveSettings,
-  saveTimeEntry, savePayPeriodPaid, deletePayPeriodPaid,
+  saveTimeEntry, savePayPeriodPaid, deletePayPeriodPaid, savePayPeriodApproval, deletePayPeriodApproval,
   saveStaffNote, deleteStaffNote, commitAutoInventory, settleRunner,
 } from './services/firestoreDb';
 import { decideAutoInventory, autoInventoryPurchaseDrawerEffect, AutoInventoryNotice } from './domain/autoInventory';
@@ -71,7 +71,10 @@ import { expectedCashForDate, expectedEndingCash, sumDrawerEntries, cashDrawerSu
 import type { CashMovementKind } from './components/LogCashMovementModal';
 const OpenDrawerModal = lazy(() => import('./components/OpenDrawerModal').then(m => ({ default: m.OpenDrawerModal })));
 const CloseDrawerModal = lazy(() => import('./components/CloseDrawerModal').then(m => ({ default: m.CloseDrawerModal })));
-import { openEntryFor, isOnBreak, periodPayFor, paidKey, toISODate, PayPeriod, correctClockOut, isValidClockOutCorrection } from './domain/timeclock';
+import {
+  openEntryFor, isOnBreak, periodPayFor, paidKey, toISODate, PayPeriod, correctClockOut, isValidClockOutCorrection,
+  payrollDue, PAY_CYCLE_DAYS, payPeriodFor,
+} from './domain/timeclock';
 import { buildAlerts } from './domain/alerts';
 import { changedSettingsSections } from './domain/audit';
 import { dropOffPurchaseCost, settlementDrawerEffect, dropOffAcceptDrawerEffect } from './domain/dropoffs';
@@ -82,6 +85,7 @@ import { MobileNav } from './components/MobileNav';
 import { MobileDrawer } from './components/MobileDrawer';
 import { Calculator } from 'lucide-react';
 import { useIsMobile } from './hooks/useMediaQuery';
+import { useKeyedSubmitGuard } from './hooks/useSubmitGuard';
 
 // Page titles for the mobile header bar.
 const PAGE_TITLES: Record<ViewState, string> = {
@@ -110,7 +114,7 @@ const App: React.FC = () => {
     appUser, roleLoading, workspaceId, workspaceUsers, invites, auditLogs, loadMoreAuditLogs, auditHasMore,
     data, notes, setNotes, tasks, setTasks,
     runners, dropOffs, settlements, salesTransactions, customers, repairs, repairBatches,
-    timeEntries, payPeriods, cashReconciliations, staffNotes,
+    timeEntries, payPeriods, payPeriodApprovals, cashReconciliations, staffNotes,
     skuCounters, setSkuCounters, activityLog, lastBackup, settings,
     dbLoading, dbError, reconnect, enableExtendedData, enableCashData,
     runnersRef, dropOffsRef, settlementsRef, customersRef, salesTransactionsRef,
@@ -124,7 +128,12 @@ const App: React.FC = () => {
   // that needs them. Idempotent; once enabled it stays for the session.
   useEffect(() => {
     if (view === 'timeclock' || view === 'reports' || view === 'dropoff') enableExtendedData();
-  }, [view, enableExtendedData]);
+    // Owner/manager also need timeEntries/payPeriods on the Dashboard itself
+    // for the "payroll due" nudge (domain/timeclock.ts's payrollDue) —
+    // gated to the same payroll.manage tier so employees/technicians never
+    // trigger this extra read just by opening the Dashboard.
+    if (view === 'dashboard' && (appUser?.role === 'owner' || appUser?.role === 'manager')) enableExtendedData();
+  }, [view, appUser?.role, enableExtendedData]);
   // Active Inventory sub-section, mirrored to the URL (/inventory/<section>).
   const [invSection, setInvSection] = useState<InvSection>(DEFAULT_INV_SECTION);
   // A customer to pre-seed the POS / Repairs view with (from a CRM quick action).
@@ -220,6 +229,12 @@ const App: React.FC = () => {
     !!appUser && !appLocked,
     () => setAppLocked(true),
   );
+
+  // Re-entrancy guard for payroll approve/mark-paid — keyed by action+user+
+  // period so a double-click on one employee's row can't double-record,
+  // without blocking another row's button (same pattern as the drop-off/
+  // runner-settlement write-once guards).
+  const payrollGuard = useKeyedSubmitGuard();
 
   // PIN unlock: verify client-side against the user's own stored hash+salt
   // (already synced locally — this is the account's own doc, always self-
@@ -345,6 +360,15 @@ const App: React.FC = () => {
   // Standing, actionable alerts for the notifications menu (low stock, overdue /
   // unclaimed repairs). Derived from live data already in memory.
   const alerts = useMemo(() => buildAlerts({ inventory: data, repairs, now: Date.now(), agingDays: settings.operations.agingInventoryDays }), [data, repairs, settings.operations.agingInventoryDays]);
+
+  // Dashboard "payroll due" nudge — most-recently-ended pay period with
+  // unpaid worked hours, using the owner's configured cycle/anchor. Only
+  // meaningful once timeEntries/payPeriods are loaded (enableExtendedData is
+  // triggered for owner/manager on Dashboard visit — see the effect above).
+  const dashboardPayrollDue = useMemo(
+    () => payrollDue(timeEntries, workspaceUsers, payPeriods, Date.now(), PAY_CYCLE_DAYS[settings.payroll.cycle], settings.payroll.anchorISO),
+    [timeEntries, workspaceUsers, payPeriods, settings.payroll.cycle, settings.payroll.anchorISO],
+  );
 
   // Per-user notification read state persists on the user doc, so it follows the
   // staff member across devices instead of living in this browser's localStorage.
@@ -1226,33 +1250,86 @@ const App: React.FC = () => {
     if (!uid || !appUser || !allow('payroll.manage')) return;
     const target = timeEntries.find(e => e.id === entryId);
     if (!target || !isValidClockOutCorrection(target, newClockOut, Date.now())) return;
+    // If this entry's clock-in falls inside a period already marked paid for
+    // this user, warn before editing — the paid snapshot won't be touched
+    // (PayPeriodPaid is a frozen record), but the underlying hours would now
+    // disagree with what was already paid out.
+    const period = payPeriodFor(target.clockIn, PAY_CYCLE_DAYS[settings.payroll.cycle], settings.payroll.anchorISO);
+    const alreadyPaid = payPeriods.some(p => p.userId === target.userId && p.periodStart === toISODate(period.start));
+    if (alreadyPaid && !window.confirm('This shift was already paid out as part of a closed pay period. Editing it will not change the amount already paid. Continue anyway?')) {
+      return;
+    }
     const next = correctClockOut(target, newClockOut, appUser.id, Date.now(), { correctedByEmail: appUser.email });
     saveTimeEntry(uid, next).catch(() => {});
     audit('timeclock.correct_clock_out', 'timeEntry', entryId, { clockOut: target.clockOut }, { clockOut: newClockOut });
   };
+  // Approve — payroll.manage tier (owner + manager). A distinct, earlier step
+  // than Mark Paid: acknowledges the numbers are reviewed and correct, but
+  // moves no money and is not itself a payment record. Mark Paid below
+  // refuses to run until a matching approval exists for that user + period.
+  const handleApprovePayPeriod = (targetUid: string, period: PayPeriod) => {
+    if (!uid || !appUser || !allow('payroll.manage')) return;
+    const startISO = toISODate(period.start);
+    const key = `approve:${targetUid}:${startISO}`;
+    payrollGuard.run(key, async () => {
+      const target = workspaceUsers.find(u => u.id === targetUid);
+      const pay = periodPayFor(timeEntries, targetUid, target?.hourlyRate, period, Date.now());
+      const rec: PayPeriodApproval = {
+        id: paidKey(targetUid, startISO),
+        userId: targetUid,
+        periodStart: startISO,
+        periodEnd: toISODate(period.end - 1),
+        approvedBy: appUser.id, approvedByEmail: appUser.email, approvedAt: Date.now(),
+        hours: pay.hours, gross: pay.gross, rate: pay.rate,
+      };
+      await savePayPeriodApproval(uid, rec).catch(() => {});
+      audit('timeclock.approve_paid', 'payPeriod', rec.id, undefined, { hours: pay.hours, gross: pay.gross });
+    });
+  };
+  // Approve every active staff member with worked hours in the period who
+  // isn't already approved — one audited action per user, guarded individually
+  // so a partial failure doesn't block the rest.
+  const handleApproveAllPayPeriod = (period: PayPeriod) => {
+    if (!uid || !appUser || !allow('payroll.manage')) return;
+    const startISO = toISODate(period.start);
+    const approvedIds = new Set(payPeriodApprovals.filter(a => a.periodStart === startISO).map(a => a.userId));
+    workspaceUsers
+      .filter(u => !u.disabled && !approvedIds.has(u.id))
+      .filter(u => periodPayFor(timeEntries, u.id, u.hourlyRate, period, Date.now()).hours > 0)
+      .forEach(u => handleApprovePayPeriod(u.id, period));
+  };
   // Owner-only pay-period sign-off. Records that a period was reviewed/paid — it
   // moves no money. Snapshots the numbers so the acknowledgment stays accurate.
+  // Refuses to run without a prior Approve record for the same user + period.
   const handleMarkPaid = (targetUid: string, period: PayPeriod) => {
     if (!uid || !appUser || appUser.role !== 'owner') return;
-    const target = workspaceUsers.find(u => u.id === targetUid);
-    const pay = periodPayFor(timeEntries, targetUid, target?.hourlyRate, period, Date.now());
     const startISO = toISODate(period.start);
-    const rec: PayPeriodPaid = {
-      id: paidKey(targetUid, startISO),
-      userId: targetUid,
-      periodStart: startISO,
-      periodEnd: toISODate(period.end - 1), // inclusive last calendar day
-      markedBy: appUser.id, markedByEmail: appUser.email, markedAt: Date.now(),
-      hours: pay.hours, gross: pay.gross, rate: pay.rate,
-    };
-    savePayPeriodPaid(uid, rec).catch(() => {});
-    audit('timeclock.mark_paid', 'payPeriod', rec.id, undefined, { hours: pay.hours, gross: pay.gross });
+    const approved = payPeriodApprovals.some(a => a.userId === targetUid && a.periodStart === startISO);
+    if (!approved) return;
+    const key = `pay:${targetUid}:${startISO}`;
+    payrollGuard.run(key, async () => {
+      const target = workspaceUsers.find(u => u.id === targetUid);
+      const pay = periodPayFor(timeEntries, targetUid, target?.hourlyRate, period, Date.now());
+      const rec: PayPeriodPaid = {
+        id: paidKey(targetUid, startISO),
+        userId: targetUid,
+        periodStart: startISO,
+        periodEnd: toISODate(period.end - 1), // inclusive last calendar day
+        markedBy: appUser.id, markedByEmail: appUser.email, markedAt: Date.now(),
+        hours: pay.hours, gross: pay.gross, rate: pay.rate,
+      };
+      await savePayPeriodPaid(uid, rec).catch(() => {});
+      audit('timeclock.mark_paid', 'payPeriod', rec.id, undefined, { hours: pay.hours, gross: pay.gross });
+    });
   };
   const handleUnmarkPaid = (targetUid: string, period: PayPeriod) => {
     if (!uid || !appUser || appUser.role !== 'owner') return;
     const id = paidKey(targetUid, toISODate(period.start));
-    deletePayPeriodPaid(uid, id).catch(() => {});
-    audit('timeclock.unmark_paid', 'payPeriod', id);
+    const key = `unpay:${id}`;
+    payrollGuard.run(key, async () => {
+      await deletePayPeriodPaid(uid, id).catch(() => {});
+      audit('timeclock.unmark_paid', 'payPeriod', id);
+    });
   };
 
   // --- Backups (Owner only) ---
@@ -1674,7 +1751,9 @@ const App: React.FC = () => {
               ? <Dashboard data={data} salesTransactions={salesTransactions} activity={activityLog} repairs={repairs} repairBatches={repairBatches} canViewProfit={allow('reports.profit.summary')} onViewAnalytics={() => navigate('analytics')} onViewRepairs={allow('repairs.manage') ? () => navigate('repairs') : undefined}
                   cashReconciliations={allow('cash.reconcile') ? cashReconciliations : undefined}
                   onViewCash={allow('cash.reconcile') ? () => navigate('reports') : undefined}
-                  onViewLayaways={allow('cash.reconcile') ? () => navigate('layaways') : undefined} />
+                  onViewLayaways={allow('cash.reconcile') ? () => navigate('layaways') : undefined}
+                  payrollDue={allow('payroll.manage') ? dashboardPayrollDue : undefined}
+                  onViewPayroll={allow('payroll.manage') ? () => navigate('timeclock') : undefined} />
               : <div className="text-center text-slate-400 py-20">You don't have access to reports.</div>
           )}
           {view === 'layaways' && allow('sales.complete') && (
@@ -1870,12 +1949,17 @@ const App: React.FC = () => {
               users={workspaceUsers}
               entries={timeEntries}
               payPeriods={payPeriods}
+              payPeriodApprovals={payPeriodApprovals}
+              payCycle={settings.payroll.cycle}
+              payAnchorISO={settings.payroll.anchorISO}
               canManagePayroll={allow('payroll.manage')}
               canMarkPaid={appUser.role === 'owner'}
               onClockIn={handleClockIn}
               onClockOut={handleClockOut}
               onStartBreak={handleStartBreak}
               onEndBreak={handleEndBreak}
+              onApprovePeriod={handleApprovePayPeriod}
+              onApproveAllPeriod={handleApproveAllPayPeriod}
               onMarkPaid={handleMarkPaid}
               onUnmarkPaid={handleUnmarkPaid}
               onCorrectClockOut={handleCorrectClockOut}

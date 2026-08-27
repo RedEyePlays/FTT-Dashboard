@@ -134,6 +134,16 @@ export function validateExtractedFields(raw: RawExtractedFields): ScannedField[]
  * everything found across both shots instead of the second capture
  * clobbering the first.
  */
+/**
+ * Whether a batch of classified fields contains at least one VERIFIED value
+ * — used by the scanner to decide whether a tier's result is trustworthy
+ * enough to stop on, versus an unverified (Luhn-failing) misread that should
+ * fall through to the next tier rather than being accepted as the answer.
+ * OCR in particular misreads digits; an unverified 15-digit guess is worse
+ * than no read at all if a cheap next tier (or AI) might get it right.
+ */
+export const hasVerifiedField = (fields: ScannedField[]): boolean => fields.some(f => f.verified);
+
 export function mergeScannedFields(existing: ScannedField[], incoming: ScannedField[]): ScannedField[] {
   const byKey = new Map(existing.map(f => [f.key, f] as const));
   for (const f of incoming) byKey.set(f.key, f);

@@ -2,13 +2,14 @@ import React, { useMemo, useState } from 'react';
 import {
   Store, Building2, Wrench, ShoppingCart, Percent, Tag, Contact, LayoutDashboard,
   Palette, ShieldCheck, DatabaseBackup, Info, Save, RotateCcw, Check, Lock, Plus, Trash2,
-  Download, RefreshCw, Loader2, CalendarClock, SlidersHorizontal, Copy,
+  Download, RefreshCw, Loader2, CalendarClock, SlidersHorizontal, Copy, DollarSign,
 } from 'lucide-react';
 import { Role, Permission } from '../types';
 import {
   AppSettings, ThemeMode, PaymentMethodKey, CURRENCIES, TIME_ZONES,
   DASHBOARD_WIDGETS, STATUS_COLOR_OPTIONS, LabelSize, mergeLabelSizes,
 } from '../domain/settings';
+import { PayCycle, PAY_CYCLE_LABEL } from '../domain/timeclock';
 import { MAX_PUSH_DOWN_MM } from '../services/labelLayout';
 import { ROLE_PERMISSIONS, ROLE_LABEL } from '../services/rbac';
 import { REPAIR_STATUS_LABEL } from '../domain/repairs';
@@ -26,7 +27,7 @@ import { BackupFileMeta } from '../services/backupStorage';
 
 type SectionId =
   | 'general' | 'store' | 'repairs' | 'checkout' | 'taxes' | 'labels'
-  | 'customers' | 'operations' | 'dashboard' | 'appearance' | 'roles' | 'data' | 'about';
+  | 'customers' | 'operations' | 'payroll' | 'dashboard' | 'appearance' | 'roles' | 'data' | 'about';
 
 const SECTIONS: { id: SectionId; label: string; icon: React.ReactNode }[] = [
   { id: 'general', label: 'General', icon: <Store className="w-4 h-4" /> },
@@ -37,6 +38,7 @@ const SECTIONS: { id: SectionId; label: string; icon: React.ReactNode }[] = [
   { id: 'labels', label: 'Labels & Printing', icon: <Tag className="w-4 h-4" /> },
   { id: 'customers', label: 'Customers', icon: <Contact className="w-4 h-4" /> },
   { id: 'operations', label: 'Operations', icon: <SlidersHorizontal className="w-4 h-4" /> },
+  { id: 'payroll', label: 'Payroll', icon: <DollarSign className="w-4 h-4" /> },
   { id: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard className="w-4 h-4" /> },
   { id: 'appearance', label: 'Appearance', icon: <Palette className="w-4 h-4" /> },
   { id: 'roles', label: 'Security & Roles', icon: <ShieldCheck className="w-4 h-4" /> },
@@ -155,6 +157,7 @@ export const SettingsView: React.FC<Props> = ({ settings, onSave, canManage, rol
             {active === 'labels' && <LabelsSection draft={draft} patch={patch} />}
             {active === 'customers' && <CustomersSection draft={draft} patch={patch} />}
             {active === 'operations' && <OperationsSection draft={draft} patch={patch} />}
+            {active === 'payroll' && <PayrollSection draft={draft} patch={patch} />}
             {active === 'dashboard' && <DashboardSection draft={draft} patch={patch} />}
             {active === 'appearance' && <AppearanceSection draft={draft} patch={patch} />}
             {active === 'roles' && <RolesSection />}
@@ -411,6 +414,20 @@ const OperationsSection: React.FC<{ draft: AppSettings; patch: PatchFn }> = ({ d
         hint="An open layaway older than this is flagged on the Layaways list as needing follow-up."
         value={draft.operations.staleLayawayDays}
         onChange={v => patch('operations', { staleLayawayDays: Math.max(1, Math.round(parseFloat(v) || 1)) })} />
+    </SettingsCard>
+  </SettingsSection>
+);
+
+const PayrollSection: React.FC<{ draft: AppSettings; patch: PatchFn }> = ({ draft, patch }) => (
+  <SettingsSection title="Payroll" description="Pay period schedule used for the Time Clock payroll summary. Changing this only affects periods going forward — already-paid periods keep their original dates and amounts.">
+    <SettingsCard>
+      <SettingsSelect label="Pay cycle" value={draft.payroll.cycle}
+        onChange={v => patch('payroll', { cycle: v as PayCycle })}
+        options={Object.entries(PAY_CYCLE_LABEL).map(([value, label]) => ({ value, label }))} />
+      <SettingsTextField label="Anchor date" type="date"
+        hint="Any date that fell on the first day of a pay period. Periods are calculated forward and backward from this date at the cycle length above."
+        value={draft.payroll.anchorISO}
+        onChange={v => patch('payroll', { anchorISO: v })} />
     </SettingsCard>
   </SettingsSection>
 );

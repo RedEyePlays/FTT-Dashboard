@@ -1,5 +1,6 @@
 import { ViewState, RepairStatus } from '../types';
 import { REPAIR_STATUSES } from './repairs';
+import { PayCycle, PAY_PERIOD_ANCHOR } from './timeclock';
 
 // Central, owner-configurable business settings. Persisted in Firestore (the
 // workspace meta doc) so the shop can be configured without code changes.
@@ -141,6 +142,14 @@ export interface AppSettings {
     staleLayawayDays: number;          // open-layaway age (days) that flags it as stale/needing follow-up
     autoLockMinutes: number;           // idle minutes before the auto-lock screen appears; 0 = never (must be chosen explicitly)
   };
+  // Owner-configurable pay-period schedule (domain/timeclock.ts's payPeriodFor/
+  // recentPayPeriods read these instead of the old hardcoded constants).
+  // Defaults match the previous hardcoded values exactly, so nothing changes
+  // for a workspace until the owner actually edits this.
+  payroll: {
+    cycle: PayCycle;      // 'weekly' | 'biweekly' — see domain/timeclock.ts's PAY_CYCLE_DAYS
+    anchorISO: string;    // YYYY-MM-DD — the start date of a period under the CURRENT cycle
+  };
 }
 
 export const DASHBOARD_WIDGETS = ['periods', 'inventory', 'repairs', 'recentSales', 'lowStock', 'topPlatforms'] as const;
@@ -169,6 +178,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   appearance: { theme: 'system' },
   backups: { enabled: false, frequency: 'daily', retention: 14 },
   operations: { openingFloatDefault: 0, voidWindowDays: 0, returnRestockingFeePercent: 0, agingInventoryDays: 30, staleLayawayDays: 60, autoLockMinutes: 4 },
+  payroll: { cycle: 'biweekly', anchorISO: PAY_PERIOD_ANCHOR },
 };
 
 // Deep-merge a stored partial over the defaults (one level per section is enough).
@@ -187,6 +197,7 @@ export function mergeSettings(partial?: DeepPartial<AppSettings>): AppSettings {
     appearance: { ...d.appearance, ...partial.appearance },
     backups: { ...d.backups, ...partial.backups },
     operations: { ...d.operations, ...partial.operations },
+    payroll: { ...d.payroll, ...partial.payroll },
   };
 }
 
