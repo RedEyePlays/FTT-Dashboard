@@ -52,12 +52,14 @@ export const MobileDrawer: React.FC<Props> = ({
     { label: 'Inventory', icon: <Table className="w-5 h-5" />, on: () => go('grid'), active: view === 'grid', show: true },
     { label: 'Quick Sale', icon: <ShoppingCart className="w-5 h-5" />, on: () => go('pos'), active: view === 'pos', show: true },
     { label: 'Quick Purchase', icon: <ShoppingBag className="w-5 h-5" />, on: () => go('quickpurchase'), active: view === 'quickpurchase', show: allow('inventory.add') },
+    // Kept immediately next to Quick Purchase — both are "acquiring stock at
+    // the counter" actions (same grouping as AppHeader.tsx's primary nav).
+    { label: 'Drop-Offs', icon: <Truck className="w-5 h-5" />, on: () => go('dropoff'), active: view === 'dropoff', show: allow('dropoffs.manage') },
     { label: 'Repairs', icon: <Wrench className="w-5 h-5" />, on: () => go('repairs'), active: view === 'repairs', show: allow('repairs.tech') },
     { label: 'Customers', icon: <Contact className="w-5 h-5" />, on: () => go('customers'), active: view === 'customers', show: allow('reports.view') },
     { label: 'Time Clock', icon: <Clock className="w-5 h-5" />, on: () => go('timeclock'), active: view === 'timeclock', show: allow('timeclock.use') },
     { label: 'Close Out', icon: <ClipboardCheck className="w-5 h-5" />, on: () => go('closeout'), active: view === 'closeout', show: allow('closeout.view') },
     { label: 'Notes', icon: <StickyNote className="w-5 h-5" />, on: () => go('notes'), active: view === 'notes', show: showNotes },
-    { label: 'Drop-Offs', icon: <Truck className="w-5 h-5" />, on: () => go('dropoff'), active: view === 'dropoff', show: allow('dropoffs.manage') },
     { label: 'Audit', icon: <ScrollText className="w-5 h-5" />, on: () => go('audit'), active: view === 'audit', show: allow('audit.view') },
     { label: 'Users', icon: <UsersIcon className="w-5 h-5" />, on: () => go('users'), active: view === 'users', show: allow('users.tech') },
     // AI Assistant can surface real profit/margin figures (sends the full

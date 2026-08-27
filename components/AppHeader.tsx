@@ -64,6 +64,10 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     { key: 'customers', label: 'Customers', icon: <Contact className="w-4 h-4" />, view: 'customers', show: allow('reports.view') },
     { key: 'pos', label: 'Quick Sale', icon: <ShoppingCart className="w-4 h-4" />, view: 'pos', show: true },
     { key: 'quickpurchase', label: 'Quick Purchase', icon: <ShoppingBag className="w-4 h-4" />, view: 'quickpurchase', show: allow('inventory.add') },
+    // Kept immediately next to Quick Purchase — both are "acquiring stock at
+    // the counter" actions, so they belong beside each other in the primary
+    // bar rather than Drop-Offs being buried a click deeper in "More".
+    { key: 'dropoff', label: 'Drop-Offs', icon: <Truck className="w-4 h-4" />, view: 'dropoff', show: allow('dropoffs.manage') },
     { key: 'notes', label: 'Notes', icon: <StickyNote className="w-4 h-4" />, view: 'notes', show: showNotes },
   ] as NavItem[]).filter(i => i.show);
 
@@ -72,7 +76,6 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     { key: 'reports', label: 'Reports', icon: <Receipt className="w-4 h-4" />, view: 'reports', show: allow('cash.reconcile') },
     { key: 'timeclock', label: 'Time Clock', icon: <Clock className="w-4 h-4" />, view: 'timeclock', show: allow('timeclock.use') },
     { key: 'closeout', label: 'Close Out', icon: <ClipboardCheck className="w-4 h-4" />, view: 'closeout', show: allow('closeout.view') },
-    { key: 'dropoff', label: 'Drop-Offs', icon: <Truck className="w-4 h-4" />, view: 'dropoff', show: allow('dropoffs.manage') },
     { key: 'audit', label: 'Audit', icon: <ScrollText className="w-4 h-4" />, view: 'audit', show: allow('audit.view') },
     { key: 'users', label: 'Users', icon: <UsersIcon className="w-4 h-4" />, view: 'users', show: allow('users.tech') },
     { key: 'settings', label: 'Settings', icon: <Settings className="w-4 h-4" />, view: 'settings', show: allow('settings.manage') },

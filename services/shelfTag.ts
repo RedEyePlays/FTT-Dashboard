@@ -76,34 +76,46 @@ export const TAG_STYLE = `
        content stack down by ~1mm — there's spare room at the bottom (the
        price line shrank in a prior change, and the stack no longer fills
        the label height), so a small downward shift reads better without
-       crowding anything or touching the QR corner overlay. Horizontal
-       padding is unchanged; total top+bottom padding is unchanged too
-       (2.5mm + 0.5mm = 1.5mm + 1.5mm), so this is a pure position shift,
-       not a size change. */
-    padding: 2.5mm 2mm 0.5mm;
+       crowding anything or touching the QR corner overlay. Vertical padding
+       is unchanged from the prior change (2.5mm + 0.5mm = same total as the
+       1.5mm/1.5mm before it, a pure position shift). The RIGHT padding is
+       no longer equal to the left: the QR grew from 9mm to 20mm (see
+       .tag-qr below), big enough that centered text could otherwise run
+       underneath its top-right corner (the QR paints on top, as a sibling
+       overlay with no layout awareness of the text beneath it). Reserving
+       ~22mm on the right (20mm QR + 1.2mm inset + ~1mm buffer) keeps the
+       centered stack visually clear of it, same "well clear of the QR"
+       intent the corner-overlay comment below has always stated — just
+       re-balanced for the new size instead of assuming it still fits. */
+    padding: 2.5mm 22mm 0.5mm 2mm;
     display: flex; flex-direction: column; justify-content: center; align-items: center;
     font-family: 'Inter', system-ui, Arial, sans-serif; color: #000; overflow: hidden;
   }
-  .store { font-size: 3mm; font-weight: 700; letter-spacing: 0.3mm; text-transform: uppercase; color: #222; line-height: 1; }
-  .name { font-size: 5.2mm; font-weight: 800; line-height: 1.1; margin-top: 1.3mm; text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .specs { font-size: 3.1mm; font-weight: 700; color: #333; margin-top: 1mm; text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  /* Price used to be the single largest element on the tag (10mm) — bold
-     weight now does the job of making it the standout number, so it no
-     longer also needs to dominate purely on size; shrunk to 7.5mm, which
-     still reads clearly larger than every other line (specs/sku are ~3mm)
-     without crowding the rest of the tag. */
-  .price { font-size: 7.5mm; font-weight: 900; letter-spacing: -0.2mm; border-top: 0.3mm solid #000; border-bottom: 0.3mm solid #000; padding: 0.6mm 0; margin-top: 1.6mm; }
-  .sku { font-family: 'SF Mono', ui-monospace, Menlo, Consolas, monospace; font-weight: 700; font-size: 2.9mm; letter-spacing: 0.3mm; margin-top: 1.4mm; }
-  /* Small IMEI/serial QR — a corner overlay, well clear of the centered
-     price/name stack. Bumped from 7mm to 9mm for easier scanning — still
-     nowhere near the full-size QR on the ZP 450 inventory label, and
+  /* Every line's font-size bumped ~8-10% ("make the scale a bit bigger") from
+     the previous pass. Kept deliberately modest — this is a 36mm-tall label,
+     content still has to fit inside it without the browser's default flex
+     shrink-to-fit silently compressing every line to squeeze it in (that
+     failure mode is exactly why the ZP 450 template disables flex-shrink; the
+     margin here is kept generous enough that this tag doesn't need to). */
+  .store { font-size: 3.3mm; font-weight: 700; letter-spacing: 0.3mm; text-transform: uppercase; color: #222; line-height: 1; }
+  .name { font-size: 5.6mm; font-weight: 800; line-height: 1.1; margin-top: 1.3mm; text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .specs { font-size: 3.4mm; font-weight: 700; color: #333; margin-top: 1mm; text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .price { font-size: 8.2mm; font-weight: 900; letter-spacing: -0.2mm; border-top: 0.3mm solid #000; border-bottom: 0.3mm solid #000; padding: 0.6mm 0; margin-top: 1.6mm; }
+  .sku { font-family: 'SF Mono', ui-monospace, Menlo, Consolas, monospace; font-weight: 700; font-size: 3.2mm; letter-spacing: 0.3mm; margin-top: 1.4mm; }
+  /* Small IMEI/serial QR — a corner overlay. Bumped from 9mm to 20mm for
+     easier scanning at a normal shelf-browsing distance — still smaller
+     than the full-size QR on the ZP 450 inventory label (11-40mm+ depending
+     on stock size — see services/labelLayout.ts's nonDymoQrSizeMm), and
      positioned as an absolute overlay on .tag-page-inner (not .tag-body),
-     so it's unaffected by the content push-down above. Deliberately NOT
-     image-rendering:pixelated — this tag is rotated 90° via CSS transform
-     to print correctly (see below), and nearest-neighbor scaling combined
-     with that rotation is what made the QR look rough/jagged. Smooth
-     (default) scaling reads far cleaner at this size. */
-  .tag-qr { position: absolute; top: 1.2mm; right: 1.2mm; width: 9mm; height: 9mm; }
+     so it's unaffected by the content push-down above. At this size it's
+     large enough to meaningfully crowd the centered text stack if nothing
+     accounted for it — see .tag-body's right padding above, added
+     specifically for this. Deliberately NOT image-rendering:pixelated —
+     this tag is rotated 90° via CSS transform to print correctly (see
+     below), and nearest-neighbor scaling combined with that rotation is
+     what made the QR look rough/jagged. Smooth (default) scaling reads far
+     cleaner at this size. */
+  .tag-qr { position: absolute; top: 1.2mm; right: 1.2mm; width: 20mm; height: 20mm; }
 `;
 
 // Wraps tag content for the DYMO portrait-native page: one .tag-page per
