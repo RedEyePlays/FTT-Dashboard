@@ -7,7 +7,7 @@ import { Repair } from '../types';
 import { REPAIR_STATUS_LABEL } from '../domain/repairs';
 import { Dpi, buildZpl } from '../services/zpl';
 import { detectZebra, sendZpl, ZebraDetect } from '../services/zebra';
-import { LabelContent, labelPreview, labelPrintDoc, mmOf } from '../services/labelLayout';
+import { LabelContent, labelPreview, labelPrintDoc, mmOf, MAX_PUSH_DOWN_MM } from '../services/labelLayout';
 import { getLabelSizes, getStoreProfile, getLabelSpacing } from './SettingsModal';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 
@@ -20,6 +20,8 @@ interface Props {
 }
 
 type Size = string;
+
+const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
 
 const genBarcode = (value: string): string => {
   try {
@@ -155,8 +157,12 @@ export const RepairLabelModal: React.FC<Props> = ({ repair: r, context, onClose,
     // Shift every line's baseline down by the same fixed offset — a push,
     // not a stretch — so the "Push content down" setting spreads the PDF
     // layout the same way it does the HTML/print preview, without changing
-    // the spacing between lines.
-    const pushDown = media.dymo ? 0 : (spacing.pushDownMm ?? 0);
+    // the spacing between lines. Clamped to the exact same verified-safe
+    // ceiling as labelLayout.ts's HTML path (services/labelLayout.ts —
+    // MAX_PUSH_DOWN_MM) — this used to be unclamped here, so a stored value
+    // beyond what's actually safe would push content past the label's
+    // bottom edge in the PDF export with no guard at all.
+    const pushDown = media.dymo ? 0 : clamp(spacing.pushDownMm ?? 0, 0, MAX_PUSH_DOWN_MM);
     // Same clamp as labelBody's lineGap — the extra distance above the
     // 1.1mm known-good default is added between each line so "Line spacing"
     // spreads the PDF layout the same way it does the HTML preview/print.

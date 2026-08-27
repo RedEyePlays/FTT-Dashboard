@@ -50,6 +50,15 @@ export interface LabelOpts {
 
 const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
 
+// Verified safe ceiling for "Push content down" — see the long comment above
+// its use in labelBody for how this was derived (real rendered geometry on
+// the tightest template, 2×1", with worst-case realistic content: org row +
+// SKU + a device name + a storage/color line + a 15-digit IMEI, all five
+// lines present at once). Exported so the two PDF-export paths
+// (components/LabelModal.tsx, components/RepairLabelModal.tsx) clamp to the
+// exact same verified-safe value instead of re-guessing their own.
+export const MAX_PUSH_DOWN_MM = 0.5;
+
 const IN = 25.4; // mm per inch
 export const mmOf = (m: LabelMedia) => ({ w: +(m.w * IN).toFixed(2), h: +(m.h * IN).toFixed(2) });
 
@@ -167,16 +176,32 @@ function labelBody(u: U, m: LabelMedia, c: LabelContent, img: LabelImages, o: La
   // is a box-model fundamental; any renderer that can lay out a `<div>` at
   // all has to implement it.
   //
-  // basePad (1.4mm) is a fixed constant, not computed from content height —
-  // chosen to approximate the top gap the previous `justify-content:center`
-  // produced for typical (non-overflowing) content on the 2×1" template, so
-  // the pushDownMm=0 default looks materially unchanged. It's necessarily
-  // an approximation (a fixed offset can't track content-dependent centering
-  // exactly the way `center` did), verified against real rendered geometry,
-  // not guessed — see services/labelLayout.test.ts and the PR description
-  // for the measured before/after numbers.
-  const basePad = 1.4;
-  const pushDown = clamp(o.pushDownMm ?? 0, 0, 2.5);
+  // basePad and MAX_PUSH_DOWN_MM were re-derived (2026) after a physical
+  // print comparison showed pushDownMm=2.5 truncating content that
+  // pushDownMm=2.0 rendered correctly — real Chromium layout geometry (not
+  // just this string-based test file) confirmed font-size is byte-identical
+  // at every pushDown value, so the mechanism was never a font/scale
+  // calculation; it was overflow. The OLD basePad (1.4mm) already overflowed
+  // the 2×1" template's available content height by ~0.55mm for realistic
+  // worst-case content (org + SKU + a device name + a storage/color line + a
+  // 15-digit IMEI — all five lines at once, which is the common case for a
+  // fully-specified device, not an edge case) BEFORE any pushDown was even
+  // applied, and every extra mm of pushDown added exactly one more mm of
+  // overflow (confirmed 1:1 linear via real rendered geometry — see the PR
+  // description for the measured numbers). A driver/print-pipeline auto-fit
+  // triggered by that overflow, not Chromium's own CSS layout, is the most
+  // likely source of the truncation and size change actually seen on paper —
+  // consistent with this file's other documented history of print-driver
+  // quirks invisible to any in-browser or automated check. The fix removes
+  // the trigger condition entirely rather than chasing the driver behavior:
+  // basePad (0.35mm) is calibrated so the worst-case content has ZERO
+  // overflow at pushDownMm=0, and MAX_PUSH_DOWN_MM (0.5mm, exported above)
+  // is the exact remaining headroom before that same worst-case content
+  // would start overflowing again. Every value in [0, MAX_PUSH_DOWN_MM] is
+  // therefore provably overflow-free for the worst realistic content on the
+  // tightest template — not merely "smaller than before."
+  const basePad = 0.35;
+  const pushDown = clamp(o.pushDownMm ?? 0, 0, MAX_PUSH_DOWN_MM);
   const contentPadTop = basePad + pushDown;
   // `flex-shrink:0` on every line below is load-bearing, not decoration: the
   // column has a fixed cross-size (stretched to the row's height) and
