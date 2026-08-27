@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+// @vitest-environment happy-dom
+import { describe, it, expect, afterEach } from 'vitest';
 import { assertOnline, OfflineError } from './functionsGuard';
 
 const setOnline = (value: boolean) => {
