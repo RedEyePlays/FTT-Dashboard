@@ -41,7 +41,10 @@ const shelfPrice = (i: InventoryItem): number =>
 // `qr` is a small IMEI/serial QR data URL — only rendered when the item has
 // one, positioned as a corner overlay so it never crowds the centered
 // price/name stack.
-const tagBody = (item: InventoryItem, store: string, qr?: string): string => {
+// Exported for tests — asserting on the real generated markup/CSS instead of
+// only on window.open-dependent behavior (printShelfTag/printShelfTagsBatch
+// need a DOM window and can't run in the plain node test environment).
+export const tagBody = (item: InventoryItem, store: string, qr?: string): string => {
   const name = getDeviceDisplayName(item);
   const specs: string[] = [];
   if (item.storage) specs.push(esc(item.storage));
@@ -63,7 +66,7 @@ const tagBody = (item: InventoryItem, store: string, qr?: string): string => {
     </div>`;
 };
 
-const TAG_STYLE = `
+export const TAG_STYLE = `
   * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   html, body { margin: 0; padding: 0; background: #fff; }
   .tag-page-inner { position: relative; width: 100%; height: 100%; }
@@ -74,9 +77,14 @@ const TAG_STYLE = `
   }
   .store { font-size: 3mm; letter-spacing: 0.3mm; text-transform: uppercase; color: #222; line-height: 1; }
   .name { font-size: 5.2mm; font-weight: 800; line-height: 1.1; margin-top: 0.8mm; text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .specs { font-size: 3.1mm; color: #333; margin-top: 0.5mm; text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .price { font-size: 10mm; font-weight: 900; letter-spacing: -0.2mm; border-top: 0.3mm solid #000; border-bottom: 0.3mm solid #000; padding: 0.8mm 0; margin-top: 1mm; }
-  .sku { font-family: 'SF Mono', ui-monospace, Menlo, Consolas, monospace; font-size: 2.9mm; letter-spacing: 0.3mm; margin-top: 0.8mm; }
+  .specs { font-size: 3.1mm; font-weight: 700; color: #333; margin-top: 0.5mm; text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Price used to be the single largest element on the tag (10mm) — bold
+     weight now does the job of making it the standout number, so it no
+     longer also needs to dominate purely on size; shrunk to 7.5mm, which
+     still reads clearly larger than every other line (specs/sku are ~3mm)
+     without crowding the rest of the tag. */
+  .price { font-size: 7.5mm; font-weight: 900; letter-spacing: -0.2mm; border-top: 0.3mm solid #000; border-bottom: 0.3mm solid #000; padding: 0.6mm 0; margin-top: 1mm; }
+  .sku { font-family: 'SF Mono', ui-monospace, Menlo, Consolas, monospace; font-weight: 700; font-size: 2.9mm; letter-spacing: 0.3mm; margin-top: 0.8mm; }
   /* Small IMEI/serial QR — a corner overlay, well clear of the centered
      price/name stack. Sized just large enough to scan reliably, nowhere
      near the full-size QR on the ZP 450 inventory label. Deliberately NOT

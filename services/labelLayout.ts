@@ -23,7 +23,7 @@ export interface LabelContent {
   org: string;      // FlipThatTech
   code: string;     // SKU (inventory) or Repair ID (repairs) — very large
   device: string;   // device / accessory name
-  sub?: string;     // storage · color, or repair type
+  sub?: string;     // storage · color · battery health, or repair type
   serial?: string;  // IMEI / serial — large, bold, high-contrast
   status?: string;  // status badge label
 }
@@ -196,6 +196,16 @@ export function textColumnWidthMm(m: LabelMedia, opts: { padMm?: number; showQr:
 export function shortLabelSku(sku: string): string {
   const prefix = `${INVENTORY_SKU_PREFIX}-`;
   return sku.startsWith(prefix) ? sku.slice(prefix.length) : sku;
+}
+
+// The device label's "sub" line (LabelContent.sub): storage · color · battery
+// health, skipping anything unset. Battery health is a resale-relevant number
+// staff read off the shelf next to the QR (condition varies a lot between two
+// otherwise-identical listings), so it belongs on the printed label itself,
+// not just in the app. Takes plain strings (not InventoryItem) so this file
+// doesn't need to depend on ../types.
+export function deviceSubLine(parts: { storage?: string; color?: string; batteryHealth?: string }): string | undefined {
+  return [parts.storage, parts.color, parts.batteryHealth && `Batt ${parts.batteryHealth}`].filter(Boolean).join(' · ') || undefined;
 }
 
 // A unit emitter: mm for print, px (scaled) for the preview.
