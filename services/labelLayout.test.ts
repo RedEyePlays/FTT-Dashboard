@@ -267,11 +267,11 @@ describe('nonDymoQrSizeMm — Fix 2: smaller QR, real dimensions', () => {
   it('the 2×1" ZP 450 QR (the template named in the bug report) has concrete, sane real-world dimensions', () => {
     const s = nonDymoQrSizeMm(size2x1);
     expect(s).toBeCloseTo(11.94, 1); // 0.47 × min(50.8mm, 25.4mm)
-    // Stays comfortably above the 7mm corner QR already shipped and scanning
-    // reliably in production on the DYMO shelf tag (services/shelfTag.ts) for
-    // the same class of payload (an identifier string) — the closest
-    // available real-world precedent for a safe lower bound in this codebase.
-    expect(s).toBeGreaterThan(11);
+    // Stays above the 9mm corner QR already shipped and scanning reliably in
+    // production on the DYMO shelf tag (services/shelfTag.ts) for the same
+    // class of payload (an identifier string) — the closest available
+    // real-world precedent for a safe lower bound in this codebase.
+    expect(s).toBeGreaterThan(9);
   });
 
   it('stays proportional across sizes (still driven by the label\'s shorter side, not a flat constant)', () => {

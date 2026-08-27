@@ -27,7 +27,7 @@ const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 
 const today = () => todayISO();
 const money = (n: number) => `$${n.toFixed(2)}`;
 
-const PAID_BY_LABEL: Record<PaidBy, string> = { runner: 'Runner paid', store: 'Store paid', personal: 'Personal paid' };
+const PAID_BY_LABEL: Record<PaidBy, string> = { runner: 'Runner paid', store: 'Store paid', personal: 'Personal (owner) paid' };
 
 const STATUS_META: Record<DropOffStatus, { label: string; cls: string }> = {
   pending:  { label: 'Pending review', cls: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400' },
@@ -268,6 +268,16 @@ const EntriesTab: React.FC<{
                     </button>
                   ))}
                 </div>
+                {/* dropOffAcceptDrawerEffect (domain/dropoffs.ts) only logs a
+                    cash-out for paidBy === 'store' — 'runner' and 'personal'
+                    never touch the drawer. Spelled out here so it doesn't
+                    depend on staff already knowing that rule. */}
+                {form.paidBy === 'store' && form.purchasePrice > 0 && (
+                  <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-1.5">Accepting this drop-off will log a ${form.purchasePrice.toFixed(2)} cash-out against today's drawer.</p>
+                )}
+                {form.paidBy === 'personal' && (
+                  <p className="text-[11px] text-slate-400 mt-1.5">Owner paid out of pocket — the purchase price still applies to the item's cost basis, but this never touches the store's cash drawer/float.</p>
+                )}
               </div>
               <div className="col-span-2">
                 <label className={lbl}>Notes</label>

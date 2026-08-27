@@ -71,28 +71,39 @@ export const TAG_STYLE = `
   html, body { margin: 0; padding: 0; background: #fff; }
   .tag-page-inner { position: relative; width: 100%; height: 100%; }
   .tag-body {
-    width: 100%; height: 100%; padding: 1.5mm 2mm;
+    width: 100%; height: 100%;
+    /* Asymmetric top/bottom padding (was 1.5mm/1.5mm) nudges the centered
+       content stack down by ~1mm — there's spare room at the bottom (the
+       price line shrank in a prior change, and the stack no longer fills
+       the label height), so a small downward shift reads better without
+       crowding anything or touching the QR corner overlay. Horizontal
+       padding is unchanged; total top+bottom padding is unchanged too
+       (2.5mm + 0.5mm = 1.5mm + 1.5mm), so this is a pure position shift,
+       not a size change. */
+    padding: 2.5mm 2mm 0.5mm;
     display: flex; flex-direction: column; justify-content: center; align-items: center;
     font-family: 'Inter', system-ui, Arial, sans-serif; color: #000; overflow: hidden;
   }
-  .store { font-size: 3mm; letter-spacing: 0.3mm; text-transform: uppercase; color: #222; line-height: 1; }
-  .name { font-size: 5.2mm; font-weight: 800; line-height: 1.1; margin-top: 0.8mm; text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .specs { font-size: 3.1mm; font-weight: 700; color: #333; margin-top: 0.5mm; text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .store { font-size: 3mm; font-weight: 700; letter-spacing: 0.3mm; text-transform: uppercase; color: #222; line-height: 1; }
+  .name { font-size: 5.2mm; font-weight: 800; line-height: 1.1; margin-top: 1.3mm; text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .specs { font-size: 3.1mm; font-weight: 700; color: #333; margin-top: 1mm; text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* Price used to be the single largest element on the tag (10mm) — bold
      weight now does the job of making it the standout number, so it no
      longer also needs to dominate purely on size; shrunk to 7.5mm, which
      still reads clearly larger than every other line (specs/sku are ~3mm)
      without crowding the rest of the tag. */
-  .price { font-size: 7.5mm; font-weight: 900; letter-spacing: -0.2mm; border-top: 0.3mm solid #000; border-bottom: 0.3mm solid #000; padding: 0.6mm 0; margin-top: 1mm; }
-  .sku { font-family: 'SF Mono', ui-monospace, Menlo, Consolas, monospace; font-weight: 700; font-size: 2.9mm; letter-spacing: 0.3mm; margin-top: 0.8mm; }
+  .price { font-size: 7.5mm; font-weight: 900; letter-spacing: -0.2mm; border-top: 0.3mm solid #000; border-bottom: 0.3mm solid #000; padding: 0.6mm 0; margin-top: 1.6mm; }
+  .sku { font-family: 'SF Mono', ui-monospace, Menlo, Consolas, monospace; font-weight: 700; font-size: 2.9mm; letter-spacing: 0.3mm; margin-top: 1.4mm; }
   /* Small IMEI/serial QR — a corner overlay, well clear of the centered
-     price/name stack. Sized just large enough to scan reliably, nowhere
-     near the full-size QR on the ZP 450 inventory label. Deliberately NOT
+     price/name stack. Bumped from 7mm to 9mm for easier scanning — still
+     nowhere near the full-size QR on the ZP 450 inventory label, and
+     positioned as an absolute overlay on .tag-page-inner (not .tag-body),
+     so it's unaffected by the content push-down above. Deliberately NOT
      image-rendering:pixelated — this tag is rotated 90° via CSS transform
      to print correctly (see below), and nearest-neighbor scaling combined
      with that rotation is what made the QR look rough/jagged. Smooth
      (default) scaling reads far cleaner at this size. */
-  .tag-qr { position: absolute; top: 1.2mm; right: 1.2mm; width: 7mm; height: 7mm; }
+  .tag-qr { position: absolute; top: 1.2mm; right: 1.2mm; width: 9mm; height: 9mm; }
 `;
 
 // Wraps tag content for the DYMO portrait-native page: one .tag-page per
