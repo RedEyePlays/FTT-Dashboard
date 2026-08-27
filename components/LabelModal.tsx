@@ -5,7 +5,7 @@ import JsBarcode from 'jsbarcode';
 import { jsPDF } from 'jspdf';
 import { InventoryItem, DeviceStatus } from '../types';
 import { getDeviceDisplayName, kindOf } from '../domain/inventory';
-import { LabelContent, labelPreview, labelPrintDoc, mmOf, maxSafePushDownMm } from '../services/labelLayout';
+import { LabelContent, labelPreview, labelPrintDoc, mmOf, maxSafePushDownMm, shortLabelSku, nonDymoQrSizeMm } from '../services/labelLayout';
 import { getLabelSizes, getStoreProfile, getLabelSpacing } from './SettingsModal';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 
@@ -115,9 +115,13 @@ export const LabelModal: React.FC<Props> = ({ item, onClose }) => {
   };
 
   const storeName = getStoreProfile().storeName;
+  // Label code is the SKU shortened for DISPLAY ONLY (see shortLabelSku's own
+  // comment) — the stored item.sku, the QR payload below (which still
+  // encodes the full `sku`), receipts, reports and search all keep the full
+  // value untouched.
   const content: LabelContent = {
     org: storeName,
-    code: isAccessory ? (upc || sku) : sku,
+    code: shortLabelSku(isAccessory ? (upc || sku) : sku),
     device: name,
     sub: [item.storage, item.color].filter(Boolean).join(' · ') || undefined,
     serial: item.imei || undefined,
@@ -177,14 +181,32 @@ export const LabelModal: React.FC<Props> = ({ item, onClose }) => {
     // 1.1mm known-good default is added between each line so "Line spacing"
     // spreads the PDF layout the same way it does the HTML preview/print.
     const lineGapExtra = media.dymo ? 0 : (Math.min(1.5, Math.max(0, spacing.lineGapMm ?? 1.1)) - 1.1);
-    const qrS = media.dymo ? h - pad * 2 - (prefs.showBarcode ? 6.5 : 0) : Math.min(w, h) * (media.h >= 3 ? 0.42 : 0.6);
+    const qrS = media.dymo ? h - pad * 2 - (prefs.showBarcode ? 6.5 : 0) : nonDymoQrSizeMm(media);
+    // Text column stops before the QR so a wrapped value never runs under it —
+    // matches the flex row's real width in the HTML preview/print path.
+    const colW = media.dymo ? undefined : Math.max(10, w - pad * 2 - (prefs.showQR && qr ? qrS + 2 : 0));
+    // Safety net (Fix 3): if the shortened SKU (or a 15-digit IMEI) still
+    // doesn't fit the column after Fix 1 + Fix 2, wrap it to a 2nd line
+    // instead of letting it run past the QR/edge — never truncate the value
+    // itself. Capped at 2 lines, same rule the HTML path follows.
+    const displaySku = shortLabelSku(sku);
     pdf.setFont('helvetica', 'bold'); pdf.setFontSize(7); pdf.text(storeName, pad, pad + 2.6 + pushDown);
-    pdf.setFont('courier', 'bold'); pdf.setFontSize(media.dymo ? 20 : 14); pdf.text(sku, pad, pad + 9 + pushDown);
-    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(media.dymo ? 12 : 10); pdf.text(name.slice(0, 30), pad, pad + 14.5 + pushDown);
+    pdf.setFont('courier', 'bold'); pdf.setFontSize(media.dymo ? 20 : 14);
+    const skuLineH = media.dymo ? 7 : 5;
+    const skuLines = colW ? (pdf.splitTextToSize(displaySku, colW) as string[]).slice(0, 2) : [displaySku];
+    skuLines.forEach((ln, i) => pdf.text(ln, pad, pad + 9 + pushDown + i * skuLineH));
+    const skuExtra = (skuLines.length - 1) * skuLineH;
+    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(media.dymo ? 12 : 10); pdf.text(name.slice(0, 30), pad, pad + 14.5 + pushDown + skuExtra);
     pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8);
-    let y = pad + 19 + pushDown;
+    let y = pad + 19 + pushDown + skuExtra;
     if (content.sub) { pdf.text(content.sub, pad, y); y += 4.5 + lineGapExtra; }
-    if (item.imei) { pdf.setFont('courier', 'bold'); pdf.setFontSize(11); pdf.text(item.imei, pad, y); pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8); y += 5 + lineGapExtra; }
+    if (item.imei) {
+      pdf.setFont('courier', 'bold'); pdf.setFontSize(11);
+      const imeiLines = colW ? (pdf.splitTextToSize(item.imei, colW) as string[]).slice(0, 2) : [item.imei];
+      imeiLines.forEach((ln, i) => pdf.text(ln, pad, y + i * 5));
+      y += imeiLines.length * 5 + lineGapExtra;
+      pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8);
+    }
     if (prefs.showStatus && status) { pdf.setFont('helvetica', 'bold'); pdf.text(status.toUpperCase(), pad, y); pdf.setFont('helvetica', 'normal'); }
     if (prefs.showQR && qr) pdf.addImage(qr, 'PNG', w - pad - qrS, pad, qrS, qrS);
     if (prefs.showBarcode && barcode) pdf.addImage(barcode, 'PNG', pad, h - pad - 5.5, w - pad * 2, 5.5);

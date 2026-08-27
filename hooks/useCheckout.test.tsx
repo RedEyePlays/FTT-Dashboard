@@ -47,6 +47,24 @@ function mount(props: { onComplete: (p: any) => void; onGenerateSku?: (t?: any) 
   return { get cx() { return cx; }, unmount: () => { act(() => root.unmount()); host.remove(); } };
 }
 
+describe('useCheckout Quick Sale search', () => {
+  it('finds the same device typing either the short (prefix-stripped label) or full SKU form', () => {
+    // device.sku is 'FTT-0001'; the printed shelf label shows just '0001'
+    // (services/labelLayout.ts's shortLabelSku, display-only) — staff need to
+    // be able to type either off the shelf and land on the same device.
+    const onComplete = vi.fn();
+    const h = mount({ onComplete });
+
+    act(() => { h.cx.setSearch('0001'); });
+    expect(h.cx.availableDevices.map(d => d.id)).toEqual(['dev-1']);
+
+    act(() => { h.cx.setSearch('FTT-0001'); });
+    expect(h.cx.availableDevices.map(d => d.id)).toEqual(['dev-1']);
+
+    h.unmount();
+  });
+});
+
 describe('useCheckout re-entrancy guard', () => {
   it('two overlapping handleCheckout calls (racing an awaited SKU generation) complete the sale only once', async () => {
     // A custom device flagged addToInventory is the one deterministic async
