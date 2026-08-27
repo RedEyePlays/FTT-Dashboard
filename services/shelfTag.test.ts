@@ -41,12 +41,13 @@ describe('shelf tag styling — bold numbers, price no longer needs to be oversi
 });
 
 describe('shelf tag — bigger QR, all-bold text, pushed-down content, and larger line gaps', () => {
-  it('the QR is bigger than before (7mm → 9mm)', () => {
+  it('the QR is bigger than before (9mm → 20mm)', () => {
     const rule = TAG_STYLE.match(/\.tag-qr\s*\{[^}]*\}/)?.[0] || '';
     const widthMm = parseFloat(rule.match(/width:\s*([\d.]+)mm/)![1]);
     const heightMm = parseFloat(rule.match(/height:\s*([\d.]+)mm/)![1]);
-    expect(widthMm).toBeGreaterThan(7);
-    expect(heightMm).toBeGreaterThan(7);
+    expect(widthMm).toBeGreaterThan(9);
+    expect(heightMm).toBeGreaterThan(9);
+    expect(widthMm).toBeCloseTo(20, 0);
     expect(widthMm).toBe(heightMm); // stays square
   });
 
@@ -58,15 +59,49 @@ describe('shelf tag — bigger QR, all-bold text, pushed-down content, and large
     }
   });
 
-  it('content is nudged down (asymmetric top/bottom padding), without changing the total padding — a pure position shift, not a resize', () => {
+  it('content is nudged down (asymmetric top/bottom padding), without changing the vertical total — a pure position shift, not a resize', () => {
     const rule = TAG_STYLE.match(/\.tag-body\s*\{[\s\S]*?\n\s*\}/)?.[0] || '';
-    const padMatch = rule.match(/padding:\s*([\d.]+)mm\s+([\d.]+)mm\s+([\d.]+)mm/);
-    expect(padMatch).toBeTruthy(); // 3-value shorthand: top, left/right, bottom
+    // 4-value shorthand now (top, right, bottom, left) — right grew to make
+    // room for the bigger QR (see the next test), which is a real size
+    // change on that one side, but top vs. bottom is still the pure
+    // "nudged down" position shift from the prior pass.
+    const padMatch = rule.match(/padding:\s*([\d.]+)mm\s+([\d.]+)mm\s+([\d.]+)mm\s+([\d.]+)mm/);
+    expect(padMatch).toBeTruthy();
     const [, top, , bottom] = padMatch!.map(Number);
     expect(top).toBeGreaterThan(bottom); // shifted down: more room reserved above than below
   });
 
-  it('the gap between every line grew from the previous values (name/specs/price/sku margin-top)', () => {
+  it('the right padding reserves room for the bigger QR so centered text stays clear of it', () => {
+    const bodyRule = TAG_STYLE.match(/\.tag-body\s*\{[\s\S]*?\n\s*\}/)?.[0] || '';
+    const padMatch = bodyRule.match(/padding:\s*[\d.]+mm\s+([\d.]+)mm\s+[\d.]+mm\s+[\d.]+mm/);
+    const rightPad = parseFloat(padMatch![1]);
+    const qrRule = TAG_STYLE.match(/\.tag-qr\s*\{[^}]*\}/)?.[0] || '';
+    const qrWidth = parseFloat(qrRule.match(/width:\s*([\d.]+)mm/)![1]);
+    const qrInset = parseFloat(qrRule.match(/right:\s*([\d.]+)mm/)![1]);
+    // The reserved zone must cover at least the QR's full footprint from the
+    // label's right edge (its width + its own inset from that edge) — with
+    // some margin, not just exactly touching it.
+    expect(rightPad).toBeGreaterThan(qrWidth + qrInset);
+  });
+
+  it('every font-size grew from the previous pass ("make the scale a bit bigger")', () => {
+    const oldSizes: Record<string, number> = { '.store': 3, '.name': 5.2, '.specs': 3.1, '.price': 7.5, '.sku': 2.9 };
+    for (const [cls, oldSize] of Object.entries(oldSizes)) {
+      const rule = TAG_STYLE.match(new RegExp(`\\${cls}\\s*\\{[^}]*\\}`))?.[0] || '';
+      const size = parseFloat(rule.match(/font-size:\s*([\d.]+)mm/)?.[1] || '0');
+      expect(size, `${cls} font-size should have grown`).toBeGreaterThan(oldSize);
+    }
+  });
+
+  it('the price is still the biggest, boldest number on the tag after the size bump', () => {
+    const sizeOf = (cls: string) => parseFloat(TAG_STYLE.match(new RegExp(`\\${cls}\\s*\\{[^}]*font-size:\\s*([\\d.]+)mm`))![1]);
+    const priceSize = sizeOf('.price');
+    expect(priceSize).toBeGreaterThan(sizeOf('.specs'));
+    expect(priceSize).toBeGreaterThan(sizeOf('.sku'));
+    expect(priceSize).toBeLessThan(10); // still not back to the original oversized 10mm
+  });
+
+  it('the gap between every line is still larger than the very first (pre-restyle) values', () => {
     const oldGaps: Record<string, number> = { '.name': 0.8, '.specs': 0.5, '.price': 1, '.sku': 0.8 };
     for (const [cls, oldGap] of Object.entries(oldGaps)) {
       const rule = TAG_STYLE.match(new RegExp(`\\${cls}\\s*\\{[^}]*\\}`))?.[0] || '';
