@@ -69,7 +69,7 @@ async function requireProfitVisibility(uid: string): Promise<void> {
  * Ops:
  *   - insights:     financial insights markdown from the inventory log
  *   - bulkParse:    parse free text into structured inventory items
- *   - imeiExtract:  read an IMEI/serial from a base64 image
+ *   - imeiExtract:  read IMEI1/IMEI2/Serial/EID separately from a base64 image
  *   - chat:         conversational assistant over the inventory
  */
 export const aiGenerate = onCall(
@@ -97,7 +97,7 @@ export const aiGenerate = onCall(
       case "bulkParse":
         return { items: await runBulkParse(ai, body.text ?? "") };
       case "imeiExtract":
-        return { text: await runImeiExtract(ai, body.base64Image ?? "") };
+        return await runImeiExtract(ai, body.base64Image ?? "");
       case "chat":
         await requireProfitVisibility(request.auth.uid);
         return {
@@ -222,12 +222,31 @@ async function runBulkParse(ai: GoogleGenAI, text: string): Promise<unknown[]> {
   return [];
 }
 
+interface ImeiExtractResult {
+  imei1: string;
+  imei2: string;
+  serial: string;
+  eid: string;
+}
+
+// Tier 3 (last resort) of the client's three-tier scanner — only reached once
+// the free barcode/on-device-OCR tiers both fail. Returns structured fields
+// so the client can label IMEI1/IMEI2/Serial/EID separately instead of
+// guessing which single string it got back. Every field is whatever the
+// model literally read, or an empty string when that field isn't visible in
+// the image — the prompt is explicit about never guessing/inventing a value,
+// and the client independently re-validates (Luhn) before trusting anything
+// as "verified" (see domain/imeiScan.ts's validateExtractedFields), so this
+// function does not need to (and cannot reliably) enforce the checksum
+// itself.
 async function runImeiExtract(
   ai: GoogleGenAI,
   base64Image: string
-): Promise<string> {
+): Promise<ImeiExtractResult> {
   // Remove header if present (e.g., "data:image/jpeg;base64,")
   const cleanBase64 = base64Image.split(",")[1] || base64Image;
+  const empty: ImeiExtractResult = { imei1: "", imei2: "", serial: "", eid: "" };
+  if (!cleanBase64) return empty;
 
   const response = await ai.models.generateContent({
     model: "gemini-2.5-flash",
@@ -240,13 +259,48 @@ async function runImeiExtract(
           },
         },
         {
-          text: "Look at this image. Find the IMEI number or Serial Number. Return ONLY the alphanumeric string. If there are multiple, prefer IMEI. Do not include labels like 'IMEI:' or 'S/N', just the number. If none found, return nothing.",
+          text: `Look at this image of a phone/tablet's "About" screen or its
+retail box label. Identify each of these fields SEPARATELY if visible:
+- Primary IMEI, labelled any of: "IMEI", "IMEI1", "IMEI 1"
+- Secondary IMEI (dual-SIM devices), labelled any of: "IMEI2", "IMEI 2"
+- Serial number, labelled any of: "Serial Number", "Serial No", "S/N"
+- EID (eSIM identifier), labelled: "EID"
+
+For each field, return ONLY the literal alphanumeric value as printed/shown —
+never the label text itself, never spaces or punctuation inside the value.
+If a field is not visible anywhere in the image, leave it as an empty
+string — do NOT guess, estimate, or reuse a value from another field. Do not
+invent a value that isn't actually legible in the image.`,
         },
       ],
     },
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          imei1: { type: Type.STRING, description: "Primary IMEI/IMEI1, digits only. Empty string if not visible." },
+          imei2: { type: Type.STRING, description: "Secondary IMEI2 (dual-SIM), digits only. Empty string if not visible." },
+          serial: { type: Type.STRING, description: "Serial number as printed. Empty string if not visible." },
+          eid: { type: Type.STRING, description: "EID, digits only. Empty string if not visible." },
+        },
+        required: ["imei1", "imei2", "serial", "eid"],
+      },
+    },
   });
 
-  return response.text?.trim() || "";
+  if (!response.text) return empty;
+  try {
+    const parsed = JSON.parse(response.text);
+    return {
+      imei1: typeof parsed.imei1 === "string" ? parsed.imei1 : "",
+      imei2: typeof parsed.imei2 === "string" ? parsed.imei2 : "",
+      serial: typeof parsed.serial === "string" ? parsed.serial : "",
+      eid: typeof parsed.eid === "string" ? parsed.eid : "",
+    };
+  } catch {
+    return empty;
+  }
 }
 
 async function runChat(
