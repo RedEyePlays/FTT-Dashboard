@@ -541,6 +541,26 @@ export interface PayPeriodPaid {
   rate: number;           // hourly rate snapshot at sign-off
 }
 
+// A distinct, EARLIER step than PayPeriodPaid: the manager/owner reviewed one
+// employee's numbers for a period and signed off that they're correct —
+// before any money changes hands. Same idempotent-key shape and snapshot
+// discipline as PayPeriodPaid, in its own collection so "approved" and
+// "paid" are two independently-trackable states (a period can be approved
+// without being paid yet, but never paid without having been approved —
+// enforced in App.tsx's handleMarkPaid).
+export interface PayPeriodApproval {
+  id: string;              // `${userId}__${periodStart}` — idempotent per user + period
+  userId: string;
+  periodStart: string;     // YYYY-MM-DD (inclusive)
+  periodEnd: string;       // YYYY-MM-DD (inclusive)
+  approvedBy: string;      // owner/manager uid (payroll.manage tier)
+  approvedByEmail?: string;
+  approvedAt: number;      // epoch ms
+  hours: number;           // hours snapshot at approval time
+  gross: number;           // gross pay snapshot at approval time
+  rate: number;            // hourly rate snapshot at approval time
+}
+
 // --- Repairs ---
 // 'internal' = a device the shop owns and is refurbishing before resale (no
 // customer involved); links back to the InventoryItem via `inventoryId`.

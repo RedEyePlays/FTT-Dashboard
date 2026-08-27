@@ -31,6 +31,7 @@ import { runOcrTier } from '../services/imeiOcr';
 import { extractImeiFromImage } from '../services/geminiService';
 
 const VALID_IMEI = '490154203237518';
+const INVALID_IMEI = '490154203237519'; // last digit flipped — 15 digits, fails Luhn
 
 function mount(ui: React.ReactElement) {
   const host = document.createElement('div');
@@ -126,6 +127,44 @@ describe('ImeiScanner tier fallthrough', () => {
 
     expect(runOcrTier).toHaveBeenCalled();
     expect(extractImeiFromImage).toHaveBeenCalledTimes(1); // OCR's garbage token classified to nothing, fell through
+    unmount();
+  });
+
+  it('a Luhn-failing (unverified) OCR candidate is NOT accepted — it falls through to AI, which wins if it succeeds', async () => {
+    (isBarcodeDetectionSupported as any).mockReturnValue(true);
+    (detectBarcodes as any).mockResolvedValue([]); // barcode tier finds nothing
+    (runOcrTier as any).mockResolvedValue([INVALID_IMEI]); // 15 digits, but fails Luhn — a misread
+    (extractImeiFromImage as any).mockResolvedValue({ imei1: VALID_IMEI, imei2: '', serial: '', eid: '' });
+
+    const onScan = vi.fn();
+    const { host, unmount } = mount(<ImeiScanner onScan={onScan} onClose={() => {}} />);
+    await flush();
+
+    await clickCapture(host);
+
+    // OCR's unverified candidate did not stop the tier chain — AI still ran
+    // and its correct result won out, never the OCR misread.
+    expect(extractImeiFromImage).toHaveBeenCalledTimes(1);
+    expect(onScan).toHaveBeenCalledWith(VALID_IMEI);
+    expect(onScan).not.toHaveBeenCalledWith(INVALID_IMEI);
+    unmount();
+  });
+
+  it('a Luhn-failing OCR candidate is still surfaced (flagged) as a last resort when AI also finds nothing', async () => {
+    (isBarcodeDetectionSupported as any).mockReturnValue(true);
+    (detectBarcodes as any).mockResolvedValue([]);
+    (runOcrTier as any).mockResolvedValue([INVALID_IMEI]);
+    (extractImeiFromImage as any).mockResolvedValue({ imei1: '', imei2: '', serial: '', eid: '' }); // AI finds nothing either
+
+    const { host, unmount } = mount(<ImeiScanner onScan={() => {}} onClose={() => {}} />);
+    await flush();
+
+    await clickCapture(host);
+
+    expect(extractImeiFromImage).toHaveBeenCalledTimes(1);
+    // Not silently dropped: the unverified candidate is shown, flagged.
+    expect(host.textContent).toContain(INVALID_IMEI);
+    expect(host.textContent).toContain("couldn't verify");
     unmount();
   });
 });

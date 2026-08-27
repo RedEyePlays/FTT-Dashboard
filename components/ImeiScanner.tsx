@@ -4,7 +4,7 @@ import { extractImeiFromImage } from '../services/geminiService';
 import { detectBarcodes, isBarcodeDetectionSupported } from '../services/imeiBarcode';
 import { runOcrTier } from '../services/imeiOcr';
 import {
-  ScannedField, ScanTier, classifyScannedValues, validateExtractedFields, mergeScannedFields,
+  ScannedField, ScanTier, classifyScannedValues, validateExtractedFields, mergeScannedFields, hasVerifiedField,
 } from '../domain/imeiScan';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 
@@ -131,7 +131,11 @@ export const ImeiScanner: React.FC<ImeiScannerProps> = ({ onScan, onClose }) => 
       try {
         const raws = await detectBarcodes(videoRef.current);
         const classified = classifyScannedValues(raws);
-        if (classified.length) {
+        // Only a VERIFIED read stops the live loop — an unverified (Luhn-
+        // failing) decode is a misread more often than a real anomaly, and
+        // the loop will just try again on the next frame rather than
+        // showing a shaky guess.
+        if (hasVerifiedField(classified)) {
           stopLiveBarcodeLoop();
           applyTierResult('barcode', classified);
         }
@@ -178,19 +182,32 @@ export const ImeiScanner: React.FC<ImeiScannerProps> = ({ onScan, onClose }) => 
 
       // Tier 1 backstop: a barcode that never registered during the live
       // loop (or the loop wasn't supported) might still be caught on the
-      // exact captured frame.
+      // exact captured frame. Only a VERIFIED field stops progression here —
+      // an unverified (Luhn-failing) candidate is kept as a last-resort
+      // fallback (shown only if nothing better turns up) rather than being
+      // accepted or silently discarded.
       const barcodeRaws = await detectBarcodes(canvas);
       const barcodeFields = classifyScannedValues(barcodeRaws);
-      if (barcodeFields.length) { applyTierResult('barcode', barcodeFields); return; } // STOP — no further calls
+      if (hasVerifiedField(barcodeFields)) { applyTierResult('barcode', barcodeFields); return; } // STOP — no further calls
+      let weakFields = barcodeFields;
+      let weakTier: ScanTier | null = barcodeFields.length ? 'barcode' : null;
 
-      // Tier 2: on-device OCR, still free/offline.
+      // Tier 2: on-device OCR, still free/offline. Same rule: an unverified
+      // OCR read (OCR misreads digits far more than barcodes do) falls
+      // through to AI instead of being accepted.
       const ocrTokens = await runOcrTier(cropToRegionOfInterest(canvas));
       const ocrFields = classifyScannedValues(ocrTokens);
-      if (ocrFields.length) { applyTierResult('ocr', ocrFields); return; }
+      if (hasVerifiedField(ocrFields)) { applyTierResult('ocr', ocrFields); return; }
+      if (ocrFields.length) { weakFields = mergeScannedFields(weakFields, ocrFields); weakTier = 'ocr'; }
 
-      // Tier 3: Gemini, last resort.
+      // Tier 3: Gemini, last resort. If even AI finds nothing, fall back to
+      // whatever unverified candidate an earlier tier found — flagged
+      // "couldn't verify" on the result screen — rather than a bare error.
       const gotAi = await runAiTier(canvas);
-      if (!gotAi) setError('No IMEI or serial detected. Try moving closer, reducing glare, or use "Scan with AI".');
+      if (!gotAi) {
+        if (weakFields.length) applyTierResult(weakTier!, weakFields);
+        else setError('No IMEI or serial detected. Try moving closer, reducing glare, or use "Scan with AI".');
+      }
     } catch (err) {
       setError('Failed to process image.');
     } finally {

@@ -3,7 +3,7 @@ import { User, signOut } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
 import {
   InventoryItem, Note, Task, Runner, DropOff, Settlement, Customer, SalesTransaction,
-  ActivityEntry, AppUser, WorkspaceInvite, AuditEntry, Repair, RepairBatch, TimeEntry, PayPeriodPaid, CashReconciliation, StaffNote,
+  ActivityEntry, AppUser, WorkspaceInvite, AuditEntry, Repair, RepairBatch, TimeEntry, PayPeriodPaid, PayPeriodApproval, CashReconciliation, StaffNote,
 } from '../types';
 import { decryptData } from '../services/security';
 import { AppSettings, mergeSettings } from '../domain/settings';
@@ -52,6 +52,7 @@ export function useWorkspaceData() {
   const [repairBatches, setRepairBatches] = useState<RepairBatch[]>([]);
   const [timeEntries, setTimeEntries] = useState<TimeEntry[]>([]);
   const [payPeriods, setPayPeriods] = useState<PayPeriodPaid[]>([]);
+  const [payPeriodApprovals, setPayPeriodApprovals] = useState<PayPeriodApproval[]>([]);
   const [cashReconciliations, setCashReconciliations] = useState<CashReconciliation[]>([]);
   const [staffNotes, setStaffNotes] = useState<StaffNote[]>([]);
   const [skuCounters, setSkuCounters] = useState<Record<string, number>>({});
@@ -214,6 +215,7 @@ export function useWorkspaceData() {
       subscribeCollection<Settlement>(workspaceId, 'settlements', setSettlements, onErr),
       subscribeCollection<TimeEntry>(workspaceId, 'timeEntries', setTimeEntries, onErr),
       subscribeCollection<PayPeriodPaid>(workspaceId, 'payPeriods', setPayPeriods, onErr),
+      subscribeCollection<PayPeriodApproval>(workspaceId, 'payPeriodApprovals', setPayPeriodApprovals, onErr),
     ];
     return () => subs.forEach(u => u());
   }, [user, appUser, workspaceId, reconnectKey, extendedEnabled]);
@@ -262,7 +264,7 @@ export function useWorkspaceData() {
     // collections
     devices, accessories, data, notes, setNotes, tasks, setTasks,
     runners, dropOffs, settlements, customers, salesTransactions,
-    repairs, repairBatches, timeEntries, payPeriods, cashReconciliations, staffNotes,
+    repairs, repairBatches, timeEntries, payPeriods, payPeriodApprovals, cashReconciliations, staffNotes,
     skuCounters, setSkuCounters, activityLog, lastBackup, settings,
     // connection status
     dbLoading, dbError, setDbError, reconnect,

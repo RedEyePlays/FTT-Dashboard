@@ -93,7 +93,7 @@ export const SettingsTextField: React.FC<{
   value: string | number;
   onChange: (v: string) => void;
   placeholder?: string;
-  type?: 'text' | 'number' | 'email' | 'tel' | 'url';
+  type?: 'text' | 'number' | 'email' | 'tel' | 'url' | 'date';
   min?: number;
   max?: number;
   step?: number;

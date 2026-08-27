@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
 import { InventoryItem, SalesTransaction, ActivityEntry, Repair, RepairBatch, CashReconciliation } from '../types';
 import { unreconciledDays, isRecognizedSale } from '../domain/reports';
+import { PayrollDue } from '../domain/timeclock';
 import { layawayTotals } from '../domain/layaway';
 import { isReversed } from '../domain/pos';
 import { todayISO } from '../domain/dates';
@@ -28,6 +29,10 @@ interface DashboardProps {
   // Omitted for anyone who can't reconcile, so no one sees a warning they
   // have no way to act on.
   cashReconciliations?: CashReconciliation[];
+  // Payroll-due flag (owner/manager — same tier as payroll.manage). Omitted
+  // for anyone who can't act on it, same reasoning as cashReconciliations.
+  payrollDue?: PayrollDue | null;
+  onViewPayroll?: () => void;
   onViewCash?: () => void;
   // Active-layaways tile (owner/manager tier, same as onViewCash) — omitted
   // hides the tile for anyone who can't reach the list it links to.
@@ -49,7 +54,7 @@ const relTime = (ts: number) => {
 };
 const platformLabel = (p?: string) => (p && p !== 'None / In-Store' ? p : 'In-Store');
 
-export const Dashboard: React.FC<DashboardProps> = ({ data, salesTransactions, activity, repairs = [], repairBatches = [], canViewProfit = true, onViewAnalytics, onViewRepairs, cashReconciliations, onViewCash, onViewLayaways }) => {
+export const Dashboard: React.FC<DashboardProps> = ({ data, salesTransactions, activity, repairs = [], repairBatches = [], canViewProfit = true, onViewAnalytics, onViewRepairs, cashReconciliations, onViewCash, onViewLayaways, payrollDue, onViewPayroll }) => {
   const mask = (v: string) => (canViewProfit ? v : '•••');
   const staleCash = useMemo(
     () => (cashReconciliations ? unreconciledDays(cashReconciliations, todayISO()) : []),
@@ -213,6 +218,27 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, salesTransactions, a
             </span>
           </span>
           {onViewCash && <ArrowRight className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />}
+        </button>
+      )}
+
+      {/* A pay period has ended and isn't marked paid yet — same spirit as the
+          unreconciled-cash flag above. */}
+      {payrollDue && (
+        <button
+          onClick={onViewPayroll}
+          disabled={!onViewPayroll}
+          className={`w-full flex items-center gap-3 text-left rounded-xl border border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-900/20 px-4 py-3 ${onViewPayroll ? 'hover:border-amber-400 cursor-pointer' : 'cursor-default'}`}
+        >
+          <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0" />
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-semibold text-amber-800 dark:text-amber-200">
+              Payroll due: period ending {new Date(payrollDue.period.end - 1).toLocaleDateString()} · {payrollDue.employeeCount} employee{payrollDue.employeeCount !== 1 ? 's' : ''} · ${payrollDue.totalGross.toFixed(2)}
+            </span>
+            <span className="block text-xs text-amber-700/80 dark:text-amber-300/80 truncate">
+              This period has ended and hasn't been marked paid yet.
+            </span>
+          </span>
+          {onViewPayroll && <ArrowRight className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />}
         </button>
       )}
 
