@@ -9,6 +9,7 @@ import {
   AppSettings, ThemeMode, PaymentMethodKey, CURRENCIES, TIME_ZONES,
   DASHBOARD_WIDGETS, STATUS_COLOR_OPTIONS, LabelSize, mergeLabelSizes,
 } from '../domain/settings';
+import { MAX_PUSH_DOWN_MM } from '../services/labelLayout';
 import { ROLE_PERMISSIONS, ROLE_LABEL } from '../services/rbac';
 import { REPAIR_STATUS_LABEL } from '../domain/repairs';
 import { formatPhoneInput } from '../domain/phone';
@@ -327,10 +328,10 @@ const LabelsSection: React.FC<{ draft: AppSettings; patch: PatchFn }> = ({ draft
           value={draft.labels.lineSpacingMm ?? ''} placeholder="Default (1.1mm)"
           onChange={v => patch('labels', { lineSpacingMm: v === '' ? undefined : Math.min(1.5, Math.max(0, parseFloat(v) || 0)) })}
           hint="Gap between the org/code/device/sub/serial lines. 0 = tight, max 1.5 — higher values overflow the small labels and can re-trigger print shrink-to-fit." />
-        <SettingsTextField label="Push content down (mm)" type="number" min={0} max={2.5} step={0.1}
+        <SettingsTextField label="Push content down (mm)" type="number" min={0} max={MAX_PUSH_DOWN_MM} step={0.05}
           value={draft.labels.contentPushDownMm ?? ''} placeholder="Default (0mm)"
-          onChange={v => patch('labels', { contentPushDownMm: v === '' ? undefined : (parseFloat(v) || 0) })}
-          hint="Shifts the whole text block down as one group, to close up whitespace below the last line — doesn't change the spacing between lines. Kept modest (max 2.5mm) since going too far crops the last line instead of shrinking the label." />
+          onChange={v => patch('labels', { contentPushDownMm: v === '' ? undefined : Math.min(MAX_PUSH_DOWN_MM, Math.max(0, parseFloat(v) || 0)) })}
+          hint={`Shifts the whole text block down as one group, to close up whitespace below the last line — doesn't change the spacing between lines or font size. Kept small (max ${MAX_PUSH_DOWN_MM}mm) — this is the verified ceiling where even a fully-specified device (long name, storage/color, 15-digit IMEI) never gets cropped on the smallest label; a previous, more generous ceiling (2.5mm) was confirmed by physical print comparison to crop content and appear to grow text size at higher values, even though this setting only ever emits a plain top offset.`} />
       </SettingsCard>
 
       <SettingsCard>
