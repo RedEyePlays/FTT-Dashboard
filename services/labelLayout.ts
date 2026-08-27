@@ -50,14 +50,83 @@ export interface LabelOpts {
 
 const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
 
-// Verified safe ceiling for "Push content down" — see the long comment above
-// its use in labelBody for how this was derived (real rendered geometry on
-// the tightest template, 2×1", with worst-case realistic content: org row +
-// SKU + a device name + a storage/color line + a 15-digit IMEI, all five
-// lines present at once). Exported so the two PDF-export paths
-// (components/LabelModal.tsx, components/RepairLabelModal.tsx) clamp to the
-// exact same verified-safe value instead of re-guessing their own.
-export const MAX_PUSH_DOWN_MM = 0.5;
+// Nominal ceiling for "Push content down" — a generous cap for content that
+// isn't using the full label (see maxSafePushDownMm below for the actual,
+// content-aware limit that's really enforced). A flat global ceiling small
+// enough to be safe for the WORST possible content (org + SKU + a long
+// device name + a storage/color line + a 15-digit IMEI, all five lines at
+// once — the common case for a fully-specified device, not an edge case)
+// made push-down imperceptible for every item that isn't that worst case —
+// which is most items. So the real safety limit is computed per render from
+// the content actually being printed (maxSafePushDownMm); this constant only
+// caps how far it's ever allowed to reach even when a short/sparse item has
+// tons of spare room, so the offset stays a "close up the gap" tweak, not an
+// arbitrary shove.
+export const MAX_PUSH_DOWN_MM = 6;
+
+// The base (pushDownMm=0) top offset for content on the non-Dymo templates —
+// see the long comment above its use in labelBody. Exported so
+// maxSafePushDownMm can compute the SAME baseline the real render uses.
+// 0.85mm, not the original 1.4mm: real rendered geometry showed the OLD
+// 1.4mm baseline already clipped ~0.55mm off the bottom of the worst-case
+// (all-five-lines) content even at pushDownMm=0, before push-down enters the
+// picture at all — a real, pre-existing defect, not introduced by this
+// feature. 0.85mm is exactly the reduction that zeroes that out (see the PR
+// description for the measured numbers).
+const BASE_PAD_MM = 0.85;
+
+/**
+ * How many additional mm of pushDownMm the given content can actually
+ * absorb on this template before ANY line's box would extend past the
+ * available content height — i.e. the real, content-aware safety ceiling,
+ * not a one-size-fits-none flat constant. Computed analytically from the
+ * exact same font-size/line-height constants labelBody renders with (no
+ * DOM, no browser needed — this has to run identically in the PDF-export
+ * path too, which has neither), so it stays exactly in sync with what
+ * actually gets drawn. Dymo has no push-down at all (0). A barcode row
+ * subtracts its own height + gap from the available space, matching
+ * labelBody's real layout.
+ *
+ * This is the mechanism that makes "clamp the offset, don't shrink or
+ * truncate" apply per-item rather than per-fixed-guess: a short accessory
+ * label (org+code+device only) gets many mm of real headroom, while the
+ * worst-case fully-specified device (all five lines) safely clamps down
+ * toward zero — physically, there simply isn't room to move a label's
+ * worth of text further down a 1" tall box once every line is already in
+ * use. Either way, font size and content are NEVER touched — only how far
+ * this function says it's safe to push is.
+ */
+export function maxSafePushDownMm(
+  m: LabelMedia,
+  c: Pick<LabelContent, 'sub' | 'serial'>,
+  opts: { padMm?: number; lineGapMm?: number; showBarcode: boolean; hasBarcodeImage: boolean },
+  ceilingMm: number = MAX_PUSH_DOWN_MM,
+): number {
+  if (m.dymo) return 0; // Dymo keeps its own separately-tuned layout; push-down never applies there.
+  const { h } = mmOf(m);
+  const pad = opts.padMm ?? 2.0;
+  const lineGap = clamp(opts.lineGapMm ?? 1.1, 0, 1.5);
+  const showBarcode = opts.showBarcode && opts.hasBarcodeImage;
+  const bcH = showBarcode ? h * 0.14 : 0;
+  const available = (h - pad * 2) - (showBarcode ? bcH + 1 : 0);
+
+  const large = m.w >= 4;
+  const fOrg = large ? 3.2 : 2.6;
+  const fCode = large ? 7.5 : 5.2;
+  const fDevice = large ? 4.6 : 3.6;
+  const fSub = large ? 3.4 : 2.8;
+  const fSerial = large ? 4.4 : 3.6;
+  // Rendered line-box heights = font-size × line-height (matches the
+  // line-height values labelBody actually sets on each line below).
+  const lineHeights = [fOrg * 1, fCode * 1, fDevice * 1.05];
+  if (c.sub) lineHeights.push(fSub * 1);
+  if (c.serial) lineHeights.push(fSerial * 1.05);
+  const gaps = lineGap * (lineHeights.length - 1);
+  const needed = BASE_PAD_MM + lineHeights.reduce((a, b) => a + b, 0) + gaps;
+
+  const headroom = Math.max(0, available - needed);
+  return Math.min(ceilingMm, headroom);
+}
 
 const IN = 25.4; // mm per inch
 export const mmOf = (m: LabelMedia) => ({ w: +(m.w * IN).toFixed(2), h: +(m.h * IN).toFixed(2) });
@@ -176,32 +245,28 @@ function labelBody(u: U, m: LabelMedia, c: LabelContent, img: LabelImages, o: La
   // is a box-model fundamental; any renderer that can lay out a `<div>` at
   // all has to implement it.
   //
-  // basePad and MAX_PUSH_DOWN_MM were re-derived (2026) after a physical
-  // print comparison showed pushDownMm=2.5 truncating content that
-  // pushDownMm=2.0 rendered correctly — real Chromium layout geometry (not
-  // just this string-based test file) confirmed font-size is byte-identical
-  // at every pushDown value, so the mechanism was never a font/scale
-  // calculation; it was overflow. The OLD basePad (1.4mm) already overflowed
-  // the 2×1" template's available content height by ~0.55mm for realistic
-  // worst-case content (org + SKU + a device name + a storage/color line + a
-  // 15-digit IMEI — all five lines at once, which is the common case for a
-  // fully-specified device, not an edge case) BEFORE any pushDown was even
-  // applied, and every extra mm of pushDown added exactly one more mm of
-  // overflow (confirmed 1:1 linear via real rendered geometry — see the PR
-  // description for the measured numbers). A driver/print-pipeline auto-fit
-  // triggered by that overflow, not Chromium's own CSS layout, is the most
-  // likely source of the truncation and size change actually seen on paper —
-  // consistent with this file's other documented history of print-driver
-  // quirks invisible to any in-browser or automated check. The fix removes
-  // the trigger condition entirely rather than chasing the driver behavior:
-  // basePad (0.35mm) is calibrated so the worst-case content has ZERO
-  // overflow at pushDownMm=0, and MAX_PUSH_DOWN_MM (0.5mm, exported above)
-  // is the exact remaining headroom before that same worst-case content
-  // would start overflowing again. Every value in [0, MAX_PUSH_DOWN_MM] is
-  // therefore provably overflow-free for the worst realistic content on the
-  // tightest template — not merely "smaller than before."
-  const basePad = 0.35;
-  const pushDown = clamp(o.pushDownMm ?? 0, 0, MAX_PUSH_DOWN_MM);
+  // basePad reads BASE_PAD_MM directly (not a separately-tuned local literal)
+  // so this and maxSafePushDownMm's own baseline calculation can never drift
+  // apart from each other.
+  //
+  // The actual ceiling on pushDown is content-aware (maxSafePushDownMm), not
+  // a flat constant: a first attempt at this fix (physical print comparison
+  // showed pushDownMm=2.5 truncating content that pushDownMm=2.0 rendered
+  // correctly) used a single fixed ceiling small enough to be safe for the
+  // WORST-case content on the tightest template — which made push-down
+  // imperceptible for every item that wasn't that exact worst case. Real
+  // Chromium layout geometry proved font-size stays byte-identical at every
+  // pushDown value regardless — the actual defect was overflow, not scale —
+  // so the fix that actually restores a usable range without reintroducing
+  // truncation is computing, per render, exactly how much room THIS
+  // content has before its last line would extend past the available
+  // height, and clamping to that (see maxSafePushDownMm's own comment for
+  // the full derivation and the PR description for measured geometry).
+  const basePad = BASE_PAD_MM;
+  const pushDown = clamp(
+    o.pushDownMm ?? 0, 0,
+    maxSafePushDownMm(m, c, { padMm: o.padMm, lineGapMm: o.lineGapMm, showBarcode: o.showBarcode, hasBarcodeImage: !!img.barcode }),
+  );
   const contentPadTop = basePad + pushDown;
   // `flex-shrink:0` on every line below is load-bearing, not decoration: the
   // column has a fixed cross-size (stretched to the row's height) and

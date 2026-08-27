@@ -75,6 +75,61 @@ describe('buildZpl', () => {
   });
 });
 
+describe('buildZpl — push-down / padding / line-spacing (Zebra direct-print path)', () => {
+  // The "Push content down" (and content padding / line spacing) Settings
+  // previously reached the browser/PDF label paths but were silently
+  // ignored here — a real fault: RepairLabelModal makes this the PRIMARY
+  // print button whenever a Zebra device is selected, so a shop printing
+  // directly to a networked Zebra printer would see zero effect from any of
+  // the three settings no matter what they were set to.
+
+  // Extract the y-coordinate ZPL gives the org field's ^FO command
+  // (^FOx,y...^FD<org text>^FS) so movement can be measured directly.
+  const orgFieldY = (z: string): number => {
+    const m = z.match(/\^FO(\d+),(\d+)\^A0N,\d+,\d+\^FB\d+,1,0,L,0\^FDFlipThatTech\^FS/);
+    if (!m) throw new Error('org field not found in ZPL output');
+    return parseInt(m[2], 10);
+  };
+  const fontSizes = (z: string): string[] => Array.from(z.matchAll(/\^A0N,(\d+),\d+/g)).map(m => m[1]);
+
+  it('with no spacing override, behaves exactly as before (built-in 0.06in padding, no push-down)', () => {
+    const z = buildZpl(data, dims('2x1'), 203);
+    expect(orgFieldY(z)).toBe(labelDots(0.06, 203));
+  });
+
+  it('pushDownMm moves every field down by the same offset, without touching font sizes', () => {
+    const base = buildZpl(data, dims('2x1'), 203);
+    const pushed = buildZpl(data, dims('2x1'), 203, undefined, { pushDownMm: 1 });
+    const deltaDots = orgFieldY(pushed) - orgFieldY(base);
+    // 1mm at 203dpi
+    expect(deltaDots).toBe(Math.round((1 / 25.4) * 203));
+    expect(fontSizes(pushed)).toEqual(fontSizes(base)); // never resized
+  });
+
+  it('a short label (no imei/issue) gets real, visible push-down movement — not clamped to near-zero', () => {
+    const shortData: ZplLabelData = { org: 'FlipThatTech', idLine: 'RPR-1', device: 'AirPods', qrData: 'x' };
+    const base = buildZpl(shortData, dims('2x1'), 203);
+    const pushed = buildZpl(shortData, dims('2x1'), 203, undefined, { pushDownMm: 4 });
+    const deltaMm = ((orgFieldY(pushed) - orgFieldY(base)) / 203) * 25.4;
+    expect(deltaMm).toBeGreaterThan(3); // most of the requested 4mm actually applied
+  });
+
+  it('a fully-specified label (org+id+device+imei+issue, the worst case) clamps push-down instead of letting content run off the bottom edge', () => {
+    const h = labelDots(1, 203); // 2x1 label height in dots
+    const withHugePush = buildZpl(data, dims('2x1'), 203, undefined, { pushDownMm: 99 });
+    // Every field's own ^FOx,y start position must stay within the label.
+    const allY = Array.from(withHugePush.matchAll(/\^FO\d+,(\d+)\^A0N/g)).map(m => parseInt(m[1], 10));
+    for (const y of allY) expect(y).toBeLessThan(h);
+    // Font sizes are still completely unaffected by the clamp.
+    expect(fontSizes(withHugePush)).toEqual(fontSizes(buildZpl(data, dims('2x1'), 203)));
+  });
+
+  it('padMm overrides the built-in 0.06in padding', () => {
+    const z = buildZpl(data, dims('2x1'), 203, undefined, { padMm: 2.0 });
+    expect(orgFieldY(z)).toBe(Math.round((2.0 / 25.4) * 203));
+  });
+});
+
 describe('LABEL_SIZES (built-ins)', () => {
   it('exposes the 5 shared built-in presets', () => {
     expect(LABEL_SIZES.map(s => s.id)).toEqual(['dymo-36x89', '2x1', '2x2', '2x3', '4x6']);

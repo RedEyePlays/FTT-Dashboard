@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { labelPrintDoc, LabelMedia, LabelContent, LabelImages, LabelOpts, MAX_PUSH_DOWN_MM } from './labelLayout';
+import { labelPrintDoc, LabelMedia, LabelContent, LabelImages, LabelOpts, MAX_PUSH_DOWN_MM, maxSafePushDownMm } from './labelLayout';
 
 // Regression coverage for the "Push content down" / "Line spacing" / content
 // padding settings actually reaching the real browser PRINT path
@@ -22,27 +22,30 @@ import { labelPrintDoc, LabelMedia, LabelContent, LabelImages, LabelOpts, MAX_PU
 // The current implementation (padding-top with justify-content:flex-start,
 // no transform, no margin cancellation) was verified against REAL RENDERED
 // GEOMETRY in a headless Chromium (not just string matching) before being
-// adopted — measured before/after pixel deltas for all three settings are
-// recorded in this change's PR description, since Playwright/Chromium isn't
-// a project dependency and can't run as part of `npm test`/CI. If a future
-// change touches this layout again, re-verify with real rendered geometry
-// the same way, not just by re-running these string checks.
+// adopted — measured before/after pixel deltas are recorded in this change's
+// PR description, since Playwright/Chromium isn't a project dependency and
+// can't run as part of `npm test`/CI. If a future change touches this layout
+// again, re-verify with real rendered geometry the same way, not just by
+// re-running these string checks.
 const media2x1: LabelMedia = { id: '2x1', w: 2, h: 1, label: '2 x 1' };
-const content: LabelContent = {
-  org: 'FlipThatTech', code: 'SKU-1', device: 'iPhone 14',
-  sub: '128GB · Black', serial: '123456789012345',
-};
+
+// Short content (no sub/serial) — plenty of headroom on the 2×1" template, so
+// the nominal MAX_PUSH_DOWN_MM ceiling applies unclamped by the per-item
+// content-aware limit. Used for the "does the value reach the HTML" tests,
+// which want a predictable, un-clamped padding-top to assert against.
+const shortContent: LabelContent = { org: 'FlipThatTech', code: 'SKU-1', device: 'iPhone 14' };
 const img: LabelImages = {};
 
 // Formatted the same way labelPrintDoc's mm unit emitter does (mkU('mm', 1)):
 // a bare number rounded to 3 decimals + "mm".
 const mm = (v: number) => `${+v.toFixed(3)}mm`;
+const BASE_PAD = 0.85;
 
 describe('labelPrintDoc — push-down offset reaches the real print HTML', () => {
   it('defaults (no pushDownMm) use the base padding-top only, and never emit transform or margin-cancellation (the two previously-broken mechanisms)', () => {
     const opts: LabelOpts = { showBarcode: false, showStatus: false };
-    const html = labelPrintDoc('t', media2x1, content, img, opts);
-    expect(html).toContain(`padding-top:${mm(0.35)}`);
+    const html = labelPrintDoc('t', media2x1, shortContent, img, opts);
+    expect(html).toContain(`padding-top:${mm(BASE_PAD)}`);
     // Locks in that push-down is never implemented via a CSS transform or a
     // margin-top/negative-margin-bottom pair again — both were confirmed by
     // physical printing to have zero effect on the real ZP 450 output
@@ -52,42 +55,45 @@ describe('labelPrintDoc — push-down offset reaches the real print HTML', () =>
     expect(html).not.toMatch(/margin-bottom:/);
   });
 
-  it('a configured pushDownMm adds directly to the base padding-top', () => {
+  it('a configured pushDownMm adds directly to the base padding-top, for content with headroom to use the full nominal ceiling', () => {
+    const maxForShort = maxSafePushDownMm(media2x1, shortContent, { showBarcode: false, hasBarcodeImage: false });
+    expect(maxForShort).toBe(MAX_PUSH_DOWN_MM); // sanity: short content isn't itself the constraint here
     const opts: LabelOpts = { showBarcode: false, showStatus: false, pushDownMm: MAX_PUSH_DOWN_MM };
-    const html = labelPrintDoc('t', media2x1, content, img, opts);
-    expect(html).toContain(`padding-top:${mm(0.35 + MAX_PUSH_DOWN_MM)}`);
+    const html = labelPrintDoc('t', media2x1, shortContent, img, opts);
+    expect(html).toContain(`padding-top:${mm(BASE_PAD + MAX_PUSH_DOWN_MM)}`);
   });
 
-  it('clamps an out-of-range pushDownMm to the [0, MAX_PUSH_DOWN_MM] ceiling', () => {
-    const html = labelPrintDoc('t', media2x1, content, img, { showBarcode: false, showStatus: false, pushDownMm: 99 });
-    expect(html).toContain(`padding-top:${mm(0.35 + MAX_PUSH_DOWN_MM)}`);
+  it('clamps an out-of-range pushDownMm to the nominal ceiling for content with enough headroom', () => {
+    const html = labelPrintDoc('t', media2x1, shortContent, img, { showBarcode: false, showStatus: false, pushDownMm: 99 });
+    expect(html).toContain(`padding-top:${mm(BASE_PAD + MAX_PUSH_DOWN_MM)}`);
   });
 
   it('clamps a negative pushDownMm to 0 (base padding-top only)', () => {
-    const html = labelPrintDoc('t', media2x1, content, img, { showBarcode: false, showStatus: false, pushDownMm: -5 });
-    expect(html).toContain(`padding-top:${mm(0.35)}`);
+    const html = labelPrintDoc('t', media2x1, shortContent, img, { showBarcode: false, showStatus: false, pushDownMm: -5 });
+    expect(html).toContain(`padding-top:${mm(BASE_PAD)}`);
   });
 
   it('push-down applies in labelPrintDoc for a repair label\'s content too (org/code/device present)', () => {
     const opts: LabelOpts = { showBarcode: true, showStatus: true, pushDownMm: MAX_PUSH_DOWN_MM };
-    const html = labelPrintDoc('Repair Label', media2x1, { ...content, status: 'In Repair' }, img, opts);
-    expect(html).toContain(`padding-top:${mm(0.35 + MAX_PUSH_DOWN_MM)}`);
+    const html = labelPrintDoc('Repair Label', media2x1, { ...shortContent, status: 'In Repair' }, img, opts);
+    expect(html).toContain(`padding-top:${mm(BASE_PAD + MAX_PUSH_DOWN_MM)}`);
   });
 
   it('Dymo labels are unaffected by pushDownMm (own separately-tuned layout, no override)', () => {
     const dymoMedia: LabelMedia = { id: 'dymo-36x89', w: 89 / 25.4, h: 36 / 25.4, label: 'DYMO', dymo: true };
     const opts: LabelOpts = { showBarcode: false, showStatus: false, pushDownMm: MAX_PUSH_DOWN_MM };
-    const html = labelPrintDoc('t', dymoMedia, content, img, opts);
+    const html = labelPrintDoc('t', dymoMedia, shortContent, img, opts);
     expect(html).not.toMatch(/padding-top:/);
     // The page-level 90° feed rotation (`transform: translate(...) rotate(90deg)`
     // on `.rot`) is a separate, legitimate mechanism — only a translateY
     // push-down transform should never appear.
     expect(html).not.toMatch(/transform:\s*translateY/);
+    expect(maxSafePushDownMm(dymoMedia, shortContent, { showBarcode: false, hasBarcodeImage: false })).toBe(0);
   });
 });
 
 describe('labelPrintDoc — pushDownMm purely translates, never resizes or truncates content', () => {
-  // Regression coverage for the actual bug (physical print comparison):
+  // Regression coverage for the original bug (physical print comparison):
   // pushDownMm=2.5 rendered text visibly LARGER and truncated content that
   // pushDownMm=2.0 rendered correctly, on the tightest template (2×1"),
   // proving pushDown was somehow feeding a size/overflow-driven scale
@@ -113,65 +119,92 @@ describe('labelPrintDoc — pushDownMm purely translates, never resizes or trunc
   // later paints/clips it.
   const textNodes = (html: string): string[] => Array.from(html.matchAll(/>([^<>]+)</g)).map(m => m[1]).filter(s => s.trim());
 
-  it('emits byte-identical font-size values and text content at pushDownMm 0, half-max, max, and beyond-max (still clamped)', () => {
+  it('the worst-case content (all five lines) has zero safe headroom on the tightest template — pushDown clamps to 0, never overflowing', () => {
+    // This is the exact combination that triggered the original bug report.
+    // Real rendered geometry confirmed the OLD basePad (1.4mm) already
+    // clipped ~0.55mm off this content even at pushDownMm=0; the new
+    // BASE_PAD_MM (0.85mm) was chosen so this content has EXACTLY zero
+    // overflow at the baseline, which also means it has zero further room —
+    // physically correct: there's nowhere left to push this much content on
+    // a 1" tall label without cropping something.
+    const max = maxSafePushDownMm(media2x1, worstCase, { showBarcode: false, hasBarcodeImage: false });
+    expect(max).toBe(0);
+  });
+
+  it('emits byte-identical font-size values and text content at pushDownMm 0, half of the nominal ceiling, and well beyond it — the worst case content clamps to 0 throughout', () => {
     const at = (pushDownMm: number) => labelPrintDoc('t', media2x1, worstCase, img, { showBarcode: false, showStatus: false, pushDownMm });
     const base = at(0);
     const half = at(MAX_PUSH_DOWN_MM / 2);
-    const max = at(MAX_PUSH_DOWN_MM);
-    // Values well beyond the ceiling (matching the task's "0, 1, 2, and max"
-    // spread against the old 2.5mm range) — must clamp to the same result
-    // as pushDownMm=MAX_PUSH_DOWN_MM exactly, never grow past it.
     const beyond1 = at(1);
     const beyond2 = at(2);
+    const wayBeyond = at(99);
 
     const baseFonts = fontSizes(base);
     expect(baseFonts.length).toBeGreaterThan(0); // sanity: the regex actually matched something
-    for (const doc of [half, max, beyond1, beyond2]) expect(fontSizes(doc)).toEqual(baseFonts);
+    for (const doc of [half, beyond1, beyond2, wayBeyond]) expect(fontSizes(doc)).toEqual(baseFonts);
 
     const baseText = textNodes(base);
-    for (const doc of [half, max, beyond1, beyond2]) expect(textNodes(doc)).toEqual(baseText);
-    expect(beyond1).toBe(max);
-    expect(beyond2).toBe(max);
+    for (const doc of [half, beyond1, beyond2, wayBeyond]) expect(textNodes(doc)).toEqual(baseText);
+    // All requested values clamp to the SAME zero-headroom result for this
+    // content — never growing further apart as the requested value grows.
+    expect(half).toBe(base);
+    expect(beyond1).toBe(base);
+    expect(beyond2).toBe(base);
+    expect(wayBeyond).toBe(base);
     // The full, untruncated SKU and serial are literally present in the
     // emitted HTML at every pushDown value — text-overflow:ellipsis is a
     // paint-time CSS behavior, never a DOM-level string edit, so this
     // stays true regardless of how a given renderer visually clips it.
     expect(baseText).toContain(worstCase.code);
     expect(baseText).toContain(worstCase.serial);
+    expect(base).toContain(`padding-top:${mm(BASE_PAD)}`);
+  });
 
-    // Only the padding-top offset itself differs between the three docs.
-    expect(base).toContain(`padding-top:${mm(0.35)}`);
-    expect(half).toContain(`padding-top:${mm(0.35 + MAX_PUSH_DOWN_MM / 2)}`);
-    expect(max).toContain(`padding-top:${mm(0.35 + MAX_PUSH_DOWN_MM)}`);
+  it('shorter content on the same tightest template gets real, visible movement — the fix is not "shrink the ceiling for everyone"', () => {
+    // Mid case: no serial line (e.g. an accessory, or IMEI not yet known).
+    const midCase: LabelContent = { ...worstCase, serial: undefined };
+    const midMax = maxSafePushDownMm(media2x1, midCase, { showBarcode: false, hasBarcodeImage: false });
+    expect(midMax).toBeGreaterThan(2); // several mm of real headroom, not a fraction of a mm
+
+    // Short case: org/code/device only (e.g. a bare accessory label).
+    const shortMax = maxSafePushDownMm(media2x1, shortContent, { showBarcode: false, hasBarcodeImage: false });
+    expect(shortMax).toBe(MAX_PUSH_DOWN_MM); // hits the nominal ceiling, plenty of spare room past it
+
+    // And critically: neither case ever needs to touch font-size to get that
+    // extra movement — same guarantee as the worst case above.
+    const at = (content: LabelContent, pushDownMm: number) =>
+      labelPrintDoc('t', media2x1, content, img, { showBarcode: false, showStatus: false, pushDownMm });
+    const midBase = fontSizes(at(midCase, 0));
+    expect(fontSizes(at(midCase, midMax))).toEqual(midBase);
   });
 });
 
 describe('labelPrintDoc — line spacing default + clamp', () => {
   it('defaults to the physically-confirmed known-good 1.1mm gap (no lineGapMm override)', () => {
     const opts: LabelOpts = { showBarcode: false, showStatus: false };
-    const html = labelPrintDoc('t', media2x1, content, img, opts);
+    const html = labelPrintDoc('t', media2x1, shortContent, img, opts);
     expect(html).toContain(`gap:${mm(1.1)}`);
   });
 
   it('clamps an out-of-range lineGapMm to the [0, 1.5] ceiling', () => {
-    const html = labelPrintDoc('t', media2x1, content, img, { showBarcode: false, showStatus: false, lineGapMm: 3 });
+    const html = labelPrintDoc('t', media2x1, shortContent, img, { showBarcode: false, showStatus: false, lineGapMm: 3 });
     expect(html).toContain(`gap:${mm(1.5)}`);
   });
 
   it('clamps a negative lineGapMm to 0', () => {
-    const html = labelPrintDoc('t', media2x1, content, img, { showBarcode: false, showStatus: false, lineGapMm: -5 });
+    const html = labelPrintDoc('t', media2x1, shortContent, img, { showBarcode: false, showStatus: false, lineGapMm: -5 });
     expect(html).toContain(`gap:${mm(0)}`);
   });
 });
 
 describe('labelPrintDoc — content padding default + override', () => {
   it('defaults to 2.0mm content padding on non-Dymo templates', () => {
-    const html = labelPrintDoc('t', media2x1, content, img, { showBarcode: false, showStatus: false });
+    const html = labelPrintDoc('t', media2x1, shortContent, img, { showBarcode: false, showStatus: false });
     expect(html).toContain(`padding:${mm(2.0)}`);
   });
 
   it('a configured padMm overrides the outer content padding', () => {
-    const html = labelPrintDoc('t', media2x1, content, img, { showBarcode: false, showStatus: false, padMm: 4.0 });
+    const html = labelPrintDoc('t', media2x1, shortContent, img, { showBarcode: false, showStatus: false, padMm: 4.0 });
     expect(html).toContain(`padding:${mm(4.0)}`);
   });
 });
