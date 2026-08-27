@@ -71,39 +71,39 @@ export const TAG_STYLE = `
   .tag-page-inner { position: relative; width: 100%; height: 100%; }
   .tag-body {
     width: 100%; height: 100%;
-    /* Asymmetric top/bottom padding (was 1.5mm/1.5mm) nudges the centered
-       content stack down by ~1mm — there's spare room at the bottom (the
-       price line shrank in a prior change, and the stack no longer fills
-       the label height), so a small downward shift reads better without
-       crowding anything or touching the QR corner overlay. Vertical padding
-       is unchanged from the prior change (2.5mm + 0.5mm = same total as the
-       1.5mm/1.5mm before it, a pure position shift). The RIGHT padding is
-       no longer equal to the left: the QR grew from 9mm to 20mm (see
-       .tag-qr below), big enough that centered text could otherwise run
-       underneath its top-right corner (the QR paints on top, as a sibling
-       overlay with no layout awareness of the text beneath it). Reserving
-       ~22mm on the right (20mm QR + 1.2mm inset + ~1mm buffer) keeps the
-       centered stack visually clear of it, same "well clear of the QR"
-       intent the corner-overlay comment below has always stated — just
-       re-balanced for the new size instead of assuming it still fits. */
-    padding: 2.5mm 22mm 0.5mm 2mm;
+    /* Vertical padding trimmed from 2.5mm/0.5mm to 2mm/0.5mm to reclaim
+       0.5mm — see the flex-shrink note below for why every bit of budget
+       here matters. Still asymmetric (more on top than bottom), keeping the
+       "nudge the stack down slightly" intent from a prior change. The RIGHT
+       padding reserves room for the 20mm QR (see .tag-qr below) so centered
+       text can't run underneath its top-right corner. */
+    padding: 2mm 22mm 0.5mm 2mm;
     display: flex; flex-direction: column; justify-content: center; align-items: center;
     font-family: 'Inter', system-ui, Arial, sans-serif; color: #000; overflow: hidden;
   }
-  /* Every line's font-size bumped ~8-10% ("make the scale a bit bigger") from
-     the previous pass. Kept deliberately modest — this is a 36mm-tall label,
-     content still has to fit inside it without the browser's default flex
-     shrink-to-fit silently compressing every line to squeeze it in (that
-     failure mode is exactly why the ZP 450 template disables flex-shrink; the
-     margin here is kept generous enough that this tag doesn't need to). */
-  .store { font-size: 3.3mm; font-weight: 700; letter-spacing: 0.3mm; text-transform: uppercase; color: #222; line-height: 1; }
-  .name { font-size: 5.6mm; font-weight: 800; line-height: 1.1; margin-top: 1.3mm; text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .specs { font-size: 3.9mm; font-weight: 700; color: #333; margin-top: 1mm; text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Root-caused bug: three consecutive font-size bumps (this tag went
+     through several "make it bigger" passes) pushed the flex column's total
+     natural content height past the label's fixed 36mm box, WITHOUT
+     flex-shrink:0 on the lines below — flexbox's default flex-shrink:1 then
+     silently compressed every line's box to fit, squashing (not cleanly
+     cropping) whichever lines had the least margin/padding slack to absorb
+     it, which on a real print looked like the model (.name) and storage
+     (.specs) rows getting cut off. This is the exact failure mode the ZP 450
+     template already guards against with flex-shrink:0 (see
+     services/labelLayout.ts) — this tag never had that guard. Fixed two
+     ways together: flex-shrink:0 on every line so nothing ever gets silently
+     resized again, AND the margins below were tightened (from the last few
+     passes' generous values) so the real content total now fits the 36mm
+     box with room to spare — flex-shrink:0 alone would just turn "squashed"
+     into "cleanly cropped," not actually fix the fit. */
+  .store { flex-shrink: 0; font-size: 3.3mm; font-weight: 700; letter-spacing: 0.3mm; text-transform: uppercase; color: #222; line-height: 1; }
+  .name { flex-shrink: 0; font-size: 5.6mm; font-weight: 800; line-height: 1.1; margin-top: 0.8mm; text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .specs { flex-shrink: 0; font-size: 3.9mm; font-weight: 700; color: #333; margin-top: 0.6mm; text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* No top/bottom rule around the price anymore — removed at the owner's
      request; the size + weight alone are enough to make it read as the
      standout line. */
-  .price { font-size: 8.2mm; font-weight: 900; letter-spacing: -0.2mm; padding: 0.6mm 0; margin-top: 1.6mm; }
-  .sku { font-family: 'SF Mono', ui-monospace, Menlo, Consolas, monospace; font-weight: 700; font-size: 3.7mm; letter-spacing: 0.3mm; margin-top: 1.4mm; }
+  .price { flex-shrink: 0; font-size: 8.2mm; font-weight: 900; letter-spacing: -0.2mm; padding: 0.4mm 0; margin-top: 1mm; }
+  .sku { flex-shrink: 0; font-family: 'SF Mono', ui-monospace, Menlo, Consolas, monospace; font-weight: 700; font-size: 3.7mm; letter-spacing: 0.3mm; margin-top: 0.8mm; }
   /* Small IMEI/serial QR — a corner overlay. Bumped from 9mm to 20mm for
      easier scanning at a normal shelf-browsing distance — still smaller
      than the full-size QR on the ZP 450 inventory label (11-40mm+ depending

@@ -123,18 +123,54 @@ describe('shelf tag — bigger QR, all-bold text, pushed-down content, and large
     expect(priceSize).toBeLessThan(10); // still not back to the original oversized 10mm
   });
 
-  it('the gap between every line is still larger than the very first (pre-restyle) values', () => {
-    const oldGaps: Record<string, number> = { '.name': 0.8, '.specs': 0.5, '.price': 1, '.sku': 0.8 };
-    for (const [cls, oldGap] of Object.entries(oldGaps)) {
-      const rule = TAG_STYLE.match(new RegExp(`\\${cls}\\s*\\{[^}]*\\}`))?.[0] || '';
-      const gap = parseFloat(rule.match(/margin-top:\s*([\d.]+)mm/)?.[1] || '0');
-      expect(gap, `${cls} margin-top should have grown`).toBeGreaterThan(oldGap);
-    }
-  });
-
   it('rendered content is unchanged by any of the above — styling/position only', () => {
     const html = tagBody(dev({}), 'FlipThatTech');
     expect(html).toContain('$699.00');
     expect(html).toContain('FTT-0000029');
+  });
+});
+
+describe('shelf tag — content actually fits the 36mm label (regression: model/storage rows were being cut off in print)', () => {
+  const LABEL_HEIGHT_MM = 36;
+
+  it('every content line disables flex-shrink, so it can never be silently compressed to fit', () => {
+    // The root cause: without this, the flex column's default flex-shrink:1
+    // compresses whichever lines have the least slack once total content
+    // height exceeds the label — on a real print that read as the model
+    // (.name) and storage (.specs) rows getting cut off, not a clean crop.
+    for (const cls of ['.store', '.name', '.specs', '.price', '.sku']) {
+      const rule = TAG_STYLE.match(new RegExp(`\\${cls}\\s*\\{[^}]*\\}`))?.[0] || '';
+      expect(rule, `${cls} should set flex-shrink: 0`).toMatch(/flex-shrink:\s*0/);
+    }
+  });
+
+  it('the estimated total content height fits inside the label with real margin to spare', () => {
+    // Analytical estimate (no headless browser here — see labelLayout.ts's
+    // maxSafePushDownMm for the same approach elsewhere in this codebase):
+    // each line's rendered height is font-size × line-height, plus its
+    // margin-top, summed top to bottom, plus the outer vertical padding.
+    // 1.2 is a conservative generic line-height for lines that don't set an
+    // explicit one (.specs, .sku, .price) — real browser "normal" for Inter
+    // is typically at or below that, so this over-, not under-, estimates.
+    const rule = (cls: string) => TAG_STYLE.match(new RegExp(`\\${cls}\\s*\\{[^}]*\\}`))?.[0] || '';
+    const num = (css: string, prop: string, fallback = 0) => parseFloat(css.match(new RegExp(`${prop}:\\s*([\\d.]+)mm`))?.[1] || String(fallback));
+
+    const store = num(rule('.store'), 'font-size') * num(rule('.store'), 'line-height', 1);
+    const name = num(rule('.name'), 'margin-top') + num(rule('.name'), 'font-size') * num(rule('.name'), 'line-height', 1.2);
+    const specs = num(rule('.specs'), 'margin-top') + num(rule('.specs'), 'font-size') * 1.2;
+    const priceRule = rule('.price');
+    const pricePadding = num(priceRule, 'padding') * 2; // shorthand `padding: Xmm 0` — vertical padding is 2×X
+    const price = num(priceRule, 'margin-top') + num(priceRule, 'font-size') * 1.2 + pricePadding;
+    const sku = num(rule('.sku'), 'margin-top') + num(rule('.sku'), 'font-size') * 1.2;
+
+    const bodyRule = TAG_STYLE.match(/\.tag-body\s*\{[\s\S]*?\n\s*\}/)?.[0] || '';
+    const padMatch = bodyRule.match(/padding:\s*([\d.]+)mm\s+[\d.]+mm\s+([\d.]+)mm\s+[\d.]+mm/);
+    const verticalPadding = Number(padMatch![1]) + Number(padMatch![2]);
+
+    const total = store + name + specs + price + sku + verticalPadding;
+    expect(total).toBeLessThan(LABEL_HEIGHT_MM);
+    // Real margin, not just barely squeaking under — the whole point is to
+    // never be this close to the edge again after three straight size bumps.
+    expect(LABEL_HEIGHT_MM - total).toBeGreaterThan(0.5);
   });
 });
