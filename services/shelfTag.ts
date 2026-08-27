@@ -51,7 +51,6 @@ export const tagBody = (item: InventoryItem, store: string, qr?: string): string
   if (item.color) specs.push(esc(item.color));
   if (item.carrier) specs.push(esc(item.carrier));
   if (item.batteryHealth) specs.push(`Battery ${esc(item.batteryHealth)}`);
-  if (item.condition) specs.push(esc(item.condition));
   const specLine = specs.join(' · ');
   return `
     <div class="tag-page-inner">
@@ -99,9 +98,12 @@ export const TAG_STYLE = `
      margin here is kept generous enough that this tag doesn't need to). */
   .store { font-size: 3.3mm; font-weight: 700; letter-spacing: 0.3mm; text-transform: uppercase; color: #222; line-height: 1; }
   .name { font-size: 5.6mm; font-weight: 800; line-height: 1.1; margin-top: 1.3mm; text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .specs { font-size: 3.4mm; font-weight: 700; color: #333; margin-top: 1mm; text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .price { font-size: 8.2mm; font-weight: 900; letter-spacing: -0.2mm; border-top: 0.3mm solid #000; border-bottom: 0.3mm solid #000; padding: 0.6mm 0; margin-top: 1.6mm; }
-  .sku { font-family: 'SF Mono', ui-monospace, Menlo, Consolas, monospace; font-weight: 700; font-size: 3.2mm; letter-spacing: 0.3mm; margin-top: 1.4mm; }
+  .specs { font-size: 3.9mm; font-weight: 700; color: #333; margin-top: 1mm; text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* No top/bottom rule around the price anymore — removed at the owner's
+     request; the size + weight alone are enough to make it read as the
+     standout line. */
+  .price { font-size: 8.2mm; font-weight: 900; letter-spacing: -0.2mm; padding: 0.6mm 0; margin-top: 1.6mm; }
+  .sku { font-family: 'SF Mono', ui-monospace, Menlo, Consolas, monospace; font-weight: 700; font-size: 3.7mm; letter-spacing: 0.3mm; margin-top: 1.4mm; }
   /* Small IMEI/serial QR — a corner overlay. Bumped from 9mm to 20mm for
      easier scanning at a normal shelf-browsing distance — still smaller
      than the full-size QR on the ZP 450 inventory label (11-40mm+ depending
