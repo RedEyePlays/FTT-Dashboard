@@ -95,6 +95,9 @@ const PAGE_TITLES: Record<ViewState, string> = {
   settings: 'Settings', timeclock: 'Time Clock', closeout: 'Close Out', layaways: 'Layaways',
 };
 import { LoadingScreen, LoadingSkeleton, DbErrorScreen } from './components/StatusScreens';
+import { ErrorBoundary } from './components/ErrorBoundary';
+import { setErrorContext, captureError } from './services/errorReporting';
+import { OfflineError } from './services/functionsGuard';
 import { todayISO } from './domain/dates';
 import { mergeById, mergeSkuCounters } from './domain/restore';
 import { canOpenNotes } from './domain/notes';
@@ -369,6 +372,11 @@ const App: React.FC = () => {
     () => payrollDue(timeEntries, workspaceUsers, payPeriods, Date.now(), PAY_CYCLE_DAYS[settings.payroll.cycle], settings.payroll.anchorISO),
     [timeEntries, workspaceUsers, payPeriods, settings.payroll.cycle, settings.payroll.anchorISO],
   );
+
+  // Keeps crash reports (services/errorReporting.ts) tagged with where the
+  // user was and what they could do — debugging context, not PII (role is a
+  // job title, not a name).
+  useEffect(() => { setErrorContext({ route: view, role: appUser?.role }); }, [view, appUser?.role]);
 
   // Per-user notification read state persists on the user doc, so it follows the
   // staff member across devices instead of living in this browser's localStorage.
@@ -1518,7 +1526,14 @@ const App: React.FC = () => {
       }
       if (stored.status !== next.status) logActivity(`${next.repairNumber} → ${next.status.replace(/_/g, ' ')}`);
       for (const e of techUpdateAuditPlan(stored, next)) audit(e.action, 'repair', e.entityId, e.before, e.after);
-    }).catch(e => console.error('Tech repair update failed', e));
+    }).catch(e => {
+      // The offline case is handled proactively in the UI (TechRepairsView
+      // disables Save while offline) — this catch is the backstop for a
+      // connection dropping mid-request. Only genuinely unexpected failures
+      // are worth a crash report; "you tried this while offline" isn't one.
+      if (!(e instanceof OfflineError)) captureError(e, { action: 'tech_update_repair' });
+      console.error('Tech repair update failed', e);
+    });
   };
 
   const handleDeleteRepair = (id: string) => {
@@ -1678,6 +1693,7 @@ const App: React.FC = () => {
           onLock={handleLock}
         />
         <main className="mx-auto px-4 sm:px-6 lg:px-8 py-8 flex-1 w-full max-w-6xl">
+          <ErrorBoundary variant="route" label="Repairs">
           <TechRepairsView
             repairs={repairs}
             batches={repairBatches}
@@ -1685,6 +1701,7 @@ const App: React.FC = () => {
             onTechUpdate={handleTechUpdateRepair}
             onPrintAudit={handleRepairPrintAudit}
           />
+          </ErrorBoundary>
         </main>
       </div>
     );
@@ -1756,6 +1773,12 @@ const App: React.FC = () => {
           the readable constrained width. */}
       <main className={`mx-auto px-3 sm:px-6 lg:px-8 py-6 sm:py-8 flex-1 w-full flex flex-col ${view === 'grid' || view === 'ai' || view === 'notes' ? 'max-w-[98%]' : 'max-w-7xl'}`}>
         <div className="animate-fadeIn flex-1 flex flex-col">
+          {/* Keyed by `view` so navigating away from a crashed screen mounts
+              a fresh boundary automatically — otherwise a tripped React error
+              boundary stays tripped forever, and a Reports crash would keep
+              blanking Quick Sale (or any other view) too, the next time the
+              user navigated there. */}
+          <ErrorBoundary key={view} variant="route" label={PAGE_TITLES[view]}>
           <Suspense fallback={<ViewLoader />}>
           {view === 'dashboard' && (
             allow('reports.view')
@@ -2020,6 +2043,7 @@ const App: React.FC = () => {
             />
           )}
           </Suspense>
+          </ErrorBoundary>
         </div>
       </main>
 

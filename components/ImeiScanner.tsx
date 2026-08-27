@@ -1,6 +1,7 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { Camera, X, Loader2, Sparkles, RotateCcw, ShieldAlert, CheckCircle2, ScanBarcode, ScanText } from 'lucide-react';
 import { extractImeiFromImage } from '../services/geminiService';
+import { OfflineError } from '../services/functionsGuard';
 import { detectBarcodes, isBarcodeDetectionSupported } from '../services/imeiBarcode';
 import { runOcrTier } from '../services/imeiOcr';
 import {
@@ -158,16 +159,24 @@ export const ImeiScanner: React.FC<ImeiScannerProps> = ({ onScan, onClose }) => 
     return canvas;
   };
 
+  // Returns false (not thrown) when offline — the AI tier is simply
+  // "unavailable" rather than a scan failure; callers fall through to
+  // whatever the on-device tiers already found, same as an AI miss.
   const runAiTier = async (canvas: HTMLCanvasElement): Promise<boolean> => {
     setProcessingLabel('Reading with AI…');
     const base64Image = canvas.toDataURL('image/jpeg', 0.8);
-    const raw = await extractImeiFromImage(base64Image);
-    const classified = validateExtractedFields(raw);
-    if (classified.length) {
-      applyTierResult('ai', classified);
-      return true;
+    try {
+      const raw = await extractImeiFromImage(base64Image);
+      const classified = validateExtractedFields(raw);
+      if (classified.length) {
+        applyTierResult('ai', classified);
+        return true;
+      }
+      return false;
+    } catch (err) {
+      if (err instanceof OfflineError) return false;
+      throw err;
     }
-    return false;
   };
 
   const handleCapture = async () => {
@@ -220,6 +229,7 @@ export const ImeiScanner: React.FC<ImeiScannerProps> = ({ onScan, onClose }) => 
   // the user already knows the on-device tiers will fail (bad glare, an
   // unusual layout).
   const handleUseAi = async () => {
+    if (!navigator.onLine) { setError("AI scan needs an internet connection — you're offline."); return; }
     stopLiveBarcodeLoop();
     setIsProcessing(true);
     setError(null);

@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@google/genai": "^1.33.0",
+    "@sentry/browser": "^10.71.0",
     "crypto-js": "^4.2.0",
     "firebase": "^12.6.0",
     "jsbarcode": "^3.12.3",

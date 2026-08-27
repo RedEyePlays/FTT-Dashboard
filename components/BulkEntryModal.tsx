@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { InventoryItem } from '../types';
 import { parseBulkInventory } from '../services/geminiService';
+import { OfflineError } from '../services/functionsGuard';
+import { useConnectionStatus } from '../hooks/useConnectionStatus';
 import { Sparkles, X, Loader2, CheckCircle, AlertCircle } from 'lucide-react';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 import { selectOnFocus } from '../hooks/selectOnFocus';
@@ -16,11 +18,14 @@ export const BulkEntryModal: React.FC<BulkEntryModalProps> = ({ onClose, onImpor
   const [parsedItems, setParsedItems] = useState<InventoryItem[]>([]);
   const [step, setStep] = useState<'input' | 'preview'>('input');
   const [error, setError] = useState<string | null>(null);
+  // Bulk parsing runs through the aiGenerate Cloud Function — no offline
+  // queue behind it, so it's disabled outright while offline.
+  const isOffline = useConnectionStatus() === 'offline';
 
   useEscapeKey(onClose);
 
   const handleProcess = async () => {
-    if (!inputText.trim()) return;
+    if (!inputText.trim() || isOffline) return;
     setIsProcessing(true);
     setError(null);
     try {
@@ -32,7 +37,7 @@ export const BulkEntryModal: React.FC<BulkEntryModalProps> = ({ onClose, onImpor
         setStep('preview');
       }
     } catch (err) {
-      setError("Failed to process text. Please try again.");
+      setError(err instanceof OfflineError ? "You're offline — bulk AI import needs an internet connection." : "Failed to process text. Please try again.");
     } finally {
       setIsProcessing(false);
     }
@@ -177,11 +182,12 @@ export const BulkEntryModal: React.FC<BulkEntryModalProps> = ({ onClose, onImpor
           {step === 'input' ? (
             <button
               onClick={handleProcess}
-              disabled={isProcessing || !inputText.trim()}
+              disabled={isProcessing || !inputText.trim() || isOffline}
+              title={isOffline ? "Unavailable offline" : undefined}
               className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-600 disabled:bg-indigo-400 text-white px-6 py-2.5 rounded-lg font-medium transition-all shadow-sm"
             >
               {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-              {isProcessing ? 'Processing...' : 'Parse with AI'}
+              {isProcessing ? 'Processing...' : isOffline ? 'Unavailable offline' : 'Parse with AI'}
             </button>
           ) : (
             <>

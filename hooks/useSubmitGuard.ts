@@ -18,6 +18,20 @@ import { useCallback, useRef, useState } from 'react';
 // afterward — a genuine failure never leaves a button stuck disabled.
 const DEFAULT_COOLDOWN_MS = 2500;
 
+// Offline correctness note: `run` never awaits `fn()` — the cooldown timer is
+// purely time-based, started synchronously and cleared after cooldownMs
+// regardless of whether the underlying write's Promise has resolved. That
+// matters because a Firestore write made offline (persistentLocalCache, see
+// services/firebase.ts) queues locally and its Promise doesn't settle until
+// the write reaches the server — potentially long after the cooldown window.
+// If this guard instead waited on that Promise, an offline write would leave
+// the guard "stuck" thinking it's still in flight. Since it doesn't, a
+// legitimate second click after the cooldown proceeds normally (the first
+// write is already safely queued, so there's nothing to lose), and a rapid
+// double-click within the cooldown is blocked exactly the same online or
+// offline. No change was needed here for offline support — this comment
+// exists so the next person doesn't "fix" it into awaiting fn().
+
 /** Guard for a single write-once action (one button, one flag). */
 export function useSubmitGuard(cooldownMs = DEFAULT_COOLDOWN_MS) {
   const inFlightRef = useRef(false);

@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { Lock, AlertTriangle, Eye, EyeOff, LogOut } from 'lucide-react';
+import { Lock, AlertTriangle, Eye, EyeOff, LogOut, WifiOff } from 'lucide-react';
 import { AppUser } from '../types';
 import { PIN_MAX_LENGTH } from '../domain/pin';
+import { useConnectionStatus } from '../hooks/useConnectionStatus';
 
 interface Props {
   me: AppUser;
@@ -25,6 +26,12 @@ const COOLDOWN_MS = 30_000;
 // screen fully replaces regardless of what it is.
 export const LockScreen: React.FC<Props> = ({ me, onUnlockWithPin, onUnlockWithPassword, onSignOut }) => {
   const hasPin = !!me.pinHash;
+  // PIN unlock is pure local verification (domain/pin.ts) — works fully
+  // offline. Password unlock reauthenticates against Firebase Auth, which
+  // needs a network round trip; offline, that would otherwise just come back
+  // as a confusing "Incorrect password" a few seconds later. Only relevant
+  // for staff with no PIN set — everyone else's unlock path is unaffected.
+  const isOffline = useConnectionStatus() === 'offline';
   const [pin, setPin] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -57,7 +64,7 @@ export const LockScreen: React.FC<Props> = ({ me, onUnlockWithPin, onUnlockWithP
 
   const submitPassword = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (busy || !password) return;
+    if (busy || !password || isOffline) return;
     setBusy(true);
     setError(null);
     const ok = await onUnlockWithPassword(password);
@@ -111,6 +118,12 @@ export const LockScreen: React.FC<Props> = ({ me, onUnlockWithPin, onUnlockWithP
         ) : (
           <form onSubmit={submitPassword} className="space-y-4">
             <p className="text-xs text-center text-slate-400 -mt-2 mb-2">No PIN set on your account — sign in with your password to unlock.</p>
+            {isOffline && (
+              <div className="bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400 p-3 rounded-lg text-sm flex items-start gap-2 justify-center text-center">
+                <WifiOff className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                <span>You're offline — password unlock needs a connection. Ask an owner/manager to set you a PIN for offline unlock, or wait to reconnect.</span>
+              </div>
+            )}
             <div>
               <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Password</label>
               <div className="relative">
@@ -133,7 +146,7 @@ export const LockScreen: React.FC<Props> = ({ me, onUnlockWithPin, onUnlockWithP
                 <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" /> <span>{error}</span>
               </div>
             )}
-            <button type="submit" disabled={busy || !password}
+            <button type="submit" disabled={busy || !password || isOffline}
               className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold shadow-lg shadow-indigo-500/30 disabled:opacity-50 disabled:cursor-not-allowed">
               Unlock
             </button>

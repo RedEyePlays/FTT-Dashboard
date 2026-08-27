@@ -1,7 +1,9 @@
 // Import the functions you need from the SDKs you need
 import { initializeApp, getApp, getApps } from "firebase/app";
 import { getAuth } from "firebase/auth";
-import { getFirestore } from "firebase/firestore";
+import {
+  getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager, Firestore,
+} from "firebase/firestore";
 import { getFunctions } from "firebase/functions";
 
 // Your web app's Firebase configuration
@@ -17,7 +19,30 @@ const firebaseConfig = {
 // Initialize Firebase
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 const auth = getAuth(app);
-const db = getFirestore(app);
+
+// Offline persistence: staff routinely have this open in more than one tab/
+// device at the counter, so persistence must support multiple tabs sharing
+// one local cache (persistentMultipleTabManager) rather than the older
+// single-tab persistence, which used to throw 'failed-precondition' the
+// moment a second tab opened. With this enabled, reads are served from the
+// local cache when offline and writes are queued and replayed automatically
+// on reconnect — no app code needs to know a write happened offline.
+//
+// initializeFirestore can still fail synchronously in a handful of real
+// environments (no IndexedDB at all, e.g. some in-app/webview browsers or
+// very old Safari private-browsing modes) — falling back to the plain
+// memory-only client keeps the app usable rather than crashing on startup;
+// staff just lose the "keep working through a refresh while offline" benefit
+// in that one uncommon case.
+let db: Firestore;
+try {
+  db = initializeFirestore(app, {
+    localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
+  });
+} catch (err) {
+  console.warn('Firestore persistent cache unavailable — falling back to memory-only Firestore.', err);
+  db = getFirestore(app);
+}
 // Cloud Functions client — the Gemini API key lives server-side in the
 // `aiGenerate` callable, so no key is ever shipped to the browser.
 const functions = getFunctions(app);
