@@ -46,12 +46,17 @@ const shelfPrice = (i: InventoryItem): number =>
 // need a DOM window and can't run in the plain node test environment).
 export const tagBody = (item: InventoryItem, store: string, qr?: string): string => {
   const name = getDeviceDisplayName(item);
+  // Color dropped from the specs line (owner request) — storage/carrier/
+  // battery are what actually help someone pick the right unit off a shelf
+  // of otherwise-identical devices; color is visible on the device itself.
   const specs: string[] = [];
   if (item.storage) specs.push(esc(item.storage));
-  if (item.color) specs.push(esc(item.color));
   if (item.carrier) specs.push(esc(item.carrier));
   if (item.batteryHealth) specs.push(`Battery ${esc(item.batteryHealth)}`);
   const specLine = specs.join(' · ');
+  // The SKU line was dropped entirely (owner request) — the QR already
+  // encodes the item's identifier, and removing this line freed real
+  // vertical room, used below for bigger type and a further push-down.
   return `
     <div class="tag-page-inner">
       <div class="tag-body">
@@ -59,7 +64,6 @@ export const tagBody = (item: InventoryItem, store: string, qr?: string): string
         <div class="name">${esc(name)}</div>
         ${specLine ? `<div class="specs">${specLine}</div>` : ''}
         <div class="price">${money(shelfPrice(item))}</div>
-        ${item.sku ? `<div class="sku">${esc(item.sku)}</div>` : ''}
       </div>
       ${qr ? `<img class="tag-qr" src="${qr}" alt="" />` : ''}
     </div>`;
@@ -71,14 +75,16 @@ export const TAG_STYLE = `
   .tag-page-inner { position: relative; width: 100%; height: 100%; }
   .tag-body {
     width: 100%; height: 100%;
-    /* Top/bottom padding shifted by +0.4mm/-0.4mm (2mm/0.5mm → 2.4mm/0.1mm)
-       to nudge the whole text stack down a bit further, per a direct "push
-       the text down a bit" request — total vertical padding (2.5mm) is
-       unchanged, so this is a pure position shift, not a size change; the
-       content-fits-the-label margin proven in shelfTag.test.ts is untouched.
-       The RIGHT padding reserves room for the 20mm QR (see .tag-qr below) so
-       centered text can't run underneath its top-right corner. */
-    padding: 2.4mm 22mm 0.1mm 2mm;
+    /* Dropping the SKU line entirely (see tagBody) freed real vertical room —
+       enough to both push the stack down further AND size up .store/.specs
+       below without re-risking the overflow this tag already had a
+       dedicated fix for (see the flex-shrink comment below; the fit margin
+       is re-proven with the current values in shelfTag.test.ts, not just
+       carried over from before this line was removed). Top padding grown to
+       4.5mm (from 2.4mm) for a noticeably bigger push-down; bottom kept at
+       0.5mm. The RIGHT padding reserves room for the 20mm QR (see .tag-qr
+       below) so centered text can't run underneath its top-right corner. */
+    padding: 4.5mm 22mm 0.5mm 2mm;
     display: flex; flex-direction: column; justify-content: center; align-items: center;
     font-family: 'Inter', system-ui, Arial, sans-serif; color: #000; overflow: hidden;
   }
@@ -97,14 +103,13 @@ export const TAG_STYLE = `
      passes' generous values) so the real content total now fits the 36mm
      box with room to spare — flex-shrink:0 alone would just turn "squashed"
      into "cleanly cropped," not actually fix the fit. */
-  .store { flex-shrink: 0; font-size: 3.3mm; font-weight: 700; letter-spacing: 0.3mm; text-transform: uppercase; color: #222; line-height: 1; }
+  .store { flex-shrink: 0; font-size: 4.2mm; font-weight: 800; letter-spacing: 0.3mm; text-transform: uppercase; color: #222; line-height: 1; }
   .name { flex-shrink: 0; font-size: 5.6mm; font-weight: 800; line-height: 1.1; margin-top: 0.8mm; text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .specs { flex-shrink: 0; font-size: 3.9mm; font-weight: 800; color: #333; margin-top: 0.6mm; text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .specs { flex-shrink: 0; font-size: 4.6mm; font-weight: 800; color: #333; margin-top: 0.6mm; text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* No top/bottom rule around the price anymore — removed at the owner's
      request; the size + weight alone are enough to make it read as the
      standout line. */
   .price { flex-shrink: 0; font-size: 8.2mm; font-weight: 900; letter-spacing: -0.2mm; padding: 0.4mm 0; margin-top: 1mm; }
-  .sku { flex-shrink: 0; font-family: 'SF Mono', ui-monospace, Menlo, Consolas, monospace; font-weight: 700; font-size: 3.7mm; letter-spacing: 0.3mm; margin-top: 0.8mm; }
   /* Small IMEI/serial QR — a corner overlay. Bumped from 9mm to 20mm for
      easier scanning at a normal shelf-browsing distance — still smaller
      than the full-size QR on the ZP 450 inventory label (11-40mm+ depending

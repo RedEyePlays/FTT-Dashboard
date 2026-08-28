@@ -10,154 +10,108 @@ const dev = (p: Partial<InventoryItem>): InventoryItem => ({
   ...p,
 } as InventoryItem);
 
+const rule = (cls: string) => TAG_STYLE.match(new RegExp(`\\${cls}\\s*\\{[^}]*\\}`))?.[0] || '';
+const sizeOf = (cls: string) => parseFloat(rule(cls).match(/font-size:\s*([\d.]+)mm/)?.[1] || '0');
+const weightOf = (cls: string) => parseInt(rule(cls).match(/font-weight:\s*(\d+)/)?.[1] || '400', 10);
+
 describe('shelf tag styling — bold numbers, price no longer needs to be oversized', () => {
-  it('the numeric lines (specs and SKU) are bold', () => {
-    expect(TAG_STYLE).toMatch(/\.specs\s*\{[^}]*font-weight:\s*[78]00/);
-    expect(TAG_STYLE).toMatch(/\.sku\s*\{[^}]*font-weight:\s*700/);
+  it('the specs line is bold', () => {
+    expect(weightOf('.specs')).toBeGreaterThanOrEqual(700);
   });
 
   it('the price is still bold but shrunk — no longer the single oversized element on the tag', () => {
-    const priceRule = TAG_STYLE.match(/\.price\s*\{[^}]*\}/)?.[0] || '';
-    expect(priceRule).toMatch(/font-weight:\s*900/); // still the boldest weight
-    const sizeMatch = priceRule.match(/font-size:\s*([\d.]+)mm/);
-    expect(sizeMatch).toBeTruthy();
-    const priceSizeMm = parseFloat(sizeMatch![1]);
+    expect(weightOf('.price')).toBe(900); // still the boldest weight
+    const priceSizeMm = sizeOf('.price');
     expect(priceSizeMm).toBeLessThan(10); // smaller than the old 10mm
     // Still clearly the largest number on the tag — bold weight signals
     // importance now, but size still gives it visual priority.
-    const specsSize = parseFloat(TAG_STYLE.match(/\.specs\s*\{[^}]*font-size:\s*([\d.]+)mm/)![1]);
-    const skuSize = parseFloat(TAG_STYLE.match(/\.sku\s*\{[^}]*font-size:\s*([\d.]+)mm/)![1]);
-    expect(priceSizeMm).toBeGreaterThan(specsSize);
-    expect(priceSizeMm).toBeGreaterThan(skuSize);
+    expect(priceSizeMm).toBeGreaterThan(sizeOf('.specs'));
   });
 
-  it('renders the price, spec numbers, and SKU into the tag body unchanged in content (styling change only)', () => {
+  it('the price has no top/bottom border rule anymore', () => {
+    expect(rule('.price')).not.toMatch(/border/);
+  });
+});
+
+describe('shelf tag — SKU line removed, color dropped from specs, bigger store/storage text', () => {
+  it('the SKU is not rendered on the tag at all (the QR already encodes the item\'s identifier)', () => {
+    const html = tagBody(dev({}), 'FlipThatTech');
+    expect(html).not.toContain('FTT-0000029');
+    expect(html).not.toContain('class="sku"');
+  });
+
+  it('the .sku CSS rule no longer exists', () => {
+    expect(TAG_STYLE).not.toMatch(/\.sku\s*\{/);
+  });
+
+  it('color is left out of the specs line even when set — storage/carrier/battery are kept, condition stays out too', () => {
+    const html = tagBody(dev({ storage: '256GB', color: 'Silver', carrier: 'Unlocked', batteryHealth: '89%', condition: 'Excellent' }), 'FlipThatTech');
+    expect(html).toContain('256GB');
+    expect(html).toContain('Unlocked');
+    expect(html).toContain('89%');
+    expect(html).not.toContain('Silver');
+    expect(html).not.toContain('Excellent');
+  });
+
+  it('the store name (.store) is bigger and bold', () => {
+    expect(sizeOf('.store')).toBeGreaterThan(3.3); // grew from the prior pass's 3.3mm
+    expect(weightOf('.store')).toBeGreaterThanOrEqual(800);
+  });
+
+  it('the storage/specs line is bigger than the prior pass', () => {
+    expect(sizeOf('.specs')).toBeGreaterThan(3.9); // grew from the prior pass's 3.9mm
+  });
+
+  it('renders the price and remaining spec fields (styling change only, content otherwise intact)', () => {
     const html = tagBody(dev({}), 'FlipThatTech');
     expect(html).toContain('$699.00');
     expect(html).toContain('256GB');
     expect(html).toContain('89%');
-    expect(html).toContain('FTT-0000029');
+    expect(html).toContain('FlipThatTech');
+    expect(html).toContain('iPhone 14 Pro Max');
   });
 });
 
-describe('shelf tag — no rule around the price, condition dropped, bigger specs/SKU text', () => {
-  it('the price has no top/bottom border rule anymore', () => {
-    const priceRule = TAG_STYLE.match(/\.price\s*\{[^}]*\}/)?.[0] || '';
-    expect(priceRule).not.toMatch(/border/);
+describe('shelf tag — pushed further down', () => {
+  it('top padding grew again from the prior pass, for a more noticeable push-down', () => {
+    const bodyRule = TAG_STYLE.match(/\.tag-body\s*\{[\s\S]*?\n\s*\}/)?.[0] || '';
+    const padMatch = bodyRule.match(/padding:\s*([\d.]+)mm\s+[\d.]+mm\s+([\d.]+)mm\s+[\d.]+mm/);
+    const [, top] = padMatch!.map(Number);
+    expect(top).toBeGreaterThan(2.4); // grew from the prior pass's 2.4mm
   });
 
-  it('condition is left out of the specs line even when set — storage/color/battery are kept', () => {
-    const html = tagBody(dev({ storage: '256GB', color: 'Silver', batteryHealth: '89%', condition: 'Excellent' }), 'FlipThatTech');
-    expect(html).toContain('256GB');
-    expect(html).toContain('Silver');
-    expect(html).toContain('89%');
-    expect(html).not.toContain('Excellent');
-  });
-
-  it('specs and SKU font-size grew again from the previous pass', () => {
-    const specsSize = parseFloat(TAG_STYLE.match(/\.specs\s*\{[^}]*font-size:\s*([\d.]+)mm/)![1]);
-    const skuSize = parseFloat(TAG_STYLE.match(/\.sku\s*\{[^}]*font-size:\s*([\d.]+)mm/)![1]);
-    expect(specsSize).toBeGreaterThan(3.4);
-    expect(skuSize).toBeGreaterThan(3.2);
-  });
-});
-
-describe('shelf tag — bigger QR, all-bold text, pushed-down content, and larger line gaps', () => {
-  it('the QR is bigger than before (9mm → 20mm)', () => {
-    const rule = TAG_STYLE.match(/\.tag-qr\s*\{[^}]*\}/)?.[0] || '';
-    const widthMm = parseFloat(rule.match(/width:\s*([\d.]+)mm/)![1]);
-    const heightMm = parseFloat(rule.match(/height:\s*([\d.]+)mm/)![1]);
-    expect(widthMm).toBeGreaterThan(9);
-    expect(heightMm).toBeGreaterThan(9);
-    expect(widthMm).toBeCloseTo(20, 0);
-    expect(widthMm).toBe(heightMm); // stays square
-  });
-
-  it('every text line on the tag is bold, not just the numeric ones', () => {
-    for (const cls of ['.store', '.name', '.specs', '.price', '.sku']) {
-      const rule = TAG_STYLE.match(new RegExp(`\\${cls}\\s*\\{[^}]*\\}`))?.[0] || '';
-      const weight = parseInt(rule.match(/font-weight:\s*(\d+)/)?.[1] || '400', 10);
-      expect(weight, `${cls} should be bold`).toBeGreaterThanOrEqual(700);
-    }
-  });
-
-  it('content is nudged down (asymmetric top/bottom padding), without changing the vertical total — a pure position shift, not a resize', () => {
-    const rule = TAG_STYLE.match(/\.tag-body\s*\{[\s\S]*?\n\s*\}/)?.[0] || '';
-    // 4-value shorthand now (top, right, bottom, left) — right grew to make
-    // room for the bigger QR (see the next test), which is a real size
-    // change on that one side, but top vs. bottom is still the pure
-    // "nudged down" position shift from the prior pass.
-    const padMatch = rule.match(/padding:\s*([\d.]+)mm\s+([\d.]+)mm\s+([\d.]+)mm\s+([\d.]+)mm/);
-    expect(padMatch).toBeTruthy();
-    const [, top, , bottom] = padMatch!.map(Number);
-    expect(top).toBeGreaterThan(bottom); // shifted down: more room reserved above than below
-  });
-
-  it('the right padding reserves room for the bigger QR so centered text stays clear of it', () => {
+  it('the right padding still reserves room for the 20mm QR so centered text stays clear of it', () => {
     const bodyRule = TAG_STYLE.match(/\.tag-body\s*\{[\s\S]*?\n\s*\}/)?.[0] || '';
     const padMatch = bodyRule.match(/padding:\s*[\d.]+mm\s+([\d.]+)mm\s+[\d.]+mm\s+[\d.]+mm/);
     const rightPad = parseFloat(padMatch![1]);
     const qrRule = TAG_STYLE.match(/\.tag-qr\s*\{[^}]*\}/)?.[0] || '';
     const qrWidth = parseFloat(qrRule.match(/width:\s*([\d.]+)mm/)![1]);
     const qrInset = parseFloat(qrRule.match(/right:\s*([\d.]+)mm/)![1]);
-    // The reserved zone must cover at least the QR's full footprint from the
-    // label's right edge (its width + its own inset from that edge) — with
-    // some margin, not just exactly touching it.
     expect(rightPad).toBeGreaterThan(qrWidth + qrInset);
-  });
-
-  it('every font-size grew from the previous pass ("make the scale a bit bigger")', () => {
-    const oldSizes: Record<string, number> = { '.store': 3, '.name': 5.2, '.specs': 3.1, '.price': 7.5, '.sku': 2.9 };
-    for (const [cls, oldSize] of Object.entries(oldSizes)) {
-      const rule = TAG_STYLE.match(new RegExp(`\\${cls}\\s*\\{[^}]*\\}`))?.[0] || '';
-      const size = parseFloat(rule.match(/font-size:\s*([\d.]+)mm/)?.[1] || '0');
-      expect(size, `${cls} font-size should have grown`).toBeGreaterThan(oldSize);
-    }
-  });
-
-  it('the price is still the biggest, boldest number on the tag after the size bump', () => {
-    const sizeOf = (cls: string) => parseFloat(TAG_STYLE.match(new RegExp(`\\${cls}\\s*\\{[^}]*font-size:\\s*([\\d.]+)mm`))![1]);
-    const priceSize = sizeOf('.price');
-    expect(priceSize).toBeGreaterThan(sizeOf('.specs'));
-    expect(priceSize).toBeGreaterThan(sizeOf('.sku'));
-    expect(priceSize).toBeLessThan(10); // still not back to the original oversized 10mm
-  });
-
-  it('rendered content is unchanged by any of the above — styling/position only', () => {
-    const html = tagBody(dev({}), 'FlipThatTech');
-    expect(html).toContain('$699.00');
-    expect(html).toContain('FTT-0000029');
   });
 });
 
-describe('shelf tag — pushed text down a bit further, storage line extra-bold', () => {
-  it('the storage/color/battery (.specs) line is even bolder than before (700 → 800)', () => {
-    const rule = TAG_STYLE.match(/\.specs\s*\{[^}]*\}/)?.[0] || '';
-    const weight = parseInt(rule.match(/font-weight:\s*(\d+)/)![1], 10);
-    expect(weight).toBeGreaterThanOrEqual(800);
-  });
-
-  it('the text stack was pushed down further — top padding grew, bottom shrank, same total', () => {
-    const rule = TAG_STYLE.match(/\.tag-body\s*\{[\s\S]*?\n\s*\}/)?.[0] || '';
-    const padMatch = rule.match(/padding:\s*([\d.]+)mm\s+[\d.]+mm\s+([\d.]+)mm\s+[\d.]+mm/);
-    const [, top, bottom] = padMatch!.map(Number);
-    expect(top).toBeGreaterThan(2); // grew from the prior pass's 2mm
-    expect(bottom).toBeLessThan(0.5); // shrank from the prior pass's 0.5mm
-    expect(top + bottom).toBeCloseTo(2.5, 1); // same total — pure position shift
+describe('shelf tag — the QR is bigger than before (9mm -> 20mm) and stays square', () => {
+  it('reads the QR dimensions from the CSS', () => {
+    const qrRule = TAG_STYLE.match(/\.tag-qr\s*\{[^}]*\}/)?.[0] || '';
+    const widthMm = parseFloat(qrRule.match(/width:\s*([\d.]+)mm/)![1]);
+    const heightMm = parseFloat(qrRule.match(/height:\s*([\d.]+)mm/)![1]);
+    expect(widthMm).toBeCloseTo(20, 0);
+    expect(widthMm).toBe(heightMm);
   });
 });
 
 describe('shelf tag — content actually fits the 36mm label (regression: model/storage rows were being cut off in print)', () => {
   const LABEL_HEIGHT_MM = 36;
+  const LINES = ['.store', '.name', '.specs', '.price']; // .sku removed entirely
 
-  it('every content line disables flex-shrink, so it can never be silently compressed to fit', () => {
-    // The root cause: without this, the flex column's default flex-shrink:1
-    // compresses whichever lines have the least slack once total content
-    // height exceeds the label — on a real print that read as the model
-    // (.name) and storage (.specs) rows getting cut off, not a clean crop.
-    for (const cls of ['.store', '.name', '.specs', '.price', '.sku']) {
-      const rule = TAG_STYLE.match(new RegExp(`\\${cls}\\s*\\{[^}]*\\}`))?.[0] || '';
-      expect(rule, `${cls} should set flex-shrink: 0`).toMatch(/flex-shrink:\s*0/);
+  it('every remaining content line disables flex-shrink, so it can never be silently compressed to fit', () => {
+    // The root cause (see services/shelfTag.ts's comment above .store): the
+    // flex column's default flex-shrink:1 compresses whichever lines have
+    // the least slack once total content height exceeds the label — on a
+    // real print that read as rows getting cut off, not a clean crop.
+    for (const cls of LINES) {
+      expect(rule(cls), `${cls} should set flex-shrink: 0`).toMatch(/flex-shrink:\s*0/);
     }
   });
 
@@ -167,9 +121,8 @@ describe('shelf tag — content actually fits the 36mm label (regression: model/
     // each line's rendered height is font-size × line-height, plus its
     // margin-top, summed top to bottom, plus the outer vertical padding.
     // 1.2 is a conservative generic line-height for lines that don't set an
-    // explicit one (.specs, .sku, .price) — real browser "normal" for Inter
-    // is typically at or below that, so this over-, not under-, estimates.
-    const rule = (cls: string) => TAG_STYLE.match(new RegExp(`\\${cls}\\s*\\{[^}]*\\}`))?.[0] || '';
+    // explicit one (.specs, .price) — real browser "normal" for Inter is
+    // typically at or below that, so this over-, not under-, estimates.
     const num = (css: string, prop: string, fallback = 0) => parseFloat(css.match(new RegExp(`${prop}:\\s*([\\d.]+)mm`))?.[1] || String(fallback));
 
     const store = num(rule('.store'), 'font-size') * num(rule('.store'), 'line-height', 1);
@@ -178,16 +131,14 @@ describe('shelf tag — content actually fits the 36mm label (regression: model/
     const priceRule = rule('.price');
     const pricePadding = num(priceRule, 'padding') * 2; // shorthand `padding: Xmm 0` — vertical padding is 2×X
     const price = num(priceRule, 'margin-top') + num(priceRule, 'font-size') * 1.2 + pricePadding;
-    const sku = num(rule('.sku'), 'margin-top') + num(rule('.sku'), 'font-size') * 1.2;
 
     const bodyRule = TAG_STYLE.match(/\.tag-body\s*\{[\s\S]*?\n\s*\}/)?.[0] || '';
     const padMatch = bodyRule.match(/padding:\s*([\d.]+)mm\s+[\d.]+mm\s+([\d.]+)mm\s+[\d.]+mm/);
     const verticalPadding = Number(padMatch![1]) + Number(padMatch![2]);
 
-    const total = store + name + specs + price + sku + verticalPadding;
+    const total = store + name + specs + price + verticalPadding;
     expect(total).toBeLessThan(LABEL_HEIGHT_MM);
-    // Real margin, not just barely squeaking under — the whole point is to
-    // never be this close to the edge again after three straight size bumps.
+    // Real margin, not just barely squeaking under.
     expect(LABEL_HEIGHT_MM - total).toBeGreaterThan(0.5);
   });
 });
