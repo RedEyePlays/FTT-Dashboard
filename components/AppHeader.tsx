@@ -2,7 +2,7 @@ import React from 'react';
 import {
   LayoutDashboard, Table, ShoppingCart, ShoppingBag, Wrench, Contact, Activity, BarChart3, StickyNote,
   Truck, ScrollText, Users as UsersIcon, Settings, Bot, Sparkles, MessageCircle,
-  Search, PlusCircle, Moon, Sun, Menu, MoreHorizontal, ChevronDown, LogOut, Clock, Receipt, ClipboardCheck,
+  Search, PlusCircle, Moon, Sun, Menu, MoreHorizontal, ChevronDown, LogOut, Clock, Receipt, ClipboardCheck, Lock,
 } from 'lucide-react';
 import { ViewState, Permission, ActivityEntry } from '../types';
 import { Alert } from '../domain/alerts';
@@ -32,6 +32,8 @@ interface AppHeaderProps {
   onOpenBulk: () => void;
   onStartAdd: () => void;
   onLock: () => void;
+  /** Locks the app overlay without signing out — available to every role. */
+  onManualLock: () => void;
   activity?: ActivityEntry[];
   alerts?: Alert[];
   notifSeenTs?: number;
@@ -52,7 +54,7 @@ const iconBtn =
 export const AppHeader: React.FC<AppHeaderProps> = ({
   view, onNavigate, allow, isTech, pageTitle, onOpenDrawer, userEmail, userRole,
   darkMode, onToggleTheme, onToggleAiSidebar, onOpenFinder,
-  onOpenSettings, onOpenBulk, onStartAdd, onLock, activity = [],
+  onOpenSettings, onOpenBulk, onStartAdd, onLock, onManualLock, activity = [],
   alerts = [], notifSeenTs = 0, onMarkNotificationsSeen = () => {}, showNotes = true,
 }) => {
   // Keyboard hint for the global-search bar (⌘K on Mac, Ctrl K elsewhere).
@@ -165,6 +167,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
         {allow('audit.view') && (
           <MenuItem icon={<ScrollText className="w-4 h-4" />} label="Audit log" active={view === 'audit'} onClick={() => { onNavigate('audit'); close(); }} />
         )}
+        <MenuItem icon={<Lock className="w-4 h-4" />} label="Lock app" onClick={() => { onManualLock(); close(); }} />
         <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
         <MenuItem icon={<LogOut className="w-4 h-4" />} label="Sign out" danger onClick={() => { onLock(); close(); }} />
       </>)}

@@ -27,6 +27,14 @@ const ROLE_RANK: Record<Role, number> = { owner: 3, manager: 2, employee: 1, tec
 export const canAssignPin = (assignerRole: Role | undefined, targetRole: Role): boolean =>
   (assignerRole === 'owner' || assignerRole === 'manager') && ROLE_RANK[targetRole] < ROLE_RANK[assignerRole];
 
+// --- Who the INACTIVITY auto-lock timer applies to ---------------------------
+// Owner/manager only — they're the roles with access to sensitive screens
+// (profit figures, settings, users). An employee/technician working the
+// counter is never auto-locked by idle time; they can still lock manually at
+// any time (App.tsx's handleManualLock), which isn't role-gated.
+export const autoLockAppliesToRole = (role: Role | undefined): boolean =>
+  role === 'owner' || role === 'manager';
+
 // --- Hashing (PBKDF2-SHA256 via Web Crypto) ---------------------------------
 
 export interface PinHash {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isValidPinFormat, canAssignPin, hashPin, verifyPin, PIN_HASH_ITERATIONS } from './pin';
+import { isValidPinFormat, canAssignPin, hashPin, verifyPin, PIN_HASH_ITERATIONS, autoLockAppliesToRole } from './pin';
 
 describe('isValidPinFormat', () => {
   it('accepts 4-6 digit numeric codes', () => {
@@ -84,5 +84,21 @@ describe('hashPin / verifyPin', () => {
 
   it('verifyPin is false for an empty/missing stored record', async () => {
     expect(await verifyPin('1234', { hash: '', salt: '', iterations: 0 })).toBe(false);
+  });
+});
+
+describe('autoLockAppliesToRole', () => {
+  it('applies to owner and manager', () => {
+    expect(autoLockAppliesToRole('owner')).toBe(true);
+    expect(autoLockAppliesToRole('manager')).toBe(true);
+  });
+
+  it('does not apply to employee or technician', () => {
+    expect(autoLockAppliesToRole('employee')).toBe(false);
+    expect(autoLockAppliesToRole('technician')).toBe(false);
+  });
+
+  it('does not apply when the role is not yet known', () => {
+    expect(autoLockAppliesToRole(undefined)).toBe(false);
   });
 });
