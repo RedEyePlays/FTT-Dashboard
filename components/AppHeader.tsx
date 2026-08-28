@@ -75,7 +75,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
 
   const more: NavItem[] = ([
     { key: 'analytics', label: 'Analytics', icon: <BarChart3 className="w-4 h-4" />, view: 'analytics', show: (userRole === 'owner' || userRole === 'manager') && allow('reports.profit.detailed') },
-    { key: 'reports', label: 'Reports', icon: <Receipt className="w-4 h-4" />, view: 'reports', show: allow('cash.reconcile') },
+    { key: 'reports', label: 'Reports', icon: <Receipt className="w-4 h-4" />, view: 'reports', show: allow('cash.reconcile') || allow('reports.profit.summary') },
     { key: 'timeclock', label: 'Time Clock', icon: <Clock className="w-4 h-4" />, view: 'timeclock', show: allow('timeclock.use') },
     { key: 'closeout', label: 'Close Out', icon: <ClipboardCheck className="w-4 h-4" />, view: 'closeout', show: allow('closeout.view') },
     { key: 'audit', label: 'Audit', icon: <ScrollText className="w-4 h-4" />, view: 'audit', show: allow('audit.view') },
