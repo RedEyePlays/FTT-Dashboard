@@ -22,6 +22,11 @@ export { techUpdateRepair } from "./repairs";
 // via the Admin SDK and hands it over out-of-band.
 export { setStaffPassword } from "./staffPassword";
 
+// Owner (or manager, for a technician account only), in-app staff account
+// creation (see staffUser.ts) — sets the email/password/PIN directly, no
+// self-claimed "pending invite" step.
+export { createStaffUser } from "./staffUser";
+
 // The Gemini API key lives in Firebase's server-side Secret Manager — it is
 // NEVER shipped to the client. Set it before deploy with:
 //   firebase functions:secrets:set GEMINI_API_KEY

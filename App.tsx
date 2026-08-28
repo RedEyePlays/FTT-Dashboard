@@ -64,7 +64,7 @@ import type { QuickPurchaseSaveInput } from './components/QuickPurchaseView';
 import { listingPlatformsLabel } from './domain/listing';
 import { AppSettings } from './domain/settings';
 import { techUpdateRepair } from './services/repairFunctions';
-import { setStaffPassword } from './services/userFunctions';
+import { setStaffPassword, createStaffUser } from './services/userFunctions';
 import { stampVoid, stampReturn, stampReconcile, stampSettlement, stampDropOffAccept, stampExpense } from './domain/attribution';
 import { useWorkspaceData } from './hooks/useWorkspaceData';
 import { newId, mkActivity } from './domain/ids';
@@ -1417,6 +1417,35 @@ const App: React.FC = () => {
     // Record the revocation with the invited email/role — the invite doc is gone after this.
     audit('user.invite_revoke', 'user', email, { email, role: inv?.role }, undefined);
   };
+  // Create a fully-usable staff account directly — email, password and an
+  // optional PIN, set right now, instead of a "pending invite" that sits
+  // unclaimed until the new hire signs in on their own. The browser can't do
+  // this itself (creating another user's Firebase Auth account from the
+  // client would sign the CALLER out and become that new user's session
+  // instead), so this posts to the createStaffUser Cloud Function
+  // (functions/src/staffUser.ts), which re-derives the caller's role/
+  // workspace from Firestore server-side and enforces the same role ceiling
+  // as handleInvite above (owner: any non-owner role; manager: technician
+  // only) — the allow() check here is UI-level only, same caveat as
+  // handleResetStaffPassword.
+  //
+  // The audit entry ('user.create') is written BY THE FUNCTION, with the
+  // Admin SDK, so the acting identity is the authenticated one regardless of
+  // whether this client calls audit(). Resolves to null on success, or a
+  // message to show in the dialog.
+  const handleCreateUser = async (input: { email: string; password: string; role: Role; pin?: string }): Promise<string | null> => {
+    if (!(allow('users.manage') || (allow('users.tech') && input.role === 'technician'))) {
+      return 'You do not have permission to create that account.';
+    }
+    try {
+      await createStaffUser(input);
+      return null;
+    } catch (e: any) {
+      return typeof e?.message === 'string' && e.message
+        ? e.message.replace(/^.*?:\s*/, '')
+        : 'Could not create the account. Please try again.';
+    }
+  };
 
   // Owner-only hourly-rate edit (rate lives on the user doc). Managers/employees
   // can't change pay — enforced here and in firestore.rules.
@@ -2229,6 +2258,7 @@ const App: React.FC = () => {
               onSetHourlyRate={allow('users.manage') ? handleSetHourlyRate : undefined}
               onInvite={handleInvite}
               onDeleteInvite={handleDeleteInvite}
+              onCreateUser={handleCreateUser}
               onSetPin={allow('users.pin') ? handleSetPin : undefined}
               onResetPassword={allow('users.manage') ? handleResetStaffPassword : undefined}
               canManageSecurity={allow('security.manage')}

@@ -58,6 +58,10 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   // (functions/src/staffPassword.ts), never by the client — and it never
   // carries the password, only who reset whose.
   'user.password_reset': 'Password reset',
+  // Written server-side by the createStaffUser Cloud Function
+  // (functions/src/staffUser.ts) — an account created directly with a
+  // password (and optional PIN) set up front, not a claimed invite.
+  'user.create': 'User created',
   'user.invite': 'User invited',
   'user.invite_revoke': 'Invite revoked',
   // Time clock
@@ -92,7 +96,7 @@ export const auditActionLabel = (action: string): string =>
 // (see the exhaustive `audit(` grep this was built from), not guessed names.
 export const CRITICAL_AUDIT_ACTIONS: readonly string[] = [
   'sale.void', 'sale.return',
-  'user.set_pin', 'user.role_change', 'user.allow_profit',
+  'user.create', 'user.set_pin', 'user.role_change', 'user.allow_profit',
   'cash.reconcile', 'settings.update',
 ];
 
