@@ -30,6 +30,21 @@ export interface InventoryItem {
   item: string; // Product Name/Model
   imei: string; // IMEI or Serial Number (devices)
   boughtFrom: string;
+  // Seller link — the customer this item was bought FROM. Buyers and sellers
+  // are the same people (one customer record per person), so this points at a
+  // plain Customer; the buying side of a person's history is derived from it
+  // (domain/customers.ts's sellerPurchasesFor). Optional and additive:
+  // `boughtFrom` stays the display text for one-off sellers and for every
+  // legacy row written before this field existed — those keep rendering
+  // exactly as before, and nothing auto-matches old text to a customer.
+  // Named for the seller side explicitly because `soldTo` on this same record
+  // is the buyer side; a bare `customerId` would be ambiguous here.
+  boughtFromCustomerId?: string;
+  // Snapshot of the seller's phone at purchase time (only written when a
+  // customer was linked or entered). Second-hand dealer record-keeping wants
+  // seller identity attached to the purchase itself, not just to a customer
+  // record that may later be edited or merged away.
+  boughtFromPhone?: string;
   purchaseCost: number;
   repairCost: number;
 

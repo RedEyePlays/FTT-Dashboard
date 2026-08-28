@@ -1,7 +1,9 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { QrCode, Printer, Camera } from 'lucide-react';
-import { InventoryItem } from '../types';
+import { InventoryItem, Customer } from '../types';
+import { SellerCustomerField } from './SellerCustomerField';
+import { CustomerDraft } from '../domain/customers';
 import { QRScanner } from './QRScanner';
 import { QRLabel } from './QRLabel';
 import { ImeiScanner } from './ImeiScanner';
@@ -16,9 +18,13 @@ interface DataEntryFormProps {
   // Existing inventory, for the duplicate IMEI/serial guard (same check the
   // Inventory item modal, Quick Purchase and auto-inventory all use).
   inventory?: InventoryItem[];
+  // "Bought From" customer picker — same field, same behaviour, as Quick
+  // Purchase and the item modal. Optional: plain free text without them.
+  customers?: Customer[];
+  onCreateCustomer?: (draft: CustomerDraft) => Customer | undefined;
 }
 
-export const DataEntryForm: React.FC<DataEntryFormProps> = ({ initialData, onSave, onCancel, inventory = [] }) => {
+export const DataEntryForm: React.FC<DataEntryFormProps> = ({ initialData, onSave, onCancel, inventory = [], customers, onCreateCustomer }) => {
   // Initialize state with a default structure or from initialData
   const [formData, setFormData] = useState<Omit<InventoryItem, 'id'>>({
     date: todayISO(),
@@ -142,10 +148,14 @@ export const DataEntryForm: React.FC<DataEntryFormProps> = ({ initialData, onSav
                   </p>
                 )}
               </div>
-               <div>
-                <label htmlFor="boughtFrom" className="block text-sm font-medium text-slate-600 dark:text-slate-300 mb-1">Bought From</label>
-                <input type="text" name="boughtFrom" id="boughtFrom" value={formData.boughtFrom} onChange={handleChange} className="w-full p-2 bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-600 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500"/>
-              </div>
+               <SellerCustomerField
+                label="Bought From"
+                placeholder="Seller name (optional)"
+                inputClassName="w-full p-2 bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-600 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                labelClassName="block text-sm font-medium text-slate-600 dark:text-slate-300 mb-1"
+                customers={customers} onCreateCustomer={onCreateCustomer}
+                value={{ boughtFrom: formData.boughtFrom || '', boughtFromCustomerId: formData.boughtFromCustomerId, boughtFromPhone: formData.boughtFromPhone }}
+                onChange={v => setFormData(prev => ({ ...prev, ...v }))} />
               <div>
                 <label htmlFor="purchaseCost" className="block text-sm font-medium text-slate-600 dark:text-slate-300 mb-1">Purchase Cost ($)</label>
                 <input type="number" step="0.01" name="purchaseCost" id="purchaseCost" value={formData.purchaseCost} onChange={handleChange} onFocus={selectOnFocus} required className="w-full p-2 bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-600 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500"/>

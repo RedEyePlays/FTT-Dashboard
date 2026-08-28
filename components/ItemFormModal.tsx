@@ -2,7 +2,9 @@ import React, { useState, useMemo, FocusEventHandler } from 'react';
 import { X, Wand2, Smartphone, Package, Barcode, Camera, Tag } from 'lucide-react';
 import { printShelfTag } from '../services/shelfTag';
 import { getStoreProfile } from './SettingsModal';
-import { InventoryItem, ItemKind, DeviceType, DeviceStatus, DeviceBuyer, Repair, ListingPlatform, Note, Role } from '../types';
+import { InventoryItem, ItemKind, DeviceType, DeviceStatus, DeviceBuyer, Repair, ListingPlatform, Note, Role, Customer } from '../types';
+import { SellerCustomerField } from './SellerCustomerField';
+import { CustomerDraft } from '../domain/customers';
 import { LinkedNotes } from './LinkedNotes';
 import { REPAIR_STATUS_LABEL } from '../domain/repairs';
 import { LISTING_PLATFORMS } from '../domain/listing';
@@ -31,6 +33,11 @@ interface Props {
   // form still renders for callers that don't have the list; the guard simply
   // doesn't engage without it.
   inventory?: InventoryItem[];
+  // Customer list + inline creation for the "Bought From" picker — the same
+  // field, behaving the same way, as on Quick Purchase. Optional: without
+  // them the field is plain free text exactly as before.
+  customers?: Customer[];
+  onCreateCustomer?: (draft: CustomerDraft) => Customer | undefined;
   notes?: Note[];                        // workspace notes, for the linked-notes panel
   noteRole?: Role;                       // viewer's role, gates which linked notes show
   onOpenNote?: (noteId: string) => void; // jump to a linked note in the Notes board
@@ -65,7 +72,7 @@ const Field: React.FC<{ label: string; value: unknown; onChange: (v: string) => 
   </div>
 );
 
-export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, deviceBuyers, onSave, onGenerateSku, onClose, linkedRepair, onCreateRepair, onOpenRepair, inventory = [], notes, noteRole, onOpenNote }) => {
+export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, deviceBuyers, onSave, onGenerateSku, onClose, linkedRepair, onCreateRepair, onOpenRepair, inventory = [], customers, onCreateCustomer, notes, noteRole, onOpenNote }) => {
   const [kind, setKind] = useState<ItemKind>(initial?.kind ?? initialKind ?? 'device');
   const [f, setF] = useState<InventoryItem>(() => initial ?? {
     id: uid(), kind: initialKind ?? 'device', sku: '', manufacturerBarcode: '',
@@ -214,7 +221,13 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, deviceBuy
                 <Field label="Item Name (override)" value={f.item} onChange={setText('item')} placeholder="Auto from brand/model" />
               </div>
               <div className="grid grid-cols-3 gap-4">
-                <Field label="Bought From (seller)" value={f.boughtFrom} onChange={setText('boughtFrom')} />
+                <SellerCustomerField
+                  label="Bought From (seller)"
+                  placeholder="Seller name (optional)"
+                  inputClassName={inp} labelClassName={lbl}
+                  customers={customers} onCreateCustomer={onCreateCustomer}
+                  value={{ boughtFrom: f.boughtFrom || '', boughtFromCustomerId: f.boughtFromCustomerId, boughtFromPhone: f.boughtFromPhone }}
+                  onChange={v => setF(prev => ({ ...prev, ...v }))} />
                 <Field label="Purchase Source (channel)" value={f.purchaseSource} onChange={setText('purchaseSource')} placeholder="Marketplace" />
                 <div>
                   {/* Attribution only — who sourced this device the store
@@ -256,7 +269,13 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, deviceBuy
               <Field label="Selling Price ($)" value={f.sellingPrice} onChange={setNum('sellingPrice')} type="number" onFocus={selectOnFocus} />
               <Field label="Low Stock Threshold" value={f.lowStockThreshold} onChange={setNum('lowStockThreshold')} type="number" />
               <Field label="Purchase Date" value={f.date} onChange={setText('date')} type="date" />
-              <Field label="Bought From" value={f.boughtFrom} onChange={setText('boughtFrom')} />
+              <SellerCustomerField
+                  label="Bought From"
+                  placeholder="Seller name (optional)"
+                  inputClassName={inp} labelClassName={lbl}
+                  customers={customers} onCreateCustomer={onCreateCustomer}
+                  value={{ boughtFrom: f.boughtFrom || '', boughtFromCustomerId: f.boughtFromCustomerId, boughtFromPhone: f.boughtFromPhone }}
+                  onChange={v => setF(prev => ({ ...prev, ...v }))} />
             </div>
           )}
 

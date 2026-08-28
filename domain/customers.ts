@@ -34,6 +34,16 @@ export interface CustomerData {
   inventory?: InventoryItem[];
 }
 
+// Devices this person SOLD TO US — inventory rows linked back to them by
+// boughtFromCustomerId (Quick Purchase / Add Item's "Bought From" picker).
+// Newest first. Legacy rows carry free-text `boughtFrom` only and are never
+// matched by text: a wrong auto-link is worse than no link.
+export function sellerPurchasesFor(c: Customer, inventory: InventoryItem[] = []): InventoryItem[] {
+  return inventory
+    .filter(i => !!i.boughtFromCustomerId && i.boughtFromCustomerId === c.id)
+    .sort((a, b) => dateMs(b.date) - dateMs(a.date));
+}
+
 export interface CustomerStats {
   purchases: SalesTransaction[];
   repairs: Repair[];          // retail + wholesale, newest first
@@ -54,6 +64,14 @@ export interface CustomerStats {
   isVIP: boolean;
   isActive: boolean;
   hasOpenRepairs: boolean;
+
+  // --- Seller side: devices we bought FROM this person ---
+  sellerPurchases: InventoryItem[];  // newest first
+  sellerPurchaseCount: number;
+  sellerPurchaseTotal: number;       // Σ purchaseCost — COST DATA, profit-sensitive
+  lastSoldToUs: number;              // epoch ms (0 = never)
+  hasBoughtFromUs: boolean;          // has sales and/or repairs with us
+  hasSoldToUs: boolean;              // has sold us at least one device
 }
 
 const underWarranty = (r: Repair, now: number) => !!r.warrantyUntil && dateMs(r.warrantyUntil) >= now;
@@ -108,9 +126,16 @@ export function customerStats(c: Customer, data: CustomerData, now: number = Dat
   const ownedBatches = data.batches.filter(b => b.businessId === c.id);
   const wholesaleOwing = ownedBatches.reduce((s, b) => s + Math.max(0, batchTotals(b, data.repairs).remaining), 0);
 
+  // Devices bought FROM this person. Their cost is deliberately NOT folded
+  // into lifetimeSpent/lifetimeProfit — that's money going out, not customer
+  // spend, and mixing the two would misstate both.
+  const sellerPurchases = sellerPurchasesFor(c, data.inventory || []);
+  const sellerPurchaseTotal = sellerPurchases.reduce((s, i) => s + (i.purchaseCost || 0), 0);
+  const sellerTimes = sellerPurchases.map(i => dateMs(i.date)).filter(Boolean);
+
   const purchaseTimes = purchases.map(t => dateMs(t.date)).filter(Boolean);
   const repairTimes = repairs.map(r => r.createdAt || dateMs(r.date)).filter(Boolean);
-  const activityTimes = [...purchaseTimes, ...repairTimes, ...(c.createdAt ? [c.createdAt] : [])].filter(Boolean);
+  const activityTimes = [...purchaseTimes, ...repairTimes, ...sellerTimes, ...(c.createdAt ? [c.createdAt] : [])].filter(Boolean);
   const lastActivity = activityTimes.length ? Math.max(...activityTimes) : 0;
 
   return {
@@ -131,11 +156,18 @@ export function customerStats(c: Customer, data: CustomerData, now: number = Dat
     isVIP: (c.tags || []).some(t => t.toLowerCase() === 'vip'),
     isActive: !!lastActivity && now - lastActivity <= ACTIVE_DAYS * DAY,
     hasOpenRepairs: repairs.some(isRepairOpen),
+    sellerPurchases,
+    sellerPurchaseCount: sellerPurchases.length,
+    sellerPurchaseTotal,
+    lastSoldToUs: sellerTimes.length ? Math.max(...sellerTimes) : 0,
+    hasBoughtFromUs: purchases.length > 0 || repairs.length > 0,
+    hasSoldToUs: sellerPurchases.length > 0,
   };
 }
 
 // --- Device history: group a customer's purchased + repaired devices ---
-export interface DeviceEvent { kind: 'purchase' | 'repair'; ts: number; label: string; detail?: string; ref: string; }
+// 'purchase' = they bought it from us; 'sold_to_us' = we bought it from them.
+export interface DeviceEvent { kind: 'purchase' | 'repair' | 'sold_to_us'; ts: number; label: string; detail?: string; ref: string; }
 export interface CustomerDevice {
   key: string;
   name: string;
@@ -183,6 +215,17 @@ export function customerDevices(stats: CustomerStats, inventory: InventoryItem[]
     }
   }
 
+  // Devices they SOLD US — the same physical device often reappears later as a
+  // repair or a resale, so these merge into the same device card by IMEI.
+  for (const i of stats.sellerPurchases) {
+    const name = i.item || [i.brand, i.model].filter(Boolean).join(' ') || 'Device';
+    const key = i.imei || i.sku || name.toLowerCase();
+    const d = ensure(key, name, i.imei || undefined, i.imei || undefined);
+    const ts = dateMs(i.date);
+    d.firstSeen = Math.min(d.firstSeen, ts);
+    d.events.push({ kind: 'sold_to_us', ts, label: `Sold to us · ${name}`, detail: i.sku, ref: i.id });
+  }
+
   return [...devices.values()]
     .map(d => ({ ...d, firstSeen: d.firstSeen === Infinity ? 0 : d.firstSeen, events: d.events.sort((a, b) => b.ts - a.ts) }))
     .sort((a, b) => b.firstSeen - a.firstSeen);
@@ -191,12 +234,16 @@ export function customerDevices(stats: CustomerStats, inventory: InventoryItem[]
 // A merged, newest-first activity timeline for the profile.
 export type TimelineEntry =
   | { kind: 'purchase'; ts: number; tx: SalesTransaction }
-  | { kind: 'repair'; ts: number; repair: Repair };
+  | { kind: 'repair'; ts: number; repair: Repair }
+  // We bought a device FROM them — the opposite direction of 'purchase', which
+  // is why it's a distinct entry kind rather than a flag on the same one.
+  | { kind: 'sold_to_us'; ts: number; item: InventoryItem };
 
 export function customerTimeline(stats: CustomerStats): TimelineEntry[] {
   const entries: TimelineEntry[] = [
     ...stats.purchases.map(tx => ({ kind: 'purchase' as const, ts: dateMs(tx.date), tx })),
     ...stats.repairs.map(repair => ({ kind: 'repair' as const, ts: repair.createdAt || dateMs(repair.date), repair })),
+    ...stats.sellerPurchases.map(item => ({ kind: 'sold_to_us' as const, ts: dateMs(item.date), item })),
   ];
   return entries.sort((a, b) => b.ts - a.ts);
 }
@@ -218,12 +265,27 @@ export function customerSearchMatch(c: Customer, stats: CustomerStats, q: string
   if (stats.repairs.some(r => [r.repairNumber, r.id, r.imei].some(v => (v || '').toLowerCase().includes(s)))) return true;
   if (stats.purchases.some(t =>
     t.id.toLowerCase().includes(s) || t.lines.some(l => (l.sku || '').toLowerCase().includes(s) || (l.name || '').toLowerCase().includes(s)))) return true;
+  // Devices they sold us are part of their record too — find a seller by the
+  // IMEI/SKU/model of the device they brought in.
+  if (stats.sellerPurchases.some(i => [i.imei, i.sku, i.item].some(v => (v || '').toLowerCase().includes(s)))) return true;
   return false;
 }
 
 export type CustomerSort = 'recent' | 'name' | 'spent' | 'repairs' | 'created';
-export type CustomerFilter = 'all' | 'active' | 'open_repairs' | 'vip' | 'balance' | 'warranty';
+export type CustomerFilter =
+  | 'all' | 'active' | 'open_repairs' | 'vip' | 'balance' | 'warranty'
+  // Relationship filters (see passesFilter for the exact semantics).
+  | 'bought_from_us' | 'sold_to_us' | 'both_ways';
 
+// Relationship semantics, chosen deliberately:
+//  - 'bought_from_us' is EXCLUSIVE (sales/repairs only, never sold us a
+//    device) — it answers "who are purely customers".
+//  - 'sold_to_us' is INCLUSIVE (anyone we've bought a device from, whether or
+//    not they also buy from us) — it's the device-source list, and dropping
+//    repeat sellers just because they also shop here would defeat its purpose.
+//  - 'both_ways' is the overlap.
+// So bought_from_us and sold_to_us are disjoint, together cover everyone with
+// any relationship, and both_ways is the subset of sold_to_us that also buys.
 export function passesFilter(filter: CustomerFilter, s: CustomerStats): boolean {
   switch (filter) {
     case 'active': return s.isActive;
@@ -231,6 +293,9 @@ export function passesFilter(filter: CustomerFilter, s: CustomerStats): boolean 
     case 'vip': return s.isVIP;
     case 'balance': return s.outstandingBalance > 0.005;
     case 'warranty': return s.activeWarranties > 0;
+    case 'bought_from_us': return s.hasBoughtFromUs && !s.hasSoldToUs;
+    case 'sold_to_us': return s.hasSoldToUs;
+    case 'both_ways': return s.hasBoughtFromUs && s.hasSoldToUs;
     default: return true;
   }
 }
@@ -272,6 +337,67 @@ export function findDuplicateGroups(customers: Customer[]): DuplicateGroup[] {
   index('phone', c => normPhone(c.phone));
   index('email', c => normEmail(c.email));
   return groups;
+}
+
+// Existing customer matching a phone/email, using the SAME normalisers
+// findDuplicateGroups uses — so "would this create a duplicate?" is answered
+// by the same rule that later flags one. Phone wins over email when both
+// match different people (phone is the primary identifier at the counter).
+export function findCustomerByContact(
+  customers: Customer[],
+  contact: { phone?: string; email?: string },
+): { customer: Customer; matchedOn: 'phone' | 'email' } | undefined {
+  const phone = normPhone(contact.phone);
+  const email = normEmail(contact.email);
+  if (phone) {
+    const hit = customers.find(c => normPhone(c.phone) === phone);
+    if (hit) return { customer: hit, matchedOn: 'phone' };
+  }
+  if (email) {
+    const hit = customers.find(c => normEmail(c.email) === email);
+    if (hit) return { customer: hit, matchedOn: 'email' };
+  }
+  return undefined;
+}
+
+export interface CustomerDraft { name: string; phone?: string; email?: string; }
+export interface CustomerLinkResult {
+  customer: Customer;
+  created: boolean;                    // true = a genuinely new record to persist
+  matchedOn?: 'phone' | 'email';       // set when an existing record was reused
+}
+
+/**
+ * Resolve "create this customer inline" without ever blindly adding a second
+ * record for someone already in the system: an existing phone/email match is
+ * reused (and enriched with any detail the draft adds that it was missing)
+ * instead of duplicated. Pure — the caller persists `customer` when
+ * `created` is true, or when `matchedOn` is set and the record changed.
+ */
+export function resolveCustomerForDraft(
+  customers: Customer[],
+  draft: CustomerDraft,
+  newId: string,
+  now: number = Date.now(),
+): CustomerLinkResult {
+  const name = (draft.name || '').trim();
+  const phone = (draft.phone || '').trim();
+  const email = (draft.email || '').trim();
+  const existing = findCustomerByContact(customers, { phone, email });
+  if (existing) {
+    // Enrich, never overwrite: an existing record's own details win.
+    const merged: Customer = {
+      ...existing.customer,
+      phone: existing.customer.phone || phone,
+      email: existing.customer.email || email || undefined,
+      name: existing.customer.name || name,
+    };
+    return { customer: merged, created: false, matchedOn: existing.matchedOn };
+  }
+  return {
+    customer: { id: newId, name, phone, email: email || undefined, kind: 'retail', createdAt: now },
+    created: true,
+  };
 }
 
 export interface MergePlan {

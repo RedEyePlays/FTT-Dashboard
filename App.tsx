@@ -39,7 +39,7 @@ const CloseOutView = lazy(() => import('./components/CloseOutView').then(m => ({
 import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, DeviceBuyer, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission, Repair, RepairBatch, TimeEntry, PayPeriodPaid, PayPeriodApproval, BreakReason, SalesTransaction, CashReconciliation, StaffNote, BalancePayment, Expense, RecurringExpense } from './types';
 import { skuPrefix, nextSku } from './services/sku';
 import { REPAIR_PREFIX, BATCH_PREFIX, applyTechEdit, techUpdateAuditPlan, repairSalePrefill, completeRepair, completeRepairSale, dateToEpochMs } from './domain/repairs';
-import { MergePlan } from './domain/customers';
+import { MergePlan, resolveCustomerForDraft, CustomerDraft } from './domain/customers';
 import { can, canPrintDropOffLabel } from './services/rbac';
 import { downloadJson, toCSV, triggerDownload } from './services/backup';
 import { INITIAL_DATA } from './constants';
@@ -1852,6 +1852,31 @@ const App: React.FC = () => {
     audit('invoice.printed', entityType, id, undefined, { doc: docName });
   };
 
+  // Create-and-link a customer inline from a "Bought From" picker (Quick
+  // Purchase / Add Item). Never blindly adds a second record for someone
+  // already in the system: an existing phone/email match is reused and
+  // enriched instead (domain/customers.ts's resolveCustomerForDraft, which
+  // uses the same normalisers findDuplicateGroups flags duplicates with).
+  // Returns the resolved customer synchronously so the form can link to it
+  // immediately.
+  const handleCreateCustomerInline = (draft: CustomerDraft): Customer | undefined => {
+    if (!uid || !draft.name.trim()) return undefined;
+    const result = resolveCustomerForDraft(customersRef.current, draft, newId());
+    if (result.created) {
+      saveItem(uid, 'customers', result.customer);
+      audit('customer.create', 'customer', result.customer.id, undefined, result.customer);
+      logActivity(`Customer ${result.customer.name} added`);
+    } else {
+      // Reused an existing record — persist only if the draft filled a gap.
+      const before = customersRef.current.find(c => c.id === result.customer.id);
+      if (before && JSON.stringify(before) !== JSON.stringify(result.customer)) {
+        saveItem(uid, 'customers', result.customer);
+        audit('customer.update', 'customer', result.customer.id, before, result.customer);
+      }
+    }
+    return result.customer;
+  };
+
   // Customer profile edits (notes / tags / preferred contact / basic fields).
   const handleSaveCustomer = (customer: Customer, prev?: Customer) => {
     if (!uid) return;
@@ -2163,12 +2188,16 @@ const App: React.FC = () => {
               onSave={handleSaveItem}
               onCancel={() => navigate('grid')}
               inventory={data}
+              customers={customers}
+              onCreateCustomer={allow('inventory.add') ? handleCreateCustomerInline : undefined}
             /></Suspense>
           )}
           {view === 'grid' && (
             <InventoryView
               inventory={data}
               deviceBuyers={deviceBuyers}
+              customers={customers}
+              onCreateCustomer={allow('inventory.add') ? handleCreateCustomerInline : undefined}
               activity={activityLog}
               auditLogs={auditLogs}
               canViewCost={allow('reports.profit.detailed')}
@@ -2210,7 +2239,9 @@ const App: React.FC = () => {
             />
           )}
           {view === 'quickpurchase' && (
-            <QuickPurchaseView inventory={data} onSave={handleQuickPurchase} />
+            <QuickPurchaseView inventory={data} onSave={handleQuickPurchase}
+              customers={customers}
+              onCreateCustomer={allow('inventory.add') ? handleCreateCustomerInline : undefined} />
           )}
           {view === 'dropoff' && (
             <DropOffView

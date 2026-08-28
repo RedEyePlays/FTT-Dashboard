@@ -46,6 +46,7 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   'batch.payment': 'Batch payment recorded',
   'invoice.printed': 'Document printed',
   // Customers
+  'customer.create': 'Customer added',
   'customer.update': 'Customer updated',
   'customer.merge': 'Customers merged',
   // Users / access

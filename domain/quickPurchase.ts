@@ -19,6 +19,11 @@ export interface QuickPurchaseInput {
   purchaseCost: number;
   paidBy: QuickPurchasePaidBy;
   boughtFrom?: string;
+  // Optional link to the customer we bought from (buyers and sellers are the
+  // same people — one customer record per person). Undefined for a one-off
+  // seller kept as free text only, which stays the fast default.
+  boughtFromCustomerId?: string;
+  boughtFromPhone?: string;
   // Optional, available on the same screen (not a second step) — left blank
   // behaves exactly as it does on the plain Add Item form: fillable later.
   storage?: string;
@@ -49,6 +54,8 @@ export function buildQuickPurchaseItem(
     item: input.device.trim(), imei,
     imeiNormalized: normalized || undefined,
     boughtFrom: (input.boughtFrom || '').trim(),
+    boughtFromCustomerId: input.boughtFromCustomerId || undefined,
+    boughtFromPhone: (input.boughtFromPhone || '').trim() || undefined,
     purchaseCost: Math.max(0, input.purchaseCost || 0), repairCost: 0,
     soldDate: '', soldTo: '', salePrice: 0, notes: '',
     condition: 'Good', deviceStatus: 'ready',

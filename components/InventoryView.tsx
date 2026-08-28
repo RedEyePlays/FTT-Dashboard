@@ -5,7 +5,8 @@ import {
   ChevronLeft, ChevronRight, CheckSquare, Square, Boxes,
   Pencil, MoreVertical, Printer, History, ScrollText, Wrench, Tag, DollarSign, CheckCircle2, AlertCircle,
 } from 'lucide-react';
-import { InventoryItem, DeviceBuyer, ItemKind, DeviceType, DeviceStatus, ActivityEntry, AuditEntry, Repair, Note, Role } from '../types';
+import { InventoryItem, DeviceBuyer, ItemKind, DeviceType, DeviceStatus, ActivityEntry, AuditEntry, Repair, Note, Role, Customer } from '../types';
+import { CustomerDraft } from '../domain/customers';
 import { linkedRepairFor, REPAIR_STATUS_LABEL } from '../domain/repairs';
 import { printShelfTag, printShelfTagsBatch } from '../services/shelfTag';
 import { getStoreProfile } from './SettingsModal';
@@ -40,6 +41,10 @@ interface Props {
   // Internal repair linking (owner/manager): start a repair ticket for a device,
   // and open the ticket already linked to one.
   repairs?: Repair[];
+  // Customer list + inline creation, for the item modal's "Bought From"
+  // picker (same field/behaviour as Quick Purchase).
+  customers?: Customer[];
+  onCreateCustomer?: (draft: CustomerDraft) => Customer | undefined;
   onCreateRepair?: (item: InventoryItem) => void;
   onOpenRepair?: (repairId: string) => void;
   notes?: Note[];                        // workspace notes, for the linked-notes panel
@@ -261,7 +266,7 @@ const parseCSV = (text: string): Record<string, string>[] => {
   return rows.filter(r => r.some(x => x !== '')).map(r => Object.fromEntries(header.map((h, i) => [h.trim(), r[i] ?? ''])));
 };
 
-export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activity, auditLogs = [], canViewCost = false, userId, section, onSelectSection, onSave, onUpdate, onDelete, onGenerateSku, onSeed, repairs = [], onCreateRepair, onOpenRepair, notes, noteRole, onOpenNote }) => {
+export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activity, auditLogs = [], canViewCost = false, userId, section, onSelectSection, onSave, onUpdate, onDelete, onGenerateSku, onSeed, repairs = [], customers, onCreateCustomer, onCreateRepair, onOpenRepair, notes, noteRole, onOpenNote }) => {
   const linkedRepairOf = (id: string): Repair | undefined => linkedRepairFor(id, repairs);
   const isMobile = useIsMobile();
   const [selectMode, setSelectMode] = useState(false); // mobile multi-select
@@ -770,6 +775,7 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
         onCreateRepair={onCreateRepair ? () => { onCreateRepair(expandItem); setExpandItem(null); } : undefined}
         onOpenRepair={onOpenRepair ? (id: string) => { onOpenRepair(id); setExpandItem(null); } : undefined}
         inventory={inventory}
+        customers={customers} onCreateCustomer={onCreateCustomer}
         notes={notes} noteRole={noteRole} onOpenNote={onOpenNote ? (id: string) => { onOpenNote(id); setExpandItem(null); } : undefined} />}
       {labelItem && <Suspense fallback={null}><LabelModal item={labelItem} onClose={() => setLabelItem(null)} /></Suspense>}
       {historyItem && <HistoryModal item={historyItem.item} mode={historyItem.mode} activity={activity} auditLogs={auditLogs} onClose={() => setHistoryItem(null)} />}
