@@ -4,9 +4,11 @@ import {
   CheckCircle, XCircle, DollarSign, ArrowRight, Wallet, ClipboardList, FileText,
 } from 'lucide-react';
 import { Runner, DropOff, DropOffStatus, PaidBy, Settlement, SettlementPaymentMethod, InventoryItem } from '../types';
-import { runnerBalance, settleableDropOffs, settlementTotals } from '../domain/dropoffs';
+import { runnerBalance, settleableDropOffs, settlementTotals, SettlementReviewLine, buildSettlementFromReview } from '../domain/dropoffs';
 import { formatPhoneInput } from '../domain/phone';
 import { printSettlementInvoice } from '../services/settlementInvoice';
+import { getStoreProfile } from './SettingsModal';
+import { SettlementReviewModal } from './SettlementReviewModal';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 import { todayISO } from '../domain/dates';
 import { useSubmitGuard, useKeyedSubmitGuard } from '../hooks/useSubmitGuard';
@@ -382,37 +384,56 @@ const SettlementTab: React.FC<{
   const [runnerId, setRunnerId] = useState(runners[0]?.id || '');
   const [notes, setNotes] = useState('');
   const [paymentMethod, setPaymentMethod] = useState<SettlementPaymentMethod>('cash');
-  // A double-tap on "Mark as Settled" before `dropOffs` reflects the first
-  // settlement (async — the live subscription hasn't refreshed yet) would
-  // otherwise settle — and pay — the same runner twice for the same batch.
+  // A double-tap on "Confirm Settlement" (in the review modal) before
+  // `dropOffs` reflects the first settlement (async — the live subscription
+  // hasn't refreshed yet) would otherwise settle — and pay — the same runner
+  // twice for the same batch. This guard wraps the actual commit regardless
+  // of whether it's reached via the review modal or (hypothetically) some
+  // other path, so reviewing/printing can never create a way around it.
   const { isSubmitting, run } = useSubmitGuard();
+  // Review screen state: open + a stable settlement id generated once when
+  // opened, reused by both the pre-commit print preview (inside the modal)
+  // and the final commit below, so the invoice a runner checks before
+  // agreeing and the one re-printable from history afterward are the exact
+  // same settlement id.
+  const [reviewing, setReviewing] = useState(false);
+  const [reviewSettlementId, setReviewSettlementId] = useState('');
+  const storeName = getStoreProfile().storeName;
 
   // Settle everything accepted/paid-out & not yet settled/rejected for this runner
   const pending = settleableDropOffs(runnerId, dropOffs);
   const { cashFronted, totalFees, amountToPay } = settlementTotals(pending);
 
-  const settle = () => {
+  const openReview = () => {
     if (pending.length === 0) return;
+    setReviewSettlementId(uid());
+    setReviewing(true);
+  };
+
+  const confirmSettlement = (lines: SettlementReviewLine[], adjustmentAmount: number, adjustmentNote: string) => {
     run(() => {
-      const settlement: Settlement = {
-        id: uid(), runnerId, date: today(),
-        dropOffIds: pending.map(d => d.id),
-        totalPurchaseFronted: cashFronted, totalFees, amountPaid: amountToPay, paymentMethod, notes,
-      };
+      const settlement = buildSettlementFromReview(
+        { id: reviewSettlementId, runnerId, date: today(), paymentMethod, notes },
+        pending, lines, adjustmentAmount, adjustmentNote,
+      );
       // onSettle (App.tsx's handleSettleRunner → services/firestoreDb.ts's
       // settleRunner) saves the settlement AND flags every drop-off in
       // dropOffIds 'settled' in one atomic batch — a separate onDropOffsChange
       // call here would be a second, untracked write racing the same status
       // transition, exactly the gap that let a runner's drop-offs stay eligible
-      // for a second settlement. The live subscription refreshes `dropOffs` once
-      // the batch commits, same as every other write in this app.
+      // for a second settlement. Anything excluded on the review screen is
+      // simply never in dropOffIds, so it's untouched by this batch and stays
+      // eligible for a later settlement. The live subscription refreshes
+      // `dropOffs` once the batch commits, same as every other write in this app.
       onSettle(settlement);
       setNotes('');
+      setReviewing(false);
     });
   };
 
   const runnerName = (id: string) => runners.find(r => r.id === id)?.name || 'Unknown';
   const history = settlements.filter(s => s.runnerId === runnerId).sort((a, b) => b.date.localeCompare(a.date));
+  const reviewRunner = runners.find(r => r.id === runnerId);
 
   if (runners.length === 0) {
     return <p className="text-slate-400 text-sm text-center py-8">Add a runner to run settlements.</p>;
@@ -476,9 +497,9 @@ const SettlementTab: React.FC<{
         <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={2} placeholder="Settlement notes…"
           className="w-full p-2 bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-md text-sm" />
 
-        <button onClick={settle} disabled={pending.length === 0 || isSubmitting}
+        <button onClick={openReview} disabled={pending.length === 0 || isSubmitting}
           className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white rounded-lg text-sm font-semibold flex items-center justify-center gap-2">
-          <CheckCircle className="w-4 h-4" /> {isSubmitting ? 'Settling…' : 'Mark as Settled'}
+          <FileText className="w-4 h-4" /> {isSubmitting ? 'Settling…' : 'Review & Settle'}
         </button>
       </div>
 
@@ -497,7 +518,15 @@ const SettlementTab: React.FC<{
                 {s.dropOffIds.length} device{s.dropOffIds.length !== 1 ? 's' : ''} · fronted {money(s.totalPurchaseFronted)} · fees {money(s.totalFees)} · {PAYMENT_METHODS.find(m => m.value === (s.paymentMethod || 'cash'))?.label}
               </p>
               {s.notes && <p className="text-xs text-slate-400 mt-1 italic">{s.notes}</p>}
-              <button onClick={() => printSettlementInvoice(s, runners.find(r => r.id === s.runnerId), dropOffs)}
+              {s.adjustmentAmount != null && (
+                <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
+                  Adjusted {s.adjustmentAmount < 0 ? '-' : '+'}{money(Math.abs(s.adjustmentAmount))}{s.adjustmentNote ? ` — ${s.adjustmentNote}` : ''}
+                </p>
+              )}
+              {!!s.lineAdjustments?.length && (
+                <p className="text-xs text-amber-600 dark:text-amber-400 mt-0.5">{s.lineAdjustments.length} device fee{s.lineAdjustments.length !== 1 ? 's' : ''} corrected on review</p>
+              )}
+              <button onClick={() => printSettlementInvoice(s, runners.find(r => r.id === s.runnerId), dropOffs, { storeName })}
                 className="mt-2 flex items-center gap-1 text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:underline">
                 <FileText className="w-3.5 h-3.5" /> Print Invoice
               </button>
@@ -505,6 +534,21 @@ const SettlementTab: React.FC<{
           ))}
         </div>
       </div>
+
+      {reviewing && reviewRunner && (
+        <SettlementReviewModal
+          runner={reviewRunner}
+          dropOffs={pending}
+          settlementId={reviewSettlementId}
+          date={today()}
+          paymentMethod={paymentMethod}
+          notes={notes}
+          storeName={storeName}
+          isSubmitting={isSubmitting}
+          onClose={() => setReviewing(false)}
+          onConfirm={confirmSettlement}
+        />
+      )}
     </div>
   );
 };
