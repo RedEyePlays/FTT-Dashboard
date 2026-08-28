@@ -84,7 +84,7 @@ import {
 } from './domain/timeclock';
 import { buildAlerts } from './domain/alerts';
 import { changedSettingsSections } from './domain/audit';
-import { dropOffPurchaseCost, settlementDrawerEffect, dropOffAcceptDrawerEffect } from './domain/dropoffs';
+import { settlementDrawerEffect, dropOffAcceptDrawerEffect } from './domain/dropoffs';
 import { InvSection, DEFAULT_INV_SECTION, invPath, parseInvPath } from './domain/inventoryNav';
 import { viewPath, parseViewPath, isRoutableView } from './domain/appNav';
 import { AppHeader } from './components/AppHeader';
@@ -1219,32 +1219,16 @@ const App: React.FC = () => {
     audit('backup.restore', 'backup', undefined, undefined, { mode });
   };
 
-  // Add an accepted drop-off into inventory, carrying device buyer + cost across.
-  // No cash-drawer effect here — a store-paid purchase already hit the drawer
-  // at Accept (see saveDropOffs' dropOffAcceptDrawerEffect call); logging it
-  // again here would double-count the same cash.
-  const handleAddDropOffToInventory = (d: DropOff) => {
-    if (!uid || !appUser || !allow('dropoffs.manage')) return;
-    const buyer = deviceBuyersRef.current.find(r => r.id === d.buyerId);
-    const newItem: InventoryItem = {
-      id: newId(), kind: 'device', date: d.dateDropped || todayISO(),
-      item: d.item, imei: d.imei, boughtFrom: d.sellerName || 'Marketplace (drop-off)',
-      // Acquisition cost = price paid to the seller + the device buyer's fee (both are
-      // real costs and both are what the settlement pays the device buyer).
-      purchaseCost: dropOffPurchaseCost(d), repairCost: 0, soldDate: '', soldTo: '', salePrice: 0,
-      deviceStatus: 'ready', buyerId: d.buyerId, buyerName: buyer?.name, dropOffId: d.id,
-      notes: d.notes ? `Drop-off: ${d.notes}` : 'Added from drop-off',
-    };
-    saveItem(uid, 'inventory', newItem);
-    // Attribution goes on the RECORD, not just in the audit log: an employee
-    // may accept a drop-off now (dropoffs.manage), and accepting can hand real
-    // cash to the seller. acceptedBy is stamped from the authenticated user
-    // (appUser), never from `d`, so a hand-crafted drop-off payload can't
-    // attribute the accept to someone else.
-    saveItem(uid, 'dropOffs', stampDropOffAccept({ ...d, inventoryId: newItem.id }, appUser, Date.now()));
-    logActivity(`${newItem.item} added from drop-off`);
-    audit('dropoff.accept', 'dropOff', d.id, undefined, { inventoryId: newItem.id });
-  };
+  // NOTE: there is deliberately NO "add a drop-off to inventory" handler any
+  // more. Under the corrected model the store FINANCES the device buyer — it
+  // advances money for a device the BUYER keeps and resells himself — so a
+  // drop-off never becomes store stock. The old handler created an inventory
+  // item at purchasePrice + fee, which inflated inventory value, COGS and
+  // profit for a device the store did not own. Devices the store genuinely
+  // buys outright to resell go through Quick Purchase
+  // (domain/quickPurchase.ts), which remains the one explicit outright-purchase
+  // flow. Drop-offs recorded under the old model keep their stored
+  // inventoryId and inventory item — nothing was migrated or deleted.
 
   // Persisted notes/tasks (meta) + array-synced device buyer data
   const saveNotes = (n: Note[]) => { setNotes(n); if (uid) saveMeta(uid, { notes: n }); };
@@ -1254,7 +1238,7 @@ const App: React.FC = () => {
   const saveDeviceBuyers = (r: DeviceBuyer[]) => { if (uid && allow('dropoffs.manage')) { syncArray(uid, 'runners', r, deviceBuyersRef.current); audit('runner.edit', 'runner'); } };
   // Save the drop-off list (any status change or field edit routes through
   // here, since DropOffView diffs against one shared array). A drop-off that
-  // just transitioned pending → accepted may hand real cash to the seller
+  // just transitioned pending → accepted may advance real cash for the device
   // right now (paidBy 'store') — see dropOffAcceptDrawerEffect's contract at
   // the top of domain/dropoffs.ts: any cash-moving action must log its effect
   // through a function like it, via commitDrawerRecord, or the till silently
@@ -1263,28 +1247,38 @@ const App: React.FC = () => {
   // drop-off, on the actual transition — editing an already-accepted drop-off
   // later never re-logs the same cash.
   const saveDropOffs = (next: DropOff[]) => {
-    if (!uid || !allow('dropoffs.manage')) return;
+    if (!uid || !appUser || !allow('dropoffs.manage')) return;
     const prev = dropOffsRef.current;
     const date = todayISO();
-    next.forEach(d => {
+    const now = Date.now();
+    // Accept attribution used to be stamped by the (now removed) "add to
+    // inventory" handler, which meant a drop-off accepted without that extra
+    // click carried no acceptedBy at all. It belongs on the accept itself:
+    // that's the moment store cash can leave the till. Stamped from the
+    // AUTHENTICATED user, never from the incoming record.
+    const stamped = next.map(d => {
       const before = prev.find(p => p.id === d.id);
-      if (before?.status === 'accepted' || d.status !== 'accepted') return; // not a fresh accept
+      if (before?.status === 'accepted' || d.status !== 'accepted') return d; // not a fresh accept
       const effect = dropOffAcceptDrawerEffect(d);
-      if (!effect) return;
-      const existing = cashReconciliations.find(r => r.date === date);
-      const listKey: 'cashIn' | 'cashOut' = effect.kind;
-      const entry = { id: newId(), amount: effect.amount, note: `Drop-off accepted — ${d.item || d.id}` };
-      commitDrawerRecord(date, { [listKey]: [...(existing?.[listKey] || []), entry] });
-      logActivity(`Cash paid out $${effect.amount.toFixed(2)} — drop-off accepted (${d.item || d.id})`);
+      if (effect) {
+        const existing = cashReconciliations.find(r => r.date === date);
+        const listKey: 'cashIn' | 'cashOut' = effect.kind;
+        const entry = { id: newId(), amount: effect.amount, note: `Drop-off accepted — ${d.item || d.id}` };
+        commitDrawerRecord(date, { [listKey]: [...(existing?.[listKey] || []), entry] });
+        logActivity(`Cash advanced $${effect.amount.toFixed(2)} — drop-off accepted, owed back by the device buyer (${d.item || d.id})`);
+      }
+      return stampDropOffAccept(d, appUser, now);
     });
-    syncArray(uid, 'dropOffs', next, prev);
+    syncArray(uid, 'dropOffs', stamped, prev);
     audit('dropoff.edit', 'dropOff');
   };
-  // Record one completed device buyer settlement. Only a 'cash' payment method ever
+  // Record one completed device buyer settlement — the buyer paying the store
+  // back (principal advanced + service fee). Only a 'cash' payment method ever
   // touches the cash drawer — e-transfer/other never do (domain/dropoffs.ts's
-  // settlementDrawerEffect is the single source of that decision). Writes
-  // through the same commitDrawerRecord path as every other drawer movement,
-  // so the register's live total and the reconciliation screen can't drift.
+  // settlementDrawerEffect is the single source of that decision, and it only
+  // counts STORE-funded principal as till money). Writes through the same
+  // commitDrawerRecord path as every other drawer movement, so the register's
+  // live total and the reconciliation screen can't drift.
   const handleSettleDeviceBuyer = (settlement: Settlement) => {
     if (!uid || !appUser || !allow('dropoffs.manage')) return;
     // Stamp the acting user onto the settlement record itself (not only the
@@ -1295,11 +1289,11 @@ const App: React.FC = () => {
     // authenticated identity.
     const attributed = stampSettlement(settlement, appUser, Date.now());
     // Saving the settlement and flagging its drop-offs 'settled' happen in one
-    // atomic commit — settleableDropOffs (domain/dropoffs.ts) only excludes
-    // 'settled'/'accepted'-gone-'paidout' drop-offs, so if this ever landed as
-    // two separate writes, a failure (or just a slow second write) between
-    // them would leave the same drop-offs eligible for a second settlement —
-    // the device buyer could get paid twice for the same batch of devices.
+    // atomic commit — settleableDropOffs (domain/dropoffs.ts) only returns
+    // 'accepted'/'paidout' drop-offs, so if this ever landed as two separate
+    // writes, a failure (or just a slow second write) between them would leave
+    // the same drop-offs eligible for a second settlement — the buyer could be
+    // billed (and collected from) twice for the same batch of devices.
     settleDeviceBuyer(uid, { settlement: attributed, dropOffIds: attributed.dropOffIds }).catch(e => console.error('Settle device buyer failed', e));
     // Every edit made on the pre-settlement review screen (components/
     // SettlementReviewModal.tsx) is already ON the settlement record itself
@@ -1309,7 +1303,8 @@ const App: React.FC = () => {
     // (audit() stamps the acting user), and — via adjustmentNote — why,
     // without needing a separate before/after diff mechanism.
     audit('dropoff.settle', 'settlement', settlement.id, undefined, {
-      buyerId: settlement.buyerId, amountPaid: settlement.amountPaid, paymentMethod: settlement.paymentMethod,
+      buyerId: settlement.buyerId, amountOwed: settlement.amountOwed, storeCashIn: settlement.storeCashIn,
+      principalOwed: settlement.principalOwed, totalFees: settlement.totalFees, paymentMethod: settlement.paymentMethod,
       lineAdjustments: settlement.lineAdjustments, adjustmentAmount: settlement.adjustmentAmount, adjustmentNote: settlement.adjustmentNote,
     });
     const effect = settlementDrawerEffect(settlement);
@@ -1317,7 +1312,7 @@ const App: React.FC = () => {
       const date = todayISO();
       const existing = cashReconciliations.find(r => r.date === date);
       const listKey: 'cashIn' | 'cashOut' = effect.kind;
-      const entry = { id: newId(), amount: effect.amount, note: `Device buyer settlement — ${settlement.id}` };
+      const entry = { id: newId(), amount: effect.amount, note: `Device buyer settlement collected — ${settlement.id}` };
       commitDrawerRecord(date, { [listKey]: [...(existing?.[listKey] || []), entry] });
     }
   };
@@ -2157,7 +2152,6 @@ const App: React.FC = () => {
               onDeviceBuyersChange={saveDeviceBuyers}
               onDropOffsChange={saveDropOffs}
               onSettle={handleSettleDeviceBuyer}
-              onAddToInventory={handleAddDropOffToInventory}
             />
           )}
           {view === 'notes' && canSeeAnyNote && (

@@ -112,32 +112,40 @@ export interface InventoryItem {
   notes: string;
 }
 
-// 'personal' = the owner/staff paid the seller out of pocket — not store
-// cash (never touches the drawer) and not the device buyer needing reimbursement
-// (never adds to what's owed them). Same vocabulary/shape as
-// RepairPurchasePaidBy's 'store' | 'personal'.
+// Who FUNDED the purchase — the store advancing money it is owed back, the
+// buyer using his own money, or the owner paying out of pocket.
+// 'personal' = the owner paid out of pocket: not store cash (never touches the
+// drawer, at acceptance or at settlement) though the buyer still owes the
+// principal back. Same vocabulary/shape as RepairPurchasePaidBy's
+// 'store' | 'personal'.
 //
 // LEGACY NAME: the 'runner' member is a STORED Firestore field value on
 // DropOff.paidBy, written to real documents since day one. The concept is now
 // called "device buyer" everywhere in the UI and in code identifiers, but
 // renaming this string literal would silently orphan every historical
-// drop-off (they'd stop matching `paidBy === 'runner'` and their fronted cash
-// would vanish from balances/settlements). So the literal stays 'runner' and
-// only the human-readable label changes — see PAID_BY_LABEL in
+// drop-off (they'd stop matching `paidBy === 'runner'` and their funding would
+// be misread as store-advanced money the buyer owes back). So the literal
+// stays 'runner' and only the human-readable label changes — see
+// domain/dropoffs.ts's BUYER_FUNDED and PAID_BY_LABEL in
 // components/DropOffView.tsx, components/SettlementReviewModal.tsx and
-// services/settlementInvoice.ts, all of which render it as "Device buyer paid".
+// services/settlementInvoice.ts, all of which render it as "Buyer-funded".
 export type PaidBy = 'runner' | 'store' | 'personal';
 
-// Which way the drop-off fee flows on a settlement. In this shop the
-// arrangement differs per buyer/settlement: sometimes the store pays the
-// device buyer a commission (an EXPENSE), and sometimes the device buyer owes
-// the store a fee for handling the device (INCOME). Both must be supported —
-// see domain/dropoffs.ts's settlementFeeDirection / settlementFeeTotals and
-// domain/reports.ts's profitAndLoss.
-export type SettlementFeeDirection = 'store_pays_buyer' | 'buyer_owes_store';
+// THE BUSINESS MODEL (confirmed by the owner, and the reason for the drop-off
+// financing rework): the device buyer sources devices FOR HIMSELF. The store
+// never acquires them. The store's role is financing plus a service fee, so at
+// settlement money only ever flows INTO the store:
+//   • store-funded  — the store paid the seller; the buyer owes that principal
+//     back PLUS the service fee.
+//   • buyer-funded  — the buyer used his own money; he owes the fee only.
+//   • personal-funded — the owner paid out of pocket; the buyer still owes
+//     principal + fee, but only the FEE is store cash (see
+//     domain/dropoffs.ts's settlementDrawerEffect).
+// Only the FEE is profit — the principal is a receivable being repaid, never
+// revenue. See domain/dropoffs.ts for the money math.
 
-// How a settlement was actually paid out to the device buyer. Only 'cash' touches the
-// cash drawer's expected total — an e-transfer or other non-cash payment never
+// How the device buyer actually settled up. Only 'cash' touches the cash
+// drawer's expected total — an e-transfer or other non-cash payment never
 // should (see domain/dropoffs.ts's settlementDrawerEffect).
 export type SettlementPaymentMethod = 'cash' | 'etransfer' | 'other';
 
@@ -165,12 +173,16 @@ export interface DropOff {
   sellerName: string;        // marketplace seller name, optional
   sellerContact: string;     // marketplace seller contact, optional
   purchasePrice: number;     // what was paid to the seller
-  paidBy: PaidBy;            // legacy stored value 'runner' = device buyer paid, 'store' cash paid, or 'personal' (staff's own money) paid
-  dropOffFee: number;        // commission owed to the device buyer for this device
+  paidBy: PaidBy;            // who funded the purchase: legacy stored value 'runner' = the buyer's own money, 'store' = store cash (buyer owes it back), 'personal' = the owner's own money (buyer still owes it back)
+  dropOffFee: number;        // the store's service fee for financing/handling this device — owed BY the buyer TO the store
   dateDropped: string;       // YYYY-MM-DD
   status: DropOffStatus;
   notes: string;
-  inventoryId?: string;      // set once accepted & added to inventory
+  // LEGACY ONLY: set on drop-offs that were added to store stock back when the
+  // code wrongly assumed the store acquired the device. Financed drop-offs
+  // never enter inventory now (see App.tsx / components/DropOffView.tsx); this
+  // field is still read so those historical records keep showing their badge.
+  inventoryId?: string;
   settlementId?: string;     // set once included in a weekly settlement
   // Staff attribution for the accept step (the moment real cash can leave the
   // till). Stamped from the authenticated user in App.tsx's
@@ -199,29 +211,42 @@ export interface Settlement {
   buyerId: string;
   date: string;              // YYYY-MM-DD settled
   dropOffIds: string[];       // devices actually included in this settlement — a device reviewed but excluded is simply left out (still 'accepted'/'paidout', eligible for a later settlement)
-  totalPurchaseFronted: number; // cash the device buyer fronted to sellers
-  totalFees: number;            // drop-off fees paid to device buyer, AFTER any per-line adjustments below
-  amountPaid: number;           // net amount paid to device buyer (or negative = owed to store) — totalPurchaseFronted + totalFees + adjustmentAmount
-  // How amountPaid was actually paid out. Optional for backward compatibility
+  // --- Corrected financing model (records written from the rework onward) ---
+  // `model: 'financing'` is the presence check that separates a new record
+  // from a pre-rework one — nothing stored was ever migrated, exactly like
+  // RepairBatch.private falling back to legacy `autoInventory` and buyerId
+  // falling back to legacy `runnerId`. Every consumer branches on it.
+  model?: 'financing';
+  // Principal the buyer owes back, split by whose cash actually funded the
+  // purchase. Kept as two numbers because only the store-funded half is the
+  // store's till being repaid.
+  principalStoreFunded?: number;
+  principalPersonalFunded?: number;
+  principalOwed?: number;        // principalStoreFunded + principalPersonalFunded
+  totalFees: number;             // the store's service fees, AFTER any per-line adjustments below
+  amountOwed?: number;           // what the BUYER owes the store: principalOwed + totalFees + adjustmentAmount
+  storeCashIn?: number;          // the part of amountOwed that is store cash: principalStoreFunded + totalFees + adjustmentAmount
+  // --- Legacy (pre-rework) fields: never written by new code ---
+  // Recorded under the inverted model where the store was believed to
+  // reimburse the buyer. Left exactly as stored — reading them is how history
+  // stays truthful; nothing recomputes or rewrites them.
+  totalPurchaseFronted?: number; // cash the buyer was thought to have fronted for the store
+  amountPaid?: number;           // net paid OUT to the buyer (negative = the buyer owed the store)
+  // How the settlement was actually paid. Optional for backward compatibility
   // with settlements recorded before this field existed — absent is treated as
   // 'cash' (matching how every settlement was implicitly handled previously).
   paymentMethod?: SettlementPaymentMethod;
-  // Which way this settlement's fee flowed. Set explicitly on every settlement
-  // built by buildSettlementFromReview going forward. OPTIONAL because
-  // historical settlements predate the field — for those, the direction is
-  // derived from the sign of amountPaid (see settlementFeeDirection), which
-  // requires no data migration. Never read this field directly; always go
-  // through settlementFeeDirection so legacy records resolve correctly.
-  feeDirection?: SettlementFeeDirection;
   notes: string;
   // Per-device fee corrections made on the review screen — only entries
   // where the fee actually changed from the drop-off's stored dropOffFee.
   // Undefined/empty when nothing was adjusted.
   lineAdjustments?: SettlementLineAdjustment[];
   // A settlement-level correction (e.g. a one-off credit/deduction agreed
-  // with the device buyer) that doesn't belong to any single device line. Folded
-  // into amountPaid; kept here separately (with its note) so the settlement
-  // record shows it was applied, not just a mismatched total.
+  // with the device buyer) that doesn't belong to any single device line.
+  // POSITIVE increases what the buyer owes, negative reduces it. Folded into
+  // amountOwed/storeCashIn (legacy records: amountPaid); kept here separately
+  // (with its note) so the settlement record shows it was applied, not just a
+  // mismatched total.
   adjustmentAmount?: number;
   adjustmentNote?: string;
   // Staff attribution — who actually paid the device buyer out, and when.

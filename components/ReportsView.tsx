@@ -593,8 +593,9 @@ const RangeControls: React.FC<{ start: string; end: string; setStart: (v: string
 );
 
 // `negative` = a cost (shown in parentheses, red). `income` = money coming IN
-// on a line that sits among costs (shown plain, green) — used for device buyer
-// fees the buyer owes the STORE, which raise net profit rather than reduce it.
+// on a line that sits among costs (shown plain, green) — used for the store's
+// drop-off service fees, which the device buyer owes the STORE and which
+// therefore raise net profit rather than reduce it.
 const PLRow: React.FC<{ label: string; value: number; negative?: boolean; income?: boolean; bold?: boolean; total?: boolean }> = ({ label, value, negative, income, bold, total }) => (
   <div className={`flex items-center justify-between py-1.5 ${total ? 'border-t-2 border-slate-200 dark:border-slate-700 mt-1 pt-2' : ''}`}>
     <span className={`${bold || total ? 'font-bold text-slate-800 dark:text-slate-100' : 'text-slate-600 dark:text-slate-300'}`}>{label}</span>
@@ -630,12 +631,11 @@ const ProfitLossTab: React.FC<{ plInput: ProfitLossInput }> = ({ plInput }) => {
           {pl.expensesByCategory.map(c => (
             <PLRow key={c.category} label={`Expense: ${c.label}${c.excludedFromPL ? ' (informational)' : ''}`} value={c.total} negative={!c.excludedFromPL} />
           ))}
-          <PLRow label="Device buyer fees collected" value={pl.deviceBuyerFeesCollected} income />
-          <PLRow label="Device buyer fees paid" value={pl.deviceBuyerFeesPaid} negative />
+          <PLRow label="Device buyer service fees (income)" value={pl.deviceBuyerFeeIncome} income />
           <PLRow label="Net profit" value={pl.netProfit} total />
         </div>
         <p className="mt-3 text-xs text-slate-400">
-          Recognized sales only (voided, returned and not-yet-settled layaway sales excluded). Device buyer fees are settlement fees only — the seller-purchase reimbursement is already in cost of goods. Fees the buyer owes the store are income and raise net profit; fees the store pays the buyer are an expense and lower it.
+          Recognized sales only (voided, returned and not-yet-settled layaway sales excluded). The store finances the device buyer: only the service fee it charges is income. The principal the buyer repays is a receivable being settled — never revenue, never profit — and financed devices are the buyer's, so they are not store inventory or cost of goods.
         </p>
       </div>
     </div>
@@ -648,8 +648,20 @@ const SettlementsTab: React.FC<{ settlements: Settlement[]; deviceBuyers: Device
   const [end, setEnd] = useState(todayISO());
   const h = useMemo(() => settlementHistory(settlements, deviceBuyers, start, end), [settlements, deviceBuyers, start, end]);
   const exportCsv = () => {
-    const rows = h.lines.map(l => ({ Date: l.date, DeviceBuyer: l.buyerName, 'Commission': l.totalFees.toFixed(2), 'Purchase reimbursed': l.totalFronted.toFixed(2), 'Total paid': l.amountPaid.toFixed(2) }));
-    rows.push({ Date: 'Total', DeviceBuyer: '', 'Commission': h.totalFees.toFixed(2), 'Purchase reimbursed': h.totalFronted.toFixed(2), 'Total paid': h.totalPaid.toFixed(2) });
+    const rows = h.lines.map(l => ({
+      Date: l.date, DeviceBuyer: l.buyerName,
+      'Service fee (income)': l.totalFees.toFixed(2),
+      'Principal repaid': l.totalPrincipal.toFixed(2),
+      'Settlement total': l.totalAmount.toFixed(2),
+      Model: l.legacy ? 'Prior model (as recorded)' : 'Buyer owes store',
+    }));
+    rows.push({
+      Date: 'Total', DeviceBuyer: '',
+      'Service fee (income)': h.totalFees.toFixed(2),
+      'Principal repaid': h.totalPrincipal.toFixed(2),
+      'Settlement total': h.totalAmount.toFixed(2),
+      Model: '',
+    });
     triggerDownload(`device buyer-settlements_${h.start}_to_${h.end}.csv`, toCSV(rows), 'text/csv;charset=utf-8;');
   };
 
@@ -665,30 +677,30 @@ const SettlementsTab: React.FC<{ settlements: Settlement[]; deviceBuyers: Device
 
       <div className={`${card} p-5`}>
         <div className="flex items-baseline justify-between mb-4">
-          <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200">Paid to deviceBuyers · {h.start} → {h.end}</h3>
-          <div className="text-right"><p className="text-xs text-slate-400">Total paid</p><p className="text-2xl font-bold text-slate-900 dark:text-white">{money(h.totalPaid)}</p></div>
+          <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200">Device buyer settlements · {h.start} → {h.end}</h3>
+          <div className="text-right"><p className="text-xs text-slate-400">Service fees (income)</p><p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">{money(h.totalFees)}</p></div>
         </div>
         {h.perBuyer.length === 0 ? <p className="text-sm text-slate-400 py-6 text-center">No settlements in this range.</p> : (
           <div className="overflow-x-auto"><table className="w-full text-sm">
             <thead className="text-[10px] uppercase tracking-wider text-slate-400"><tr>
-              <th className="text-left py-2">DeviceBuyer</th><th className="text-right py-2">Settlements</th><th className="text-right py-2">Commission</th><th className="text-right py-2">Reimbursed</th><th className="text-right py-2">Total paid</th>
+              <th className="text-left py-2">Device buyer</th><th className="text-right py-2">Settlements</th><th className="text-right py-2">Service fee</th><th className="text-right py-2">Principal</th><th className="text-right py-2">Total</th>
             </tr></thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
               {h.perBuyer.map(r => (
                 <tr key={r.buyerId}>
                   <td className="py-2 font-medium text-slate-700 dark:text-slate-200">{r.buyerName}</td>
-                  <td className="py-2 text-right text-slate-400">{r.settlementCount}</td>
+                  <td className="py-2 text-right text-slate-400">{r.settlementCount}{r.legacyCount > 0 ? ` (${r.legacyCount} prior model)` : ''}</td>
                   <td className="py-2 text-right text-slate-500 dark:text-slate-400">{money(r.totalFees)}</td>
-                  <td className="py-2 text-right text-slate-500 dark:text-slate-400">{money(r.totalFronted)}</td>
-                  <td className="py-2 text-right font-semibold text-slate-800 dark:text-slate-100">{money(r.totalPaid)}</td>
+                  <td className="py-2 text-right text-slate-500 dark:text-slate-400">{money(r.totalPrincipal)}</td>
+                  <td className="py-2 text-right font-semibold text-slate-800 dark:text-slate-100">{money(r.totalAmount)}</td>
                 </tr>
               ))}
             </tbody>
             <tfoot><tr className="border-t-2 border-slate-200 dark:border-slate-700 font-bold">
               <td className="py-2 text-slate-800 dark:text-slate-100">Total</td><td></td>
               <td className="py-2 text-right text-slate-800 dark:text-slate-100">{money(h.totalFees)}</td>
-              <td className="py-2 text-right text-slate-800 dark:text-slate-100">{money(h.totalFronted)}</td>
-              <td className="py-2 text-right text-slate-800 dark:text-slate-100">{money(h.totalPaid)}</td>
+              <td className="py-2 text-right text-slate-800 dark:text-slate-100">{money(h.totalPrincipal)}</td>
+              <td className="py-2 text-right text-slate-800 dark:text-slate-100">{money(h.totalAmount)}</td>
             </tr></tfoot>
           </table></div>
         )}
@@ -699,16 +711,19 @@ const SettlementsTab: React.FC<{ settlements: Settlement[]; deviceBuyers: Device
           <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200 mb-3">Individual settlements</h3>
           <div className="overflow-x-auto"><table className="w-full text-sm">
             <thead className="text-[10px] uppercase tracking-wider text-slate-400"><tr>
-              <th className="text-left py-2">Date</th><th className="text-left py-2">DeviceBuyer</th><th className="text-right py-2">Commission</th><th className="text-right py-2">Reimbursed</th><th className="text-right py-2">Total paid</th>
+              <th className="text-left py-2">Date</th><th className="text-left py-2">Device buyer</th><th className="text-right py-2">Service fee</th><th className="text-right py-2">Principal</th><th className="text-right py-2">Total</th>
             </tr></thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
               {h.lines.map(l => (
                 <tr key={l.id}>
                   <td className="py-2 text-slate-500 dark:text-slate-400">{l.date}</td>
-                  <td className="py-2 text-slate-700 dark:text-slate-200">{l.buyerName}</td>
+                  <td className="py-2 text-slate-700 dark:text-slate-200">
+                    {l.buyerName}
+                    {l.legacy && <span className="ml-2 text-[10px] uppercase tracking-wide text-amber-600 dark:text-amber-400" title="Recorded under the prior model (store reimbursed the device buyer) — shown exactly as originally recorded.">prior model</span>}
+                  </td>
                   <td className="py-2 text-right text-slate-500 dark:text-slate-400">{money(l.totalFees)}</td>
-                  <td className="py-2 text-right text-slate-500 dark:text-slate-400">{money(l.totalFronted)}</td>
-                  <td className="py-2 text-right font-semibold text-slate-800 dark:text-slate-100">{money(l.amountPaid)}</td>
+                  <td className="py-2 text-right text-slate-500 dark:text-slate-400">{money(l.totalPrincipal)}</td>
+                  <td className="py-2 text-right font-semibold text-slate-800 dark:text-slate-100">{money(l.totalAmount)}</td>
                 </tr>
               ))}
             </tbody>
@@ -733,8 +748,7 @@ const YearEndTab: React.FC<{ plInput: ProfitLossInput }> = ({ plInput }) => {
     { label: 'Gross profit', value: summary.grossProfit, strong: true },
     { label: 'Payroll paid', value: summary.payrollPaid },
     ...summary.expensesByCategory.map(c => ({ label: `Expense: ${c.label}${c.excludedFromPL ? ' (informational)' : ''}`, value: c.total })),
-    { label: 'Device buyer fees collected', value: summary.deviceBuyerFeesCollected },
-    { label: 'Device buyer fees paid', value: summary.deviceBuyerFeesPaid },
+    { label: 'Device buyer service fees (income)', value: summary.deviceBuyerFeeIncome },
     { label: 'Net profit', value: summary.netProfit, strong: true },
     { label: 'Sales tax collected', value: summary.salesTaxCollected },
   ];
@@ -753,7 +767,7 @@ const YearEndTab: React.FC<{ plInput: ProfitLossInput }> = ({ plInput }) => {
             <Download className="w-4 h-4" /> Export CSV
           </button>
         </div>
-        <p className="mt-3 text-xs text-slate-400">One consolidated annual summary to hand to your accountant — revenue, profit, payroll, cash expenses, device buyer fees (collected and paid) and sales tax collected for {year}.</p>
+        <p className="mt-3 text-xs text-slate-400">One consolidated annual summary to hand to your accountant — revenue, profit, payroll, cash expenses, device buyer service fee income and sales tax collected for {year}.</p>
       </div>
       <div className={`${card} p-5`}>
         <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200 mb-3">{year} year-end summary</h3>

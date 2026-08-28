@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { settlementInvoiceHtml } from './settlementInvoice';
 import { buildSettlementFromReview, initSettlementReview } from '../domain/dropoffs';
-import { DropOff, DeviceBuyer, PaidBy, DropOffStatus } from '../types';
+import { DropOff, DeviceBuyer, PaidBy, DropOffStatus, Settlement } from '../types';
 
 const d = (p: Partial<DropOff>): DropOff => ({
   id: 'd', buyerId: 'r1', item: 'iPhone 13', imei: '356789012345678', sellerName: '', sellerContact: '',
@@ -76,21 +76,44 @@ describe('settlementInvoiceHtml — the printed breakdown\'s totals match the co
     expect(html).toContain('-$15.00');
   });
 
-  it('states the net direction in plain words — store pays device buyer (positive net)', () => {
-    const lines = initSettlementReview(dropOffs);
-    const settlement = buildSettlementFromReview({ id: 'S-1', buyerId: 'r1', date: '2026-08-15', paymentMethod: 'cash', notes: '' }, dropOffs, lines, 0, '');
-    expect(settlement.amountPaid).toBeGreaterThan(0);
-    const html = settlementInvoiceHtml(settlement, buyer, dropOffs, {});
-    expect(html).toContain('Store pays device buyer $350.00'); // 300 fronted + 50 fees
+  it('states the direction unambiguously: the buyer owes the store, principal and fee as SEPARATE lines', () => {
+    // Store-funded $100 device + $20 service fee = the canonical $120 case.
+    const financed = [d({ id: 'xr', item: 'iPhone XR', purchasePrice: 100, dropOffFee: 20, paidBy: 'store' })];
+    const settlement = buildSettlementFromReview(
+      { id: 'S-1', buyerId: 'r1', date: '2026-08-15', paymentMethod: 'cash', notes: '' },
+      financed, initSettlementReview(financed), 0, '');
+    const html = settlementInvoiceHtml(settlement, buyer, financed, {});
+    expect(html).toContain('Principal owed (device purchase price advanced by store)');
+    expect(html).toContain('$100.00');
+    expect(html).toContain('Service fee');
+    expect(html).toContain('$20.00');
+    expect(html).toContain('Total owed to store');
+    expect(html).toContain('Device buyer owes store $120.00');
+    // Nothing on the page may say the store pays the buyer.
+    expect(html.toLowerCase()).not.toContain('store pays');
+    expect(html.toLowerCase()).not.toContain('fronted by device buyer');
+    expect(html.toLowerCase()).not.toContain('reimburse');
   });
 
-  it('states the net direction in plain words — buyer owes store (negative net)', () => {
-    // A big enough deduction to flip the sign.
-    const lines = initSettlementReview(dropOffs);
-    const settlement = buildSettlementFromReview({ id: 'S-1', buyerId: 'r1', date: '2026-08-15', paymentMethod: 'cash', notes: '' }, dropOffs, lines, -400, 'Device buyer owes back a prior overpayment');
-    expect(settlement.amountPaid).toBeLessThan(0);
-    const html = settlementInvoiceHtml(settlement, buyer, dropOffs, {});
-    expect(html).toContain('Device buyer owes store $50.00'); // |350 - 400|
+  it('a buyer-funded device prints zero principal — he owes the service fee only', () => {
+    const own = [d({ id: 'own', item: 'Pixel 8', purchasePrice: 100, dropOffFee: 20, paidBy: 'runner' })];
+    const settlement = buildSettlementFromReview(
+      { id: 'S-2', buyerId: 'r1', date: '2026-08-15', paymentMethod: 'cash', notes: '' },
+      own, initSettlementReview(own), 0, '');
+    const html = settlementInvoiceHtml(settlement, buyer, own, {});
+    expect(html).toContain('Buyer-funded (own money)');
+    expect(html).toContain('Device buyer owes store $20.00');
+  });
+
+  it('a settlement recorded under the PRIOR model reprints exactly as stored, under a clear legacy banner', () => {
+    const legacy: Settlement = {
+      id: 'S-OLD', buyerId: 'r1', date: '2026-06-01', dropOffIds: ['1'],
+      totalPurchaseFronted: 300, totalFees: 20, amountPaid: 320, notes: '',
+    };
+    const html = settlementInvoiceHtml(legacy, buyer, dropOffs, {});
+    expect(html).toContain('Store paid device buyer $320.00');
+    expect(html).toContain('Recorded under the prior model');
+    expect(html).not.toContain('Total owed to store');
   });
 
   it('includes a signature line for the buyer and for the store', () => {

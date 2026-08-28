@@ -1,5 +1,5 @@
 import { SalesTransaction, InventoryItem, PayPeriodPaid, CashReconciliation, CashDrawerEntry, Settlement, DeviceBuyer, Expense } from '../types';
-import { settlementFeeTotals } from './dropoffs';
+import { isLegacySettlement } from './dropoffs';
 import { isReversed } from './pos';
 import { kindOf } from './inventory';
 import { ExpenseCategory, plExpenseTotal, expenseTotalsByCategory, CategoryTotal } from './expenses';
@@ -302,26 +302,27 @@ const inDateRange = (dateISO: string | undefined, lo: string, hi: string): boole
 const order = (start: string, end: string): [string, string] => (start <= end ? [start, end] : [end, start]);
 
 // --- Part 3: device buyer settlement history ------------------------------------
-// Settlement records already carry the money facts: totalFees (the drop-off fee
-// — which may be owed BY the device buyer TO the store, or paid BY the store TO
-// the buyer, depending on the settlement's feeDirection; see
-// domain/dropoffs.ts's settlementFeeDirection), totalPurchaseFronted
-// (reimbursement of what the device buyer paid sellers — that becomes device
-// purchaseCost/COGS), and amountPaid (net cash moved). Pure aggregation over
-// the existing records; no new tracking.
+// Settlement records already carry the money facts. Under the corrected
+// financing model (types.ts / domain/dropoffs.ts) the store FINANCES the
+// device buyer: at settlement he repays the principal the store advanced and
+// pays the store's service fee. Money flows INTO the store.
 //
-// The aggregates below are a plain sum of the fees on each settlement in range,
-// regardless of direction — a "how much fee money changed hands" view. The
-// income-vs-expense split that net profit depends on lives in
-// settlementFeeTotals / profitAndLoss, NOT here.
+// Principal and fee are aggregated as SEPARATE totals and never summed into
+// one opaque figure — only the fee is income (see profitAndLoss); the
+// principal is a receivable being settled.
+//
+// PRE-REWORK records (no `model`) are read exactly as they were stored — their
+// legacy totalPurchaseFronted/amountPaid — and flagged `legacy` so the UI can
+// say so. Nothing about them is recomputed or migrated.
 
 export interface DeviceBuyerSettlementRow {
   buyerId: string;
   buyerName: string;
   settlementCount: number;
-  totalFees: number;        // Σ drop-off fees (either direction — see header)
-  totalFronted: number;     // Σ seller-purchase reimbursement
-  totalPaid: number;        // Σ net cash moved (negative = the buyer owed the store)
+  totalFees: number;      // Σ service fees the store charged
+  totalPrincipal: number; // Σ principal repaid (legacy records: the amount they recorded as fronted)
+  totalAmount: number;    // Σ settlement totals (new: owed by the buyer; legacy: paid out to him)
+  legacyCount: number;    // how many of those settlements predate the financing rework
 }
 
 export interface SettlementLine {
@@ -330,8 +331,9 @@ export interface SettlementLine {
   buyerId: string;
   buyerName: string;
   totalFees: number;
-  totalFronted: number;
-  amountPaid: number;
+  totalPrincipal: number;
+  totalAmount: number;
+  legacy: boolean;        // true = recorded under the prior model, shown as stored
 }
 
 export interface SettlementHistory {
@@ -340,9 +342,10 @@ export interface SettlementHistory {
   perBuyer: DeviceBuyerSettlementRow[];
   lines: SettlementLine[];   // individual settlements in range, newest first
   totalFees: number;
-  totalFronted: number;
-  totalPaid: number;
+  totalPrincipal: number;
+  totalAmount: number;
   count: number;
+  legacyCount: number;
 }
 
 export const settlementHistory = (
@@ -356,27 +359,36 @@ export const settlementHistory = (
   const inRangeSettlements = settlements.filter(s => inDateRange(s.date, lo, hi));
 
   const byBuyer = new Map<string, DeviceBuyerSettlementRow>();
-  let totalFees = 0, totalFronted = 0, totalPaid = 0;
+  let totalFees = 0, totalPrincipal = 0, totalAmount = 0, legacyCount = 0;
   const lines: SettlementLine[] = [];
 
   for (const s of inRangeSettlements) {
     const buyerName = nameOf.get(s.buyerId) || 'Unknown device buyer';
-    const fees = s.totalFees || 0, fronted = s.totalPurchaseFronted || 0, paid = s.amountPaid || 0;
-    lines.push({ id: s.id, date: s.date, buyerId: s.buyerId, buyerName, totalFees: fees, totalFronted: fronted, amountPaid: paid });
-    const row = byBuyer.get(s.buyerId) || { buyerId: s.buyerId, buyerName, settlementCount: 0, totalFees: 0, totalFronted: 0, totalPaid: 0 };
+    const legacy = isLegacySettlement(s);
+    const fees = s.totalFees || 0;
+    // New records: principal the buyer repaid + what he owed in total.
+    // Legacy records: the figures exactly as they were stored back then.
+    const principal = legacy ? (s.totalPurchaseFronted || 0) : (s.principalOwed || 0);
+    const amount = legacy ? (s.amountPaid || 0) : (s.amountOwed || 0);
+    lines.push({ id: s.id, date: s.date, buyerId: s.buyerId, buyerName, totalFees: fees, totalPrincipal: principal, totalAmount: amount, legacy });
+    const row = byBuyer.get(s.buyerId) || { buyerId: s.buyerId, buyerName, settlementCount: 0, totalFees: 0, totalPrincipal: 0, totalAmount: 0, legacyCount: 0 };
     row.settlementCount += 1;
+    if (legacy) row.legacyCount += 1;
     row.totalFees = round2(row.totalFees + fees);
-    row.totalFronted = round2(row.totalFronted + fronted);
-    row.totalPaid = round2(row.totalPaid + paid);
+    row.totalPrincipal = round2(row.totalPrincipal + principal);
+    row.totalAmount = round2(row.totalAmount + amount);
     byBuyer.set(s.buyerId, row);
-    totalFees = round2(totalFees + fees); totalFronted = round2(totalFronted + fronted); totalPaid = round2(totalPaid + paid);
+    totalFees = round2(totalFees + fees);
+    totalPrincipal = round2(totalPrincipal + principal);
+    totalAmount = round2(totalAmount + amount);
+    if (legacy) legacyCount += 1;
   }
 
   return {
     start: lo, end: hi,
-    perBuyer: [...byBuyer.values()].sort((a, b) => b.totalPaid - a.totalPaid),
+    perBuyer: [...byBuyer.values()].sort((a, b) => b.totalAmount - a.totalAmount),
     lines: lines.sort((a, b) => b.date.localeCompare(a.date)),
-    totalFees, totalFronted, totalPaid, count: lines.length,
+    totalFees, totalPrincipal, totalAmount, count: lines.length, legacyCount,
   };
 };
 
@@ -409,13 +421,13 @@ export interface ProfitLoss {
   payroll: number;           // gross pay of pay periods paid in range
   expenses: number;          // expense ledger total in range, any payment method, excl. Wages-flagged categories
   expensesByCategory: CategoryTotal[];
-  // Drop-off fees split by direction (see domain/dropoffs.ts's
-  // settlementFeeDirection). These are NOT a single signed "commissions"
-  // figure: in this shop the fee often flows TO the store, and both
-  // arrangements coexist across buyers/settlements.
-  deviceBuyerFeesCollected: number; // fees the buyer owed the store — INCOME
-  deviceBuyerFeesPaid: number;      // fees the store paid the buyer — EXPENSE
-  // grossProfit − payroll − expenses + deviceBuyerFeesCollected − deviceBuyerFeesPaid
+  // The store's drop-off service fees — ALWAYS income. The store finances the
+  // device buyer and charges a fee for it; it never pays him a commission, so
+  // there is no direction or conditionality here any more. The principal the
+  // buyer repays is deliberately absent: it is a receivable being settled, not
+  // revenue, and counting it would overstate profit by the whole device price.
+  deviceBuyerFeeIncome: number;
+  // grossProfit − payroll − expenses + deviceBuyerFeeIncome
   netProfit: number;
 }
 
@@ -450,19 +462,20 @@ export const profitAndLoss = (input: ProfitLossInput, start: string, end: string
   const expensesTotal = plExpenseTotal(expenses, expenseCategories, lo, hi);
   const expensesByCategory = expenseTotalsByCategory(expenses, expenseCategories, lo, hi);
 
-  // Drop-off fees are direction-aware: a fee the device buyer owes the STORE is
-  // income and RAISES net profit; a fee the store pays the buyer is an expense
-  // and lowers it. This previously subtracted every fee unconditionally, which
-  // understated profit by 2× the fee on every buyer-owes-store settlement.
-  const feeTotals = settlementFeeTotals(settlements.filter(s => inDateRange(s.date, lo, hi)));
+  // Settlement service fees are store INCOME, full stop — the store is always
+  // the financier collecting a fee, never the party paying one. Only the fee
+  // is counted: the principal repayment on the same settlement is a
+  // receivable being settled and never touches revenue or profit.
+  const deviceBuyerFeeIncome = round2(settlements
+    .filter(s => inDateRange(s.date, lo, hi))
+    .reduce((sum, s) => sum + (s.totalFees || 0), 0));
 
   const grossProfit = round2(revenue - costOfGoods);
-  const netProfit = round2(grossProfit - payroll - expensesTotal + feeTotals.netContribution);
+  const netProfit = round2(grossProfit - payroll - expensesTotal + deviceBuyerFeeIncome);
   return {
     start: lo, end: hi, revenue, costOfGoods, grossProfit, payroll,
     expenses: expensesTotal, expensesByCategory,
-    deviceBuyerFeesCollected: feeTotals.feesCollected,
-    deviceBuyerFeesPaid: feeTotals.feesPaid,
+    deviceBuyerFeeIncome,
     netProfit,
   };
 };
@@ -479,8 +492,7 @@ export const profitLossCsvRows = (pl: ProfitLoss): Record<string, string | numbe
     Line: `Expense: ${c.label}${c.excludedFromPL ? ' (informational — not in net profit)' : ''}`,
     Amount: (-c.total).toFixed(2),
   })),
-  { Line: 'Device buyer fees collected', Amount: pl.deviceBuyerFeesCollected.toFixed(2) },
-  { Line: 'Device buyer fees paid', Amount: (-pl.deviceBuyerFeesPaid).toFixed(2) },
+  { Line: 'Device buyer service fees (income)', Amount: pl.deviceBuyerFeeIncome.toFixed(2) },
   { Line: 'Net profit', Amount: pl.netProfit.toFixed(2) },
 ];
 
@@ -494,9 +506,8 @@ export interface YearEndSummary {
   payrollPaid: number;
   expenses: number;
   expensesByCategory: CategoryTotal[];
-  // Same direction-aware split as ProfitLoss — see its doc comment.
-  deviceBuyerFeesCollected: number;
-  deviceBuyerFeesPaid: number;
+  // Store service fees on drop-off settlements — always income, see ProfitLoss.
+  deviceBuyerFeeIncome: number;
   netProfit: number;
   salesTaxCollected: number;
 }
@@ -514,8 +525,7 @@ export const yearEndSummary = (input: ProfitLossInput, year: number): YearEndSum
     payrollPaid: pl.payroll,
     expenses: pl.expenses,
     expensesByCategory: pl.expensesByCategory,
-    deviceBuyerFeesCollected: pl.deviceBuyerFeesCollected,
-    deviceBuyerFeesPaid: pl.deviceBuyerFeesPaid,
+    deviceBuyerFeeIncome: pl.deviceBuyerFeeIncome,
     netProfit: pl.netProfit,
     salesTaxCollected: tax.totalTaxCollected,
   };
@@ -529,8 +539,7 @@ export const yearEndCsvRows = (s: YearEndSummary): Record<string, string | numbe
   { Metric: 'Gross profit', Value: s.grossProfit.toFixed(2) },
   { Metric: 'Payroll paid', Value: s.payrollPaid.toFixed(2) },
   ...s.expensesByCategory.map(c => ({ Metric: `Expense: ${c.label}${c.excludedFromPL ? ' (informational)' : ''}`, Value: c.total.toFixed(2) })),
-  { Metric: 'Device buyer fees collected', Value: s.deviceBuyerFeesCollected.toFixed(2) },
-  { Metric: 'Device buyer fees paid', Value: s.deviceBuyerFeesPaid.toFixed(2) },
+  { Metric: 'Device buyer service fees (income)', Value: s.deviceBuyerFeeIncome.toFixed(2) },
   { Metric: 'Net profit', Value: s.netProfit.toFixed(2) },
   { Metric: 'Sales tax collected', Value: s.salesTaxCollected.toFixed(2) },
 ];
