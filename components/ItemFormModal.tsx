@@ -217,7 +217,11 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, deviceBuy
                 <Field label="Bought From (seller)" value={f.boughtFrom} onChange={setText('boughtFrom')} />
                 <Field label="Purchase Source (channel)" value={f.purchaseSource} onChange={setText('purchaseSource')} placeholder="Marketplace" />
                 <div>
-                  <label className={lbl}>Device Buyer (drop-off)</label>
+                  {/* Attribution only — who sourced this device the store
+                      owns. NOT a drop-off link: a financed drop-off is the
+                      buyer's device and never becomes store inventory (see
+                      domain/dropoffs.ts). */}
+                  <label className={lbl}>Sourced by (device buyer)</label>
                   <select className={inp} value={f.buyerId ?? ''} onChange={e => {
                     const r = deviceBuyers.find(x => x.id === e.target.value);
                     set('buyerId', e.target.value || undefined); set('buyerName', r?.name);

@@ -1,107 +1,95 @@
-import { DropOff, Settlement, SettlementFeeDirection, SettlementLineAdjustment, SettlementPaymentMethod } from '../types';
+import { DropOff, PaidBy, Settlement, SettlementLineAdjustment, SettlementPaymentMethod } from '../types';
 
 const round2 = (n: number): number => Math.round((n || 0) * 100) / 100;
+const money2 = (n: number): string => `$${n.toFixed(2)}`;
 
 // Pure money math for the device buyer drop-off flow — no Firebase/React imports so it
-// can be unit-tested, matching domain/pos.ts, domain/repairs.ts, etc. The device buyer
-// balance and settlement totals were previously defined inline in DropOffView;
-// the device acquisition-cost calc lived (buggily) inline in App.tsx.
+// can be unit-tested, matching domain/pos.ts, domain/repairs.ts, etc.
+//
+// THE MODEL (corrected — the store FINANCES the buyer; see types.ts's PaidBy):
+// the device buyer sources devices for himself and keeps them. The store never
+// acquires them, never resells them, and never pays the buyer. The store either
+// fronts the purchase money or it doesn't, and either way it charges a service
+// fee. At settlement money flows INTO the store:
+//
+//   store-funded  ($100 device, $20 fee) → buyer owes $120 (principal + fee)
+//   buyer-funded  ($100 device, $20 fee) → buyer owes  $20 (fee only)
+//   personal-funded (owner's own cash)   → buyer owes $120, but only the $20
+//                                          is store cash (see below)
+//
+// ONLY THE FEE IS PROFIT. The principal is a receivable being repaid — it is
+// never revenue and never touches the P&L (domain/reports.ts).
+//
+// Principal and fee are deliberately kept as SEPARATE numbers everywhere —
+// domain, UI and printed invoice. They are different money and nothing may
+// re-derive one by subtracting the other from an opaque total.
 
-export interface DeviceBuyerBalance {
-  cashFronted: number; // cash the device buyer fronted to sellers (drop-offs paidBy 'runner')
-  feesOwed: number;    // drop-off commission owed to the device buyer
-  net: number;         // total owed to the device buyer (positive = store owes device buyer)
-  count: number;       // number of active drop-offs counted
+// The stored PaidBy value meaning "the buyer used his own money". The literal
+// is still 'runner' for legacy-data reasons (see types.ts's PaidBy); naming it
+// once here keeps that legacy string out of every call site.
+export const BUYER_FUNDED: PaidBy = 'runner';
+
+// Whose cash actually funded a purchase, from the store's point of view.
+// 'store' is the only one that moved the till at acceptance
+// (dropOffAcceptDrawerEffect), which is why the settlement's drawer effect
+// treats it differently from 'personal'.
+export type PrincipalFunder = 'store' | 'personal' | 'buyer';
+export function principalFunder(d: Pick<DropOff, 'paidBy'>): PrincipalFunder {
+  if (d.paidBy === 'store') return 'store';
+  if (d.paidBy === 'personal') return 'personal';
+  return 'buyer';
 }
 
-// Balance owed to a device buyer: the cash they fronted to sellers (paidBy 'runner')
-// plus the fees owed, across drop-offs that are neither rejected nor already
-// settled. Store-paid devices don't add to what we owe the device buyer (only the fee
-// does).
-export function deviceBuyerBalance(buyerId: string, dropOffs: DropOff[]): DeviceBuyerBalance {
+/* ---------------- Outstanding receivable (money on the street) ---------------- */
+
+// What a device buyer currently owes the store: everything accepted/paid-out
+// and not yet settled or rejected. Split, never netted into one figure.
+export interface DeviceBuyerOutstanding {
+  principalStoreFunded: number;    // store cash advanced and not yet repaid
+  principalPersonalFunded: number; // the owner's own cash advanced, not yet repaid
+  principalOwed: number;           // both of the above — total principal the buyer owes back
+  feesOwed: number;                // service fees accrued and not yet collected
+  totalOwed: number;               // principalOwed + feesOwed
+  count: number;                   // number of unsettled drop-offs counted
+}
+
+/**
+ * Per-buyer outstanding balance — the receivable the store carries between
+ * accepting a drop-off and settling it. Replaces the old `deviceBuyerBalance`,
+ * which computed the exact opposite (what the STORE owed the buyer).
+ *
+ * Buyer-funded drop-offs contribute no principal: the buyer spent his own
+ * money on his own device, so there is nothing to repay — only the fee.
+ */
+export function deviceBuyerOutstanding(buyerId: string, dropOffs: DropOff[]): DeviceBuyerOutstanding {
   const active = dropOffs.filter(d =>
     d.buyerId === buyerId && d.status !== 'rejected' && d.status !== 'settled'
   );
-  const cashFronted = active.filter(d => d.paidBy === 'runner').reduce((s, d) => s + (d.purchasePrice || 0), 0);
-  const feesOwed = active.reduce((s, d) => s + (d.dropOffFee || 0), 0);
-  return { cashFronted, feesOwed, net: cashFronted + feesOwed, count: active.length };
+  let principalStoreFunded = 0, principalPersonalFunded = 0, feesOwed = 0;
+  for (const d of active) {
+    const funder = principalFunder(d);
+    if (funder === 'store') principalStoreFunded += d.purchasePrice || 0;
+    else if (funder === 'personal') principalPersonalFunded += d.purchasePrice || 0;
+    feesOwed += d.dropOffFee || 0;
+  }
+  principalStoreFunded = round2(principalStoreFunded);
+  principalPersonalFunded = round2(principalPersonalFunded);
+  feesOwed = round2(feesOwed);
+  const principalOwed = round2(principalStoreFunded + principalPersonalFunded);
+  return {
+    principalStoreFunded, principalPersonalFunded, principalOwed, feesOwed,
+    totalOwed: round2(principalOwed + feesOwed), count: active.length,
+  };
 }
 
 // Drop-offs eligible to be rolled into a settlement for a device buyer: accepted or
-// paid-out, and not yet settled/rejected.
+// paid-out, and not yet settled/rejected. A drop-off flagged 'settled' by a
+// committed settlement can never come back here, which is what stops the same
+// batch being settled (and collected on) twice.
 export function settleableDropOffs(buyerId: string, dropOffs: DropOff[]): DropOff[] {
   return dropOffs.filter(d =>
     d.buyerId === buyerId && (d.status === 'accepted' || d.status === 'paidout')
   );
-}
-
-export interface SettlementTotals {
-  cashFronted: number; // fronted cash to reimburse (paidBy 'runner')
-  totalFees: number;   // all drop-off fees in the set
-  amountToPay: number; // cashFronted + totalFees
-}
-
-// Amount to pay a device buyer for a set of drop-offs: reimburse the cash they fronted
-// (paidBy 'runner') plus every drop-off fee.
-export function settlementTotals(dropOffs: DropOff[]): SettlementTotals {
-  const cashFronted = dropOffs.filter(d => d.paidBy === 'runner').reduce((s, d) => s + (d.purchasePrice || 0), 0);
-  const totalFees = dropOffs.reduce((s, d) => s + (d.dropOffFee || 0), 0);
-  return { cashFronted, totalFees, amountToPay: cashFronted + totalFees };
-}
-
-// Acquisition cost of a device sourced via a drop-off: what was paid to the
-// seller PLUS the device buyer's commission — both are real costs of acquiring it, and
-// both are what the settlement pays the device buyer. (Previously purchaseCost dropped
-// the fee, overstating resale Net Profit by exactly the fee.)
-export function dropOffPurchaseCost(d: Pick<DropOff, 'purchasePrice' | 'dropOffFee'>): number {
-  return (d.purchasePrice || 0) + (d.dropOffFee || 0);
-}
-
-// Shared shape for "this money action moved cash in the till, log it as this
-// kind/amount" — returned by every drawer-affecting decision below.
-//
-// IMPORTANT: any NEW action that hands cash to/from someone outside a normal
-// POS sale (a settlement, a drop-off purchase, a refund, ...) must decide its
-// drawer effect through a function here (returning DrawerEffect | null) and
-// have its App.tsx handler write that effect via commitDrawerRecord — the same
-// two-step every effect below follows. A handler that skips this is a missing
-// drawer entry, which is exactly the store-paid-drop-off bug this file's
-// dropOffAcceptDrawerEffect was added to fix: the cash really left the till,
-// but nothing ever told the reconciliation screen.
-export interface DrawerEffect { kind: 'cashOut' | 'cashIn'; amount: number }
-
-// A completed settlement's effect on today's cash drawer — the ONE place that
-// decides whether paying a device buyer touches the till. Only 'cash' ever does;
-// e-transfer/other never do, no matter the amount. A settlement predating this
-// field (paymentMethod absent) defaults to 'cash', matching how every
-// settlement was implicitly treated before payment method was tracked.
-// amountPaid > 0 (store owes device buyer) is cash OUT of the drawer; a negative
-// amountPaid (device buyer owed the store) is cash IN. Zero/near-zero produces no
-// entry at all.
-export function settlementDrawerEffect(settlement: Pick<Settlement, 'paymentMethod' | 'amountPaid'>): DrawerEffect | null {
-  const method = settlement.paymentMethod || 'cash';
-  if (method !== 'cash') return null;
-  const amount = round2(settlement.amountPaid || 0);
-  if (Math.abs(amount) < 0.005) return null;
-  return amount > 0 ? { kind: 'cashOut', amount } : { kind: 'cashIn', amount: -amount };
-}
-
-// A drop-off's effect on today's cash drawer at the moment it's accepted
-// (pending → accepted) — the ONE place that decides whether accepting a
-// drop-off touches the till. Only a store-paid purchase does: that's the shop
-// handing cash to the seller directly, right now. A buyer-paid drop-off never
-// touches the drawer here — that was the device buyer's own cash, fronted on the
-// store's behalf and reimbursed later (as a lump sum, alongside the fee) via
-// settlementDrawerEffect when the device buyer is settled, not at acceptance.
-//
-// The caller is responsible for only invoking this on the actual pending→
-// accepted transition (not on every save of an already-accepted drop-off) so
-// the purchase is never logged to the drawer twice.
-export function dropOffAcceptDrawerEffect(d: Pick<DropOff, 'paidBy' | 'purchasePrice'>): DrawerEffect | null {
-  if (d.paidBy !== 'store') return null;
-  const amount = round2(d.purchasePrice || 0);
-  if (amount < 0.005) return null;
-  return { kind: 'cashOut', amount };
 }
 
 /* ---------------- Pre-settlement review (editable) ---------------- */
@@ -114,8 +102,8 @@ export function dropOffAcceptDrawerEffect(d: Pick<DropOff, 'paidBy' | 'purchaseP
 // call these functions to total it up / build the final record.
 
 // One line on the review screen: whether it's still included in this
-// settlement, and the fee actually being paid for it (may differ from the
-// drop-off's stored dropOffFee if edited on this screen).
+// settlement, and the service fee actually being charged for it (may differ
+// from the drop-off's stored dropOffFee if edited on this screen).
 export interface SettlementReviewLine {
   dropOffId: string;
   included: boolean;
@@ -129,41 +117,68 @@ export function initSettlementReview(dropOffs: DropOff[]): SettlementReviewLine[
   return dropOffs.map(d => ({ dropOffId: d.id, included: true, fee: round2(d.dropOffFee || 0) }));
 }
 
-export interface SettlementReviewTotals {
-  deviceCount: number;    // included lines only
-  cashFronted: number;    // purchasePrice of included, paidBy 'runner' lines
-  totalFees: number;      // sum of included lines' (possibly-edited) fee
-  subtotal: number;       // cashFronted + totalFees
-  adjustmentAmount: number;
-  netAmount: number;      // subtotal + adjustmentAmount — what settlementDrawerEffect/Settlement.amountPaid uses
+// Everything the buyer owes for one settlement run, split by kind of money.
+// `totalOwed` and `storeCashIn` differ only by personal-funded principal: the
+// buyer owes it, but it is the OWNER's money coming back, not the till's.
+export interface SettlementTotals {
+  deviceCount: number;
+  principalStoreFunded: number;
+  principalPersonalFunded: number;
+  principalOwed: number;      // principalStoreFunded + principalPersonalFunded
+  feesOwed: number;           // Σ included lines' (possibly-edited) fee
+  adjustmentAmount: number;   // positive = buyer owes more, negative = owes less
+  totalOwed: number;          // principalOwed + feesOwed + adjustmentAmount — what the buyer pays
+  storeCashIn: number;        // principalStoreFunded + feesOwed + adjustmentAmount — what the till receives
 }
 
-// Recompute every total live from the current review state — called on every
-// edit so the screen never shows a stale number. `adjustmentAmount` is the
-// settlement-level correction (positive = more owed to the device buyer, negative
-// = less), independent of any per-line fee edit.
+/**
+ * Recompute every total live from the current review state — called on every
+ * edit so the screen never shows a stale number.
+ *
+ * PERSONAL-FUNDED TREATMENT (a documented judgment call): a personal-funded
+ * drop-off is treated like a store-funded one for what the BUYER owes — he
+ * received store-negotiated financing and owes principal + fee back — but its
+ * principal is deliberately EXCLUDED from `storeCashIn`. The owner's own cash
+ * left no trace on the store's books at acceptance (dropOffAcceptDrawerEffect
+ * no-ops for 'personal', and always has), so depositing that principal into
+ * the till at settlement would invent store cash the store never advanced and
+ * silently convert the owner's personal loan into store money. Only the fee is
+ * the store's. The buyer still sees, and signs for, the full amount owed.
+ */
 export function settlementReviewTotals(
   dropOffs: DropOff[],
   lines: SettlementReviewLine[],
   adjustmentAmount: number,
-): SettlementReviewTotals {
+): SettlementTotals {
   const byId = new Map(dropOffs.map(d => [d.id, d]));
-  let cashFronted = 0;
-  let totalFees = 0;
-  let deviceCount = 0;
+  let principalStoreFunded = 0, principalPersonalFunded = 0, feesOwed = 0, deviceCount = 0;
   for (const l of lines) {
     if (!l.included) continue;
     const d = byId.get(l.dropOffId);
     if (!d) continue;
     deviceCount += 1;
-    if (d.paidBy === 'runner') cashFronted += d.purchasePrice || 0;
-    totalFees += l.fee || 0;
+    const funder = principalFunder(d);
+    if (funder === 'store') principalStoreFunded += d.purchasePrice || 0;
+    else if (funder === 'personal') principalPersonalFunded += d.purchasePrice || 0;
+    feesOwed += l.fee || 0;
   }
-  cashFronted = round2(cashFronted);
-  totalFees = round2(totalFees);
+  principalStoreFunded = round2(principalStoreFunded);
+  principalPersonalFunded = round2(principalPersonalFunded);
+  feesOwed = round2(feesOwed);
   const adj = round2(adjustmentAmount || 0);
-  const subtotal = round2(cashFronted + totalFees);
-  return { deviceCount, cashFronted, totalFees, subtotal, adjustmentAmount: adj, netAmount: round2(subtotal + adj) };
+  const principalOwed = round2(principalStoreFunded + principalPersonalFunded);
+  return {
+    deviceCount, principalStoreFunded, principalPersonalFunded, principalOwed, feesOwed,
+    adjustmentAmount: adj,
+    totalOwed: round2(principalOwed + feesOwed + adj),
+    storeCashIn: round2(principalStoreFunded + feesOwed + adj),
+  };
+}
+
+// What a device buyer owes for a set of drop-offs with no review edits —
+// the same math the review screen runs, so the two can never drift.
+export function settlementTotals(dropOffs: DropOff[]): SettlementTotals {
+  return settlementReviewTotals(dropOffs, initSettlementReview(dropOffs), 0);
 }
 
 // Which per-device fee edits actually happened — only lines still included
@@ -184,90 +199,120 @@ export function buildLineAdjustments(dropOffs: DropOff[], lines: SettlementRevie
   return out;
 }
 
-// The net-amount direction of a settlement. Deliberately UNIFIED with
-// SettlementFeeDirection (types.ts): the two non-even members are exactly that
-// type, so a settlement's cash direction and its fee direction are described in
-// one vocabulary instead of two overlapping ones. 'even' exists only here —
-// a fee always flows one way or the other, but a net amount can land at zero.
-export type SettlementDirection = SettlementFeeDirection | 'even';
+/* ---------------- Cash drawer ---------------- */
 
-// Zero (to the cent) reads as neither direction — a settlement that landed
-// exactly even shouldn't be described as "the store pays the device buyer $0.00",
-// which is technically true but misleading on a printed page.
-export function settlementDirection(netAmount: number): SettlementDirection {
-  if (netAmount > 0.004) return 'store_pays_buyer';
-  if (netAmount < -0.004) return 'buyer_owes_store';
-  return 'even';
+// Shared shape for "this money action moved cash in the till, log it as this
+// kind/amount" — returned by every drawer-affecting decision below.
+//
+// IMPORTANT: any NEW action that hands cash to/from someone outside a normal
+// POS sale (a settlement, a drop-off purchase, a refund, ...) must decide its
+// drawer effect through a function here (returning DrawerEffect | null) and
+// have its App.tsx handler write that effect via commitDrawerRecord — the same
+// two-step every effect below follows. A handler that skips this is a missing
+// drawer entry, which is exactly the store-paid-drop-off bug this file's
+// dropOffAcceptDrawerEffect was added to fix: the cash really left the till,
+// but nothing ever told the reconciliation screen.
+export interface DrawerEffect { kind: 'cashOut' | 'cashIn'; amount: number }
+
+/**
+ * A completed settlement's effect on today's cash drawer — the ONE place that
+ * decides whether settling with a device buyer touches the till. Only 'cash'
+ * ever does; e-transfer/other never do, no matter the amount. A settlement
+ * with no paymentMethod recorded defaults to 'cash', matching how every
+ * settlement was implicitly treated before that field was tracked.
+ *
+ * NEW (financing-model) settlements: the buyer PAYS the store, so the effect
+ * is derived from `storeCashIn` — store-funded principal coming back plus the
+ * service fees, but NOT personal-funded principal (that's the owner's money,
+ * see settlementReviewTotals). Cash IN. It can only go the other way if a
+ * settlement-level adjustment exceeds everything owed.
+ *
+ * LEGACY settlements (no `model`) keep their original interpretation exactly:
+ * a positive amountPaid was cash OUT to the buyer, a negative one cash IN.
+ * Nothing stored is reinterpreted or migrated — historical drawer entries and
+ * reprints must keep saying what they always said.
+ */
+export function settlementDrawerEffect(
+  s: Pick<Settlement, 'paymentMethod' | 'amountPaid' | 'storeCashIn' | 'model'>,
+): DrawerEffect | null {
+  const method = s.paymentMethod || 'cash';
+  if (method !== 'cash') return null;
+  if (s.model === 'financing') {
+    const amount = round2(s.storeCashIn || 0);
+    if (Math.abs(amount) < 0.005) return null;
+    return amount > 0 ? { kind: 'cashIn', amount } : { kind: 'cashOut', amount: -amount };
+  }
+  const amount = round2(s.amountPaid || 0);
+  if (Math.abs(amount) < 0.005) return null;
+  return amount > 0 ? { kind: 'cashOut', amount } : { kind: 'cashIn', amount: -amount };
 }
 
-// Plain-words statement of the net amount's direction — this is what goes on
-// the printed breakdown so there's no ambiguity on paper about who owes whom.
-export function settlementDirectionLabel(netAmount: number, direction: SettlementDirection = settlementDirection(netAmount)): string {
-  const amt = money2(Math.abs(netAmount));
-  if (direction === 'store_pays_buyer') return `Store pays device buyer ${amt}`;
-  if (direction === 'buyer_owes_store') return `Device buyer owes store ${amt}`;
+/**
+ * A drop-off's effect on today's cash drawer at the moment it's accepted
+ * (pending → accepted) — the ONE place that decides whether accepting a
+ * drop-off touches the till. Only a store-funded purchase does: that's the
+ * shop advancing cash for a device the BUYER keeps, and the buyer owes it back
+ * (plus the fee) at settlement. A buyer-funded drop-off never touches the
+ * drawer — it was the buyer's own money for his own device. A personal-funded
+ * one doesn't either: that was the owner's out-of-pocket cash, which by design
+ * leaves no trace on the store's books.
+ *
+ * The caller is responsible for only invoking this on the actual pending→
+ * accepted transition (not on every save of an already-accepted drop-off) so
+ * the purchase is never logged to the drawer twice.
+ */
+export function dropOffAcceptDrawerEffect(d: Pick<DropOff, 'paidBy' | 'purchasePrice'>): DrawerEffect | null {
+  if (d.paidBy !== 'store') return null;
+  const amount = round2(d.purchasePrice || 0);
+  if (amount < 0.005) return null;
+  return { kind: 'cashOut', amount };
+}
+
+/* ---------------- Plain-words direction ---------------- */
+
+// Under the corrected model a settlement only ever has the buyer paying the
+// store, so there is no per-settlement "direction" to record any more — the
+// old feeDirection / settlementFeeDirection / settlementFeeTotals machinery is
+// gone. All that remains is stating the amount in plain words.
+export function settlementOwedLabel(totalOwed: number): string {
+  if (totalOwed > 0.004) return `Device buyer owes store ${money2(totalOwed)}`;
+  // Only reachable via a settlement-level adjustment bigger than what's owed.
+  if (totalOwed < -0.004) return `Store owes device buyer ${money2(-totalOwed)}`;
   return 'Settled even — no balance either way';
 }
 
-/* ---------------- Fee direction (who owes the fee to whom) ---------------- */
-//
-// The drop-off fee does NOT always flow from the store to the device buyer. In
-// this shop the buyer frequently owes the STORE a fee for handling/reselling
-// the device, which makes that fee INCOME, not an expense. Both arrangements
-// are real and can differ per buyer and per settlement, so the direction is
-// recorded per settlement rather than assumed globally.
-//
-// NOTE the cash side (settlementDrawerEffect above) was already correct and is
-// deliberately untouched: a negative amountPaid is already treated as cash IN.
-// Only the P&L attribution in domain/reports.ts was wrong.
+/* ---------------- Legacy settlement rendering ---------------- */
 
-/**
- * The fee direction for one settlement.
- *
- * New settlements carry an explicit `feeDirection` (set by
- * buildSettlementFromReview) and that always wins. Historical settlements
- * predate the field, so their direction is DERIVED from the sign of
- * `amountPaid`:
- *   • amountPaid < 0  → the buyer owed the store money  → 'buyer_owes_store'
- *   • otherwise (incl. exactly 0) → 'store_pays_buyer'
- *
- * This is safe without a data migration because the sign of amountPaid is
- * already the established, trusted source of truth for direction on the cash
- * side — settlementDrawerEffect has always used it to decide cash-in vs
- * cash-out, so every historical record's sign was written correctly. Zero nets
- * resolve to 'store_pays_buyer', which is harmless: a zero-net settlement
- * contributes 0 to either bucket. Same no-migration-fallback pattern as
- * RepairBatch.private falling back to the legacy `autoInventory` field.
- */
-export function settlementFeeDirection(
-  s: Pick<Settlement, 'feeDirection' | 'amountPaid'>,
-): SettlementFeeDirection {
-  if (s.feeDirection) return s.feeDirection;
-  return (s.amountPaid || 0) < 0 ? 'buyer_owes_store' : 'store_pays_buyer';
+// How a PRE-REWORK settlement read at the time it was recorded. Used only to
+// re-display/reprint historical records truthfully (services/
+// settlementInvoice.ts) — never for new settlements, never for the P&L.
+export type LegacySettlementDirection = 'store_pays_buyer' | 'buyer_owes_store' | 'even';
+
+export function legacySettlementDirection(amountPaid: number | undefined): LegacySettlementDirection {
+  const n = amountPaid || 0;
+  if (n > 0.004) return 'store_pays_buyer';
+  if (n < -0.004) return 'buyer_owes_store';
+  return 'even';
 }
 
-export interface SettlementFeeTotals {
-  feesCollected: number;   // Σ totalFees where the buyer owed the store — INCOME
-  feesPaid: number;        // Σ totalFees where the store paid the buyer — EXPENSE
-  netContribution: number; // feesCollected − feesPaid; add this to net profit
+export function legacySettlementDirectionLabel(
+  amountPaid: number | undefined,
+  direction: LegacySettlementDirection = legacySettlementDirection(amountPaid),
+): string {
+  const amt = money2(Math.abs(amountPaid || 0));
+  if (direction === 'store_pays_buyer') return `Store paid device buyer ${amt}`;
+  if (direction === 'buyer_owes_store') return `Device buyer owed store ${amt}`;
+  return 'Settled even — no balance either way';
 }
 
-/**
- * Split a set of settlements' fees by direction. `netContribution` is what
- * domain/reports.ts ADDS to net profit — collected fees raise profit, paid fees
- * lower it. Never sum totalFees unconditionally; that was the bug this fixes.
- */
-export function settlementFeeTotals(settlements: Settlement[]): SettlementFeeTotals {
-  let feesCollected = 0, feesPaid = 0;
-  for (const s of settlements) {
-    const fee = s.totalFees || 0;
-    if (settlementFeeDirection(s) === 'buyer_owes_store') feesCollected += fee;
-    else feesPaid += fee;
-  }
-  feesCollected = round2(feesCollected);
-  feesPaid = round2(feesPaid);
-  return { feesCollected, feesPaid, netContribution: round2(feesCollected - feesPaid) };
+// True for any settlement recorded before the financing rework. Such records
+// are displayed exactly as stored and clearly labelled, never recomputed.
+export function isLegacySettlement(s: Pick<Settlement, 'model'>): boolean {
+  return s.model !== 'financing';
 }
+
+export const LEGACY_SETTLEMENT_NOTE =
+  'Recorded under the prior model (store reimbursed the device buyer) — shown exactly as originally recorded.';
 
 /* ---------------- Legacy field normalization ---------------- */
 
@@ -291,11 +336,13 @@ export function withResolvedBuyerId<T extends { buyerId: string }>(raw: any): T 
   return raw as T;
 }
 
-const money2 = (n: number): string => `$${n.toFixed(2)}`;
 
 // Assemble the final Settlement record from the reviewed state — the ONE
 // place that turns review-screen edits into what actually gets saved, so the
 // pre-commit print preview and the post-commit save can never disagree.
+// Always stamped `model: 'financing'`, which is how every consumer tells a
+// corrected-model record from a pre-rework one. The legacy
+// totalPurchaseFronted/amountPaid fields are deliberately NOT written.
 export function buildSettlementFromReview(
   base: { id: string; buyerId: string; date: string; paymentMethod: SettlementPaymentMethod; notes: string },
   dropOffs: DropOff[],
@@ -306,21 +353,16 @@ export function buildSettlementFromReview(
   const totals = settlementReviewTotals(dropOffs, lines, adjustmentAmount);
   const lineAdjustments = buildLineAdjustments(dropOffs, lines);
   const trimmedNote = (adjustmentNote || '').trim();
-  // Record the fee direction EXPLICITLY on every new settlement, derived from
-  // the same net amount the printed invoice and the drawer effect use, so the
-  // P&L never has to guess. (Only pre-existing records fall back to deriving it
-  // from the sign of amountPaid — see settlementFeeDirection.) A settlement
-  // that lands exactly even is recorded as 'store_pays_buyer'; it contributes
-  // zero either way, so the choice is cosmetic.
-  const feeDirection: SettlementFeeDirection =
-    totals.netAmount < 0 ? 'buyer_owes_store' : 'store_pays_buyer';
   return {
     ...base,
+    model: 'financing',
     dropOffIds: lines.filter(l => l.included).map(l => l.dropOffId),
-    totalPurchaseFronted: totals.cashFronted,
-    totalFees: totals.totalFees,
-    amountPaid: totals.netAmount,
-    feeDirection,
+    principalStoreFunded: totals.principalStoreFunded,
+    principalPersonalFunded: totals.principalPersonalFunded,
+    principalOwed: totals.principalOwed,
+    totalFees: totals.feesOwed,
+    amountOwed: totals.totalOwed,
+    storeCashIn: totals.storeCashIn,
     lineAdjustments: lineAdjustments.length ? lineAdjustments : undefined,
     adjustmentAmount: Math.abs(totals.adjustmentAmount) >= 0.005 ? totals.adjustmentAmount : undefined,
     adjustmentNote: trimmedNote || undefined,

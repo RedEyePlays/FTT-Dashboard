@@ -34,9 +34,14 @@ const baseProps = {
 };
 
 describe('SettlementReviewModal', () => {
-  it('shows the unedited totals and net direction on open', () => {
+  it('shows the unedited totals and states that the buyer owes the store', () => {
     const { host, unmount } = mount(<SettlementReviewModal {...baseProps} isSubmitting={false} onConfirm={() => {}} />);
-    expect(host.textContent).toContain('Store pays device buyer $350.00'); // 300 fronted + 50 fees
+    // Only the store-funded device ($500) is principal the buyer owes back;
+    // the buyer-funded one contributes its $20 service fee only.
+    expect(host.textContent).toContain('Principal owed (device purchase price)');
+    expect(host.textContent).toContain('$500.00');
+    expect(host.textContent).toContain('Device buyer owes store $550.00'); // 500 principal + 50 fees
+    expect(host.textContent).not.toContain('Store pays device buyer');
     unmount();
   });
 
@@ -51,7 +56,7 @@ describe('SettlementReviewModal', () => {
       setter.call(firstFeeInput, '25');
       firstFeeInput.dispatchEvent(new Event('input', { bubbles: true }));
     });
-    expect(host.textContent).toContain('Store pays device buyer $355.00'); // 300 + (25+30)
+    expect(host.textContent).toContain('Device buyer owes store $555.00'); // 500 principal + (25+30) fees
     unmount();
   });
 
@@ -64,7 +69,7 @@ describe('SettlementReviewModal', () => {
     // Exclude the second device (iPhone 14, store-paid, fee 30).
     act(() => { checkboxes[1].click(); });
     expect(host.textContent).toContain('Excluded — stays unsettled');
-    expect(host.textContent).toContain('Store pays device buyer $320.00'); // 300 + 20, device 2 excluded
+    expect(host.textContent).toContain('Device buyer owes store $20.00'); // only the buyer-funded line's fee remains // 300 + 20, device 2 excluded
 
     const confirmBtn = Array.from(host.querySelectorAll('button')).find(b => b.textContent?.includes('Confirm Settlement')) as HTMLButtonElement;
     act(() => { confirmBtn.click(); });

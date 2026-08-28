@@ -3,13 +3,13 @@ import { X, CheckCircle, FileText, RotateCcw, AlertTriangle } from 'lucide-react
 import { DropOff, DeviceBuyer, SettlementPaymentMethod } from '../types';
 import {
   SettlementReviewLine, initSettlementReview, settlementReviewTotals, buildSettlementFromReview,
-  settlementDirection, settlementDirectionLabel,
+  settlementOwedLabel,
 } from '../domain/dropoffs';
 import { printSettlementInvoice } from '../services/settlementInvoice';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 
 const money = (n: number) => `$${(n || 0).toFixed(2)}`;
-const PAID_BY_LABEL: Record<string, string> = { runner: 'Device buyer paid', store: 'Store paid', personal: 'Personal paid' };
+const PAID_BY_LABEL: Record<string, string> = { runner: 'Buyer-funded', store: 'Store-funded', personal: 'Owner-funded' };
 
 interface Props {
   buyer: DeviceBuyer;
@@ -46,7 +46,6 @@ export const SettlementReviewModal: React.FC<Props> = ({
   const byId = useMemo(() => new Map(dropOffs.map(d => [d.id, d])), [dropOffs]);
   const adjAmount = parseFloat(adjustmentAmount) || 0;
   const totals = settlementReviewTotals(dropOffs, lines, adjAmount);
-  const direction = settlementDirection(totals.netAmount);
 
   const updateFee = (dropOffId: string, fee: number) =>
     setLines(prev => prev.map(l => l.dropOffId === dropOffId ? { ...l, fee } : l));
@@ -75,7 +74,7 @@ export const SettlementReviewModal: React.FC<Props> = ({
         <div className="px-5 py-3 border-b border-slate-100 dark:border-slate-800 flex justify-between items-center sticky top-0 bg-white dark:bg-slate-900 z-10">
           <div>
             <h2 className="font-bold text-slate-800 dark:text-slate-100">Review Settlement — {buyer.name}</h2>
-            <p className="text-xs text-slate-400">Check every line with the device buyer before confirming. Nothing is saved yet.</p>
+            <p className="text-xs text-slate-400">What the buyer owes the store — principal advanced plus the service fee. Check every line with him before confirming; nothing is saved yet.</p>
           </div>
           <button onClick={onClose} aria-label="Close"><X className="w-5 h-5 text-slate-400" /></button>
         </div>
@@ -118,7 +117,7 @@ export const SettlementReviewModal: React.FC<Props> = ({
               <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Settlement-level adjustment ($)</label>
               <input type="number" step="0.01" value={adjustmentAmount} onChange={e => setAdjustmentAmount(e.target.value)}
                 placeholder="0.00" className="w-full p-2 bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-md text-sm" />
-              <p className="text-[11px] text-slate-400 mt-1">Positive adds to what's owed the device buyer; negative deducts. For a one-off correction not tied to a single device.</p>
+              <p className="text-[11px] text-slate-400 mt-1">Positive adds to what the buyer owes the store; negative reduces it. For a one-off correction not tied to a single device.</p>
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Adjustment note</label>
@@ -133,13 +132,22 @@ export const SettlementReviewModal: React.FC<Props> = ({
 
           <div className="space-y-1.5 text-sm border-t border-slate-100 dark:border-slate-800 pt-3">
             <Row label="Devices this settlement" value={String(totals.deviceCount)} raw />
-            <Row label="Purchase cash fronted by device buyer" value={money(totals.cashFronted)} raw />
-            <Row label="Total drop-off fees" value={money(totals.totalFees)} raw />
+            <Row label="Principal owed (device purchase price)" value={money(totals.principalOwed)} raw />
+            {totals.principalPersonalFunded > 0 && (
+              <Row label="…of which owner-funded (repays the owner, not the till)" value={money(totals.principalPersonalFunded)} raw />
+            )}
+            <Row label="Service fees" value={money(totals.feesOwed)} raw />
             {adjAmount !== 0 && <Row label="Settlement adjustment" value={`${adjAmount < 0 ? '-' : '+'}${money(Math.abs(adjAmount))}`} raw />}
             <div className="border-t border-slate-100 dark:border-slate-800 my-1" />
-            <div className={`rounded-lg p-2 text-center font-semibold ${direction === 'buyer_owes_store' ? 'bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400' : 'bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-400'}`}>
-              {settlementDirectionLabel(totals.netAmount, direction)}
+            <div className="rounded-lg p-2 text-center font-semibold bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400">
+              {settlementOwedLabel(totals.totalOwed)}
             </div>
+            {/* Only the store-funded principal + fees are the till's money —
+                owner-funded principal is repaid to the owner personally, so it
+                never becomes store cash (domain/dropoffs.ts). */}
+            {totals.principalPersonalFunded > 0 && (
+              <p className="text-[11px] text-slate-400 text-center">Of that, {money(totals.storeCashIn)} is store cash; {money(totals.principalPersonalFunded)} repays the owner personally.</p>
+            )}
           </div>
         </div>
 

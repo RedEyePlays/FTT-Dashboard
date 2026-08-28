@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
 import {
   Truck, Users, CalendarCheck, Plus, X, Trash2, Phone, User, Package,
-  CheckCircle, XCircle, DollarSign, ArrowRight, Wallet, ClipboardList, FileText,
+  CheckCircle, XCircle, Wallet, ClipboardList, FileText,
 } from 'lucide-react';
-import { DeviceBuyer, DropOff, DropOffStatus, PaidBy, Settlement, SettlementPaymentMethod, InventoryItem } from '../types';
-import { deviceBuyerBalance, settleableDropOffs, settlementTotals, SettlementReviewLine, buildSettlementFromReview } from '../domain/dropoffs';
+import { DeviceBuyer, DropOff, DropOffStatus, PaidBy, Settlement, SettlementPaymentMethod } from '../types';
+import { deviceBuyerOutstanding, settleableDropOffs, settlementTotals, SettlementReviewLine, buildSettlementFromReview, settlementOwedLabel, isLegacySettlement, LEGACY_SETTLEMENT_NOTE } from '../domain/dropoffs';
 import { formatPhoneInput } from '../domain/phone';
 import { printSettlementInvoice } from '../services/settlementInvoice';
 import { getStoreProfile } from './SettingsModal';
@@ -22,14 +22,18 @@ interface Props {
   // Records one completed settlement (writes the record, marks its drop-offs
   // settled, and — for a cash payment only — logs the cash-drawer effect).
   onSettle: (settlement: Settlement) => void;
-  onAddToInventory: (d: DropOff) => void;
 }
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 const today = () => todayISO();
 const money = (n: number) => `$${n.toFixed(2)}`;
 
-const PAID_BY_LABEL: Record<PaidBy, string> = { runner: 'Device buyer paid', store: 'Store paid', personal: 'Personal (owner) paid' };
+// How the purchase was funded. The store never buys the device — it either
+// advances the money (and is owed it back) or it doesn't (see types.ts's
+// PaidBy; 'runner' is the legacy stored value for buyer-funded).
+const PAID_BY_LABEL: Record<PaidBy, string> = {
+  runner: 'Buyer-funded (own money)', store: 'Store-funded (owed back)', personal: 'Owner-funded (owed back)',
+};
 
 const STATUS_META: Record<DropOffStatus, { label: string; cls: string }> = {
   pending:  { label: 'Pending review', cls: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400' },
@@ -40,7 +44,7 @@ const STATUS_META: Record<DropOffStatus, { label: string; cls: string }> = {
 };
 
 export const DropOffView: React.FC<Props> = ({
-  deviceBuyers, dropOffs, settlements, onDeviceBuyersChange, onDropOffsChange, onSettle, onAddToInventory,
+  deviceBuyers, dropOffs, settlements, onDeviceBuyersChange, onDropOffsChange, onSettle,
 }) => {
   const [tab, setTab] = useState<'entries' | 'deviceBuyers' | 'settlement'>('entries');
 
@@ -63,7 +67,7 @@ export const DropOffView: React.FC<Props> = ({
         <h1 className="text-2xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
           <Truck className="w-6 h-6 text-indigo-500" /> Drop-Off / Device Buyers
         </h1>
-        <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Track device buyer drop-offs, balances, and weekly settlements.</p>
+        <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">The store finances the device buyer: it advances the purchase money (or doesn't) and charges a service fee. The buyer keeps the device and owes the store principal + fee at settlement.</p>
       </div>
 
       <div className="flex gap-2 flex-wrap">
@@ -73,7 +77,7 @@ export const DropOffView: React.FC<Props> = ({
       </div>
 
       {tab === 'entries' && (
-        <EntriesTab deviceBuyers={deviceBuyers} dropOffs={dropOffs} onDropOffsChange={onDropOffsChange} onAddToInventory={onAddToInventory} />
+        <EntriesTab deviceBuyers={deviceBuyers} dropOffs={dropOffs} onDropOffsChange={onDropOffsChange} />
       )}
       {tab === 'deviceBuyers' && (
         <DeviceBuyersTab deviceBuyers={deviceBuyers} dropOffs={dropOffs} onDeviceBuyersChange={onDeviceBuyersChange} />
@@ -90,15 +94,13 @@ export const DropOffView: React.FC<Props> = ({
 const EntriesTab: React.FC<{
   deviceBuyers: DeviceBuyer[]; dropOffs: DropOff[];
   onDropOffsChange: (d: DropOff[]) => void;
-  onAddToInventory: (d: DropOff) => void;
-}> = ({ deviceBuyers, dropOffs, onDropOffsChange, onAddToInventory }) => {
+}> = ({ deviceBuyers, dropOffs, onDropOffsChange }) => {
   const [showForm, setShowForm] = useState(false);
   const [filter, setFilter] = useState<DropOffStatus | 'all'>('all');
   // Accept moves real cash (dropOffAcceptDrawerEffect, logged in App.tsx's
-  // saveDropOffs) and Add to Inventory creates a real inventory record —
-  // both are keyed per-row so a double-tap on one drop-off's button can't
-  // double-log the cash or double-create the item, without freezing every
-  // other row's buttons while one is in flight.
+  // saveDropOffs) — keyed per-row so a double-tap on one drop-off's Accept
+  // can't double-log the cash, without freezing every other row's buttons
+  // while one is in flight.
   const { isPending: rowPending, run: runRow } = useKeyedSubmitGuard();
 
   useEscapeKey(() => setShowForm(false), showForm);
@@ -172,7 +174,8 @@ const EntriesTab: React.FC<{
                 <div className="flex gap-4 mt-2 text-xs">
                   <span className="text-slate-500 dark:text-slate-400">Purchase: <b className="text-slate-700 dark:text-slate-200">{money(d.purchasePrice)}</b></span>
                   <span className="text-slate-500 dark:text-slate-400">Paid by: <b className="text-slate-700 dark:text-slate-200">{PAID_BY_LABEL[d.paidBy] || 'Store paid'}</b></span>
-                  <span className="text-slate-500 dark:text-slate-400">Fee: <b className="text-emerald-600">{money(d.dropOffFee)}</b></span>
+                  <span className="text-slate-500 dark:text-slate-400">Service fee: <b className="text-emerald-600">{money(d.dropOffFee)}</b></span>
+                  <span className="text-slate-500 dark:text-slate-400">Buyer owes: <b className="text-indigo-600 dark:text-indigo-400">{money((d.paidBy === 'runner' ? 0 : d.purchasePrice || 0) + (d.dropOffFee || 0))}</b></span>
                 </div>
                 {d.notes && <p className="text-xs text-slate-400 mt-1 italic">{d.notes}</p>}
               </div>
@@ -193,16 +196,16 @@ const EntriesTab: React.FC<{
                   </button>
                 </>
               )}
-              {d.status === 'accepted' && !d.inventoryId && (
-                <button onClick={() => runRow(`add:${d.id}`, () => onAddToInventory(d))}
-                  disabled={rowPending(`add:${d.id}`)}
-                  className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300 hover:bg-emerald-100 disabled:opacity-40">
-                  <ArrowRight className="w-3.5 h-3.5" /> {rowPending(`add:${d.id}`) ? 'Adding…' : 'Add to Inventory'}
-                </button>
-              )}
+              {/* No "Add to Inventory" action: a financed drop-off is the
+                  BUYER's device, not store stock — adding it would pollute
+                  inventory value, COGS and profit. Devices the store genuinely
+                  buys outright go through Quick Purchase instead. Historical
+                  drop-offs that were added to stock under the old model keep
+                  showing their badge; nothing stored was changed. */}
               {d.inventoryId && (
-                <span className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-100 dark:bg-slate-800 text-slate-500">
-                  <Package className="w-3.5 h-3.5" /> In inventory
+                <span className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-100 dark:bg-slate-800 text-slate-500"
+                  title="Added to store stock under the prior model, before drop-offs were understood as financing.">
+                  <Package className="w-3.5 h-3.5" /> In inventory (prior model)
                 </span>
               )}
               {(d.status === 'accepted' || d.status === 'paidout') && (
@@ -257,11 +260,11 @@ const EntriesTab: React.FC<{
                 <input type="number" step="0.01" className={inp} value={form.purchasePrice} onChange={e => set('purchasePrice', parseFloat(e.target.value) || 0)} />
               </div>
               <div>
-                <label className={lbl}>Drop-Off Fee ($)</label>
+                <label className={lbl}>Service Fee ($)</label>
                 <input type="number" step="0.01" className={inp} value={form.dropOffFee} onChange={e => set('dropOffFee', parseFloat(e.target.value) || 0)} />
               </div>
               <div className="col-span-2">
-                <label className={lbl}>Who paid the seller?</label>
+                <label className={lbl}>Who funded the purchase?</label>
                 <div className="flex gap-2">
                   {(['runner', 'store', 'personal'] as PaidBy[]).map(p => (
                     <button key={p} type="button" onClick={() => set('paidBy', p)}
@@ -271,14 +274,17 @@ const EntriesTab: React.FC<{
                   ))}
                 </div>
                 {/* dropOffAcceptDrawerEffect (domain/dropoffs.ts) only logs a
-                    cash-out for paidBy === 'store' — 'runner' and 'personal'
-                    never touch the drawer. Spelled out here so it doesn't
-                    depend on staff already knowing that rule. */}
+                    cash-out for paidBy === 'store' — buyer-funded and
+                    'personal' never touch the drawer. Spelled out here so it
+                    doesn't depend on staff already knowing that rule. */}
                 {form.paidBy === 'store' && form.purchasePrice > 0 && (
-                  <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-1.5">Accepting this drop-off will log a ${form.purchasePrice.toFixed(2)} cash-out against today's drawer.</p>
+                  <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-1.5">Accepting logs a ${form.purchasePrice.toFixed(2)} cash-out today. The buyer owes that back plus the ${form.dropOffFee.toFixed(2)} service fee at settlement.</p>
+                )}
+                {form.paidBy === 'runner' && (
+                  <p className="text-[11px] text-slate-400 mt-1.5">The buyer used his own money for his own device — no drawer movement, and he owes the store the service fee only.</p>
                 )}
                 {form.paidBy === 'personal' && (
-                  <p className="text-[11px] text-slate-400 mt-1.5">Owner paid out of pocket — the purchase price still applies to the item's cost basis, but this never touches the store's cash drawer/float.</p>
+                  <p className="text-[11px] text-slate-400 mt-1.5">Owner paid out of pocket — never touches the store's cash drawer. The buyer still owes the purchase price back (to the owner) plus the service fee (to the store).</p>
                 )}
               </div>
               <div className="col-span-2">
@@ -344,7 +350,7 @@ const DeviceBuyersTab: React.FC<{
       <div className="space-y-3">
         {deviceBuyers.length === 0 && <p className="text-slate-400 text-sm text-center py-8">No deviceBuyers yet.</p>}
         {deviceBuyers.map(r => {
-          const bal = deviceBuyerBalance(r.id, dropOffs);
+          const bal = deviceBuyerOutstanding(r.id, dropOffs);
           return (
             <div key={r.id} className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-4">
               <div className="flex items-start justify-between">
@@ -358,11 +364,18 @@ const DeviceBuyersTab: React.FC<{
                   <button onClick={() => remove(r.id)} className="text-slate-400 hover:text-rose-500 p-1"><Trash2 className="w-4 h-4" /></button>
                 </div>
               </div>
+              {/* The outstanding receivable — real money on the street
+                  between accepting a drop-off and settling it. Principal and
+                  fee stay two separate figures: only the fee is profit. */}
               <div className="grid grid-cols-3 gap-2 mt-3 pt-3 border-t border-slate-100 dark:border-slate-800 text-center">
-                <div><p className="text-[10px] text-slate-400 uppercase">Cash Fronted</p><p className="font-bold text-slate-700 dark:text-slate-200 text-sm">{money(bal.cashFronted)}</p></div>
-                <div><p className="text-[10px] text-slate-400 uppercase">Fees Owed</p><p className="font-bold text-emerald-600 text-sm">{money(bal.feesOwed)}</p></div>
-                <div><p className="text-[10px] text-slate-400 uppercase">Net Owed</p><p className="font-bold text-indigo-600 dark:text-indigo-400 text-sm">{money(bal.net)}</p></div>
+                <div><p className="text-[10px] text-slate-400 uppercase">Principal Outstanding</p><p className="font-bold text-slate-700 dark:text-slate-200 text-sm">{money(bal.principalOwed)}</p></div>
+                <div><p className="text-[10px] text-slate-400 uppercase">Service Fees Outstanding</p><p className="font-bold text-emerald-600 text-sm">{money(bal.feesOwed)}</p></div>
+                <div><p className="text-[10px] text-slate-400 uppercase">Total Owed To Store</p><p className="font-bold text-indigo-600 dark:text-indigo-400 text-sm">{money(bal.totalOwed)}</p></div>
               </div>
+              <p className="text-[10px] text-slate-400 text-center mt-1">
+                {bal.count} unsettled drop-off{bal.count !== 1 ? 's' : ''}
+                {bal.principalPersonalFunded > 0 && ` · ${money(bal.principalPersonalFunded)} of the principal was owner-funded (repays the owner, not the till)`}
+              </p>
             </div>
           );
         })}
@@ -402,7 +415,7 @@ const SettlementTab: React.FC<{
 
   // Settle everything accepted/paid-out & not yet settled/rejected for this device buyer
   const pending = settleableDropOffs(buyerId, dropOffs);
-  const { cashFronted, totalFees, amountToPay } = settlementTotals(pending);
+  const totals = settlementTotals(pending);
 
   const openReview = () => {
     if (pending.length === 0) return;
@@ -461,7 +474,7 @@ const SettlementTab: React.FC<{
             <div key={d.id} className="flex items-center justify-between px-3 py-2 text-sm">
               <div className="min-w-0">
                 <p className="text-slate-700 dark:text-slate-200 truncate">{d.item}</p>
-                <p className="text-[11px] text-slate-400">{PAID_BY_LABEL[d.paidBy] || 'Store paid'} · fee {money(d.dropOffFee)}</p>
+                <p className="text-[11px] text-slate-400">{PAID_BY_LABEL[d.paidBy] || 'Store-funded'} · service fee {money(d.dropOffFee)}</p>
               </div>
               <span className="text-slate-500 dark:text-slate-400">{money(d.purchasePrice)}</span>
             </div>
@@ -470,13 +483,16 @@ const SettlementTab: React.FC<{
 
         <div className="space-y-1.5 text-sm">
           <Row label={`Devices this settlement`} value={`${pending.length}`} raw />
-          <Row label="Purchase cash fronted by device buyer" value={cashFronted} />
-          <Row label="Total drop-off fees" value={totalFees} />
+          <Row label="Principal owed (device purchase price)" value={totals.principalOwed} />
+          <Row label="Service fees" value={totals.feesOwed} />
           <div className="border-t border-slate-100 dark:border-slate-800 my-1" />
           <div className="flex items-center justify-between">
-            <span className="font-semibold text-slate-700 dark:text-slate-200 flex items-center gap-1"><Wallet className="w-4 h-4" /> Total to pay device buyer</span>
-            <span className="text-lg font-bold text-indigo-600 dark:text-indigo-400">{money(amountToPay)}</span>
+            <span className="font-semibold text-slate-700 dark:text-slate-200 flex items-center gap-1"><Wallet className="w-4 h-4" /> Total owed to store</span>
+            <span className="text-lg font-bold text-emerald-600 dark:text-emerald-400">{money(totals.totalOwed)}</span>
           </div>
+          {totals.principalPersonalFunded > 0 && (
+            <p className="text-[11px] text-slate-400">{money(totals.storeCashIn)} of that is store cash; {money(totals.principalPersonalFunded)} repays the owner personally.</p>
+          )}
         </div>
 
         <div>
@@ -490,7 +506,7 @@ const SettlementTab: React.FC<{
             ))}
           </div>
           {paymentMethod === 'cash'
-            ? <p className="text-[11px] text-slate-400 mt-1">Reduces (or adds to) today's expected cash drawer total.</p>
+            ? <p className="text-[11px] text-slate-400 mt-1">Adds {money(totals.storeCashIn)} to today's expected cash drawer total (collected from the buyer).</p>
             : <p className="text-[11px] text-slate-400 mt-1">Does not touch the cash drawer.</p>}
         </div>
 
@@ -512,10 +528,20 @@ const SettlementTab: React.FC<{
             <div key={s.id} className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-4">
               <div className="flex items-center justify-between">
                 <p className="text-sm font-medium text-slate-700 dark:text-slate-200">{s.date}</p>
-                <span className="font-bold text-emerald-600">{money(s.amountPaid)}</span>
+                <span className="font-bold text-emerald-600">{money(isLegacySettlement(s) ? (s.amountPaid || 0) : (s.amountOwed || 0))}</span>
               </div>
+              {/* Pre-rework settlements are displayed exactly as they were
+                  recorded (store paid the buyer) and labelled as such —
+                  nothing stored is reinterpreted. */}
               <p className="text-xs text-slate-400 mt-1">
-                {s.dropOffIds.length} device{s.dropOffIds.length !== 1 ? 's' : ''} · fronted {money(s.totalPurchaseFronted)} · fees {money(s.totalFees)} · {PAYMENT_METHODS.find(m => m.value === (s.paymentMethod || 'cash'))?.label}
+                {s.dropOffIds.length} device{s.dropOffIds.length !== 1 ? 's' : ''}
+                {isLegacySettlement(s)
+                  ? ` · fronted ${money(s.totalPurchaseFronted || 0)} · fees ${money(s.totalFees)}`
+                  : ` · principal ${money(s.principalOwed || 0)} · service fees ${money(s.totalFees)}`}
+                {' · '}{PAYMENT_METHODS.find(m => m.value === (s.paymentMethod || 'cash'))?.label}
+              </p>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                {isLegacySettlement(s) ? LEGACY_SETTLEMENT_NOTE : settlementOwedLabel(s.amountOwed || 0)}
               </p>
               {s.notes && <p className="text-xs text-slate-400 mt-1 italic">{s.notes}</p>}
               {s.adjustmentAmount != null && (
