@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { ShoppingBag, AlertTriangle, CheckCircle, Camera } from 'lucide-react';
-import { InventoryItem } from '../types';
+import { InventoryItem, Customer } from '../types';
 import { findInventoryMatchByIdentifier, normalizeIdentifier } from '../domain/autoInventory';
 import { quickPurchaseImeiError, QuickPurchasePaidBy } from '../domain/quickPurchase';
 import { selectOnFocus } from '../hooks/selectOnFocus';
 import { useSubmitGuard } from '../hooks/useSubmitGuard';
 import { ImeiScanner } from './ImeiScanner';
+import { SellerCustomerField } from './SellerCustomerField';
+import { CustomerDraft } from '../domain/customers';
 
 export interface QuickPurchaseSaveInput {
   device: string;
@@ -13,6 +15,11 @@ export interface QuickPurchaseSaveInput {
   purchaseCost: number;
   paidBy: QuickPurchasePaidBy;
   boughtFrom?: string;
+  // Optional link to the customer record for the person we bought from —
+  // buyers and sellers are the same people. Left undefined for a one-off
+  // seller entered as free text only.
+  boughtFromCustomerId?: string;
+  boughtFromPhone?: string;
   storage?: string;
   color?: string;
   batteryHealth?: string;
@@ -22,6 +29,11 @@ export interface QuickPurchaseSaveInput {
 interface Props {
   inventory: InventoryItem[];
   onSave: (input: QuickPurchaseSaveInput) => void;
+  customers?: Customer[];
+  // Create-and-link a customer without leaving Quick Purchase. Runs the
+  // existing phone/email duplicate detection (domain/customers.ts) rather
+  // than blindly adding a second record.
+  onCreateCustomer?: (draft: CustomerDraft) => Customer | undefined;
 }
 
 const inputCls = 'w-full px-3 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500';
@@ -29,6 +41,7 @@ const labelCls = 'block text-xs font-medium text-slate-500 dark:text-slate-400 m
 
 const emptyForm = () => ({
   device: '', imei: '', purchaseCost: '', paidBy: 'store' as QuickPurchasePaidBy, boughtFrom: '',
+  boughtFromCustomerId: undefined as string | undefined, boughtFromPhone: undefined as string | undefined,
   storage: '', color: '', batteryHealth: '', targetSalePrice: '',
 });
 
@@ -39,7 +52,7 @@ const emptyForm = () => ({
 // the same screen (not a second step) but stay optional — left blank, they
 // behave exactly as on the plain Add Item form (fillable later). The full
 // Add Item form (InventoryView) stays available for complete specs up front.
-export const QuickPurchaseView: React.FC<Props> = ({ inventory, onSave }) => {
+export const QuickPurchaseView: React.FC<Props> = ({ inventory, onSave, customers = [], onCreateCustomer }) => {
   const [f, setF] = useState(emptyForm());
   const [confirmDuplicate, setConfirmDuplicate] = useState(false);
   const [saved, setSaved] = useState<{ device: string; amount: number } | null>(null);
@@ -67,6 +80,8 @@ export const QuickPurchaseView: React.FC<Props> = ({ inventory, onSave }) => {
       onSave({
         device: f.device.trim(), imei: f.imei.trim() || undefined, purchaseCost: cost, paidBy: f.paidBy,
         boughtFrom: f.boughtFrom.trim() || undefined,
+        boughtFromCustomerId: f.boughtFromCustomerId,
+        boughtFromPhone: f.boughtFromPhone,
         storage: f.storage.trim() || undefined, color: f.color.trim() || undefined,
         batteryHealth: f.batteryHealth.trim() || undefined,
         targetSalePrice: parseFloat(f.targetSalePrice) > 0 ? parseFloat(f.targetSalePrice) : undefined,
@@ -161,10 +176,14 @@ export const QuickPurchaseView: React.FC<Props> = ({ inventory, onSave }) => {
             </div>
           </div>
 
-          <div>
-            <label className={labelCls}>Source / Bought From</label>
-            <input className={inputCls} placeholder="Seller name (optional)" value={f.boughtFrom} onChange={e => set({ boughtFrom: e.target.value })} />
-          </div>
+          <SellerCustomerField
+            value={{ boughtFrom: f.boughtFrom, boughtFromCustomerId: f.boughtFromCustomerId, boughtFromPhone: f.boughtFromPhone }}
+            onChange={v => set(v)}
+            customers={customers}
+            onCreateCustomer={onCreateCustomer}
+            inputClassName={inputCls}
+            labelClassName={labelCls}
+          />
         </div>
 
         <button onClick={save} disabled={!canSave || isSubmitting}

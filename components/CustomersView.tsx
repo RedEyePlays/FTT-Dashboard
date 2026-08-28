@@ -3,6 +3,7 @@ import {
   Users, Search, ArrowLeft, Phone, Mail, ShoppingCart, Wrench, DollarSign,
   ChevronRight, Receipt, Pencil, X, Clock, Smartphone, ShieldCheck, AlertTriangle,
   Copy, PlusCircle, Printer, FileText, Merge, Hash, Check, Ban, RotateCcw, Star,
+  Filter, PackagePlus,
 } from 'lucide-react';
 import { Customer, SalesTransaction, Repair, RepairBatch, InventoryItem, AuditEntry, Note, Role } from '../types';
 import { LinkedNotes } from './LinkedNotes';
@@ -64,14 +65,21 @@ const money0 = (n: number) => `$${Math.round(n || 0).toLocaleString()}`;
 const fmtDate = (ms: number) => (ms ? new Date(ms).toLocaleDateString() : '—');
 const PAYMENT_LABEL: Record<string, string> = { cash: 'Cash', card: 'Card', mixed: 'Mixed', etransfer: 'E-Transfer' };
 const TAG_SUGGESTIONS = ['VIP', 'Wholesale', 'Business', 'Student', 'Repeat Customer', 'Walk-In', 'Referral'];
-const FILTERS: { id: CustomerFilter; label: string }[] = [
+const FILTERS: { id: CustomerFilter; label: string; title?: string }[] = [
   { id: 'all', label: 'All' },
   { id: 'active', label: 'Active' },
   { id: 'open_repairs', label: 'Open Repairs' },
   { id: 'vip', label: 'VIP' },
   { id: 'balance', label: 'Outstanding Balance' },
   { id: 'warranty', label: 'Warranty Claims' },
+  // Relationship (see domain/customers.ts's passesFilter). Available to every
+  // role: a relationship isn't money — any purchase figures shown alongside
+  // stay masked by canViewProfit exactly as before.
+  { id: 'bought_from_us', label: 'Bought From Us', title: 'Sales/repairs only — never sold us a device' },
+  { id: 'sold_to_us', label: 'Sold To Us', title: 'Everyone we have bought a device from — your device-source list' },
+  { id: 'both_ways', label: 'Both Ways', title: 'Buys from us and sells to us' },
 ];
+const FILTER_LABEL = (f: CustomerFilter) => FILTERS.find(x => x.id === f)?.label || 'All';
 
 const cardStyle = 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl';
 
@@ -127,12 +135,31 @@ export const CustomersView: React.FC<Props> = (props) => {
       {/* Filters */}
       <div className="flex flex-wrap gap-1.5">
         {FILTERS.map(f => (
-          <button key={f.id} onClick={() => setFilter(f.id)}
+          <button key={f.id} onClick={() => setFilter(f.id)} title={f.title}
             className={`px-3 py-1.5 rounded-lg text-xs font-medium border ${filter === f.id ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:border-indigo-400'}`}>
             {f.label}
           </button>
         ))}
       </div>
+
+      {/* Why the list looks short: filter and search both stated plainly, each
+          clearable on its own so they keep working together. */}
+      {(filter !== 'all' || query.trim()) && (
+        <div className="flex flex-wrap items-center gap-2 text-xs bg-indigo-50 dark:bg-indigo-500/10 border border-indigo-200 dark:border-indigo-500/30 rounded-lg px-3 py-2 text-indigo-800 dark:text-indigo-200">
+          <Filter className="w-3.5 h-3.5 shrink-0" />
+          <span>Showing <strong>{rows.length}</strong> of {customers.length}</span>
+          {filter !== 'all' && (
+            <button onClick={() => setFilter('all')} className="flex items-center gap-1 px-2 py-0.5 rounded bg-white dark:bg-slate-900 border border-indigo-200 dark:border-indigo-500/40 font-medium">
+              {FILTER_LABEL(filter)} <X className="w-3 h-3" />
+            </button>
+          )}
+          {query.trim() && (
+            <button onClick={() => setQuery('')} className="flex items-center gap-1 px-2 py-0.5 rounded bg-white dark:bg-slate-900 border border-indigo-200 dark:border-indigo-500/40 font-medium">
+              “{query.trim()}” <X className="w-3 h-3" />
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Duplicate warning */}
       {duplicates.length > 0 && (
@@ -161,6 +188,7 @@ export const CustomersView: React.FC<Props> = (props) => {
               badge={<>
                 {s.hasOpenRepairs && <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">Open repair</span>}
                 {c.kind === 'wholesale' && <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300">Wholesale</span>}
+                {s.hasSoldToUs && <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">Sold to us ×{s.sellerPurchaseCount}</span>}
               </>}
               actions={<ChevronRight className="w-5 h-5 text-slate-300 shrink-0" />}>
               {c.phone && <CardRow label="Phone"><a href={`tel:${c.phone}`} onClick={e => e.stopPropagation()} className="text-indigo-600 dark:text-indigo-400">{c.phone}</a></CardRow>}
@@ -195,6 +223,7 @@ export const CustomersView: React.FC<Props> = (props) => {
                       {s.hasOpenRepairs && <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">Open repair</span>}
                       {(c.tags || []).slice(0, 2).map(t => <span key={t} className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300">{t}</span>)}
                       {c.kind === 'wholesale' && <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300">Wholesale</span>}
+                      {s.hasSoldToUs && <span title={`Sold us ${s.sellerPurchaseCount} device${s.sellerPurchaseCount === 1 ? '' : 's'}`} className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">Sold to us ×{s.sellerPurchaseCount}</span>}
                     </div>
                   </td>
                   <td className="px-4 py-2.5 text-slate-500 dark:text-slate-400 text-xs">{[c.phone, c.email].filter(Boolean).join(' · ') || '—'}</td>
@@ -223,7 +252,7 @@ const CustomerProfile: React.FC<Props & { customer: Customer; data: CustomerData
   const s = useMemo(() => customerStats(customer, data), [customer, data]);
   const timeline = useMemo(() => customerTimeline(s), [s]);
   const devices = useMemo(() => customerDevices(s, inventory), [s, inventory]);
-  const [tab, setTab] = useState<'overview' | 'purchases' | 'repairs' | 'devices' | 'activity'>('overview');
+  const [tab, setTab] = useState<'overview' | 'purchases' | 'sold' | 'repairs' | 'devices' | 'activity'>('overview');
   const [editing, setEditing] = useState(false);
   const [invoice, setInvoice] = useState<SalesTransaction | null>(null);
   const [collectingBalance, setCollectingBalance] = useState<SalesTransaction | null>(null);
@@ -302,9 +331,10 @@ const CustomerProfile: React.FC<Props & { customer: Customer; data: CustomerData
       </div>
 
       {/* Summary cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3">
         <Stat label="Lifetime Spend" value={mask(money0(s.lifetimeSpent))} />
         <Stat label="Total Purchases" value={String(s.purchaseCount)} />
+        <Stat label="Sold To Us" value={String(s.sellerPurchaseCount)} accent={s.sellerPurchaseCount ? 'text-amber-600 dark:text-amber-400' : undefined} />
         <Stat label="Total Repairs" value={String(s.repairCount)} />
         <Stat label="Active Repairs" value={String(s.activeRepairs)} accent={s.activeRepairs ? 'text-blue-600 dark:text-blue-400' : undefined} />
         <Stat label="Active Warranties" value={String(s.activeWarranties)} />
@@ -331,8 +361,11 @@ const CustomerProfile: React.FC<Props & { customer: Customer; data: CustomerData
 
       {/* Tabs */}
       <div className="flex gap-1 border-b border-slate-200 dark:border-slate-800">
-        {(['overview', 'purchases', 'repairs', 'devices', 'activity'] as const).map(t => (
-          <button key={t} onClick={() => setTab(t)} className={`px-4 py-2 text-sm font-medium capitalize border-b-2 -mb-px ${tab === t ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400' : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-700'}`}>{t}</button>
+        {([
+          ['overview', 'Overview'], ['purchases', 'Purchases'], ['sold', `Sold To Us${s.sellerPurchaseCount ? ` (${s.sellerPurchaseCount})` : ''}`],
+          ['repairs', 'Repairs'], ['devices', 'Devices'], ['activity', 'Activity'],
+        ] as const).map(([t, label]) => (
+          <button key={t} onClick={() => setTab(t)} className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px whitespace-nowrap ${tab === t ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400' : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-700'}`}>{label}</button>
         ))}
       </div>
 
@@ -354,6 +387,8 @@ const CustomerProfile: React.FC<Props & { customer: Customer; data: CustomerData
             <Row label="Avg purchase" value={mask(money(s.avgPurchase))} />
             <Row label="Avg repair" value={money(s.avgRepair)} />
             <Row label="Outstanding balance" value={money(s.outstandingBalance)} />
+            {/* Cost data — masked by the same canViewProfit gate as the rest. */}
+            <Row label="Paid to them (devices bought)" value={mask(money(s.sellerPurchaseTotal))} />
           </Panel>
           <Panel title="Internal notes" className="md:col-span-2">
             {customer.notes ? <p className="text-sm text-slate-600 dark:text-slate-300 whitespace-pre-wrap">{customer.notes}</p> : <Empty text="No notes. Use Edit to add internal notes." />}
@@ -398,6 +433,39 @@ const CustomerProfile: React.FC<Props & { customer: Customer; data: CustomerData
         </Panel>
       )}
 
+      {/* Devices we bought FROM them — the payoff of linking "Bought From" to
+          a customer. Amounts are cost data: masked behind canViewProfit, the
+          same gate the inventory cost columns and the rest of this view use. */}
+      {tab === 'sold' && (
+        <Panel title={`Sold To Us (${s.sellerPurchaseCount})`}>
+          {s.sellerPurchases.length === 0 ? <Empty text="No devices bought from this person yet." /> : (
+            <div className="overflow-x-auto"><table className="w-full text-sm">
+              <thead className="text-[10px] uppercase tracking-wider text-slate-400"><tr><th className="text-left py-2">Date</th><th className="text-left py-2">Device</th><th className="text-left py-2">IMEI / Serial</th><th className="text-left py-2">SKU</th><th className="text-left py-2">Status</th><th className="text-right py-2">We Paid</th></tr></thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                {s.sellerPurchases.map(i => (
+                  <tr key={i.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                    <td className="py-2 text-slate-600 dark:text-slate-300">{i.date || '—'}</td>
+                    <td className="py-2 text-slate-800 dark:text-slate-100">
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">Sold to us</span>
+                        {i.item || [i.brand, i.model].filter(Boolean).join(' ') || 'Device'}
+                      </span>
+                    </td>
+                    <td className="py-2 font-mono text-xs text-slate-400">{i.imei || '—'}</td>
+                    <td className="py-2 font-mono text-xs text-slate-400">{i.sku || '—'}</td>
+                    <td className="py-2 text-xs text-slate-500 dark:text-slate-400">{i.deviceStatus || '—'}</td>
+                    <td className="py-2 text-right font-medium text-slate-800 dark:text-slate-100">{mask(money(i.purchaseCost))}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table></div>
+          )}
+          {s.sellerPurchases.length > 0 && (
+            <p className="mt-3 text-xs text-slate-400">Total paid to this seller: <span className="font-semibold text-slate-600 dark:text-slate-300">{mask(money(s.sellerPurchaseTotal))}</span></p>
+          )}
+        </Panel>
+      )}
+
       {tab === 'repairs' && (
         <Panel title={`Repair History (${s.repairCount})`}>
           {s.repairs.length === 0 ? <Empty text="No repairs yet." /> : (
@@ -436,7 +504,7 @@ const CustomerProfile: React.FC<Props & { customer: Customer; data: CustomerData
                   <ul className="mt-2 space-y-1 pl-6">
                     {d.events.map((e, i) => (
                       <li key={i} className="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-2">
-                        <span className={`w-1.5 h-1.5 rounded-full ${e.kind === 'purchase' ? 'bg-emerald-500' : 'bg-indigo-500'}`} />
+                        <span className={`w-1.5 h-1.5 rounded-full ${e.kind === 'purchase' ? 'bg-emerald-500' : e.kind === 'sold_to_us' ? 'bg-amber-500' : 'bg-indigo-500'}`} />
                         {e.label} <span className="text-slate-300 dark:text-slate-600">· {fmtDate(e.ts)}</span>
                       </li>
                     ))}
@@ -454,13 +522,19 @@ const CustomerProfile: React.FC<Props & { customer: Customer; data: CustomerData
             <ul className="space-y-3">
               {timeline.map((e, i) => (
                 <li key={i} className="flex items-start gap-3">
-                  <div className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 ${e.kind === 'purchase' ? 'bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400' : 'bg-indigo-100 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-400'}`}>
-                    {e.kind === 'purchase' ? <ShoppingCart className="w-3.5 h-3.5" /> : <Wrench className="w-3.5 h-3.5" />}
+                  {/* Direction is colour + icon + wording, so a timeline that
+                      mixes "bought from us" and "sold to us" never reads
+                      ambiguously: emerald cart = they bought, amber inbound
+                      package = we bought from them. */}
+                  <div className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 ${e.kind === 'purchase' ? 'bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400' : e.kind === 'sold_to_us' ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400' : 'bg-indigo-100 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-400'}`}>
+                    {e.kind === 'purchase' ? <ShoppingCart className="w-3.5 h-3.5" /> : e.kind === 'sold_to_us' ? <PackagePlus className="w-3.5 h-3.5" /> : <Wrench className="w-3.5 h-3.5" />}
                   </div>
                   <div className="min-w-0 flex-1">
                     {e.kind === 'purchase'
-                      ? <p className="text-sm text-slate-700 dark:text-slate-200">Purchase · {mask(money(e.tx.totalPaid))} <span className="text-slate-400">({e.tx.lines.length} item{e.tx.lines.length !== 1 ? 's' : ''})</span></p>
-                      : <p className="text-sm text-slate-700 dark:text-slate-200">Repair {e.repair.repairNumber} · {[e.repair.brand, e.repair.model].filter(Boolean).join(' ') || e.repair.deviceType} <span className="text-slate-400">({REPAIR_STATUS_LABEL[e.repair.status]})</span></p>}
+                      ? <p className="text-sm text-slate-700 dark:text-slate-200"><span className="font-medium text-emerald-700 dark:text-emerald-400">Bought from us</span> · {mask(money(e.tx.totalPaid))} <span className="text-slate-400">({e.tx.lines.length} item{e.tx.lines.length !== 1 ? 's' : ''})</span></p>
+                      : e.kind === 'sold_to_us'
+                        ? <p className="text-sm text-slate-700 dark:text-slate-200"><span className="font-medium text-amber-700 dark:text-amber-400">Sold to us</span> · {e.item.item || 'Device'}{e.item.imei ? <span className="font-mono text-xs text-slate-400"> · {e.item.imei}</span> : null} <span className="text-slate-400">(we paid {mask(money(e.item.purchaseCost))})</span></p>
+                        : <p className="text-sm text-slate-700 dark:text-slate-200">Repair {e.repair.repairNumber} · {[e.repair.brand, e.repair.model].filter(Boolean).join(' ') || e.repair.deviceType} <span className="text-slate-400">({REPAIR_STATUS_LABEL[e.repair.status]})</span></p>}
                     <p className="text-xs text-slate-400 flex items-center gap-1"><Clock className="w-3 h-3" />{fmtDate(e.ts)}</p>
                   </div>
                 </li>

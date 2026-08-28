@@ -38,6 +38,28 @@ describe('buildQuickPurchaseItem', () => {
     expect(item.imeiNormalized).toBe('SN-001');
   });
 
+  it('stores the seller customer link (and phone snapshot) alongside the free text', () => {
+    const item = buildQuickPurchaseItem(
+      { device: 'iPhone 14', purchaseCost: 400, paidBy: 'store', boughtFrom: 'Jane Seller', boughtFromCustomerId: 'c1', boughtFromPhone: ' 555-0100 ' },
+      { id: 'i9', sku: 'PHN-9' },
+      '2026-08-25',
+    );
+    expect(item.boughtFrom).toBe('Jane Seller');
+    expect(item.boughtFromCustomerId).toBe('c1');
+    expect(item.boughtFromPhone).toBe('555-0100'); // seller detail retained on the purchase record itself
+  });
+
+  it('leaves the link undefined for a free-text-only (one-off) seller', () => {
+    const item = buildQuickPurchaseItem(
+      { device: 'iPhone 14', purchaseCost: 400, paidBy: 'store', boughtFrom: 'Guy at the mall' },
+      { id: 'i10', sku: 'PHN-10' },
+      '2026-08-25',
+    );
+    expect(item.boughtFrom).toBe('Guy at the mall');
+    expect(item.boughtFromCustomerId).toBeUndefined();
+    expect(item.boughtFromPhone).toBeUndefined();
+  });
+
   it('leaves imeiNormalized undefined when no IMEI/serial was entered', () => {
     const item = buildQuickPurchaseItem(
       { device: 'Unknown phone', purchaseCost: 50, paidBy: 'personal' },
