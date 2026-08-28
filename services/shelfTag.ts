@@ -71,13 +71,14 @@ export const TAG_STYLE = `
   .tag-page-inner { position: relative; width: 100%; height: 100%; }
   .tag-body {
     width: 100%; height: 100%;
-    /* Vertical padding trimmed from 2.5mm/0.5mm to 2mm/0.5mm to reclaim
-       0.5mm — see the flex-shrink note below for why every bit of budget
-       here matters. Still asymmetric (more on top than bottom), keeping the
-       "nudge the stack down slightly" intent from a prior change. The RIGHT
-       padding reserves room for the 20mm QR (see .tag-qr below) so centered
-       text can't run underneath its top-right corner. */
-    padding: 2mm 22mm 0.5mm 2mm;
+    /* Top/bottom padding shifted by +0.4mm/-0.4mm (2mm/0.5mm → 2.4mm/0.1mm)
+       to nudge the whole text stack down a bit further, per a direct "push
+       the text down a bit" request — total vertical padding (2.5mm) is
+       unchanged, so this is a pure position shift, not a size change; the
+       content-fits-the-label margin proven in shelfTag.test.ts is untouched.
+       The RIGHT padding reserves room for the 20mm QR (see .tag-qr below) so
+       centered text can't run underneath its top-right corner. */
+    padding: 2.4mm 22mm 0.1mm 2mm;
     display: flex; flex-direction: column; justify-content: center; align-items: center;
     font-family: 'Inter', system-ui, Arial, sans-serif; color: #000; overflow: hidden;
   }
@@ -98,7 +99,7 @@ export const TAG_STYLE = `
      into "cleanly cropped," not actually fix the fit. */
   .store { flex-shrink: 0; font-size: 3.3mm; font-weight: 700; letter-spacing: 0.3mm; text-transform: uppercase; color: #222; line-height: 1; }
   .name { flex-shrink: 0; font-size: 5.6mm; font-weight: 800; line-height: 1.1; margin-top: 0.8mm; text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .specs { flex-shrink: 0; font-size: 3.9mm; font-weight: 700; color: #333; margin-top: 0.6mm; text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .specs { flex-shrink: 0; font-size: 3.9mm; font-weight: 800; color: #333; margin-top: 0.6mm; text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* No top/bottom rule around the price anymore — removed at the owner's
      request; the size + weight alone are enough to make it read as the
      standout line. */

@@ -12,7 +12,7 @@ const dev = (p: Partial<InventoryItem>): InventoryItem => ({
 
 describe('shelf tag styling — bold numbers, price no longer needs to be oversized', () => {
   it('the numeric lines (specs and SKU) are bold', () => {
-    expect(TAG_STYLE).toMatch(/\.specs\s*\{[^}]*font-weight:\s*700/);
+    expect(TAG_STYLE).toMatch(/\.specs\s*\{[^}]*font-weight:\s*[78]00/);
     expect(TAG_STYLE).toMatch(/\.sku\s*\{[^}]*font-weight:\s*700/);
   });
 
@@ -127,6 +127,23 @@ describe('shelf tag — bigger QR, all-bold text, pushed-down content, and large
     const html = tagBody(dev({}), 'FlipThatTech');
     expect(html).toContain('$699.00');
     expect(html).toContain('FTT-0000029');
+  });
+});
+
+describe('shelf tag — pushed text down a bit further, storage line extra-bold', () => {
+  it('the storage/color/battery (.specs) line is even bolder than before (700 → 800)', () => {
+    const rule = TAG_STYLE.match(/\.specs\s*\{[^}]*\}/)?.[0] || '';
+    const weight = parseInt(rule.match(/font-weight:\s*(\d+)/)![1], 10);
+    expect(weight).toBeGreaterThanOrEqual(800);
+  });
+
+  it('the text stack was pushed down further — top padding grew, bottom shrank, same total', () => {
+    const rule = TAG_STYLE.match(/\.tag-body\s*\{[\s\S]*?\n\s*\}/)?.[0] || '';
+    const padMatch = rule.match(/padding:\s*([\d.]+)mm\s+[\d.]+mm\s+([\d.]+)mm\s+[\d.]+mm/);
+    const [, top, bottom] = padMatch!.map(Number);
+    expect(top).toBeGreaterThan(2); // grew from the prior pass's 2mm
+    expect(bottom).toBeLessThan(0.5); // shrank from the prior pass's 0.5mm
+    expect(top + bottom).toBeCloseTo(2.5, 1); // same total — pure position shift
   });
 });
 
