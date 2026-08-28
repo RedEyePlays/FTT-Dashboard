@@ -548,7 +548,7 @@ function dropOffLabelBody(u: U, m: LabelMedia, c: DropOffLabelContent, qr: strin
         ${qr ? `<img src="${qr}" style="width:${u(qrS)};height:${u(qrS)};flex-shrink:0;align-self:flex-start;image-rendering:pixelated;" />` : ''}
       </div>
       <div style="flex-shrink:0;font-weight:800;font-size:${u(f.fMoney)};line-height:1.1;${noClip}border-top:${u(0.3)} solid #000;padding-top:${u(0.6)};">${esc(c.moneyLine)}</div>
-      <div style="flex-shrink:0;font-size:${u(f.fMeta)};font-weight:600;line-height:1.1;${noClip}">${esc(c.fundingLabel)} · Dropped ${esc(c.dateDropped)} · Ref ${esc(c.ref)}</div>
+      <div style="flex-shrink:0;font-size:${u(f.fMeta)};font-weight:600;line-height:1.1;${noClip}">Dropped ${esc(c.dateDropped)} · Ref ${esc(c.ref)}</div>
     </div>`;
 }
 

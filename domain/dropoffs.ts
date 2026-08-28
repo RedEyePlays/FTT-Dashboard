@@ -76,18 +76,15 @@ export interface DropOffLabelMoney {
 /**
  * The per-device money statement for a printed drop-off label.
  *
- * Every case names its funding source explicitly rather than printing a bare
- * total, because the three read completely differently to whoever picks the
- * device up:
- *  • store-funded  — the store advanced the cash; principal AND fee are owed.
- *  • buyer-funded  — the buyer's own money; ONLY the fee is owed, and the
- *    line must not imply the store paid anything.
- *  • personal-funded — the OWNER advanced his own cash. Treated exactly as
- *    the rest of the app treats it (types.ts's PaidBy, settlementReviewTotals'
- *    documented judgment call, settlementInvoice.ts's "of which owner-funded
- *    out of pocket" line): the buyer owes principal + fee just like a
- *    store-funded device, and the label says the OWNER paid — it never claims
- *    the store's till advanced money it never advanced.
+ * Deliberately just the number the buyer owes — no funding-source wording
+ * (no "Store paid"/"Buyer funded"/"Owner paid"), per the owner's explicit
+ * request that the label state the bottom line only. A buyer-funded device
+ * (no principal owed) prints as a bare fee, e.g. "$30.00"; a device with a
+ * principal owed prints as principal+fee with a single leading $ and no
+ * second $, e.g. "$250.00+20.00" — never broken down into separate labeled
+ * figures. `fundingLabel`/`principalOwed`/`feeOwed`/`totalOwed` are still
+ * returned for callers that need the breakdown elsewhere (the drop-off
+ * screen, tests) — only the printed `moneyLine` was simplified.
  */
 export function dropOffLabelMoney(
   d: Pick<DropOff, 'paidBy' | 'purchasePrice' | 'dropOffFee'>,
@@ -96,9 +93,9 @@ export function dropOffLabelMoney(
   const fee = round2(d.dropOffFee || 0);
   const principal = funder === 'buyer' ? 0 : round2(d.purchasePrice || 0);
   const total = round2(principal + fee);
-  const moneyLine = funder === 'buyer'
-    ? `Buyer funded · Fee ${money2(fee)} owed`
-    : `${funder === 'store' ? 'Store paid' : 'Owner paid (out of pocket)'} ${money2(principal)} · Fee ${money2(fee)} · Owed ${money2(total)}`;
+  const moneyLine = principal > 0
+    ? `$${principal.toFixed(2)}+${fee.toFixed(2)}`
+    : money2(fee);
   return {
     fundingLabel: PAID_BY_LABEL[d.paidBy] || PAID_BY_LABEL.store,
     moneyLine, principalOwed: principal, feeOwed: fee, totalOwed: total,
