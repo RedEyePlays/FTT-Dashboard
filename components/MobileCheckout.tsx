@@ -209,7 +209,15 @@ export const MobileCheckout: React.FC<Props> = (props) => {
             )}
           </div>
           {cx.scanMsg && <p className="text-xs text-rose-500">{cx.scanMsg}</p>}
-          <button onClick={() => cx.handleScan(cx.scan)} className="w-full flex items-center justify-center gap-2 py-3.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-base font-semibold"><ScanLine className="w-5 h-5" /> Scan / Add</button>
+          {/* A phone has no wedge-scanner gun, so the field is normally empty
+              here — handleScan('') is a silent no-op (see useCheckout.ts),
+              which read as "the button does nothing" / "doesn't open the
+              camera" (it never did; that was only the small camera icon
+              inside the input above). This is the main, thumb-sized CTA on
+              this screen, so it now does what tapping it obviously implies:
+              with something typed/wedge-scanned into the field, add that;
+              otherwise open the camera directly, same as the icon button. */}
+          <button onClick={() => { if (cx.scan.trim()) cx.handleScan(cx.scan); else setShowCamera(true); }} className="w-full flex items-center justify-center gap-2 py-3.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-base font-semibold"><ScanLine className="w-5 h-5" /> Scan / Add</button>
           <div className="grid grid-cols-3 gap-2">
             <button onClick={() => { cx.setSearch(''); setPick('device'); }} className="flex flex-col items-center gap-1 py-3 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-medium text-slate-700 dark:text-slate-200"><Smartphone className="w-5 h-5 text-indigo-500" /> Device</button>
             <button onClick={() => { cx.setSearch(''); setPick('accessory'); }} className="flex flex-col items-center gap-1 py-3 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-medium text-slate-700 dark:text-slate-200"><Package className="w-5 h-5 text-violet-500" /> Accessory</button>
