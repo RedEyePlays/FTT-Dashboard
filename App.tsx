@@ -47,7 +47,8 @@ import { auth } from './services/firebase';
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, reauthenticateWithCredential, EmailAuthProvider } from 'firebase/auth';
 import { LockScreen } from './components/LockScreen';
 import { useInactivityTimer } from './hooks/useInactivityTimer';
-import { hashPin, verifyPin, canAssignPin, isValidPinFormat } from './domain/pin';
+import { useAppLock } from './hooks/useAppLock';
+import { hashPin, verifyPin, canAssignPin, isValidPinFormat, autoLockAppliesToRole } from './domain/pin';
 import {
   saveMeta, saveItem, deleteItem, syncArray, allocateSku,
   logActivityDoc, commitSale, voidSale, returnSale, collectLayawayBalance, saveCashReconciliation, seedSampleData,
@@ -225,29 +226,25 @@ const App: React.FC = () => {
   // --- AUTO-LOCK (inactivity) ------------------------------------------------
   // A lock OVERLAY, not a sign-out: the authenticated session stays intact, the
   // rest of the app just isn't rendered while `appLocked` is true (see the
-  // early return near the bottom). Persisted to sessionStorage so a refresh (or
-  // the browser back button, which only changes in-app view state) can't drop
-  // back into the app without re-entering the PIN/password — the locked flag is
-  // read back out BEFORE the first paint via the lazy useState initializer.
-  const APP_LOCK_KEY = 'bizTrackAppLocked';
-  const [appLocked, setAppLocked] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return false;
-    try { return sessionStorage.getItem(APP_LOCK_KEY) === '1'; } catch { return false; }
-  });
-  useEffect(() => {
-    try {
-      if (appLocked) sessionStorage.setItem(APP_LOCK_KEY, '1');
-      else sessionStorage.removeItem(APP_LOCK_KEY);
-    } catch { /* storage unavailable (e.g. private mode) — lock still works in-memory */ }
-  }, [appLocked]);
-  // A signed-out session should never resurrect a stale lock on the next login.
-  useEffect(() => { if (!user) setAppLocked(false); }, [user]);
+  // early return near the bottom). See useAppLock.ts for the sessionStorage
+  // persistence and the "only a genuine sign-out clears it" rule.
+  const [appLocked, setAppLocked] = useAppLock(user, isLoadingAuth);
 
+  // Auto-lock (inactivity timeout) is owner/manager only — those are the
+  // roles with access to sensitive screens (profit, settings, users). An
+  // employee/technician working the counter is never auto-locked; they can
+  // still lock manually at any time via handleManualLock below.
   useInactivityTimer(
     settings.operations.autoLockMinutes,
-    !!appUser && !appLocked,
+    autoLockAppliesToRole(appUser?.role) && !appLocked,
     () => setAppLocked(true),
   );
+
+  // Manual lock, available to every role (unlike the inactivity timer above)
+  // — stepping away from the counter is a legitimate reason to lock for
+  // anyone, not just owner/manager. This only sets the overlay flag; unlike
+  // handleLock it never signs out, so the session/cart/etc. are untouched.
+  const handleManualLock = () => setAppLocked(true);
 
   // Re-entrancy guard for payroll approve/mark-paid — keyed by action+user+
   // period so a double-click on one employee's row can't double-record,
@@ -1909,6 +1906,7 @@ const App: React.FC = () => {
           onOpenBulk={() => {}}
           onStartAdd={() => {}}
           onLock={handleLock}
+          onManualLock={handleManualLock}
         />
         <main className="mx-auto px-4 sm:px-6 lg:px-8 py-8 flex-1 w-full max-w-6xl">
           <ErrorBoundary variant="route" label="Repairs">
@@ -1944,6 +1942,7 @@ const App: React.FC = () => {
         onOpenBulk={() => setShowBulkModal(true)}
         onStartAdd={handleStartAdd}
         onLock={handleLock}
+        onManualLock={handleManualLock}
         activity={activityLog}
         alerts={alerts}
         notifSeenTs={appUser.notifSeenTs ?? 0}
@@ -1966,6 +1965,7 @@ const App: React.FC = () => {
         onOpenSettings={() => navigate('settings')}
         onOpenBulk={() => setShowBulkModal(true)}
         onLock={handleLock}
+        onManualLock={handleManualLock}
         showNotes={canSeeAnyNote}
       />
 
