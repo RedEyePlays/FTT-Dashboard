@@ -136,7 +136,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, currentDa
             }
 
             // Preserve every collection (inventory, accessories, sales history,
-            // customers, runners, drop-offs, settlements, notes, tasks).
+            // customers, device buyers, drop-offs, settlements, notes, tasks).
             const restoredData: AppData = normalizeRestore(parsed);
             setRestoreError(null);
             // Opens RestoreConfirmModal — nothing destructive happens from

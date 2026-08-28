@@ -2,7 +2,7 @@ import { useCallback, useRef, useState } from 'react';
 
 // Re-entrancy guard for write-once UI actions whose write handlers are
 // fire-and-forget (Quick Purchase save, drop-off Accept / Add to Inventory,
-// runner settlement — see App.tsx: none of these return a promise the caller
+// device buyer settlement — see App.tsx: none of these return a promise the caller
 // awaits, they kick off a Firestore write and the real confirmation is the
 // next live-data snapshot, which can take a real amount of time to land).
 // That means the local state/props a button's `disabled` normally depends on

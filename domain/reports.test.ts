@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { SalesTransaction, InventoryItem, PayPeriodPaid, CashReconciliation, Settlement, Runner, Expense } from '../types';
+import { SalesTransaction, InventoryItem, PayPeriodPaid, CashReconciliation, Settlement, DeviceBuyer, Expense } from '../types';
 import {
   cashCollectedOnTx, expectedCashForDate, reconcileCash,
   expectedEndingCash, sumDrawerEntries, cashDrawerSummary, openDrawerPatch,
@@ -24,9 +24,9 @@ const recon = (p: Partial<CashReconciliation>): CashReconciliation => ({
   id: 'r', date: '2026-07-10', expectedCash: 0, countedCash: 0, variance: 0, recordedBy: 'o', recordedAt: 0, ...p,
 });
 const settle = (p: Partial<Settlement>): Settlement => ({
-  id: 's', runnerId: 'r1', date: '2026-07-05', dropOffIds: [], totalPurchaseFronted: 0, totalFees: 0, amountPaid: 0, notes: '', ...p,
+  id: 's', buyerId: 'r1', date: '2026-07-05', dropOffIds: [], totalPurchaseFronted: 0, totalFees: 0, amountPaid: 0, notes: '', ...p,
 });
-const runner = (p: Partial<Runner>): Runner => ({ id: 'r1', name: 'Alex', phone: '', notes: '', ...p });
+const buyer = (p: Partial<DeviceBuyer>): DeviceBuyer => ({ id: 'r1', name: 'Alex', phone: '', notes: '', ...p });
 const expense = (p: Partial<Expense>): Expense => ({
   id: 'e', date: '2026-07-10', amount: 0, category: 'other', paymentMethod: 'cash',
   enteredBy: 'o', enteredByEmail: 'o@shop.test', createdAt: 0, ...p,
@@ -243,7 +243,7 @@ describe('profitAndLoss', () => {
     expenses: [], expenseCategories: DEFAULT_EXPENSE_CATEGORIES,
   };
 
-  it('builds a P&L: revenue − COGS − payroll − expenses − runner commissions', () => {
+  it('builds a P&L: revenue − COGS − payroll − expenses − device buyer fees paid', () => {
     const input: ProfitLossInput = {
       ...base,
       transactions: [
@@ -271,8 +271,83 @@ describe('profitAndLoss', () => {
     expect(pl.grossProfit).toBe(730);
     expect(pl.payroll).toBe(600);          // only the in-range paid period
     expect(pl.expenses).toBe(50);          // 40 + 10 — Wages excluded, not double-subtracted against payroll
-    expect(pl.runnerCommissions).toBe(30); // fees only, not amountPaid (avoids double-counting COGS)
-    expect(pl.netProfit).toBe(50);         // 730 − 600 − 50 − 30
+    // amountPaid > 0 → the store paid the buyer, so the fee is an EXPENSE.
+    expect(pl.deviceBuyerFeesPaid).toBe(30);   // fees only, not amountPaid (avoids double-counting COGS)
+    expect(pl.deviceBuyerFeesCollected).toBe(0);
+    expect(pl.netProfit).toBe(50);             // 730 − 600 − 50 − 30
+  });
+
+  // --- Fee direction: the fee is NOT always a commission the store pays out ---
+  // In this shop the device buyer frequently owes the STORE the drop-off fee,
+  // which makes it income. Both directions must work; see
+  // domain/dropoffs.ts's settlementFeeDirection.
+
+  it('a settlement where the buyer OWES the store INCREASES net profit by the fee', () => {
+    const input: ProfitLossInput = {
+      ...base,
+      settlements: [settle({ date: '2026-07-05', totalFees: 30, totalPurchaseFronted: 0, amountPaid: -30, feeDirection: 'buyer_owes_store' })],
+    };
+    const pl = profitAndLoss(input, '2026-07-01', '2026-07-31');
+    expect(pl.deviceBuyerFeesCollected).toBe(30);
+    expect(pl.deviceBuyerFeesPaid).toBe(0);
+    expect(pl.netProfit).toBe(30); // ADDED, not subtracted
+  });
+
+  it('a settlement where the store PAYS the buyer still DECREASES net profit by the fee', () => {
+    const input: ProfitLossInput = {
+      ...base,
+      settlements: [settle({ date: '2026-07-05', totalFees: 30, totalPurchaseFronted: 200, amountPaid: 230, feeDirection: 'store_pays_buyer' })],
+    };
+    const pl = profitAndLoss(input, '2026-07-01', '2026-07-31');
+    expect(pl.deviceBuyerFeesCollected).toBe(0);
+    expect(pl.deviceBuyerFeesPaid).toBe(30);
+    expect(pl.netProfit).toBe(-30);
+  });
+
+  it('both directions in one range net out against each other', () => {
+    const input: ProfitLossInput = {
+      ...base,
+      settlements: [
+        settle({ id: 'owes', date: '2026-07-05', totalFees: 50, amountPaid: -50, feeDirection: 'buyer_owes_store' }),
+        settle({ id: 'paid', date: '2026-07-06', totalFees: 20, amountPaid: 20, feeDirection: 'store_pays_buyer' }),
+      ],
+    };
+    const pl = profitAndLoss(input, '2026-07-01', '2026-07-31');
+    expect(pl.deviceBuyerFeesCollected).toBe(50);
+    expect(pl.deviceBuyerFeesPaid).toBe(20);
+    expect(pl.netProfit).toBe(30); // +50 − 20
+  });
+
+  it('LEGACY settlements with no feeDirection resolve purely from the sign of amountPaid — no migration', () => {
+    // Negative amountPaid = the buyer owed the store → income.
+    const legacyOwes = profitAndLoss(
+      { ...base, settlements: [settle({ date: '2026-07-05', totalFees: 30, amountPaid: -30 })] },
+      '2026-07-01', '2026-07-31');
+    expect(legacyOwes.deviceBuyerFeesCollected).toBe(30);
+    expect(legacyOwes.deviceBuyerFeesPaid).toBe(0);
+    expect(legacyOwes.netProfit).toBe(30);
+
+    // Positive amountPaid = the store paid the buyer → expense.
+    const legacyPaid = profitAndLoss(
+      { ...base, settlements: [settle({ date: '2026-07-05', totalFees: 30, totalPurchaseFronted: 200, amountPaid: 230 })] },
+      '2026-07-01', '2026-07-31');
+    expect(legacyPaid.deviceBuyerFeesCollected).toBe(0);
+    expect(legacyPaid.deviceBuyerFeesPaid).toBe(30);
+    expect(legacyPaid.netProfit).toBe(-30);
+  });
+
+  it('the CSV export shows fees collected and fees paid as two separate signed rows', () => {
+    const pl = profitAndLoss({
+      ...base,
+      settlements: [
+        settle({ id: 'owes', date: '2026-07-05', totalFees: 50, amountPaid: -50 }),
+        settle({ id: 'paid', date: '2026-07-06', totalFees: 20, amountPaid: 20 }),
+      ],
+    }, '2026-07-01', '2026-07-31');
+    const rows = profitLossCsvRows(pl);
+    expect(rows).toContainEqual({ Line: 'Device buyer fees collected', Amount: '50.00' });
+    expect(rows).toContainEqual({ Line: 'Device buyer fees paid', Amount: '-20.00' });
+    expect(rows.some(r => String(r.Line).toLowerCase().includes('commission'))).toBe(false);
   });
 
   it('is all-zero for an empty range and produces labelled CSV rows', () => {
@@ -300,19 +375,19 @@ describe('profitAndLoss', () => {
     expect(pl.expenses).toBe(75); // not 150
   });
 
-  it('runner-settlement cash payouts (no backing Expense record) are counted once, via runnerCommissions only', () => {
-    // A runner settled in cash writes a cashOut entry too (App.tsx), but that
+  it('buyer-settlement cash payouts (no backing Expense record) are counted once, via device buyer fees only', () => {
+    // A buyer settled in cash writes a cashOut entry too (App.tsx), but that
     // call site deliberately never creates an Expense record — the cost is
-    // already fully represented by runnerCommissions (totalFees). Simulating
+    // already fully represented by deviceBuyerFeesPaid (totalFees). Simulating
     // that here: a cashOut entry exists with nothing in the expense ledger.
     const input: ProfitLossInput = {
       ...base,
-      cashReconciliations: [recon({ date: '2026-07-05', cashOut: [{ id: 'c1', amount: 230 }] })], // runner paid in cash
+      cashReconciliations: [recon({ date: '2026-07-05', cashOut: [{ id: 'c1', amount: 230 }] })], // buyer paid in cash
       settlements: [settle({ date: '2026-07-05', totalFees: 30, totalPurchaseFronted: 200, amountPaid: 230 })],
     };
     const pl = profitAndLoss(input, '2026-07-01', '2026-07-31');
     expect(pl.expenses).toBe(0);           // the cashOut entry does not leak into expenses
-    expect(pl.runnerCommissions).toBe(30); // sole source for this cost
+    expect(pl.deviceBuyerFeesPaid).toBe(30); // sole source for this cost
     expect(pl.netProfit).toBe(-30);
   });
 
@@ -335,33 +410,33 @@ describe('profitAndLoss', () => {
 });
 
 describe('settlementHistory', () => {
-  const runners = [runner({ id: 'r1', name: 'Alex' }), runner({ id: 'r2', name: 'Sam' })];
+  const deviceBuyers = [buyer({ id: 'r1', name: 'Alex' }), buyer({ id: 'r2', name: 'Sam' })];
   const settlements = [
-    settle({ id: 's1', runnerId: 'r1', date: '2026-07-05', totalFees: 30, totalPurchaseFronted: 200, amountPaid: 230 }),
-    settle({ id: 's2', runnerId: 'r1', date: '2026-07-20', totalFees: 20, totalPurchaseFronted: 0, amountPaid: 20 }),
-    settle({ id: 's3', runnerId: 'r2', date: '2026-07-10', totalFees: 15, totalPurchaseFronted: 100, amountPaid: 115 }),
-    settle({ id: 'old', runnerId: 'r1', date: '2026-06-01', totalFees: 999, amountPaid: 999 }), // out of range
+    settle({ id: 's1', buyerId: 'r1', date: '2026-07-05', totalFees: 30, totalPurchaseFronted: 200, amountPaid: 230 }),
+    settle({ id: 's2', buyerId: 'r1', date: '2026-07-20', totalFees: 20, totalPurchaseFronted: 0, amountPaid: 20 }),
+    settle({ id: 's3', buyerId: 'r2', date: '2026-07-10', totalFees: 15, totalPurchaseFronted: 100, amountPaid: 115 }),
+    settle({ id: 'old', buyerId: 'r1', date: '2026-06-01', totalFees: 999, amountPaid: 999 }), // out of range
   ];
 
-  it('aggregates per runner and overall within the range', () => {
-    const h = settlementHistory(settlements, runners, '2026-07-01', '2026-07-31');
+  it('aggregates per buyer and overall within the range', () => {
+    const h = settlementHistory(settlements, deviceBuyers, '2026-07-01', '2026-07-31');
     expect(h.count).toBe(3);
     expect(h.totalPaid).toBe(365);   // 230 + 20 + 115
     expect(h.totalFees).toBe(65);    // 30 + 20 + 15
-    const alex = h.perRunner.find(r => r.runnerId === 'r1')!;
-    expect(alex.runnerName).toBe('Alex');
+    const alex = h.perBuyer.find(r => r.buyerId === 'r1')!;
+    expect(alex.buyerName).toBe('Alex');
     expect(alex.settlementCount).toBe(2);
     expect(alex.totalPaid).toBe(250);
     expect(alex.totalFees).toBe(50);
     // sorted by total paid, newest lines first
-    expect(h.perRunner[0].runnerId).toBe('r1');
+    expect(h.perBuyer[0].buyerId).toBe('r1');
     expect(h.lines[0].id).toBe('s2');
   });
 
-  it('labels an unknown runner and reverses swapped start/end', () => {
-    const h = settlementHistory([settle({ id: 'z', runnerId: 'ghost', date: '2026-07-09', amountPaid: 10 })], runners, '2026-07-31', '2026-07-01');
+  it('labels an unknown buyer and reverses swapped start/end', () => {
+    const h = settlementHistory([settle({ id: 'z', buyerId: 'ghost', date: '2026-07-09', amountPaid: 10 })], deviceBuyers, '2026-07-31', '2026-07-01');
     expect(h.start).toBe('2026-07-01');
-    expect(h.lines[0].runnerName).toBe('Unknown runner');
+    expect(h.lines[0].buyerName).toBe('Unknown device buyer');
   });
 });
 
@@ -384,7 +459,8 @@ describe('yearEndSummary', () => {
     expect(s.salesTaxCollected).toBe(130);
     expect(s.payrollPaid).toBe(800);
     expect(s.expenses).toBe(25);
-    expect(s.runnerCommissions).toBe(45);
+    expect(s.deviceBuyerFeesPaid).toBe(45);
+    expect(s.deviceBuyerFeesCollected).toBe(0);
     expect(s.netProfit).toBe(1000 - 400 - 800 - 25 - 45);
   });
 });

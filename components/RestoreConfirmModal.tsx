@@ -9,7 +9,9 @@ const REPLACE_PHRASE = 'DELETE MY DATA';
 const COLLECTION_LABEL: Record<string, string> = {
   inventory: 'inventory items', notes: 'notes', tasks: 'to-do tasks', customers: 'customers',
   salesTransactions: 'sales', repairs: 'repairs', repairBatches: 'repair batches',
-  runners: 'runners', dropOffs: 'drop-offs', settlements: 'settlements',
+  // Key = the Firestore collection name, deliberately still 'runners' (see
+  // COLLECTIONS in services/firestoreDb.ts); label = the current UI term.
+  runners: 'device buyers', dropOffs: 'drop-offs', settlements: 'settlements',
 };
 
 interface Props {

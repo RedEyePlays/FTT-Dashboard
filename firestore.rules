@@ -32,7 +32,8 @@ service cloud.firestore {
     // sales.void, sales.return and dropoffs.manage to (employees get cash.log
     // but NOT reconcile/void/return/dropoffs; the generic isStaffOf() catch-all
     // used to let an employee bypass that server-side, which the rules below
-    // for cashReconciliations/salesTransactions/dropOffs/runners/settlements
+    // for cashReconciliations/salesTransactions/dropOffs/runners (device
+    // buyers)/settlements
     // close).
     function isManagerUp(ws) { return activeMemberOf(ws) && (myRole() == 'owner' || myRole() == 'manager'); }
     // Employee or technician — active staff who are NOT manager/owner tier.
@@ -248,13 +249,20 @@ service cloud.firestore {
         allow delete: if isOwnerOf(ws);
       }
 
-      // Drop-offs / runner settlements: owner/manager only (dropoffs.manage) —
-      // an employee has no drop-off write access at all, matching rbac.ts.
+      // Drop-offs / device buyer settlements: owner/manager only
+      // (dropoffs.manage) — an employee has no drop-off write access at all,
+      // matching rbac.ts.
       match /dropOffs/{id} {
         allow read: if activeMemberOf(ws);
         allow create, update: if isManagerUp(ws);
         allow delete: if isOwnerOf(ws);
       }
+      // `runners` stores DEVICE BUYERS. The concept was renamed to "device
+      // buyer" in the UI and code, but the collection path is deliberately
+      // left as `runners` for data continuity — renaming it would require
+      // migrating every live document. Do NOT rename this path without a
+      // matching data migration; it must stay identical to COLLECTIONS in
+      // services/firestoreDb.ts and functions/src/backups.ts.
       match /runners/{id} {
         allow read: if activeMemberOf(ws);
         allow create, update: if isManagerUp(ws);

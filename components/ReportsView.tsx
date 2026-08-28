@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { Wallet, Receipt, Download, Save, AlertTriangle, CheckCircle2, Plus, Trash2, Scale, FileArchive, Truck, DoorOpen, History, LockOpen, Banknote, Pencil, Repeat, SkipForward } from 'lucide-react';
-import { SalesTransaction, CashReconciliation, CashDrawerEntry, InventoryItem, PayPeriodPaid, Settlement, Runner, Repair, Customer, AuditEntry, ActivityEntry, TimeEntry, AppUser, Expense, RecurringExpense, ExpensePaymentMethod, RecurringFrequency } from '../types';
+import { SalesTransaction, CashReconciliation, CashDrawerEntry, InventoryItem, PayPeriodPaid, Settlement, DeviceBuyer, Repair, Customer, AuditEntry, ActivityEntry, TimeEntry, AppUser, Expense, RecurringExpense, ExpensePaymentMethod, RecurringFrequency } from '../types';
 import { ExpenseCategory, duePeriodsFor, DuePeriod } from '../domain/expenses';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 import {
@@ -23,7 +23,7 @@ interface Props {
   inventory: InventoryItem[];
   payPeriods: PayPeriodPaid[];
   settlements: Settlement[];
-  runners: Runner[];
+  deviceBuyers: DeviceBuyer[];
   expenses: Expense[];
   expenseCategories: ExpenseCategory[];
   recurringExpenses: RecurringExpense[];
@@ -53,7 +53,7 @@ const TABS: { id: TabId; label: string; icon: React.ReactNode }[] = [
   { id: 'tax', label: 'Sales Tax', icon: <Receipt className="w-4 h-4" /> },
   { id: 'pnl', label: 'Profit & Loss', icon: <Scale className="w-4 h-4" /> },
   { id: 'expenses', label: 'Expenses', icon: <Banknote className="w-4 h-4" /> },
-  { id: 'settlements', label: 'Runner Settlements', icon: <Truck className="w-4 h-4" /> },
+  { id: 'settlements', label: 'Device Buyer Settlements', icon: <Truck className="w-4 h-4" /> },
   { id: 'yearend', label: 'Year-End Export', icon: <FileArchive className="w-4 h-4" /> },
 ];
 
@@ -65,7 +65,7 @@ const input = 'px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark
 const label = 'block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1';
 
 export const ReportsView: React.FC<Props> = ({
-  salesTransactions, cashReconciliations, inventory, payPeriods, settlements, runners, onSaveReconciliation,
+  salesTransactions, cashReconciliations, inventory, payPeriods, settlements, deviceBuyers, onSaveReconciliation,
   repairs, customers, auditLogs, activity, timeEntries, users, expenses, expenseCategories,
   recurringExpenses, canManageExpenses, onSaveExpense, onDeleteExpense,
   onSaveRecurringExpense, onDeleteRecurringExpense, onGenerateRecurringExpense, onSkipRecurringPeriod,
@@ -101,7 +101,7 @@ export const ReportsView: React.FC<Props> = ({
           onGenerateRecurringExpense={onGenerateRecurringExpense} onSkipRecurringPeriod={onSkipRecurringPeriod}
         />
       )}
-      {tab === 'settlements' && <SettlementsTab settlements={settlements} runners={runners} />}
+      {tab === 'settlements' && <SettlementsTab settlements={settlements} deviceBuyers={deviceBuyers} />}
       {tab === 'yearend' && <YearEndTab plInput={plInput} />}
     </div>
   );
@@ -592,10 +592,13 @@ const RangeControls: React.FC<{ start: string; end: string; setStart: (v: string
   </div>
 );
 
-const PLRow: React.FC<{ label: string; value: number; negative?: boolean; bold?: boolean; total?: boolean }> = ({ label, value, negative, bold, total }) => (
+// `negative` = a cost (shown in parentheses, red). `income` = money coming IN
+// on a line that sits among costs (shown plain, green) — used for device buyer
+// fees the buyer owes the STORE, which raise net profit rather than reduce it.
+const PLRow: React.FC<{ label: string; value: number; negative?: boolean; income?: boolean; bold?: boolean; total?: boolean }> = ({ label, value, negative, income, bold, total }) => (
   <div className={`flex items-center justify-between py-1.5 ${total ? 'border-t-2 border-slate-200 dark:border-slate-700 mt-1 pt-2' : ''}`}>
     <span className={`${bold || total ? 'font-bold text-slate-800 dark:text-slate-100' : 'text-slate-600 dark:text-slate-300'}`}>{label}</span>
-    <span className={`tabular-nums ${bold || total ? 'font-bold' : ''} ${negative ? 'text-rose-600 dark:text-rose-400' : total && value < 0 ? 'text-rose-600 dark:text-rose-400' : 'text-slate-800 dark:text-slate-100'}`}>
+    <span className={`tabular-nums ${bold || total ? 'font-bold' : ''} ${negative ? 'text-rose-600 dark:text-rose-400' : income ? 'text-emerald-600 dark:text-emerald-400' : total && value < 0 ? 'text-rose-600 dark:text-rose-400' : 'text-slate-800 dark:text-slate-100'}`}>
       {negative ? `(${money(value)})` : money(value)}
     </span>
   </div>
@@ -627,26 +630,27 @@ const ProfitLossTab: React.FC<{ plInput: ProfitLossInput }> = ({ plInput }) => {
           {pl.expensesByCategory.map(c => (
             <PLRow key={c.category} label={`Expense: ${c.label}${c.excludedFromPL ? ' (informational)' : ''}`} value={c.total} negative={!c.excludedFromPL} />
           ))}
-          <PLRow label="Runner commissions" value={pl.runnerCommissions} negative />
+          <PLRow label="Device buyer fees collected" value={pl.deviceBuyerFeesCollected} income />
+          <PLRow label="Device buyer fees paid" value={pl.deviceBuyerFeesPaid} negative />
           <PLRow label="Net profit" value={pl.netProfit} total />
         </div>
         <p className="mt-3 text-xs text-slate-400">
-          Recognized sales only (voided, returned and not-yet-settled layaway sales excluded). Runner commissions are settlement fees only — the seller-purchase reimbursement is already in cost of goods.
+          Recognized sales only (voided, returned and not-yet-settled layaway sales excluded). Device buyer fees are settlement fees only — the seller-purchase reimbursement is already in cost of goods. Fees the buyer owes the store are income and raise net profit; fees the store pays the buyer are an expense and lower it.
         </p>
       </div>
     </div>
   );
 };
 
-/* ---------------- Runner settlement history ---------------- */
-const SettlementsTab: React.FC<{ settlements: Settlement[]; runners: Runner[] }> = ({ settlements, runners }) => {
+/* ---------------- Device buyer settlement history ---------------- */
+const SettlementsTab: React.FC<{ settlements: Settlement[]; deviceBuyers: DeviceBuyer[] }> = ({ settlements, deviceBuyers }) => {
   const [start, setStart] = useState(monthStartISO());
   const [end, setEnd] = useState(todayISO());
-  const h = useMemo(() => settlementHistory(settlements, runners, start, end), [settlements, runners, start, end]);
+  const h = useMemo(() => settlementHistory(settlements, deviceBuyers, start, end), [settlements, deviceBuyers, start, end]);
   const exportCsv = () => {
-    const rows = h.lines.map(l => ({ Date: l.date, Runner: l.runnerName, 'Commission': l.totalFees.toFixed(2), 'Purchase reimbursed': l.totalFronted.toFixed(2), 'Total paid': l.amountPaid.toFixed(2) }));
-    rows.push({ Date: 'Total', Runner: '', 'Commission': h.totalFees.toFixed(2), 'Purchase reimbursed': h.totalFronted.toFixed(2), 'Total paid': h.totalPaid.toFixed(2) });
-    triggerDownload(`runner-settlements_${h.start}_to_${h.end}.csv`, toCSV(rows), 'text/csv;charset=utf-8;');
+    const rows = h.lines.map(l => ({ Date: l.date, DeviceBuyer: l.buyerName, 'Commission': l.totalFees.toFixed(2), 'Purchase reimbursed': l.totalFronted.toFixed(2), 'Total paid': l.amountPaid.toFixed(2) }));
+    rows.push({ Date: 'Total', DeviceBuyer: '', 'Commission': h.totalFees.toFixed(2), 'Purchase reimbursed': h.totalFronted.toFixed(2), 'Total paid': h.totalPaid.toFixed(2) });
+    triggerDownload(`device buyer-settlements_${h.start}_to_${h.end}.csv`, toCSV(rows), 'text/csv;charset=utf-8;');
   };
 
   return (
@@ -661,18 +665,18 @@ const SettlementsTab: React.FC<{ settlements: Settlement[]; runners: Runner[] }>
 
       <div className={`${card} p-5`}>
         <div className="flex items-baseline justify-between mb-4">
-          <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200">Paid to runners · {h.start} → {h.end}</h3>
+          <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200">Paid to deviceBuyers · {h.start} → {h.end}</h3>
           <div className="text-right"><p className="text-xs text-slate-400">Total paid</p><p className="text-2xl font-bold text-slate-900 dark:text-white">{money(h.totalPaid)}</p></div>
         </div>
-        {h.perRunner.length === 0 ? <p className="text-sm text-slate-400 py-6 text-center">No settlements in this range.</p> : (
+        {h.perBuyer.length === 0 ? <p className="text-sm text-slate-400 py-6 text-center">No settlements in this range.</p> : (
           <div className="overflow-x-auto"><table className="w-full text-sm">
             <thead className="text-[10px] uppercase tracking-wider text-slate-400"><tr>
-              <th className="text-left py-2">Runner</th><th className="text-right py-2">Settlements</th><th className="text-right py-2">Commission</th><th className="text-right py-2">Reimbursed</th><th className="text-right py-2">Total paid</th>
+              <th className="text-left py-2">DeviceBuyer</th><th className="text-right py-2">Settlements</th><th className="text-right py-2">Commission</th><th className="text-right py-2">Reimbursed</th><th className="text-right py-2">Total paid</th>
             </tr></thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-              {h.perRunner.map(r => (
-                <tr key={r.runnerId}>
-                  <td className="py-2 font-medium text-slate-700 dark:text-slate-200">{r.runnerName}</td>
+              {h.perBuyer.map(r => (
+                <tr key={r.buyerId}>
+                  <td className="py-2 font-medium text-slate-700 dark:text-slate-200">{r.buyerName}</td>
                   <td className="py-2 text-right text-slate-400">{r.settlementCount}</td>
                   <td className="py-2 text-right text-slate-500 dark:text-slate-400">{money(r.totalFees)}</td>
                   <td className="py-2 text-right text-slate-500 dark:text-slate-400">{money(r.totalFronted)}</td>
@@ -695,13 +699,13 @@ const SettlementsTab: React.FC<{ settlements: Settlement[]; runners: Runner[] }>
           <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200 mb-3">Individual settlements</h3>
           <div className="overflow-x-auto"><table className="w-full text-sm">
             <thead className="text-[10px] uppercase tracking-wider text-slate-400"><tr>
-              <th className="text-left py-2">Date</th><th className="text-left py-2">Runner</th><th className="text-right py-2">Commission</th><th className="text-right py-2">Reimbursed</th><th className="text-right py-2">Total paid</th>
+              <th className="text-left py-2">Date</th><th className="text-left py-2">DeviceBuyer</th><th className="text-right py-2">Commission</th><th className="text-right py-2">Reimbursed</th><th className="text-right py-2">Total paid</th>
             </tr></thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
               {h.lines.map(l => (
                 <tr key={l.id}>
                   <td className="py-2 text-slate-500 dark:text-slate-400">{l.date}</td>
-                  <td className="py-2 text-slate-700 dark:text-slate-200">{l.runnerName}</td>
+                  <td className="py-2 text-slate-700 dark:text-slate-200">{l.buyerName}</td>
                   <td className="py-2 text-right text-slate-500 dark:text-slate-400">{money(l.totalFees)}</td>
                   <td className="py-2 text-right text-slate-500 dark:text-slate-400">{money(l.totalFronted)}</td>
                   <td className="py-2 text-right font-semibold text-slate-800 dark:text-slate-100">{money(l.amountPaid)}</td>
@@ -729,7 +733,8 @@ const YearEndTab: React.FC<{ plInput: ProfitLossInput }> = ({ plInput }) => {
     { label: 'Gross profit', value: summary.grossProfit, strong: true },
     { label: 'Payroll paid', value: summary.payrollPaid },
     ...summary.expensesByCategory.map(c => ({ label: `Expense: ${c.label}${c.excludedFromPL ? ' (informational)' : ''}`, value: c.total })),
-    { label: 'Runner commissions', value: summary.runnerCommissions },
+    { label: 'Device buyer fees collected', value: summary.deviceBuyerFeesCollected },
+    { label: 'Device buyer fees paid', value: summary.deviceBuyerFeesPaid },
     { label: 'Net profit', value: summary.netProfit, strong: true },
     { label: 'Sales tax collected', value: summary.salesTaxCollected },
   ];
@@ -748,7 +753,7 @@ const YearEndTab: React.FC<{ plInput: ProfitLossInput }> = ({ plInput }) => {
             <Download className="w-4 h-4" /> Export CSV
           </button>
         </div>
-        <p className="mt-3 text-xs text-slate-400">One consolidated annual summary to hand to your accountant — revenue, profit, payroll, cash expenses, runner commissions and sales tax collected for {year}.</p>
+        <p className="mt-3 text-xs text-slate-400">One consolidated annual summary to hand to your accountant — revenue, profit, payroll, cash expenses, device buyer fees (collected and paid) and sales tax collected for {year}.</p>
       </div>
       <div className={`${card} p-5`}>
         <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200 mb-3">{year} year-end summary</h3>

@@ -42,7 +42,7 @@ export interface InventoryItem {
   carrier?: string;
   batteryHealth?: string;
   condition?: string;
-  purchaseSource?: string; // channel: Marketplace, Runner, Trade-in, etc.
+  purchaseSource?: string; // channel: Marketplace, Device Buyer, Trade-in, etc.
   targetSalePrice?: number;
   deviceStatus?: DeviceStatus;
   listed?: boolean; // posted for sale (marketplace/storefront) — independent of deviceStatus
@@ -104,28 +104,46 @@ export interface InventoryItem {
   etransferTaxStatus?: 'none' | 'separate';
   paymentNotes?: string;
 
-  // Drop-off / runner sourcing
-  runnerId?: string;
-  runnerName?: string;
+  // Drop-off / device buyer sourcing
+  buyerId?: string;
+  buyerName?: string;
   dropOffId?: string;
 
   notes: string;
 }
 
 // 'personal' = the owner/staff paid the seller out of pocket — not store
-// cash (never touches the drawer) and not the runner needing reimbursement
+// cash (never touches the drawer) and not the device buyer needing reimbursement
 // (never adds to what's owed them). Same vocabulary/shape as
 // RepairPurchasePaidBy's 'store' | 'personal'.
+//
+// LEGACY NAME: the 'runner' member is a STORED Firestore field value on
+// DropOff.paidBy, written to real documents since day one. The concept is now
+// called "device buyer" everywhere in the UI and in code identifiers, but
+// renaming this string literal would silently orphan every historical
+// drop-off (they'd stop matching `paidBy === 'runner'` and their fronted cash
+// would vanish from balances/settlements). So the literal stays 'runner' and
+// only the human-readable label changes — see PAID_BY_LABEL in
+// components/DropOffView.tsx, components/SettlementReviewModal.tsx and
+// services/settlementInvoice.ts, all of which render it as "Device buyer paid".
 export type PaidBy = 'runner' | 'store' | 'personal';
 
-// How a settlement was actually paid out to the runner. Only 'cash' touches the
+// Which way the drop-off fee flows on a settlement. In this shop the
+// arrangement differs per buyer/settlement: sometimes the store pays the
+// device buyer a commission (an EXPENSE), and sometimes the device buyer owes
+// the store a fee for handling the device (INCOME). Both must be supported —
+// see domain/dropoffs.ts's settlementFeeDirection / settlementFeeTotals and
+// domain/reports.ts's profitAndLoss.
+export type SettlementFeeDirection = 'store_pays_buyer' | 'buyer_owes_store';
+
+// How a settlement was actually paid out to the device buyer. Only 'cash' touches the
 // cash drawer's expected total — an e-transfer or other non-cash payment never
 // should (see domain/dropoffs.ts's settlementDrawerEffect).
 export type SettlementPaymentMethod = 'cash' | 'etransfer' | 'other';
 
 export type DropOffStatus = 'pending' | 'accepted' | 'rejected' | 'paidout' | 'settled';
 
-export interface Runner {
+export interface DeviceBuyer {
   id: string;
   name: string;
   phone: string;
@@ -134,14 +152,21 @@ export interface Runner {
 
 export interface DropOff {
   id: string;
-  runnerId: string;
+  // The device buyer who sourced this device. STORED AS `runnerId` on documents
+  // written before the Runner→Device Buyer rename; those legacy documents are
+  // normalized at the read boundary (domain/dropoffs.ts's withResolvedBuyerId,
+  // applied in hooks/useWorkspaceData.ts) so nothing downstream ever sees
+  // `runnerId` and no Firestore migration was needed. New writes only ever set
+  // `buyerId`. Same pattern as RepairBatch.private falling back to the legacy
+  // `autoInventory` field.
+  buyerId: string;
   item: string;              // device / item name
   imei: string;              // IMEI / serial, optional
   sellerName: string;        // marketplace seller name, optional
   sellerContact: string;     // marketplace seller contact, optional
   purchasePrice: number;     // what was paid to the seller
-  paidBy: PaidBy;            // 'runner' paid, 'store' cash paid, or 'personal' (staff's own money) paid
-  dropOffFee: number;        // commission owed to the runner for this device
+  paidBy: PaidBy;            // legacy stored value 'runner' = device buyer paid, 'store' cash paid, or 'personal' (staff's own money) paid
+  dropOffFee: number;        // commission owed to the device buyer for this device
   dateDropped: string;       // YYYY-MM-DD
   status: DropOffStatus;
   notes: string;
@@ -162,23 +187,32 @@ export interface SettlementLineAdjustment {
 
 export interface Settlement {
   id: string;
-  runnerId: string;
+  // See DropOff.buyerId — same legacy `runnerId` fallback, same normalization
+  // boundary, no migration.
+  buyerId: string;
   date: string;              // YYYY-MM-DD settled
   dropOffIds: string[];       // devices actually included in this settlement — a device reviewed but excluded is simply left out (still 'accepted'/'paidout', eligible for a later settlement)
-  totalPurchaseFronted: number; // cash the runner fronted to sellers
-  totalFees: number;            // drop-off fees paid to runner, AFTER any per-line adjustments below
-  amountPaid: number;           // net amount paid to runner (or negative = owed to store) — totalPurchaseFronted + totalFees + adjustmentAmount
+  totalPurchaseFronted: number; // cash the device buyer fronted to sellers
+  totalFees: number;            // drop-off fees paid to device buyer, AFTER any per-line adjustments below
+  amountPaid: number;           // net amount paid to device buyer (or negative = owed to store) — totalPurchaseFronted + totalFees + adjustmentAmount
   // How amountPaid was actually paid out. Optional for backward compatibility
   // with settlements recorded before this field existed — absent is treated as
   // 'cash' (matching how every settlement was implicitly handled previously).
   paymentMethod?: SettlementPaymentMethod;
+  // Which way this settlement's fee flowed. Set explicitly on every settlement
+  // built by buildSettlementFromReview going forward. OPTIONAL because
+  // historical settlements predate the field — for those, the direction is
+  // derived from the sign of amountPaid (see settlementFeeDirection), which
+  // requires no data migration. Never read this field directly; always go
+  // through settlementFeeDirection so legacy records resolve correctly.
+  feeDirection?: SettlementFeeDirection;
   notes: string;
   // Per-device fee corrections made on the review screen — only entries
   // where the fee actually changed from the drop-off's stored dropOffFee.
   // Undefined/empty when nothing was adjusted.
   lineAdjustments?: SettlementLineAdjustment[];
   // A settlement-level correction (e.g. a one-off credit/deduction agreed
-  // with the runner) that doesn't belong to any single device line. Folded
+  // with the device buyer) that doesn't belong to any single device line. Folded
   // into amountPaid; kept here separately (with its note) so the settlement
   // record shows it was applied, not just a mismatched total.
   adjustmentAmount?: number;
@@ -392,7 +426,10 @@ export interface AuditEntry {
   userId: string;
   userEmail: string;
   action: string;        // e.g. 'inventory.add', 'sale.complete', 'user.role_change'
-  entityType: string;    // 'inventory' | 'accessory' | 'sale' | 'customer' | 'runner' | 'settlement' | 'user' | 'backup'
+  // 'inventory' | 'accessory' | 'sale' | 'customer' | 'runner' | 'settlement' | 'user' | 'backup'
+  // ('runner' is a legacy STORED entityType string for device buyers — kept so
+  // historical audit entries keep resolving; see domain/audit.ts.)
+  entityType: string;
   entityId?: string;
   before?: any;
   after?: any;
@@ -508,7 +545,11 @@ export interface AppData {
   inventory: InventoryItem[];
   notes: Note[];
   tasks: Task[];
-  runners?: Runner[];
+  // `runners`: the backup JSON's field name, deliberately UNCHANGED. It mirrors
+  // the Firestore collection name (also still `runners` — see COLLECTIONS in
+  // services/firestoreDb.ts) so every backup file ever exported still restores
+  // losslessly. The concept is "device buyer"; only the storage key is legacy.
+  runners?: DeviceBuyer[];
   dropOffs?: DropOff[];
   settlements?: Settlement[];
   customers?: Customer[];

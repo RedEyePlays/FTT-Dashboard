@@ -2,7 +2,7 @@ import React, { useState, useMemo, FocusEventHandler } from 'react';
 import { X, Wand2, Smartphone, Package, Barcode, Camera, Tag } from 'lucide-react';
 import { printShelfTag } from '../services/shelfTag';
 import { getStoreProfile } from './SettingsModal';
-import { InventoryItem, ItemKind, DeviceType, DeviceStatus, Runner, Repair, ListingPlatform, Note, Role } from '../types';
+import { InventoryItem, ItemKind, DeviceType, DeviceStatus, DeviceBuyer, Repair, ListingPlatform, Note, Role } from '../types';
 import { LinkedNotes } from './LinkedNotes';
 import { REPAIR_STATUS_LABEL } from '../domain/repairs';
 import { LISTING_PLATFORMS } from '../domain/listing';
@@ -17,7 +17,7 @@ import { todayISO } from '../domain/dates';
 interface Props {
   initial?: InventoryItem;
   initialKind?: ItemKind;
-  runners: Runner[];
+  deviceBuyers: DeviceBuyer[];
   onSave: (item: InventoryItem) => void;
   onGenerateSku: (kind: ItemKind, deviceType?: DeviceType) => Promise<string>;
   onClose: () => void;
@@ -65,7 +65,7 @@ const Field: React.FC<{ label: string; value: unknown; onChange: (v: string) => 
   </div>
 );
 
-export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, runners, onSave, onGenerateSku, onClose, linkedRepair, onCreateRepair, onOpenRepair, inventory = [], notes, noteRole, onOpenNote }) => {
+export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, deviceBuyers, onSave, onGenerateSku, onClose, linkedRepair, onCreateRepair, onOpenRepair, inventory = [], notes, noteRole, onOpenNote }) => {
   const [kind, setKind] = useState<ItemKind>(initial?.kind ?? initialKind ?? 'device');
   const [f, setF] = useState<InventoryItem>(() => initial ?? {
     id: uid(), kind: initialKind ?? 'device', sku: '', manufacturerBarcode: '',
@@ -217,13 +217,13 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, runners, 
                 <Field label="Bought From (seller)" value={f.boughtFrom} onChange={setText('boughtFrom')} />
                 <Field label="Purchase Source (channel)" value={f.purchaseSource} onChange={setText('purchaseSource')} placeholder="Marketplace" />
                 <div>
-                  <label className={lbl}>Runner (drop-off)</label>
-                  <select className={inp} value={f.runnerId ?? ''} onChange={e => {
-                    const r = runners.find(x => x.id === e.target.value);
-                    set('runnerId', e.target.value || undefined); set('runnerName', r?.name);
+                  <label className={lbl}>Device Buyer (drop-off)</label>
+                  <select className={inp} value={f.buyerId ?? ''} onChange={e => {
+                    const r = deviceBuyers.find(x => x.id === e.target.value);
+                    set('buyerId', e.target.value || undefined); set('buyerName', r?.name);
                   }}>
                     <option value="">— none —</option>
-                    {runners.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                    {deviceBuyers.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
                   </select>
                 </div>
                 <Field label="Purchase Price ($)" value={f.purchaseCost} onChange={setNum('purchaseCost')} type="number" onFocus={selectOnFocus} />

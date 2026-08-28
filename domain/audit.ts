@@ -23,8 +23,14 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   // Drop-offs
   'dropoff.accept': 'Drop-off accepted',
   'dropoff.edit': 'Drop-off edited',
-  'dropoff.settle': 'Runner settled',
-  'runner.edit': 'Runner edited',
+  'dropoff.settle': 'Device buyer settled',
+  // 'runner.edit' is a legacy STORED action string, kept as-is on purpose: it
+  // is written into historical auditLogs documents, and renaming the key would
+  // make every past entry fall through to prettify() and render as "Runner
+  // edit" — reintroducing the old term in the one place we can't edit. New
+  // writes keep emitting 'runner.edit' too, so there is exactly one action
+  // string for this event; only the human-readable label changed.
+  'runner.edit': 'Device buyer edited',
   // Repairs
   'repair.create': 'Repair created',
   'repair.edit': 'Repair edited',

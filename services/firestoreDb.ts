@@ -3,7 +3,7 @@ import {
 } from 'firebase/firestore';
 import { db } from './firebase';
 import {
-  InventoryItem, Runner, DropOff, Settlement, Customer, SalesTransaction, ActivityEntry, Note, Task,
+  InventoryItem, DeviceBuyer, DropOff, Settlement, Customer, SalesTransaction, ActivityEntry, Note, Task,
   AppUser, WorkspaceInvite, AuditEntry, TimeEntry, PayPeriodPaid, PayPeriodApproval, CashReconciliation, StaffNote, ListingPlatform, Repair,
   Expense, RecurringExpense,
 } from '../types';
@@ -13,6 +13,18 @@ import { allocateSkuInTxn } from './sku';
 
 // Shared shop data lives under user_data/{workspaceId}/<collection>, where
 // workspaceId is the owning account's uid. The `wsId` arg below is that id.
+// NOTE on 'runners': this collection stores DEVICE BUYERS. The concept was
+// renamed from "runner" to "device buyer" throughout the UI and code, but the
+// stored collection name was deliberately left as `runners` — renaming a live
+// Firestore collection means copying every document, updating security rules
+// and handling in-flight writes, for zero functional gain. Keeping the legacy
+// name is zero-migration-risk; the mismatch is intentional, not an oversight.
+// The same legacy name appears in functions/src/backups.ts's COLLECTIONS, the
+// AppData.runners backup field (types.ts / domain/restore.ts) and
+// firestore.rules' `match /runners/{id}`.
+//
+// MUST be kept in sync with COLLECTIONS in functions/src/backups.ts — see the
+// warning comment there.
 export const COLLECTIONS = [
   'inventory', 'accessories', 'salesTransactions', 'customers',
   'dropOffs', 'runners', 'settlements', 'activityLog', 'auditLogs',
@@ -235,13 +247,13 @@ export async function returnSale(uid: string, payload: {
   await batch.commit();
 }
 
-// Record a runner settlement in one atomic commit: save the settlement record
+// Record a device buyer settlement in one atomic commit: save the settlement record
 // AND flag every drop-off it covers 'settled', in the same batch — never as a
 // separate, untracked follow-up write. Without this, settleableDropOffs
 // (domain/dropoffs.ts) never sees these drop-offs leave 'accepted'/'paidout',
 // so the exact same batch of devices stays eligible for a second settlement
-// and the runner risks getting paid twice for it.
-export async function settleRunner(uid: string, payload: { settlement: Settlement; dropOffIds: string[] }) {
+// and the device buyer risks getting paid twice for it.
+export async function settleDeviceBuyer(uid: string, payload: { settlement: Settlement; dropOffIds: string[] }) {
   const batch = writeBatch(db);
   batch.set(docRef(uid, 'settlements', payload.settlement.id), clean(payload.settlement));
   payload.dropOffIds.forEach(id => batch.set(docRef(uid, 'dropOffs', id),
@@ -260,7 +272,9 @@ export async function seedSampleData(uid: string, items: InventoryItem[]) {
 
 // One-time migration from the legacy single encrypted blob into collections.
 export async function migrateLegacyIfNeeded(uid: string, legacy: {
-  inventory?: InventoryItem[]; runners?: Runner[]; dropOffs?: DropOff[];
+  // `runners` (not `deviceBuyers`): the legacy blob's stored field name, kept
+  // verbatim — see the COLLECTIONS note above. The concept is "device buyer".
+  inventory?: InventoryItem[]; runners?: DeviceBuyer[]; dropOffs?: DropOff[];
   settlements?: Settlement[]; notes?: Note[]; tasks?: Task[]; skuCounters?: Record<string, number>;
 }): Promise<boolean> {
   const existing = await getDocs(colRef(uid, 'inventory'));

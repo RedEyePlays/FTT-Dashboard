@@ -75,7 +75,7 @@ export const LogCashMovementModal: React.FC<Props> = ({ onClose, onLog, initialK
             <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{kind === 'cashOut' ? 'Reason' : 'Note'} (optional)</label>
             <input value={note} onChange={e => setNote(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter') submit(); }}
-              placeholder={kind === 'cashIn' ? 'e.g. change top-up' : kind === 'cashOut' ? 'e.g. paid runner COD' : 'e.g. bank deposit'} className={input} />
+              placeholder={kind === 'cashIn' ? 'e.g. change top-up' : kind === 'cashOut' ? 'e.g. paid device buyer COD' : 'e.g. bank deposit'} className={input} />
           </div>
           {expectedBefore != null && (
             <div className="rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 px-3 py-2 text-xs text-slate-500 dark:text-slate-400 flex items-center justify-between">

@@ -13,7 +13,7 @@ describe('normalizeRestore', () => {
     expect(d.tasks).toHaveLength(1);
   });
 
-  it('preserves runners/dropOffs/settlements/customers/sales from a simple backup', () => {
+  it('preserves deviceBuyers/dropOffs/settlements/customers/sales from a simple backup', () => {
     const d = normalizeRestore({
       inventory: [],
       runners: [{ id: 'r' }],

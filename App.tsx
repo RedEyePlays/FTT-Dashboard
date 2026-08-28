@@ -36,7 +36,7 @@ const UsersView = lazy(() => import('./components/UsersView').then(m => ({ defau
 const AuditLogView = lazy(() => import('./components/AuditLogView').then(m => ({ default: m.AuditLogView })));
 const TimeClockView = lazy(() => import('./components/TimeClockView').then(m => ({ default: m.TimeClockView })));
 const CloseOutView = lazy(() => import('./components/CloseOutView').then(m => ({ default: m.CloseOutView })));
-import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, Runner, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission, Repair, RepairBatch, TimeEntry, PayPeriodPaid, PayPeriodApproval, BreakReason, SalesTransaction, CashReconciliation, StaffNote, BalancePayment, Expense, RecurringExpense } from './types';
+import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, DeviceBuyer, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission, Repair, RepairBatch, TimeEntry, PayPeriodPaid, PayPeriodApproval, BreakReason, SalesTransaction, CashReconciliation, StaffNote, BalancePayment, Expense, RecurringExpense } from './types';
 import { skuPrefix, nextSku } from './services/sku';
 import { REPAIR_PREFIX, BATCH_PREFIX, applyTechEdit, techUpdateAuditPlan, repairSalePrefill, completeRepair, completeRepairSale, dateToEpochMs } from './domain/repairs';
 import { MergePlan } from './domain/customers';
@@ -54,7 +54,7 @@ import {
   updateUserDoc, setInvite, deleteInvite,
   logAudit, exportWorkspaceData, recordBackup, saveSettings,
   saveTimeEntry, savePayPeriodPaid, deletePayPeriodPaid, savePayPeriodApproval, deletePayPeriodApproval,
-  saveStaffNote, deleteStaffNote, commitAutoInventory, settleRunner,
+  saveStaffNote, deleteStaffNote, commitAutoInventory, settleDeviceBuyer,
   saveExpense, deleteExpense, saveRecurringExpense, deleteRecurringExpense,
 } from './services/firestoreDb';
 import { decideAutoInventory, autoInventoryPurchaseDrawerEffect, AutoInventoryNotice } from './domain/autoInventory';
@@ -122,11 +122,11 @@ const App: React.FC = () => {
     user, isLoadingAuth, authError, setAuthError,
     appUser, roleLoading, workspaceId, workspaceUsers, invites, auditLogs, loadMoreAuditLogs, auditHasMore,
     data, notes, setNotes, tasks, setTasks,
-    runners, dropOffs, settlements, salesTransactions, customers, repairs, repairBatches,
+    deviceBuyers, dropOffs, settlements, salesTransactions, customers, repairs, repairBatches,
     timeEntries, payPeriods, payPeriodApprovals, cashReconciliations, staffNotes, expenses, recurringExpenses,
     skuCounters, setSkuCounters, activityLog, lastBackup, settings,
     dbLoading, dbError, reconnect, enableExtendedData, enableCashData,
-    runnersRef, dropOffsRef, settlementsRef, customersRef, salesTransactionsRef,
+    deviceBuyersRef, dropOffsRef, settlementsRef, customersRef, salesTransactionsRef,
     repairsRef, repairBatchesRef, skuRef, dataRef,
   } = useWorkspaceData();
 
@@ -250,7 +250,7 @@ const App: React.FC = () => {
   // Re-entrancy guard for payroll approve/mark-paid — keyed by action+user+
   // period so a double-click on one employee's row can't double-record,
   // without blocking another row's button (same pattern as the drop-off/
-  // runner-settlement write-once guards).
+  // device-buyer-settlement write-once guards).
   const payrollGuard = useKeyedSubmitGuard();
 
   // PIN unlock: verify client-side against the user's own stored hash+salt
@@ -316,8 +316,8 @@ const App: React.FC = () => {
   // reconciliations for anyone who can handle cash the moment they're on POS —
   // and on Reports. Without this the drawer summary is blank and Open Drawer /
   // cash-log writes have no live record to read-modify-write against.
-  // Drop-Off is included too: settling a runner in cash writes a cashOut entry
-  // to today's drawer record (handleSettleRunner, via commitDrawerRecord) —
+  // Drop-Off is included too: settling a device buyer in cash writes a cashOut entry
+  // to today's drawer record (handleSettleDeviceBuyer, via commitDrawerRecord) —
   // without cashReconciliations already loaded, commitDrawerRecord's merge
   // would build off an empty local record and overwrite the real one (opening
   // float and all) with a stripped-down doc containing only that one entry.
@@ -1001,7 +1001,7 @@ const App: React.FC = () => {
     audit('cash.log', 'cashReconciliation', date, undefined, { kind, amount });
 
     // "Cash out" is a general same-till payout (rent, supplies, paying a
-    // runner COD, misc) — the same concept as the new expense ledger. Only
+    // device buyer COD, misc) — the same concept as the new expense ledger. Only
     // back it with an Expense record when the actor actually holds
     // expenses.manage (owner/manager): cash.log itself is open to employees
     // too, but firestore.rules gates the expenses collection to
@@ -1183,7 +1183,7 @@ const App: React.FC = () => {
     if (mode === 'replace') {
       await syncArray(uid, 'inventory', incomingDevices, currentDevices);
       await syncArray(uid, 'accessories', incomingAccessories, currentAccessories);
-      await syncArray(uid, 'runners', restoredData.runners || [], runnersRef.current);
+      await syncArray(uid, 'runners', restoredData.runners || [], deviceBuyersRef.current);
       await syncArray(uid, 'dropOffs', restoredData.dropOffs || [], dropOffsRef.current);
       await syncArray(uid, 'settlements', restoredData.settlements || [], settlementsRef.current);
       await syncArray(uid, 'customers', restoredData.customers || [], customersRef.current);
@@ -1199,7 +1199,7 @@ const App: React.FC = () => {
       // here safe rather than switching to a separate upsert-only writer.
       await syncArray(uid, 'inventory', mergeById(currentDevices, incomingDevices), currentDevices);
       await syncArray(uid, 'accessories', mergeById(currentAccessories, incomingAccessories), currentAccessories);
-      await syncArray(uid, 'runners', mergeById(runnersRef.current, restoredData.runners || []), runnersRef.current);
+      await syncArray(uid, 'runners', mergeById(deviceBuyersRef.current, restoredData.runners || []), deviceBuyersRef.current);
       await syncArray(uid, 'dropOffs', mergeById(dropOffsRef.current, restoredData.dropOffs || []), dropOffsRef.current);
       await syncArray(uid, 'settlements', mergeById(settlementsRef.current, restoredData.settlements || []), settlementsRef.current);
       await syncArray(uid, 'customers', mergeById(customersRef.current, restoredData.customers || []), customersRef.current);
@@ -1215,20 +1215,20 @@ const App: React.FC = () => {
     audit('backup.restore', 'backup', undefined, undefined, { mode });
   };
 
-  // Add an accepted drop-off into inventory, carrying runner + cost across.
+  // Add an accepted drop-off into inventory, carrying device buyer + cost across.
   // No cash-drawer effect here — a store-paid purchase already hit the drawer
   // at Accept (see saveDropOffs' dropOffAcceptDrawerEffect call); logging it
   // again here would double-count the same cash.
   const handleAddDropOffToInventory = (d: DropOff) => {
     if (!uid || !allow('dropoffs.manage')) return;
-    const runner = runnersRef.current.find(r => r.id === d.runnerId);
+    const buyer = deviceBuyersRef.current.find(r => r.id === d.buyerId);
     const newItem: InventoryItem = {
       id: newId(), kind: 'device', date: d.dateDropped || todayISO(),
       item: d.item, imei: d.imei, boughtFrom: d.sellerName || 'Marketplace (drop-off)',
-      // Acquisition cost = price paid to the seller + the runner's fee (both are
-      // real costs and both are what the settlement pays the runner).
+      // Acquisition cost = price paid to the seller + the device buyer's fee (both are
+      // real costs and both are what the settlement pays the device buyer).
       purchaseCost: dropOffPurchaseCost(d), repairCost: 0, soldDate: '', soldTo: '', salePrice: 0,
-      deviceStatus: 'ready', runnerId: d.runnerId, runnerName: runner?.name, dropOffId: d.id,
+      deviceStatus: 'ready', buyerId: d.buyerId, buyerName: buyer?.name, dropOffId: d.id,
       notes: d.notes ? `Drop-off: ${d.notes}` : 'Added from drop-off',
     };
     saveItem(uid, 'inventory', newItem);
@@ -1237,12 +1237,12 @@ const App: React.FC = () => {
     audit('dropoff.accept', 'dropOff', d.id, undefined, { inventoryId: newItem.id });
   };
 
-  // Persisted notes/tasks (meta) + array-synced runner data
+  // Persisted notes/tasks (meta) + array-synced device buyer data
   const saveNotes = (n: Note[]) => { setNotes(n); if (uid) saveMeta(uid, { notes: n }); };
   // Jump from a record's linked-notes panel to that page in the Notes board.
   const openNote = (noteId: string) => { setFocusNoteId(noteId); navigate('notes'); };
   const saveTasks = (t: Task[]) => { setTasks(t); if (uid) saveMeta(uid, { tasks: t }); };
-  const saveRunners = (r: Runner[]) => { if (uid && allow('dropoffs.manage')) { syncArray(uid, 'runners', r, runnersRef.current); audit('runner.edit', 'runner'); } };
+  const saveDeviceBuyers = (r: DeviceBuyer[]) => { if (uid && allow('dropoffs.manage')) { syncArray(uid, 'runners', r, deviceBuyersRef.current); audit('runner.edit', 'runner'); } };
   // Save the drop-off list (any status change or field edit routes through
   // here, since DropOffView diffs against one shared array). A drop-off that
   // just transitioned pending → accepted may hand real cash to the seller
@@ -1271,20 +1271,20 @@ const App: React.FC = () => {
     syncArray(uid, 'dropOffs', next, prev);
     audit('dropoff.edit', 'dropOff');
   };
-  // Record one completed runner settlement. Only a 'cash' payment method ever
+  // Record one completed device buyer settlement. Only a 'cash' payment method ever
   // touches the cash drawer — e-transfer/other never do (domain/dropoffs.ts's
   // settlementDrawerEffect is the single source of that decision). Writes
   // through the same commitDrawerRecord path as every other drawer movement,
   // so the register's live total and the reconciliation screen can't drift.
-  const handleSettleRunner = (settlement: Settlement) => {
+  const handleSettleDeviceBuyer = (settlement: Settlement) => {
     if (!uid || !allow('dropoffs.manage')) return;
     // Saving the settlement and flagging its drop-offs 'settled' happen in one
     // atomic commit — settleableDropOffs (domain/dropoffs.ts) only excludes
     // 'settled'/'accepted'-gone-'paidout' drop-offs, so if this ever landed as
     // two separate writes, a failure (or just a slow second write) between
     // them would leave the same drop-offs eligible for a second settlement —
-    // the runner could get paid twice for the same batch of devices.
-    settleRunner(uid, { settlement, dropOffIds: settlement.dropOffIds }).catch(e => console.error('Settle runner failed', e));
+    // the device buyer could get paid twice for the same batch of devices.
+    settleDeviceBuyer(uid, { settlement, dropOffIds: settlement.dropOffIds }).catch(e => console.error('Settle device buyer failed', e));
     // Every edit made on the pre-settlement review screen (components/
     // SettlementReviewModal.tsx) is already ON the settlement record itself
     // (lineAdjustments / adjustmentAmount / adjustmentNote — see
@@ -1293,7 +1293,7 @@ const App: React.FC = () => {
     // (audit() stamps the acting user), and — via adjustmentNote — why,
     // without needing a separate before/after diff mechanism.
     audit('dropoff.settle', 'settlement', settlement.id, undefined, {
-      runnerId: settlement.runnerId, amountPaid: settlement.amountPaid, paymentMethod: settlement.paymentMethod,
+      buyerId: settlement.buyerId, amountPaid: settlement.amountPaid, paymentMethod: settlement.paymentMethod,
       lineAdjustments: settlement.lineAdjustments, adjustmentAmount: settlement.adjustmentAmount, adjustmentNote: settlement.adjustmentNote,
     });
     const effect = settlementDrawerEffect(settlement);
@@ -1301,7 +1301,7 @@ const App: React.FC = () => {
       const date = todayISO();
       const existing = cashReconciliations.find(r => r.date === date);
       const listKey: 'cashIn' | 'cashOut' = effect.kind;
-      const entry = { id: newId(), amount: effect.amount, note: `Runner settlement — ${settlement.id}` };
+      const entry = { id: newId(), amount: effect.amount, note: `Device buyer settlement — ${settlement.id}` };
       commitDrawerRecord(date, { [listKey]: [...(existing?.[listKey] || []), entry] });
     }
   };
@@ -1978,7 +1978,7 @@ const App: React.FC = () => {
           )}
           {view === 'reports' && (
             allow('cash.reconcile')
-              ? <ReportsView salesTransactions={salesTransactions} cashReconciliations={cashReconciliations} inventory={data} payPeriods={payPeriods} settlements={settlements} runners={runners} onSaveReconciliation={handleSaveReconciliation} defaultOpeningFloat={settings.operations.openingFloatDefault}
+              ? <ReportsView salesTransactions={salesTransactions} cashReconciliations={cashReconciliations} inventory={data} payPeriods={payPeriods} settlements={settlements} deviceBuyers={deviceBuyers} onSaveReconciliation={handleSaveReconciliation} defaultOpeningFloat={settings.operations.openingFloatDefault}
                   repairs={repairs} customers={customers} auditLogs={auditLogs} activity={activityLog} timeEntries={timeEntries} users={workspaceUsers}
                   expenses={expenses} expenseCategories={settings.expenses.categories}
                   canManageExpenses={allow('expenses.manage')} recurringExpenses={recurringExpenses}
@@ -2058,7 +2058,7 @@ const App: React.FC = () => {
           {view === 'grid' && (
             <InventoryView
               inventory={data}
-              runners={runners}
+              deviceBuyers={deviceBuyers}
               activity={activityLog}
               auditLogs={auditLogs}
               canViewCost={allow('reports.profit.detailed')}
@@ -2104,12 +2104,12 @@ const App: React.FC = () => {
           )}
           {view === 'dropoff' && (
             <DropOffView
-              runners={runners}
+              deviceBuyers={deviceBuyers}
               dropOffs={dropOffs}
               settlements={settlements}
-              onRunnersChange={saveRunners}
+              onDeviceBuyersChange={saveDeviceBuyers}
               onDropOffsChange={saveDropOffs}
-              onSettle={handleSettleRunner}
+              onSettle={handleSettleDeviceBuyer}
               onAddToInventory={handleAddDropOffToInventory}
             />
           )}
