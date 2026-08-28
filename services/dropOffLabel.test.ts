@@ -26,40 +26,46 @@ const content = (p: Partial<DropOff>): DropOffLabelContent =>
 const printed = (p: Partial<DropOff>, m: LabelMedia = dymo): string =>
   dropOffLabelsPrintDoc('t', m, [{ content: content(p), qr: 'data:image/png;base64,QR' }]);
 
-describe('drop-off label money — stated per device, by funding source', () => {
-  it('STORE-FUNDED: shows the amount the store paid, the fee, and the total owed on this device', () => {
+describe('drop-off label money — just the amount owed, no funding-source wording', () => {
+  it('STORE-FUNDED: prints principal+fee as one plain figure, no breakdown', () => {
     const html = printed({ paidBy: 'store', purchasePrice: 100, dropOffFee: 20 });
-    expect(html).toContain('Store paid $100.00 · Fee $20.00 · Owed $120.00');
-    // And the total on the label is the same figure the drop-off screen shows.
+    expect(html).toContain('$100.00+20.00');
+    expect(html).not.toContain('Store paid');
+    expect(html).not.toContain('Fee');
+    expect(html).not.toContain('Owed');
+    // And the total is the same figure the drop-off screen shows.
     expect(dropOffOwed(d({ paidBy: 'store', purchasePrice: 100, dropOffFee: 20 }))).toBe(120);
   });
 
-  it('BUYER-FUNDED: shows fee-only owed, and never implies the store paid anything', () => {
+  it('BUYER-FUNDED: shows the fee alone as a bare dollar figure, never implying the store paid anything', () => {
     const html = printed({ paidBy: 'runner', purchasePrice: 100, dropOffFee: 20 });
-    expect(html).toContain('Buyer funded · Fee $20.00 owed');
+    expect(html).toContain('$20.00');
     expect(html).not.toContain('Store paid');
+    expect(html).not.toContain('Buyer funded');
     expect(html).not.toContain('$100.00');   // the buyer's own money is never stated as a store figure
-    expect(html).not.toContain('Owed $120.00');
+    expect(html).not.toContain('$120.00');
     expect(dropOffOwed(d({ paidBy: 'runner', purchasePrice: 100, dropOffFee: 20 }))).toBe(20);
   });
 
-  it("PERSONAL-FUNDED: follows the app's existing treatment — buyer owes principal + fee, but the OWNER paid, not the till", () => {
-    // Mirrors domain/dropoffs.ts's documented judgment call (settlementReviewTotals)
-    // and settlementInvoice.ts's "of which owner-funded out of pocket" line:
-    // the buyer owes the same as a store-funded device, but the label must not
-    // claim the store's till advanced the money.
+  it("PERSONAL-FUNDED: buyer owes principal + fee just like store-funded, printed the same plain way", () => {
+    // Mirrors domain/dropoffs.ts's documented judgment call (settlementReviewTotals):
+    // the buyer owes the same as a store-funded device — the label no longer
+    // distinguishes who fronted the cash, only what's owed.
     const html = printed({ paidBy: 'personal', purchasePrice: 100, dropOffFee: 20 });
-    expect(html).toContain('Owner paid (out of pocket) $100.00 · Fee $20.00 · Owed $120.00');
+    expect(html).toContain('$100.00+20.00');
+    expect(html).not.toContain('Owner paid');
     expect(html).not.toContain('Store paid');
     expect(dropOffOwed(d({ paidBy: 'personal', purchasePrice: 100, dropOffFee: 20 }))).toBe(120);
-    // Consistent with the settlement math: the buyer owes it, the till doesn't get it.
     expect(dropOffLabelMoney(d({ paidBy: 'personal', purchasePrice: 100, dropOffFee: 20 })).totalOwed).toBe(120);
   });
 
-  it('every funding case also prints its PAID_BY_LABEL wording, the same words the drop-off screen and invoice use', () => {
-    expect(printed({ paidBy: 'store' })).toContain('Store-funded (owed back)');
-    expect(printed({ paidBy: 'runner' })).toContain('Buyer-funded (own money)');
-    expect(printed({ paidBy: 'personal' })).toContain('Owner-funded (owed back)');
+  it('no PAID_BY_LABEL / funding-source wording prints on the label at all — the bottom meta row is date + ref only', () => {
+    for (const paidBy of ['store', 'runner', 'personal'] as const) {
+      const html = printed({ paidBy });
+      expect(html).not.toContain('Store-funded');
+      expect(html).not.toContain('Buyer-funded');
+      expect(html).not.toContain('Owner-funded');
+    }
   });
 });
 
@@ -109,7 +115,7 @@ describe('drop-off label QR — encodes the IMEI/serial, matching the inventory 
 describe('non-truncation — the IMEI and the money figures never ellipsis-clip', () => {
   it('the serial and money lines use wrap-not-ellipsis CSS, and never white-space:nowrap', () => {
     const html = printed({ paidBy: 'store', purchasePrice: 1299.99, dropOffFee: 149.5 });
-    for (const value of ['356789012345678', 'Store paid $1299.99 · Fee $149.50 · Owed $1449.49']) {
+    for (const value of ['356789012345678', '$1299.99+149.50']) {
       const div = html.match(new RegExp(`<div style="[^"]*">${value.replace(/[$.*+?()|[\]\\]/g, '\\$&')}</div>`));
       expect(div, `${value} should render in its own line box`).toBeTruthy();
       expect(div![0]).toContain('overflow-wrap:anywhere');
@@ -203,7 +209,7 @@ describe('drop-off label printing — shared media, shared print path', () => {
 
   it('the on-screen preview renders the same content as the printed label', () => {
     const preview = dropOffLabelPreview(dymo, content({ paidBy: 'store', purchasePrice: 100, dropOffFee: 20 }), undefined);
-    expect(preview).toContain('Store paid $100.00 · Fee $20.00 · Owed $120.00');
+    expect(preview).toContain('$100.00+20.00');
     expect(preview).toContain('Marcus Webb');
   });
 });

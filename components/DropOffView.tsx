@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import {
   Truck, Users, CalendarCheck, Plus, X, Trash2, Phone, User, Package,
-  CheckCircle, XCircle, Wallet, ClipboardList, FileText, QrCode,
+  CheckCircle, XCircle, Wallet, ClipboardList, FileText, QrCode, Pencil,
 } from 'lucide-react';
 import { DeviceBuyer, DropOff, DropOffStatus, PaidBy, Settlement, SettlementPaymentMethod } from '../types';
 import { deviceBuyerOutstanding, settleableDropOffs, settlementTotals, SettlementReviewLine, buildSettlementFromReview, settlementOwedLabel, isLegacySettlement, LEGACY_SETTLEMENT_NOTE, dropOffOwed, PAID_BY_LABEL } from '../domain/dropoffs';
@@ -126,6 +126,14 @@ const EntriesTab: React.FC<{
   canPrintLabels: boolean;
 }> = ({ deviceBuyers, dropOffs, onDropOffsChange, canPrintLabels }) => {
   const [showForm, setShowForm] = useState(false);
+  // Set to the drop-off being edited, or null for the "New Drop-Off" case —
+  // the same modal/form serves both, since every field a new entry collects
+  // is also one that might need correcting later (wrong price, wrong buyer,
+  // a typo in the IMEI). App.tsx's saveDropOffs already diffs the whole array
+  // and only re-logs a drawer effect on an actual pending→accepted
+  // transition, so editing an already-accepted drop-off's other fields never
+  // double-logs cash — see its comment.
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [filter, setFilter] = useState<DropOffStatus | 'all'>('all');
   // Accept moves real cash (dropOffAcceptDrawerEffect, logged in App.tsx's
   // saveDropOffs) — keyed per-row so a double-tap on one drop-off's Accept
@@ -133,7 +141,8 @@ const EntriesTab: React.FC<{
   // while one is in flight.
   const { isPending: rowPending, run: runRow } = useKeyedSubmitGuard();
 
-  useEscapeKey(() => setShowForm(false), showForm);
+  const closeForm = () => { setShowForm(false); setEditingId(null); };
+  useEscapeKey(closeForm, showForm);
 
   const blank = (): DropOff => ({
     id: uid(), buyerId: deviceBuyers[0]?.id || '', item: '', imei: '',
@@ -146,14 +155,17 @@ const EntriesTab: React.FC<{
 
   const save = () => {
     if (!form.buyerId || !form.item) return;
-    onDropOffsChange([...dropOffs, form]);
+    if (editingId) onDropOffsChange(dropOffs.map(d => d.id === editingId ? { ...form, id: editingId } : d));
+    else onDropOffsChange([...dropOffs, form]);
     setForm(blank());
     setShowForm(false);
+    setEditingId(null);
   };
 
   const update = (id: string, patch: Partial<DropOff>) =>
     onDropOffsChange(dropOffs.map(d => d.id === id ? { ...d, ...patch } : d));
   const remove = (id: string) => onDropOffsChange(dropOffs.filter(d => d.id !== id));
+  const openEdit = (d: DropOff) => { setForm(d); setEditingId(d.id); setShowForm(true); };
 
   const buyerName = (id: string) => deviceBuyers.find(r => r.id === id)?.name || 'Unknown';
   const shown = filter === 'all' ? dropOffs : dropOffs.filter(d => d.status === filter);
@@ -172,7 +184,7 @@ const EntriesTab: React.FC<{
             </button>
           ))}
         </div>
-        <button onClick={() => { setForm(blank()); setShowForm(true); }} disabled={deviceBuyers.length === 0}
+        <button onClick={() => { setForm(blank()); setEditingId(null); setShowForm(true); }} disabled={deviceBuyers.length === 0}
           className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white rounded-lg text-sm font-medium">
           <Plus className="w-4 h-4" /> New Drop-Off
         </button>
@@ -224,6 +236,10 @@ const EntriesTab: React.FC<{
                   <QrCode className="w-3.5 h-3.5" /> Print Label
                 </button>
               )}
+              <button onClick={() => openEdit(d)}
+                className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700">
+                <Pencil className="w-3.5 h-3.5" /> Edit
+              </button>
               {d.status === 'pending' && (
                 <>
                   <button onClick={() => runRow(`accept:${d.id}`, () => update(d.id, { status: 'accepted' }))}
@@ -260,13 +276,13 @@ const EntriesTab: React.FC<{
         ))}
       </div>
 
-      {/* New drop-off modal */}
+      {/* New / edit drop-off modal — same form serves both (see editingId above). */}
       {showForm && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={() => setShowForm(false)}>
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={closeForm}>
           <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-lg border border-slate-200 dark:border-slate-700 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
             <div className="px-5 py-3 border-b border-slate-100 dark:border-slate-800 flex justify-between items-center">
-              <h2 className="font-bold text-slate-800 dark:text-slate-100">New Drop-Off</h2>
-              <button onClick={() => setShowForm(false)}><X className="w-5 h-5 text-slate-400" /></button>
+              <h2 className="font-bold text-slate-800 dark:text-slate-100">{editingId ? 'Edit Drop-Off' : 'New Drop-Off'}</h2>
+              <button onClick={closeForm}><X className="w-5 h-5 text-slate-400" /></button>
             </div>
             <div className="p-5 grid grid-cols-2 gap-3">
               <div className="col-span-2">
@@ -317,8 +333,11 @@ const EntriesTab: React.FC<{
                     cash-out for paidBy === 'store' — buyer-funded and
                     'personal' never touch the drawer. Spelled out here so it
                     doesn't depend on staff already knowing that rule. */}
-                {form.paidBy === 'store' && form.purchasePrice > 0 && (
+                {form.paidBy === 'store' && form.purchasePrice > 0 && (!editingId || form.status === 'pending') && (
                   <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-1.5">Accepting logs a ${form.purchasePrice.toFixed(2)} cash-out today. The buyer owes that back plus the ${form.dropOffFee.toFixed(2)} service fee at settlement.</p>
+                )}
+                {form.paidBy === 'store' && editingId && form.status !== 'pending' && (
+                  <p className="text-[11px] text-slate-400 mt-1.5">This drop-off was already accepted — changing the price here does not adjust the cash-out already logged for it.</p>
                 )}
                 {form.paidBy === 'runner' && (
                   <p className="text-[11px] text-slate-400 mt-1.5">The buyer used his own money for his own device — no drawer movement, and he owes the store the service fee only.</p>
@@ -333,8 +352,8 @@ const EntriesTab: React.FC<{
               </div>
             </div>
             <div className="px-5 py-3 border-t border-slate-100 dark:border-slate-800 flex justify-end gap-2">
-              <button onClick={() => setShowForm(false)} className="px-4 py-2 text-sm rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">Cancel</button>
-              <button onClick={save} disabled={!form.buyerId || !form.item} className="px-4 py-2 text-sm rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white font-medium">Save Drop-Off</button>
+              <button onClick={closeForm} className="px-4 py-2 text-sm rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">Cancel</button>
+              <button onClick={save} disabled={!form.buyerId || !form.item} className="px-4 py-2 text-sm rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white font-medium">{editingId ? 'Save Changes' : 'Save Drop-Off'}</button>
             </div>
           </div>
         </div>
