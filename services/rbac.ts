@@ -23,9 +23,24 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     // totals), but 'reports.profit.detailed' (full history + per-record cost/
     // profit) only when an owner enables the per-user allowProfit override.
   ],
+  // Employees run the shop end-to-end. The owner's explicit decision is that
+  // the operational actions below are NOT gated behind a manager — oversight
+  // comes from attribution + the audit log (every void/return/reconcile/
+  // settlement/expense stamps the acting user on the record AND writes an
+  // auditLogs entry), not from blocking the action at the counter.
+  //
+  // What deliberately stays manager/owner-only: inventory.delete, all of
+  // users.*, security.manage, settings.manage, payroll.manage, backup.export,
+  // staffNotes.manage, audit.view, closeout.view, repairs.performance, and
+  // BOTH profit tiers (see can() below — employees still see no cost, margin
+  // or profit figure anywhere without the per-user allowProfit override).
   employee: [
-    'inventory.add', 'sales.complete', 'repairs.manage', 'repairs.tech', 'reports.view',
-    'cash.log',   // log a cash in/out / withdrawal at the register, without a manager present
+    'inventory.add', 'inventory.edit',
+    'sales.complete', 'sales.void', 'sales.return', 'dropoffs.manage',
+    'repairs.manage', 'repairs.tech', 'reports.view',
+    'cash.log',        // log a cash in/out / withdrawal at the register
+    'cash.reconcile',  // count and close the drawer at end of shift
+    'expenses.manage',
     'timeclock.use',
   ],
   // Technicians get a repair-only, profit-free experience — but still clock in.

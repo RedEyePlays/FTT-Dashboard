@@ -256,12 +256,15 @@ export function useWorkspaceData() {
     return subscribeCollection<StaffNote>(workspaceId, 'staffNotes', setStaffNotes, onErr);
   }, [user, appUser, workspaceId, reconnectKey]);
 
-  // Expense ledger (owner/manager only, matches expenses.manage in
-  // services/rbac.ts and firestore.rules) — its own effect, role-gated like
-  // staffNotes, so an employee/technician never even attempts a subscription
-  // firestore.rules would reject anyway.
+  // Expense ledger (owner/manager/employee — expenses.manage in
+  // services/rbac.ts and isStaffOf() in firestore.rules; employees were
+  // granted it when they took over end-to-end shop operation). Its own
+  // effect, role-gated like staffNotes, so a technician never even attempts a
+  // subscription firestore.rules would reject anyway. NOTE: this ledger is
+  // business spend (rent, supplies, payouts) — it is NOT per-item cost/margin/
+  // profit, which stays behind the two reports.profit.* tiers for employees.
   useEffect(() => {
-    if (!user || !appUser || !workspaceId || (appUser.role !== 'owner' && appUser.role !== 'manager')) {
+    if (!user || !appUser || !workspaceId || appUser.role === 'technician') {
       setExpenses([]); setRecurringExpenses([]); return;
     }
     const onErr = (e: Error) => { console.error('Firestore error (expenses):', e); };
