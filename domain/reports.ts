@@ -482,16 +482,23 @@ export const profitAndLoss = (input: ProfitLossInput, start: string, end: string
 
 /** Flatten a P&L to labelled CSV rows — one row per expense category between
  * gross profit and net profit, so the accountant export shows the same
- * gross profit → expenses → net profit walk the report screen does. */
-export const profitLossCsvRows = (pl: ProfitLoss): Record<string, string | number>[] => [
+ * gross profit → expenses → net profit walk the report screen does.
+ *
+ * `withCategories: false` collapses those rows into one "Expenses" line for a
+ * viewer without expenses.viewAll (a manager). The NUMBERS are identical
+ * either way — net profit still subtracts every workspace expense; only the
+ * per-category breakdown is withheld. */
+export const profitLossCsvRows = (pl: ProfitLoss, withCategories = true): Record<string, string | number>[] => [
   { Line: 'Revenue', Amount: pl.revenue.toFixed(2) },
   { Line: 'Cost of goods sold', Amount: (-pl.costOfGoods).toFixed(2) },
   { Line: 'Gross profit', Amount: pl.grossProfit.toFixed(2) },
   { Line: 'Payroll', Amount: (-pl.payroll).toFixed(2) },
-  ...pl.expensesByCategory.map(c => ({
-    Line: `Expense: ${c.label}${c.excludedFromPL ? ' (informational — not in net profit)' : ''}`,
-    Amount: (-c.total).toFixed(2),
-  })),
+  ...(withCategories
+    ? pl.expensesByCategory.map(c => ({
+        Line: `Expense: ${c.label}${c.excludedFromPL ? ' (informational — not in net profit)' : ''}`,
+        Amount: (-c.total).toFixed(2),
+      }))
+    : [{ Line: 'Expenses', Amount: (-pl.expenses).toFixed(2) }]),
   { Line: 'Device buyer service fees (income)', Amount: pl.deviceBuyerFeeIncome.toFixed(2) },
   { Line: 'Net profit', Amount: pl.netProfit.toFixed(2) },
 ];
@@ -532,13 +539,15 @@ export const yearEndSummary = (input: ProfitLossInput, year: number): YearEndSum
 };
 
 /** Flatten the year-end summary to labelled CSV rows for the accountant export. */
-export const yearEndCsvRows = (s: YearEndSummary): Record<string, string | number>[] => [
+export const yearEndCsvRows = (s: YearEndSummary, withCategories = true): Record<string, string | number>[] => [
   { Metric: `Year`, Value: String(s.year) },
   { Metric: 'Revenue', Value: s.revenue.toFixed(2) },
   { Metric: 'Cost of goods sold', Value: s.costOfGoods.toFixed(2) },
   { Metric: 'Gross profit', Value: s.grossProfit.toFixed(2) },
   { Metric: 'Payroll paid', Value: s.payrollPaid.toFixed(2) },
-  ...s.expensesByCategory.map(c => ({ Metric: `Expense: ${c.label}${c.excludedFromPL ? ' (informational)' : ''}`, Value: c.total.toFixed(2) })),
+  ...(withCategories
+    ? s.expensesByCategory.map(c => ({ Metric: `Expense: ${c.label}${c.excludedFromPL ? ' (informational)' : ''}`, Value: c.total.toFixed(2) }))
+    : [{ Metric: 'Expenses', Value: s.expenses.toFixed(2) }]),
   { Metric: 'Device buyer service fees (income)', Value: s.deviceBuyerFeeIncome.toFixed(2) },
   { Metric: 'Net profit', Value: s.netProfit.toFixed(2) },
   { Metric: 'Sales tax collected', Value: s.salesTaxCollected.toFixed(2) },

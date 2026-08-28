@@ -1,4 +1,4 @@
-import { Expense, RecurringExpense, RecurringFrequency } from '../types';
+import { Expense, RecurringExpense, RecurringFrequency, RecurringAmountMode } from '../types';
 import { toISODate, shiftISODate } from './dates';
 
 const round2 = (n: number): number => Math.round((n + Number.EPSILON) * 100) / 100;
@@ -128,23 +128,99 @@ export const duePeriodsFor = (r: RecurringExpense, now: number): DuePeriod[] => 
   return out;
 };
 
+/** A template with no authoritative amount of its own — utilities, phone,
+ * card-processing fees. `amountMode` is optional so every template written
+ * before this feature keeps behaving exactly as before ('fixed'). */
+export const amountModeOf = (r: Pick<RecurringExpense, 'amountMode'>): RecurringAmountMode => r.amountMode || 'fixed';
+export const isVariableRecurring = (r: Pick<RecurringExpense, 'amountMode'>): boolean => amountModeOf(r) === 'variable';
+
+/**
+ * The amount a due period would post at, or null when it CANNOT post yet.
+ *
+ * Fixed: the template's stored amount (must be > 0).
+ * Variable: ONLY an amount explicitly entered by a person for this period.
+ * `estimatedAmount` is deliberately never consulted here — it is a UI prefill
+ * hint, nothing more. A variable bill that nobody has typed a figure for
+ * returns null and therefore stays pending; silently posting last month's
+ * utility figure as if it were the real one would corrupt the P&L.
+ */
+export const resolveRecurringAmount = (r: RecurringExpense, enteredAmount?: number): number | null => {
+  if (isVariableRecurring(r)) {
+    return typeof enteredAmount === 'number' && enteredAmount > 0 ? round2(enteredAmount) : null;
+  }
+  // A fixed template may still be overridden at generation time (an owner
+  // correcting a one-off rent change) — but it never NEEDS the override.
+  const amount = typeof enteredAmount === 'number' && enteredAmount > 0 ? enteredAmount : r.amount;
+  return amount > 0 ? round2(amount) : null;
+};
+
+/** The last `n` posted amounts for a template, newest first — shown when
+ * entering a variable bill so an unusual figure is obvious ("last 3: $142,
+ * $138, $151"). Reads the ordinary Expense ledger; no parallel history. */
+export const lastAmountsForRecurring = (expenses: Expense[], recurringId: string, n = 3): number[] =>
+  expenses
+    .filter(e => e.recurringId === recurringId)
+    .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+    .slice(0, n)
+    .map(e => e.amount);
+
 /** Build the (unsaved) Expense draft for one due period. Pure — the caller
- * assigns an id and persists it. */
+ * assigns an id and persists it.
+ *
+ * Throws when the period has no usable amount (a variable bill nobody has
+ * entered a figure for). That is deliberate and load-bearing: there is no
+ * code path that turns a variable template into a real Expense without a
+ * real, human-entered number.
+ */
 export const buildRecurringExpense = (
   r: RecurringExpense,
   period: DuePeriod,
   user: { id: string; email: string },
   now: number,
-): Omit<Expense, 'id'> => ({
-  date: period.date,
-  amount: r.amount,
-  category: r.category,
-  paymentMethod: r.paymentMethod,
-  payee: r.payee,
-  note: r.note,
-  enteredBy: user.id,
-  enteredByEmail: user.email,
-  createdAt: now,
-  recurringId: r.id,
-  recurringPeriod: period.key,
-});
+  enteredAmount?: number,
+): Omit<Expense, 'id'> => {
+  const amount = resolveRecurringAmount(r, enteredAmount);
+  if (amount === null) {
+    throw new Error(`Recurring expense ${r.id} (${amountModeOf(r)}) has no amount for period ${period.key}`);
+  }
+  return {
+    date: period.date,
+    amount,
+    category: r.category,
+    paymentMethod: r.paymentMethod,
+    payee: r.payee,
+    note: r.note,
+    enteredBy: user.id,
+    enteredByEmail: user.email,
+    createdAt: now,
+    recurringId: r.id,
+    recurringPeriod: period.key,
+  };
+};
+
+// --- Visibility ------------------------------------------------------------
+
+/**
+ * The expense rows a viewer is allowed to BROWSE.
+ *
+ * Owner (expenses.viewAll) sees the whole ledger. A manager holds only
+ * expenses.add, so their list is scoped to entries they submitted themselves,
+ * keyed on the server-stamped `enteredBy` field — no parallel ownership
+ * mechanism.
+ *
+ * IMPORTANT: this is a BROWSE filter for the expense-list UI only. It must
+ * never be applied to ProfitLossInput.expenses — net profit subtracts every
+ * workspace expense regardless of who may browse the ledger (see
+ * domain/reports.ts).
+ */
+export const visibleExpensesFor = (
+  expenses: Expense[],
+  viewer: { id: string; canViewAll: boolean },
+): Expense[] => viewer.canViewAll ? expenses : expenses.filter(e => e.enteredBy === viewer.id);
+
+/** Whether a viewer may edit/delete one specific expense: owners any, a
+ * manager only their own entries. Mirrors firestore.rules' expenses block. */
+export const canMutateExpense = (
+  expense: Pick<Expense, 'enteredBy'>,
+  viewer: { id: string; canViewAll: boolean },
+): boolean => viewer.canViewAll || expense.enteredBy === viewer.id;

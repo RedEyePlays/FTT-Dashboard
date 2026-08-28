@@ -181,36 +181,127 @@ describe('legitimate flows still work after removing the catch-all', () => {
   });
 });
 
-describe('expense ledger (expenses.manage — owner/manager/employee, never technician)', () => {
-  it('manager can write and read expenses', async () => {
-    await assertSucceeds(setDoc(doc(asManager(), 'user_data', WORKSPACE, 'expenses', 'e1'),
-      { id: 'e1', date: '2026-07-01', amount: 40, category: 'rent', paymentMethod: 'cash', enteredBy: 'manager-uid', enteredByEmail: 'manager@shop.test', createdAt: Date.now() }));
-    const { getDoc } = await import('firebase/firestore');
-    await assertSucceeds(getDoc(doc(asManager(), 'user_data', WORKSPACE, 'expenses', 'e1')));
+describe('expense ledger — the expenses.add / expenses.viewAll split', () => {
+  const mineDoc = () => ({
+    id: 'own1', date: '2026-07-01', amount: 40, category: 'rent', paymentMethod: 'cash',
+    enteredBy: 'manager-uid', enteredByEmail: 'manager@shop.test', createdAt: Date.now(),
   });
-
-  it('technician cannot write or read expenses', async () => {
-    await assertFails(setDoc(doc(asTech(), 'user_data', WORKSPACE, 'expenses', 'e4'), { id: 'e4', amount: 10 }));
+  const theirsDoc = () => ({
+    id: 'other1', date: '2026-07-01', amount: 99, category: 'rent', paymentMethod: 'cash',
+    enteredBy: 'employee-uid', enteredByEmail: 'employee@shop.test', createdAt: Date.now(),
+  });
+  // Seeded with rules disabled: these exist regardless of who may write them.
+  const seedExpenses = async () => {
     await testEnv.withSecurityRulesDisabled(async (ctx) => {
-      await setDoc(doc(ctx.firestore(), 'user_data', WORKSPACE, 'expenses', 'e5'), { id: 'e5', date: '2026-07-01', amount: 40, category: 'rent' });
+      const db = ctx.firestore();
+      await setDoc(doc(db, 'user_data', WORKSPACE, 'expenses', 'own1'), mineDoc());
+      await setDoc(doc(db, 'user_data', WORKSPACE, 'expenses', 'other1'), theirsDoc());
     });
-    const { getDoc } = await import('firebase/firestore');
-    await assertFails(getDoc(doc(asTech(), 'user_data', WORKSPACE, 'expenses', 'e5')));
+  };
+
+  it('MANAGER may CREATE an expense — but only stamped with their OWN enteredBy', async () => {
+    await assertSucceeds(setDoc(doc(asManager(), 'user_data', WORKSPACE, 'expenses', 'm-new'),
+      { ...mineDoc(), id: 'm-new' }));
+    // Filing one under someone else's name is DENIED.
+    await assertFails(setDoc(doc(asManager(), 'user_data', WORKSPACE, 'expenses', 'm-forged'),
+      { ...theirsDoc(), id: 'm-forged' }));
   });
 
-  it('recurringExpenses is gated the same as expenses', async () => {
+  it('MANAGER reading their OWN expense is ALLOWED', async () => {
+    await seedExpenses();
+    const { getDoc } = await import('firebase/firestore');
+    await assertSucceeds(getDoc(doc(asManager(), 'user_data', WORKSPACE, 'expenses', 'own1')));
+  });
+
+  it('MANAGER EDITING another user\'s expense is DENIED (the airtight, server-enforced half)', async () => {
+    await seedExpenses();
+    await assertFails(setDoc(doc(asManager(), 'user_data', WORKSPACE, 'expenses', 'other1'),
+      { amount: 1 }, { merge: true }));
+  });
+
+  it('MANAGER DELETING another user\'s expense is DENIED', async () => {
+    await seedExpenses();
+    const { deleteDoc } = await import('firebase/firestore');
+    await assertFails(deleteDoc(doc(asManager(), 'user_data', WORKSPACE, 'expenses', 'other1')));
+  });
+
+  it('MANAGER may edit and delete their OWN expense', async () => {
+    await seedExpenses();
+    const { deleteDoc } = await import('firebase/firestore');
+    await assertSucceeds(setDoc(doc(asManager(), 'user_data', WORKSPACE, 'expenses', 'own1'),
+      { amount: 41 }, { merge: true }));
+    await assertSucceeds(deleteDoc(doc(asManager(), 'user_data', WORKSPACE, 'expenses', 'own1')));
+  });
+
+  it('MANAGER may not REASSIGN an expense\'s enteredBy away from themselves', async () => {
+    await seedExpenses();
+    await assertFails(setDoc(doc(asManager(), 'user_data', WORKSPACE, 'expenses', 'own1'),
+      { ...mineDoc(), enteredBy: 'employee-uid' }));
+  });
+
+  /**
+   * DOCUMENTED, DELIBERATE GAP — read is manager-wide, not own-entries-only.
+   *
+   * Restricting a manager's READ to `enteredBy == uid` would also truncate
+   * their live `expenses` subscription (Firestore evaluates read rules per
+   * document even for a collection query), which is the exact array
+   * domain/reports.ts's profitAndLoss subtracts — the manager's net profit
+   * would then silently OMIT everyone else's spend and be overstated. A wrong
+   * P&L is worse than a manager being able to read a peer's expense doc, so
+   * the "my submitted expenses only" scoping is applied client-side in
+   * ExpensesTab while WRITE stays enforced here. This test asserts the real
+   * behavior rather than a guarantee the implementation does not provide.
+   */
+  it('MANAGER reading another user\'s expense is ALLOWED — the documented read-side gap (write stays denied)', async () => {
+    await seedExpenses();
+    const { getDoc } = await import('firebase/firestore');
+    await assertSucceeds(getDoc(doc(asManager(), 'user_data', WORKSPACE, 'expenses', 'other1')));
+  });
+
+  it('EMPLOYEE has NO expense access at all — cannot read or write any expense', async () => {
+    await seedExpenses();
+    const { getDoc, deleteDoc } = await import('firebase/firestore');
+    await assertFails(getDoc(doc(asEmployee(), 'user_data', WORKSPACE, 'expenses', 'other1')));  // not even their OWN
+    await assertFails(getDoc(doc(asEmployee(), 'user_data', WORKSPACE, 'expenses', 'own1')));
+    await assertFails(setDoc(doc(asEmployee(), 'user_data', WORKSPACE, 'expenses', 'e-new'),
+      { id: 'e-new', amount: 10, enteredBy: 'employee-uid' }));
+    await assertFails(deleteDoc(doc(asEmployee(), 'user_data', WORKSPACE, 'expenses', 'other1')));
+  });
+
+  it('TECHNICIAN still has no expense access', async () => {
+    await seedExpenses();
+    const { getDoc } = await import('firebase/firestore');
+    await assertFails(getDoc(doc(asTech(), 'user_data', WORKSPACE, 'expenses', 'own1')));
+    await assertFails(setDoc(doc(asTech(), 'user_data', WORKSPACE, 'expenses', 't1'), { id: 't1', amount: 10 }));
+  });
+
+  it('OWNER reads and mutates every expense, whoever entered it', async () => {
+    await seedExpenses();
+    const { getDoc, deleteDoc } = await import('firebase/firestore');
+    await assertSucceeds(getDoc(doc(asOwner(), 'user_data', WORKSPACE, 'expenses', 'own1')));
+    await assertSucceeds(getDoc(doc(asOwner(), 'user_data', WORKSPACE, 'expenses', 'other1')));
+    await assertSucceeds(setDoc(doc(asOwner(), 'user_data', WORKSPACE, 'expenses', 'other1'), { amount: 1 }, { merge: true }));
+    await assertSucceeds(deleteDoc(doc(asOwner(), 'user_data', WORKSPACE, 'expenses', 'other1')));
+  });
+
+  it('recurringExpenses (incl. the variable-amount templates) is OWNER-ONLY configuration', async () => {
     await assertSucceeds(setDoc(doc(asOwner(), 'user_data', WORKSPACE, 'recurringExpenses', 'r1'),
-      { id: 'r1', category: 'rent', amount: 1500, paymentMethod: 'etransfer', frequency: 'monthly', startDate: '2026-01-01', active: true, createdBy: WORKSPACE, createdByEmail: 'owner@shop.test', createdAt: Date.now() }));
-    await assertSucceeds(setDoc(doc(asEmployee(), 'user_data', WORKSPACE, 'recurringExpenses', 'r2'),
-      { id: 'r2', category: 'supplies', amount: 10, paymentMethod: 'cash', frequency: 'monthly', startDate: '2026-01-01', active: true, createdBy: 'employee-uid', createdByEmail: 'employee@shop.test', createdAt: Date.now() }));
-    await assertFails(setDoc(doc(asTech(), 'user_data', WORKSPACE, 'recurringExpenses', 'r3'), { id: 'r3', amount: 10 }));
+      { id: 'r1', category: 'rent', amount: 1500, amountMode: 'fixed', paymentMethod: 'etransfer', frequency: 'monthly', startDate: '2026-01-01', active: true, createdBy: WORKSPACE, createdByEmail: 'owner@shop.test', createdAt: Date.now() }));
+    await assertSucceeds(setDoc(doc(asOwner(), 'user_data', WORKSPACE, 'recurringExpenses', 'r-var'),
+      { id: 'r-var', category: 'utilities', amount: 0, amountMode: 'variable', estimatedAmount: 140, paymentMethod: 'etransfer', frequency: 'monthly', startDate: '2026-01-01', active: true, createdBy: WORKSPACE, createdByEmail: 'owner@shop.test', createdAt: Date.now() }));
+    // Everyone else — manager included — is shut out of the schedule config.
+    const { getDoc } = await import('firebase/firestore');
+    await assertFails(getDoc(doc(asManager(), 'user_data', WORKSPACE, 'recurringExpenses', 'r1')));
+    await assertFails(setDoc(doc(asManager(), 'user_data', WORKSPACE, 'recurringExpenses', 'r2'), { id: 'r2', amount: 10 }));
+    await assertFails(setDoc(doc(asEmployee(), 'user_data', WORKSPACE, 'recurringExpenses', 'r3'), { id: 'r3', amount: 10 }));
+    await assertFails(setDoc(doc(asTech(), 'user_data', WORKSPACE, 'recurringExpenses', 'r4'), { id: 'r4', amount: 10 }));
   });
 });
 
 /**
- * PART 1 of the employee-permissions change: the six operational actions an
+ * PART 1 of the employee-permissions change: the five operational actions an
  * employee gained (sales.void, sales.return, inventory.edit, cash.reconcile,
- * dropoffs.manage, expenses.manage) must actually work SERVER-SIDE, and the
+ * dropoffs.manage) must actually work SERVER-SIDE, and the
  * manager/owner-only set must stay shut. These are the emulator cases the PR
  * body quotes.
  */
@@ -245,11 +336,15 @@ describe('employee operational permissions (granted)', () => {
       { id: 's1', buyerId: 'b1', amountPaid: 300, settledBy: 'employee-uid', settledByEmail: 'employee@shop.test', settledAt: Date.now() }));
   });
 
-  it('employee can LOG AN EXPENSE (and read the ledger the UI needs)', async () => {
-    await assertSucceeds(setDoc(doc(asEmployee(), 'user_data', WORKSPACE, 'expenses', 'e2'),
+  // NOTE: "employee can LOG AN EXPENSE" used to live here. That grant has been
+  // REVOKED — expense amounts are cost/profit-sensitive, so the employee role
+  // lost expense access entirely in the expenses.add / expenses.viewAll split.
+  // The replacement assertions (employee create AND read both DENIED) are in
+  // the expense-ledger describe above; this is the pointer so the removal
+  // reads as deliberate rather than a dropped case.
+  it('employee can no longer LOG AN EXPENSE — the one operational grant that was rolled back', async () => {
+    await assertFails(setDoc(doc(asEmployee(), 'user_data', WORKSPACE, 'expenses', 'e2'),
       { id: 'e2', date: '2026-07-01', amount: 40, category: 'supplies', paymentMethod: 'cash', enteredBy: 'employee-uid', enteredByEmail: 'employee@shop.test', createdAt: Date.now() }));
-    const { getDoc } = await import('firebase/firestore');
-    await assertSucceeds(getDoc(doc(asEmployee(), 'user_data', WORKSPACE, 'expenses', 'e2')));
   });
 });
 

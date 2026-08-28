@@ -30,13 +30,14 @@ service cloud.firestore {
     function isStaffOf(ws) { return activeMemberOf(ws) && myRole() != 'technician'; }
     // Owner or manager — the payroll.manage / users.* / audit.view tier.
     //
-    // HISTORY: this used to also gate cash.reconcile, sales.void, sales.return,
-    // dropoffs.manage and expenses.manage. Employees have since been granted
-    // all five (see services/rbac.ts's employee role) — they run the shop
-    // end-to-end and oversight comes from attribution + auditLogs, not from
-    // blocking the write. Those collections are gated by isStaffOf() now; this
-    // helper remains for the things that are genuinely still manager+:
-    // payPeriodApprovals and any-user timeEntry corrections.
+    // HISTORY: this used to also gate cash.reconcile, sales.void, sales.return
+    // and dropoffs.manage. Employees have since been granted all four (see
+    // services/rbac.ts's employee role) — they run the shop end-to-end and
+    // oversight comes from attribution + auditLogs, not from blocking the
+    // write. Those collections are gated by isStaffOf() now; this helper
+    // remains for the things that are genuinely still manager+:
+    // payPeriodApprovals, any-user timeEntry corrections, and the expense
+    // ledger (which employees lost entirely — see the expenses block).
     function isManagerUp(ws) { return activeMemberOf(ws) && (myRole() == 'owner' || myRole() == 'manager'); }
     // Employee or technician — active staff who are NOT manager/owner tier.
     // Both are trusted with ONLY their own timeEntries (see the match block
@@ -199,19 +200,59 @@ service cloud.firestore {
       }
 
       // Expense ledger (domain/expenses.ts) — general business expenses, any
-      // payment method. expenses.manage in services/rbac.ts, now held by
-      // owner/manager/employee (isStaffOf), so an employee can log the rent
-      // cheque or a parts purchase without a manager present. Technicians
-      // still have no access at all.
+      // payment method. Expense amounts are cost/profit-sensitive, so the old
+      // single `expenses.manage` permission (owner + manager + employee, gated
+      // here by isStaffOf) has been split in services/rbac.ts into:
+      //   • expenses.add     — owner + manager: create an expense, and
+      //                        edit/delete ONLY their own entries.
+      //   • expenses.viewAll — owner only: browse the whole ledger and its
+      //                        totals, mutate anyone's entry, and configure
+      //                        recurring templates/categories.
+      // EMPLOYEES AND TECHNICIANS NOW HAVE NO EXPENSE ACCESS AT ALL — not even
+      // read. isStaffOf() is deliberately no longer used here.
       //
-      // This ledger is business SPEND, not per-item cost/margin/profit — the
-      // latter is still gated for employees by the two reports.profit.* tiers
-      // in services/rbac.ts, which this grant does not touch.
+      // READ, and why it is manager-wide rather than own-entries-only:
+      // net profit must keep subtracting EVERY workspace expense, and a
+      // manager legitimately holds reports.profit.summary. Firestore evaluates
+      // read rules per document even for a collection query, so restricting a
+      // manager's read to `enteredBy == uid` would silently truncate the very
+      // `expenses` array that feeds domain/reports.ts's profitAndLoss — the
+      // manager's P&L would then omit every expense somebody else entered and
+      // OVERSTATE net profit. A wrong P&L is a worse outcome than a manager
+      // being able to read a peer's expense document, so read stays
+      // workspace-wide for the manager tier and the "my submitted expenses
+      // only" scoping is applied client-side in components/ReportsView.tsx's
+      // ExpensesTab (domain/expenses.ts's visibleExpensesFor). This is an
+      // explicit, documented trade-off, not an oversight: the manager READ
+      // restriction is UI-level scoping, while the WRITE restriction below is
+      // genuinely enforced server-side. Closing the read side properly needs a
+      // server-computed expense aggregate the manager may read instead of the
+      // raw documents — see the PR discussion.
+      //
+      // WRITE — airtight here, per document:
+      //   create: an owner writes anything; a manager may only create a row
+      //           stamped with their OWN uid in enteredBy (so they cannot
+      //           file an expense under somebody else's name).
+      //   update/delete: an owner any row; a manager only a row whose
+      //           EXISTING enteredBy is their own uid, and an update may not
+      //           reassign enteredBy away from them.
       match /expenses/{id} {
-        allow read, write: if isStaffOf(ws);
+        allow read: if isManagerUp(ws);
+        allow create: if isOwnerOf(ws)
+          || (isManagerUp(ws) && request.resource.data.enteredBy == request.auth.uid);
+        allow update: if isOwnerOf(ws)
+          || (isManagerUp(ws)
+              && resource.data.enteredBy == request.auth.uid
+              && request.resource.data.enteredBy == request.auth.uid);
+        allow delete: if isOwnerOf(ws)
+          || (isManagerUp(ws) && resource.data.enteredBy == request.auth.uid);
       }
+      // Recurring templates are owner-only CONFIGURATION (which bills recur,
+      // at what amount or in variable "enter it each period" mode, and which
+      // periods were generated/skipped). A manager may add an expense but
+      // never touch the schedule that posts them.
       match /recurringExpenses/{id} {
-        allow read, write: if isStaffOf(ws);
+        allow read, write: if isOwnerOf(ws);
       }
 
       // Cash drawer: any staff (owner/manager/employee) may log a movement
