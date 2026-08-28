@@ -4,16 +4,16 @@ import { describe, it, expect, vi } from 'vitest';
 import { createRoot } from 'react-dom/client';
 import { act } from 'react';
 import { SettlementReviewModal } from './SettlementReviewModal';
-import { DropOff, Runner, PaidBy, DropOffStatus } from '../types';
+import { DropOff, DeviceBuyer, PaidBy, DropOffStatus } from '../types';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 const d = (p: Partial<DropOff>): DropOff => ({
-  id: 'd', runnerId: 'r1', item: 'iPhone 13', imei: '356789012345678', sellerName: '', sellerContact: '',
+  id: 'd', buyerId: 'r1', item: 'iPhone 13', imei: '356789012345678', sellerName: '', sellerContact: '',
   purchasePrice: 0, paidBy: 'runner' as PaidBy, dropOffFee: 0, dateDropped: '2026-08-01',
   status: 'accepted' as DropOffStatus, notes: '', ...p,
 });
-const runner: Runner = { id: 'r1', name: 'Marcus', phone: '', notes: '' };
+const buyer: DeviceBuyer = { id: 'r1', name: 'Marcus', phone: '', notes: '' };
 const dropOffs: DropOff[] = [
   d({ id: '1', item: 'iPhone 13', purchasePrice: 300, dropOffFee: 20, paidBy: 'runner' }),
   d({ id: '2', item: 'iPhone 14', purchasePrice: 500, dropOffFee: 30, paidBy: 'store' }),
@@ -28,7 +28,7 @@ function mount(ui: React.ReactElement) {
 }
 
 const baseProps = {
-  runner, dropOffs, settlementId: 'S-1', date: '2026-08-15',
+  buyer, dropOffs, settlementId: 'S-1', date: '2026-08-15',
   paymentMethod: 'cash' as const, notes: '', storeName: 'FlipThatTech',
   onClose: () => {},
 };
@@ -36,7 +36,7 @@ const baseProps = {
 describe('SettlementReviewModal', () => {
   it('shows the unedited totals and net direction on open', () => {
     const { host, unmount } = mount(<SettlementReviewModal {...baseProps} isSubmitting={false} onConfirm={() => {}} />);
-    expect(host.textContent).toContain('Store pays runner $350.00'); // 300 fronted + 50 fees
+    expect(host.textContent).toContain('Store pays device buyer $350.00'); // 300 fronted + 50 fees
     unmount();
   });
 
@@ -51,7 +51,7 @@ describe('SettlementReviewModal', () => {
       setter.call(firstFeeInput, '25');
       firstFeeInput.dispatchEvent(new Event('input', { bubbles: true }));
     });
-    expect(host.textContent).toContain('Store pays runner $355.00'); // 300 + (25+30)
+    expect(host.textContent).toContain('Store pays device buyer $355.00'); // 300 + (25+30)
     unmount();
   });
 
@@ -64,7 +64,7 @@ describe('SettlementReviewModal', () => {
     // Exclude the second device (iPhone 14, store-paid, fee 30).
     act(() => { checkboxes[1].click(); });
     expect(host.textContent).toContain('Excluded — stays unsettled');
-    expect(host.textContent).toContain('Store pays runner $320.00'); // 300 + 20, device 2 excluded
+    expect(host.textContent).toContain('Store pays device buyer $320.00'); // 300 + 20, device 2 excluded
 
     const confirmBtn = Array.from(host.querySelectorAll('button')).find(b => b.textContent?.includes('Confirm Settlement')) as HTMLButtonElement;
     act(() => { confirmBtn.click(); });

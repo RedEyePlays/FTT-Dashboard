@@ -1,5 +1,5 @@
 import {
-  AppData, InventoryItem, Note, Task, Runner, DropOff, Settlement, Customer, SalesTransaction, ActivityEntry,
+  AppData, InventoryItem, Note, Task, DeviceBuyer, DropOff, Settlement, Customer, SalesTransaction, ActivityEntry,
   Repair, RepairBatch,
 } from '../types';
 
@@ -10,13 +10,19 @@ import {
 //      { inventory, notes, tasks, ... }.
 //   2. Full export (Settings → Backup → Export JSON): a wrapper
 //      { exportedAt, workspaceId, data: { inventory, accessories,
-//        salesTransactions, customers, runners, dropOffs, settlements,
+//        salesTransactions, customers, deviceBuyers, dropOffs, settlements,
 //        meta: [{ notes, tasks, skuCounters }] } }.
 //
 // The previous restore path only read top-level inventory/notes/tasks, silently
-// dropping accessories, sales history, customers, runners, drop-offs and
+// dropping accessories, sales history, customers, deviceBuyers, drop-offs and
 // settlements. This normalizer preserves every collection from either shape.
 
+// NOTE on `runners`: every `runners` key below is the STORED backup-file field
+// name and matches the Firestore collection name, both deliberately left
+// unchanged when the "runner" concept was renamed to "device buyer" (see the
+// note on COLLECTIONS in services/firestoreDb.ts). Renaming the key here would
+// make every backup file ever exported restore as zero device buyers. The type
+// is `DeviceBuyer`; only the storage key is legacy.
 const arr = <T>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
 
 export function normalizeRestore(parsed: any): AppData {
@@ -41,7 +47,7 @@ export function normalizeRestore(parsed: any): AppData {
     inventory,
     notes,
     tasks,
-    runners: arr<Runner>(src.runners),
+    runners: arr<DeviceBuyer>(src.runners),
     dropOffs: arr<DropOff>(src.dropOffs),
     settlements: arr<Settlement>(src.settlements),
     customers: arr<Customer>(src.customers),

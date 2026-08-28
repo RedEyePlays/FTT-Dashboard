@@ -3,8 +3,8 @@ import {
   Truck, Users, CalendarCheck, Plus, X, Trash2, Phone, User, Package,
   CheckCircle, XCircle, DollarSign, ArrowRight, Wallet, ClipboardList, FileText,
 } from 'lucide-react';
-import { Runner, DropOff, DropOffStatus, PaidBy, Settlement, SettlementPaymentMethod, InventoryItem } from '../types';
-import { runnerBalance, settleableDropOffs, settlementTotals, SettlementReviewLine, buildSettlementFromReview } from '../domain/dropoffs';
+import { DeviceBuyer, DropOff, DropOffStatus, PaidBy, Settlement, SettlementPaymentMethod, InventoryItem } from '../types';
+import { deviceBuyerBalance, settleableDropOffs, settlementTotals, SettlementReviewLine, buildSettlementFromReview } from '../domain/dropoffs';
 import { formatPhoneInput } from '../domain/phone';
 import { printSettlementInvoice } from '../services/settlementInvoice';
 import { getStoreProfile } from './SettingsModal';
@@ -14,10 +14,10 @@ import { todayISO } from '../domain/dates';
 import { useSubmitGuard, useKeyedSubmitGuard } from '../hooks/useSubmitGuard';
 
 interface Props {
-  runners: Runner[];
+  deviceBuyers: DeviceBuyer[];
   dropOffs: DropOff[];
   settlements: Settlement[];
-  onRunnersChange: (r: Runner[]) => void;
+  onDeviceBuyersChange: (r: DeviceBuyer[]) => void;
   onDropOffsChange: (d: DropOff[]) => void;
   // Records one completed settlement (writes the record, marks its drop-offs
   // settled, and — for a cash payment only — logs the cash-drawer effect).
@@ -29,7 +29,7 @@ const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 
 const today = () => todayISO();
 const money = (n: number) => `$${n.toFixed(2)}`;
 
-const PAID_BY_LABEL: Record<PaidBy, string> = { runner: 'Runner paid', store: 'Store paid', personal: 'Personal (owner) paid' };
+const PAID_BY_LABEL: Record<PaidBy, string> = { runner: 'Device buyer paid', store: 'Store paid', personal: 'Personal (owner) paid' };
 
 const STATUS_META: Record<DropOffStatus, { label: string; cls: string }> = {
   pending:  { label: 'Pending review', cls: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400' },
@@ -40,9 +40,9 @@ const STATUS_META: Record<DropOffStatus, { label: string; cls: string }> = {
 };
 
 export const DropOffView: React.FC<Props> = ({
-  runners, dropOffs, settlements, onRunnersChange, onDropOffsChange, onSettle, onAddToInventory,
+  deviceBuyers, dropOffs, settlements, onDeviceBuyersChange, onDropOffsChange, onSettle, onAddToInventory,
 }) => {
-  const [tab, setTab] = useState<'entries' | 'runners' | 'settlement'>('entries');
+  const [tab, setTab] = useState<'entries' | 'deviceBuyers' | 'settlement'>('entries');
 
   const tabBtn = (id: typeof tab, icon: React.ReactNode, label: string) => (
     <button
@@ -61,25 +61,25 @@ export const DropOffView: React.FC<Props> = ({
     <div className="flex flex-col gap-6">
       <div>
         <h1 className="text-2xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
-          <Truck className="w-6 h-6 text-indigo-500" /> Drop-Off / Runners
+          <Truck className="w-6 h-6 text-indigo-500" /> Drop-Off / Device Buyers
         </h1>
-        <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Track runner drop-offs, balances, and weekly settlements.</p>
+        <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Track device buyer drop-offs, balances, and weekly settlements.</p>
       </div>
 
       <div className="flex gap-2 flex-wrap">
         {tabBtn('entries', <Package className="w-4 h-4" />, 'Drop-Offs')}
-        {tabBtn('runners', <Users className="w-4 h-4" />, 'Runners')}
+        {tabBtn('deviceBuyers', <Users className="w-4 h-4" />, 'Device Buyers')}
         {tabBtn('settlement', <CalendarCheck className="w-4 h-4" />, 'Saturday Settlement')}
       </div>
 
       {tab === 'entries' && (
-        <EntriesTab runners={runners} dropOffs={dropOffs} onDropOffsChange={onDropOffsChange} onAddToInventory={onAddToInventory} />
+        <EntriesTab deviceBuyers={deviceBuyers} dropOffs={dropOffs} onDropOffsChange={onDropOffsChange} onAddToInventory={onAddToInventory} />
       )}
-      {tab === 'runners' && (
-        <RunnersTab runners={runners} dropOffs={dropOffs} onRunnersChange={onRunnersChange} />
+      {tab === 'deviceBuyers' && (
+        <DeviceBuyersTab deviceBuyers={deviceBuyers} dropOffs={dropOffs} onDeviceBuyersChange={onDeviceBuyersChange} />
       )}
       {tab === 'settlement' && (
-        <SettlementTab runners={runners} dropOffs={dropOffs} settlements={settlements} onSettle={onSettle} />
+        <SettlementTab deviceBuyers={deviceBuyers} dropOffs={dropOffs} settlements={settlements} onSettle={onSettle} />
       )}
     </div>
   );
@@ -88,10 +88,10 @@ export const DropOffView: React.FC<Props> = ({
 /* ---------------- Drop-off entries ---------------- */
 
 const EntriesTab: React.FC<{
-  runners: Runner[]; dropOffs: DropOff[];
+  deviceBuyers: DeviceBuyer[]; dropOffs: DropOff[];
   onDropOffsChange: (d: DropOff[]) => void;
   onAddToInventory: (d: DropOff) => void;
-}> = ({ runners, dropOffs, onDropOffsChange, onAddToInventory }) => {
+}> = ({ deviceBuyers, dropOffs, onDropOffsChange, onAddToInventory }) => {
   const [showForm, setShowForm] = useState(false);
   const [filter, setFilter] = useState<DropOffStatus | 'all'>('all');
   // Accept moves real cash (dropOffAcceptDrawerEffect, logged in App.tsx's
@@ -104,7 +104,7 @@ const EntriesTab: React.FC<{
   useEscapeKey(() => setShowForm(false), showForm);
 
   const blank = (): DropOff => ({
-    id: uid(), runnerId: runners[0]?.id || '', item: '', imei: '',
+    id: uid(), buyerId: deviceBuyers[0]?.id || '', item: '', imei: '',
     sellerName: '', sellerContact: '', purchasePrice: 0, paidBy: 'runner',
     dropOffFee: 0, dateDropped: today(), status: 'pending', notes: '',
   });
@@ -113,7 +113,7 @@ const EntriesTab: React.FC<{
   const set = <K extends keyof DropOff>(k: K, v: DropOff[K]) => setForm(f => ({ ...f, [k]: v }));
 
   const save = () => {
-    if (!form.runnerId || !form.item) return;
+    if (!form.buyerId || !form.item) return;
     onDropOffsChange([...dropOffs, form]);
     setForm(blank());
     setShowForm(false);
@@ -123,7 +123,7 @@ const EntriesTab: React.FC<{
     onDropOffsChange(dropOffs.map(d => d.id === id ? { ...d, ...patch } : d));
   const remove = (id: string) => onDropOffsChange(dropOffs.filter(d => d.id !== id));
 
-  const runnerName = (id: string) => runners.find(r => r.id === id)?.name || 'Unknown';
+  const buyerName = (id: string) => deviceBuyers.find(r => r.id === id)?.name || 'Unknown';
   const shown = filter === 'all' ? dropOffs : dropOffs.filter(d => d.status === filter);
 
   const inp = 'w-full p-2 bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-md text-sm focus:ring-indigo-500 focus:border-indigo-500';
@@ -140,19 +140,19 @@ const EntriesTab: React.FC<{
             </button>
           ))}
         </div>
-        <button onClick={() => { setForm(blank()); setShowForm(true); }} disabled={runners.length === 0}
+        <button onClick={() => { setForm(blank()); setShowForm(true); }} disabled={deviceBuyers.length === 0}
           className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white rounded-lg text-sm font-medium">
           <Plus className="w-4 h-4" /> New Drop-Off
         </button>
       </div>
 
-      {runners.length === 0 && (
+      {deviceBuyers.length === 0 && (
         <div className="text-center text-slate-400 text-sm py-8 border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-xl">
-          Add a runner first (Runners tab) before logging drop-offs.
+          Add a device buyer first (DeviceBuyers tab) before logging drop-offs.
         </div>
       )}
 
-      {runners.length > 0 && shown.length === 0 && (
+      {deviceBuyers.length > 0 && shown.length === 0 && (
         <div className="text-center text-slate-400 text-sm py-8">No drop-offs to show.</div>
       )}
 
@@ -166,7 +166,7 @@ const EntriesTab: React.FC<{
                   <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${STATUS_META[d.status].cls}`}>{STATUS_META[d.status].label}</span>
                 </div>
                 <p className="text-xs text-slate-400 mt-1">
-                  {runnerName(d.runnerId)} · {d.imei || 'No IMEI'} · {d.dateDropped}
+                  {buyerName(d.buyerId)} · {d.imei || 'No IMEI'} · {d.dateDropped}
                   {d.sellerName && ` · seller: ${d.sellerName}`}
                 </p>
                 <div className="flex gap-4 mt-2 text-xs">
@@ -227,9 +227,9 @@ const EntriesTab: React.FC<{
             </div>
             <div className="p-5 grid grid-cols-2 gap-3">
               <div className="col-span-2">
-                <label className={lbl}>Runner *</label>
-                <select autoFocus className={inp} value={form.runnerId} onChange={e => set('runnerId', e.target.value)}>
-                  {runners.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                <label className={lbl}>Device Buyer *</label>
+                <select autoFocus className={inp} value={form.buyerId} onChange={e => set('buyerId', e.target.value)}>
+                  {deviceBuyers.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
                 </select>
               </div>
               <div className="col-span-2">
@@ -288,7 +288,7 @@ const EntriesTab: React.FC<{
             </div>
             <div className="px-5 py-3 border-t border-slate-100 dark:border-slate-800 flex justify-end gap-2">
               <button onClick={() => setShowForm(false)} className="px-4 py-2 text-sm rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">Cancel</button>
-              <button onClick={save} disabled={!form.runnerId || !form.item} className="px-4 py-2 text-sm rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white font-medium">Save Drop-Off</button>
+              <button onClick={save} disabled={!form.buyerId || !form.item} className="px-4 py-2 text-sm rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white font-medium">Save Drop-Off</button>
             </div>
           </div>
         </div>
@@ -297,24 +297,24 @@ const EntriesTab: React.FC<{
   );
 };
 
-/* ---------------- Runners ---------------- */
+/* ---------------- DeviceBuyers ---------------- */
 
-const RunnersTab: React.FC<{
-  runners: Runner[]; dropOffs: DropOff[];
-  onRunnersChange: (r: Runner[]) => void;
-}> = ({ runners, dropOffs, onRunnersChange }) => {
-  const [form, setForm] = useState<Runner>({ id: '', name: '', phone: '', notes: '' });
+const DeviceBuyersTab: React.FC<{
+  deviceBuyers: DeviceBuyer[]; dropOffs: DropOff[];
+  onDeviceBuyersChange: (r: DeviceBuyer[]) => void;
+}> = ({ deviceBuyers, dropOffs, onDeviceBuyersChange }) => {
+  const [form, setForm] = useState<DeviceBuyer>({ id: '', name: '', phone: '', notes: '' });
   const [editing, setEditing] = useState(false);
 
   const save = () => {
     if (!form.name) return;
-    if (editing) onRunnersChange(runners.map(r => r.id === form.id ? form : r));
-    else onRunnersChange([...runners, { ...form, id: uid() }]);
+    if (editing) onDeviceBuyersChange(deviceBuyers.map(r => r.id === form.id ? form : r));
+    else onDeviceBuyersChange([...deviceBuyers, { ...form, id: uid() }]);
     setForm({ id: '', name: '', phone: '', notes: '' });
     setEditing(false);
   };
-  const edit = (r: Runner) => { setForm(r); setEditing(true); };
-  const remove = (id: string) => onRunnersChange(runners.filter(r => r.id !== id));
+  const edit = (r: DeviceBuyer) => { setForm(r); setEditing(true); };
+  const remove = (id: string) => onDeviceBuyersChange(deviceBuyers.filter(r => r.id !== id));
 
   const inp = 'w-full p-2 bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-md text-sm focus:ring-indigo-500 focus:border-indigo-500';
 
@@ -322,11 +322,11 @@ const RunnersTab: React.FC<{
     <div className="grid md:grid-cols-2 gap-6">
       {/* Form */}
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl p-5 h-fit">
-        <h3 className="font-semibold text-slate-800 dark:text-slate-100 mb-3">{editing ? 'Edit Runner' : 'Add Runner'}</h3>
+        <h3 className="font-semibold text-slate-800 dark:text-slate-100 mb-3">{editing ? 'Edit DeviceBuyer' : 'Add DeviceBuyer'}</h3>
         <div className="space-y-3">
           <div className="relative">
             <User className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-            <input className={`${inp} pl-9`} placeholder="Runner name *" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
+            <input className={`${inp} pl-9`} placeholder="Device buyer name *" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
           </div>
           <div className="relative">
             <Phone className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -334,7 +334,7 @@ const RunnersTab: React.FC<{
           </div>
           <textarea className={inp} rows={2} placeholder="Notes" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} />
           <div className="flex gap-2">
-            <button onClick={save} disabled={!form.name} className="flex-1 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white rounded-lg text-sm font-medium">{editing ? 'Save Changes' : 'Add Runner'}</button>
+            <button onClick={save} disabled={!form.name} className="flex-1 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white rounded-lg text-sm font-medium">{editing ? 'Save Changes' : 'Add DeviceBuyer'}</button>
             {editing && <button onClick={() => { setForm({ id: '', name: '', phone: '', notes: '' }); setEditing(false); }} className="px-4 py-2 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-lg text-sm">Cancel</button>}
           </div>
         </div>
@@ -342,9 +342,9 @@ const RunnersTab: React.FC<{
 
       {/* List */}
       <div className="space-y-3">
-        {runners.length === 0 && <p className="text-slate-400 text-sm text-center py-8">No runners yet.</p>}
-        {runners.map(r => {
-          const bal = runnerBalance(r.id, dropOffs);
+        {deviceBuyers.length === 0 && <p className="text-slate-400 text-sm text-center py-8">No deviceBuyers yet.</p>}
+        {deviceBuyers.map(r => {
+          const bal = deviceBuyerBalance(r.id, dropOffs);
           return (
             <div key={r.id} className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-4">
               <div className="flex items-start justify-between">
@@ -378,30 +378,30 @@ const PAYMENT_METHODS: { value: SettlementPaymentMethod; label: string }[] = [
 ];
 
 const SettlementTab: React.FC<{
-  runners: Runner[]; dropOffs: DropOff[]; settlements: Settlement[];
+  deviceBuyers: DeviceBuyer[]; dropOffs: DropOff[]; settlements: Settlement[];
   onSettle: (settlement: Settlement) => void;
-}> = ({ runners, dropOffs, settlements, onSettle }) => {
-  const [runnerId, setRunnerId] = useState(runners[0]?.id || '');
+}> = ({ deviceBuyers, dropOffs, settlements, onSettle }) => {
+  const [buyerId, setBuyerId] = useState(deviceBuyers[0]?.id || '');
   const [notes, setNotes] = useState('');
   const [paymentMethod, setPaymentMethod] = useState<SettlementPaymentMethod>('cash');
   // A double-tap on "Confirm Settlement" (in the review modal) before
   // `dropOffs` reflects the first settlement (async — the live subscription
-  // hasn't refreshed yet) would otherwise settle — and pay — the same runner
+  // hasn't refreshed yet) would otherwise settle — and pay — the same device buyer
   // twice for the same batch. This guard wraps the actual commit regardless
   // of whether it's reached via the review modal or (hypothetically) some
   // other path, so reviewing/printing can never create a way around it.
   const { isSubmitting, run } = useSubmitGuard();
   // Review screen state: open + a stable settlement id generated once when
   // opened, reused by both the pre-commit print preview (inside the modal)
-  // and the final commit below, so the invoice a runner checks before
+  // and the final commit below, so the invoice a device buyer checks before
   // agreeing and the one re-printable from history afterward are the exact
   // same settlement id.
   const [reviewing, setReviewing] = useState(false);
   const [reviewSettlementId, setReviewSettlementId] = useState('');
   const storeName = getStoreProfile().storeName;
 
-  // Settle everything accepted/paid-out & not yet settled/rejected for this runner
-  const pending = settleableDropOffs(runnerId, dropOffs);
+  // Settle everything accepted/paid-out & not yet settled/rejected for this device buyer
+  const pending = settleableDropOffs(buyerId, dropOffs);
   const { cashFronted, totalFees, amountToPay } = settlementTotals(pending);
 
   const openReview = () => {
@@ -413,14 +413,14 @@ const SettlementTab: React.FC<{
   const confirmSettlement = (lines: SettlementReviewLine[], adjustmentAmount: number, adjustmentNote: string) => {
     run(() => {
       const settlement = buildSettlementFromReview(
-        { id: reviewSettlementId, runnerId, date: today(), paymentMethod, notes },
+        { id: reviewSettlementId, buyerId, date: today(), paymentMethod, notes },
         pending, lines, adjustmentAmount, adjustmentNote,
       );
-      // onSettle (App.tsx's handleSettleRunner → services/firestoreDb.ts's
-      // settleRunner) saves the settlement AND flags every drop-off in
+      // onSettle (App.tsx's handleSettleDeviceBuyer → services/firestoreDb.ts's
+      // settleDeviceBuyer) saves the settlement AND flags every drop-off in
       // dropOffIds 'settled' in one atomic batch — a separate onDropOffsChange
       // call here would be a second, untracked write racing the same status
-      // transition, exactly the gap that let a runner's drop-offs stay eligible
+      // transition, exactly the gap that let a device buyer's drop-offs stay eligible
       // for a second settlement. Anything excluded on the review screen is
       // simply never in dropOffIds, so it's untouched by this batch and stays
       // eligible for a later settlement. The live subscription refreshes
@@ -431,12 +431,12 @@ const SettlementTab: React.FC<{
     });
   };
 
-  const runnerName = (id: string) => runners.find(r => r.id === id)?.name || 'Unknown';
-  const history = settlements.filter(s => s.runnerId === runnerId).sort((a, b) => b.date.localeCompare(a.date));
-  const reviewRunner = runners.find(r => r.id === runnerId);
+  const buyerName = (id: string) => deviceBuyers.find(r => r.id === id)?.name || 'Unknown';
+  const history = settlements.filter(s => s.buyerId === buyerId).sort((a, b) => b.date.localeCompare(a.date));
+  const reviewBuyer = deviceBuyers.find(r => r.id === buyerId);
 
-  if (runners.length === 0) {
-    return <p className="text-slate-400 text-sm text-center py-8">Add a runner to run settlements.</p>;
+  if (deviceBuyers.length === 0) {
+    return <p className="text-slate-400 text-sm text-center py-8">Add a device buyer to run settlements.</p>;
   }
 
   return (
@@ -448,10 +448,10 @@ const SettlementTab: React.FC<{
         </div>
 
         <div>
-          <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Runner</label>
-          <select value={runnerId} onChange={e => setRunnerId(e.target.value)}
+          <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">DeviceBuyer</label>
+          <select value={buyerId} onChange={e => setBuyerId(e.target.value)}
             className="w-full p-2 bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-md text-sm">
-            {runners.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+            {deviceBuyers.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
           </select>
         </div>
 
@@ -470,11 +470,11 @@ const SettlementTab: React.FC<{
 
         <div className="space-y-1.5 text-sm">
           <Row label={`Devices this settlement`} value={`${pending.length}`} raw />
-          <Row label="Purchase cash fronted by runner" value={cashFronted} />
+          <Row label="Purchase cash fronted by device buyer" value={cashFronted} />
           <Row label="Total drop-off fees" value={totalFees} />
           <div className="border-t border-slate-100 dark:border-slate-800 my-1" />
           <div className="flex items-center justify-between">
-            <span className="font-semibold text-slate-700 dark:text-slate-200 flex items-center gap-1"><Wallet className="w-4 h-4" /> Total to pay runner</span>
+            <span className="font-semibold text-slate-700 dark:text-slate-200 flex items-center gap-1"><Wallet className="w-4 h-4" /> Total to pay device buyer</span>
             <span className="text-lg font-bold text-indigo-600 dark:text-indigo-400">{money(amountToPay)}</span>
           </div>
         </div>
@@ -505,7 +505,7 @@ const SettlementTab: React.FC<{
 
       {/* History */}
       <div>
-        <h3 className="font-semibold text-slate-800 dark:text-slate-100 mb-3 flex items-center gap-2"><ClipboardList className="w-4 h-4 text-slate-400" /> Settlement History — {runnerName(runnerId)}</h3>
+        <h3 className="font-semibold text-slate-800 dark:text-slate-100 mb-3 flex items-center gap-2"><ClipboardList className="w-4 h-4 text-slate-400" /> Settlement History — {buyerName(buyerId)}</h3>
         <div className="space-y-3">
           {history.length === 0 && <p className="text-slate-400 text-sm">No settlements yet.</p>}
           {history.map(s => (
@@ -526,7 +526,7 @@ const SettlementTab: React.FC<{
               {!!s.lineAdjustments?.length && (
                 <p className="text-xs text-amber-600 dark:text-amber-400 mt-0.5">{s.lineAdjustments.length} device fee{s.lineAdjustments.length !== 1 ? 's' : ''} corrected on review</p>
               )}
-              <button onClick={() => printSettlementInvoice(s, runners.find(r => r.id === s.runnerId), dropOffs, { storeName })}
+              <button onClick={() => printSettlementInvoice(s, deviceBuyers.find(r => r.id === s.buyerId), dropOffs, { storeName })}
                 className="mt-2 flex items-center gap-1 text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:underline">
                 <FileText className="w-3.5 h-3.5" /> Print Invoice
               </button>
@@ -535,9 +535,9 @@ const SettlementTab: React.FC<{
         </div>
       </div>
 
-      {reviewing && reviewRunner && (
+      {reviewing && reviewBuyer && (
         <SettlementReviewModal
-          runner={reviewRunner}
+          buyer={reviewBuyer}
           dropOffs={pending}
           settlementId={reviewSettlementId}
           date={today()}

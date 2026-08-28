@@ -1,8 +1,8 @@
-import { Settlement, DropOff, Runner, SettlementPaymentMethod } from '../types';
+import { Settlement, DropOff, DeviceBuyer, SettlementPaymentMethod } from '../types';
 import { PRINT_PREVIEW_BAR_STYLE, PRINT_PREVIEW_BAR_HTML } from './printPreview';
 import { settlementDirection, settlementDirectionLabel } from '../domain/dropoffs';
 
-// A standard-paper invoice for a completed (or about-to-be-completed) runner
+// A standard-paper invoice for a completed (or about-to-be-completed) device buyer
 // settlement — NOT a thermal receipt, NOT a Dymo label, same regular-paper
 // print pattern as services/repairPrint.ts's openPrint. One page, letter-ish
 // width, browser's normal print dialog / default paper size.
@@ -12,7 +12,7 @@ import { settlementDirection, settlementDirectionLabel } from '../domain/dropoff
 //  - BEFORE committing, from the review screen (components/
 //    SettlementReviewModal.tsx) — `settlement` there is a draft built by
 //    domain/dropoffs.ts's buildSettlementFromReview, not yet written
-//    anywhere, so the runner can check the exact breakdown before agreeing.
+//    anywhere, so the device buyer can check the exact breakdown before agreeing.
 //  - AFTER committing, re-printed from settlement history
 //    (components/DropOffView.tsx) — same function, the real saved record.
 const money = (n?: number) => `$${(n || 0).toFixed(2)}`;
@@ -22,7 +22,7 @@ const PAYMENT_LABEL: Record<SettlementPaymentMethod, string> = {
   cash: 'Cash', etransfer: 'E-Transfer', other: 'Other',
 };
 
-const PAID_BY_LABEL: Record<string, string> = { runner: 'Runner paid', store: 'Store paid', personal: 'Personal paid' };
+const PAID_BY_LABEL: Record<string, string> = { runner: 'Device buyer paid', store: 'Store paid', personal: 'Personal paid' };
 
 // The full print document, built as a pure string — no window/DOM — so the
 // exact markup (and, critically, the totals baked into it) can be asserted
@@ -31,7 +31,7 @@ const PAID_BY_LABEL: Record<string, string> = { runner: 'Runner paid', store: 'S
 // actually opens the window and writes this out.
 export function settlementInvoiceHtml(
   settlement: Settlement,
-  runner: Runner | undefined,
+  buyer: DeviceBuyer | undefined,
   allDropOffs: DropOff[],
   opts: { storeName?: string } = {},
 ): string {
@@ -56,7 +56,7 @@ export function settlementInvoiceHtml(
 
   const method = settlement.paymentMethod || 'cash';
   const direction = settlementDirection(settlement.amountPaid);
-  const directionCls = direction === 'runner_owes' ? 'owe' : '';
+  const directionCls = direction === 'buyer_owes_store' ? 'owe' : '';
 
   return `<html><head><title>Settlement Invoice ${esc(settlement.id)}</title>
     <style>
@@ -77,8 +77,8 @@ export function settlementInvoiceHtml(
       ${PRINT_PREVIEW_BAR_STYLE}
     </style></head><body>${PRINT_PREVIEW_BAR_HTML}
       <h2>${esc(store)}</h2>
-      <div class="sub">Runner Settlement Invoice — ${esc(settlement.id)}</div>
-      <div class="row"><span class="k">Runner</span><span class="b">${esc(runner?.name || 'Unknown')}</span></div>
+      <div class="sub">Device Buyer Settlement Invoice — ${esc(settlement.id)}</div>
+      <div class="row"><span class="k">DeviceBuyer</span><span class="b">${esc(buyer?.name || 'Unknown')}</span></div>
       <div class="row"><span class="k">Settlement date</span><span>${esc(settlement.date)}</span></div>
       <div class="row"><span class="k">Settlement ID</span><span>${esc(settlement.id)}</span></div>
       <div class="row"><span class="k">Payment method</span><span>${esc(PAYMENT_LABEL[method])}</span></div>
@@ -88,7 +88,7 @@ export function settlementInvoiceHtml(
         <tbody>${rows}</tbody>
       </table>
       <div class="tot">
-        <div class="row"><span class="k">Purchase cash fronted by runner</span><span>${money(settlement.totalPurchaseFronted)}</span></div>
+        <div class="row"><span class="k">Purchase cash fronted by device buyer</span><span>${money(settlement.totalPurchaseFronted)}</span></div>
         <div class="row"><span class="k">Total drop-off fees</span><span>${money(settlement.totalFees)}</span></div>
         ${settlement.adjustmentAmount != null ? `<div class="row"><span class="k">Adjustment${settlement.adjustmentNote ? ` — ${esc(settlement.adjustmentNote)}` : ''}</span><span>${settlement.adjustmentAmount < 0 ? '-' : '+'}${money(Math.abs(settlement.adjustmentAmount))}</span></div>` : ''}
         <div class="row b" style="margin-top:2px"><span>Net amount</span><span>${money(Math.abs(settlement.amountPaid))}</span></div>
@@ -96,7 +96,7 @@ export function settlementInvoiceHtml(
       <div class="direction ${directionCls}">${esc(settlementDirectionLabel(settlement.amountPaid, direction))}</div>
       ${settlement.notes ? `<h3>Notes</h3><p style="font-size:11px;color:#333">${esc(settlement.notes)}</p>` : ''}
       <div class="sig">
-        <div class="line"><div class="rule"></div>Runner signature</div>
+        <div class="line"><div class="rule"></div>Device buyer signature</div>
         <div class="line"><div class="rule"></div>${esc(store)} signature</div>
       </div>
       <div class="foot">Settlement ${esc(settlement.id)}</div>
@@ -105,13 +105,13 @@ export function settlementInvoiceHtml(
 
 export function printSettlementInvoice(
   settlement: Settlement,
-  runner: Runner | undefined,
+  buyer: DeviceBuyer | undefined,
   allDropOffs: DropOff[],
   opts: { storeName?: string } = {},
 ): boolean {
   const win = window.open('', '_blank', 'width=420,height=640');
   if (!win) return false;
-  win.document.write(settlementInvoiceHtml(settlement, runner, allDropOffs, opts));
+  win.document.write(settlementInvoiceHtml(settlement, buyer, allDropOffs, opts));
   win.document.close();
   return true;
 }

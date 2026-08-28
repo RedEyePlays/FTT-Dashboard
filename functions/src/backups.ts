@@ -13,10 +13,17 @@ if (!admin.apps.length) admin.initializeApp();
 // stays complete. This drifted out of sync once already (cashReconciliations
 // and staffNotes were missing here for a while) — there is no automated check
 // that catches this, so double-check the two lists match on every change.
+//
+// NOTE on "runners": this collection stores DEVICE BUYERS. The concept was
+// renamed from "runner" to "device buyer" throughout the UI and code, but the
+// stored collection name was deliberately left as `runners` for data
+// continuity — zero migration risk. See the matching note in
+// services/firestoreDb.ts.
 const COLLECTIONS = [
   "inventory", "accessories", "salesTransactions", "customers",
   "dropOffs", "runners", "settlements", "activityLog", "auditLogs",
-  "repairs", "repairBatches", "timeEntries", "payPeriods", "cashReconciliations", "staffNotes",
+  "repairs", "repairBatches", "timeEntries", "payPeriods", "payPeriodApprovals",
+  "cashReconciliations", "staffNotes", "expenses", "recurringExpenses",
 ] as const;
 
 const HOUR_MS = 3_600_000;

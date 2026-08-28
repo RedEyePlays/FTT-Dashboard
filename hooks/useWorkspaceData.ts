@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { User, signOut } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
 import {
-  InventoryItem, Note, Task, Runner, DropOff, Settlement, Customer, SalesTransaction,
+  InventoryItem, Note, Task, DeviceBuyer, DropOff, Settlement, Customer, SalesTransaction,
   ActivityEntry, AppUser, WorkspaceInvite, AuditEntry, Repair, RepairBatch, TimeEntry, PayPeriodPaid, PayPeriodApproval, CashReconciliation, StaffNote,
   Expense, RecurringExpense,
 } from '../types';
@@ -10,6 +10,7 @@ import { decryptData } from '../services/security';
 import { AppSettings, mergeSettings } from '../domain/settings';
 import { auth, db } from '../services/firebase';
 import { onAuthChange } from '../services/auth';
+import { withResolvedBuyerId } from '../domain/dropoffs';
 import {
   subscribeCollection, subscribeMeta, migrateLegacyIfNeeded,
   getUserDoc, setUserDoc, updateUserDoc, subscribeWorkspaceUsers, getInvite, deleteInvite,
@@ -44,7 +45,7 @@ export function useWorkspaceData() {
   const data = useMemo(() => [...devices, ...accessories], [devices, accessories]);
   const [notes, setNotes] = useState<Note[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [runners, setRunners] = useState<Runner[]>([]);
+  const [deviceBuyers, setDeviceBuyers] = useState<DeviceBuyer[]>([]);
   const [dropOffs, setDropOffs] = useState<DropOff[]>([]);
   const [settlements, setSettlements] = useState<Settlement[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -93,7 +94,7 @@ export function useWorkspaceData() {
   const [auditLimit, setAuditLimit] = useState(AUDIT_PAGE);
 
   // Refs for latest snapshots (used to diff array-based updates + SKU gen)
-  const runnersRef = useRef<Runner[]>([]);
+  const deviceBuyersRef = useRef<DeviceBuyer[]>([]);
   const dropOffsRef = useRef<DropOff[]>([]);
   const settlementsRef = useRef<Settlement[]>([]);
   const customersRef = useRef<Customer[]>([]);
@@ -102,7 +103,7 @@ export function useWorkspaceData() {
   const repairBatchesRef = useRef<RepairBatch[]>([]);
   const skuRef = useRef<Record<string, number>>({});
   const dataRef = useRef<InventoryItem[]>([]);
-  useEffect(() => { runnersRef.current = runners; }, [runners]);
+  useEffect(() => { deviceBuyersRef.current = deviceBuyers; }, [deviceBuyers]);
   useEffect(() => { dropOffsRef.current = dropOffs; }, [dropOffs]);
   useEffect(() => { settlementsRef.current = settlements; }, [settlements]);
   useEffect(() => { customersRef.current = customers; }, [customers]);
@@ -118,7 +119,7 @@ export function useWorkspaceData() {
       setUser(u);
       if (!u) {
         setDevices([]); setAccessories([]); setNotes([]); setTasks([]);
-        setRunners([]); setDropOffs([]); setSettlements([]); setCustomers([]);
+        setDeviceBuyers([]); setDropOffs([]); setSettlements([]); setCustomers([]);
         setSalesTransactions([]); setRepairs([]); setRepairBatches([]); setTimeEntries([]); setPayPeriods([]); setActivityLog([]); setSkuCounters({});
         setAppUser(null); setWorkspaceUsers([]); setInvites([]); setAuditLogs([]); setStaffNotes([]); setExtendedEnabled(false); setCashEnabled(false);
         setDbLoading(false); setRoleLoading(false);
@@ -187,7 +188,7 @@ export function useWorkspaceData() {
     const subs = [
       subscribeCollection<InventoryItem>(wsId, 'inventory', rows => { setDevices(rows); setDbLoading(false); }, onErr),
       subscribeCollection<InventoryItem>(wsId, 'accessories', setAccessories, onErr),
-      subscribeCollection<Runner>(wsId, 'runners', setRunners, onErr),
+      subscribeCollection<DeviceBuyer>(wsId, 'runners', setDeviceBuyers, onErr),
       subscribeCollection<Customer>(wsId, 'customers', setCustomers, onErr),
       subscribeCollection<SalesTransaction>(wsId, 'salesTransactions', setSalesTransactions, onErr),
       subscribeCollection<Repair>(wsId, 'repairs', setRepairs, onErr),
@@ -214,8 +215,14 @@ export function useWorkspaceData() {
     if (!user || !appUser || !workspaceId || !extendedEnabled) return;
     const onErr = (e: Error) => { console.error('Firestore error (extended):', e); setDbError(e.message || 'Failed to load data'); };
     const subs = [
-      subscribeCollection<DropOff>(workspaceId, 'dropOffs', setDropOffs, onErr),
-      subscribeCollection<Settlement>(workspaceId, 'settlements', setSettlements, onErr),
+      // Legacy-field normalization boundary. Documents written before the
+      // Runner→Device Buyer rename carry `runnerId` instead of `buyerId`, and
+      // deliberately were NOT migrated (see types.ts's DropOff.buyerId). This
+      // is the ONE place that resolves it: every DropOff/Settlement gets
+      // `buyerId` backfilled here, so no component, domain function or write
+      // handler downstream ever has to know the legacy name existed.
+      subscribeCollection<DropOff>(workspaceId, 'dropOffs', rows => setDropOffs(rows.map(withResolvedBuyerId<DropOff>)), onErr),
+      subscribeCollection<Settlement>(workspaceId, 'settlements', rows => setSettlements(rows.map(withResolvedBuyerId<Settlement>)), onErr),
       subscribeCollection<TimeEntry>(workspaceId, 'timeEntries', setTimeEntries, onErr),
       subscribeCollection<PayPeriodPaid>(workspaceId, 'payPeriods', setPayPeriods, onErr),
       subscribeCollection<PayPeriodApproval>(workspaceId, 'payPeriodApprovals', setPayPeriodApprovals, onErr),
@@ -282,7 +289,7 @@ export function useWorkspaceData() {
     auditHasMore: auditLogs.length >= auditLimit,
     // collections
     devices, accessories, data, notes, setNotes, tasks, setTasks,
-    runners, dropOffs, settlements, customers, salesTransactions,
+    deviceBuyers, dropOffs, settlements, customers, salesTransactions,
     repairs, repairBatches, timeEntries, payPeriods, payPeriodApprovals, cashReconciliations, staffNotes,
     expenses, recurringExpenses,
     skuCounters, setSkuCounters, activityLog, lastBackup, settings,
@@ -292,7 +299,7 @@ export function useWorkspaceData() {
     // Idempotent — safe to call on every render of those views.
     enableExtendedData, enableCashData,
     // latest-snapshot refs
-    runnersRef, dropOffsRef, settlementsRef, customersRef, salesTransactionsRef,
+    deviceBuyersRef, dropOffsRef, settlementsRef, customersRef, salesTransactionsRef,
     repairsRef, repairBatchesRef, skuRef, dataRef,
   };
 }

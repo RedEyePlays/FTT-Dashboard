@@ -1,4 +1,5 @@
-import { SalesTransaction, InventoryItem, PayPeriodPaid, CashReconciliation, CashDrawerEntry, Settlement, Runner, Expense } from '../types';
+import { SalesTransaction, InventoryItem, PayPeriodPaid, CashReconciliation, CashDrawerEntry, Settlement, DeviceBuyer, Expense } from '../types';
+import { settlementFeeTotals } from './dropoffs';
 import { isReversed } from './pos';
 import { kindOf } from './inventory';
 import { ExpenseCategory, plExpenseTotal, expenseTotalsByCategory, CategoryTotal } from './expenses';
@@ -300,26 +301,34 @@ export const isRecognizedSale = (t: SalesTransaction): boolean => !isReversed(t)
 const inDateRange = (dateISO: string | undefined, lo: string, hi: string): boolean => !!dateISO && dateISO >= lo && dateISO <= hi;
 const order = (start: string, end: string): [string, string] => (start <= end ? [start, end] : [end, start]);
 
-// --- Part 3: runner settlement history ------------------------------------
-// Settlement records already carry the money facts: totalFees (commission paid
-// to the runner), totalPurchaseFronted (reimbursement of what the runner paid
-// sellers — that becomes device purchaseCost/COGS), and amountPaid (net cash
-// paid). Pure aggregation over the existing records; no new tracking.
+// --- Part 3: device buyer settlement history ------------------------------------
+// Settlement records already carry the money facts: totalFees (the drop-off fee
+// — which may be owed BY the device buyer TO the store, or paid BY the store TO
+// the buyer, depending on the settlement's feeDirection; see
+// domain/dropoffs.ts's settlementFeeDirection), totalPurchaseFronted
+// (reimbursement of what the device buyer paid sellers — that becomes device
+// purchaseCost/COGS), and amountPaid (net cash moved). Pure aggregation over
+// the existing records; no new tracking.
+//
+// The aggregates below are a plain sum of the fees on each settlement in range,
+// regardless of direction — a "how much fee money changed hands" view. The
+// income-vs-expense split that net profit depends on lives in
+// settlementFeeTotals / profitAndLoss, NOT here.
 
-export interface RunnerSettlementRow {
-  runnerId: string;
-  runnerName: string;
+export interface DeviceBuyerSettlementRow {
+  buyerId: string;
+  buyerName: string;
   settlementCount: number;
-  totalFees: number;        // Σ commission
+  totalFees: number;        // Σ drop-off fees (either direction — see header)
   totalFronted: number;     // Σ seller-purchase reimbursement
-  totalPaid: number;        // Σ net cash paid to the runner
+  totalPaid: number;        // Σ net cash moved (negative = the buyer owed the store)
 }
 
 export interface SettlementLine {
   id: string;
   date: string;
-  runnerId: string;
-  runnerName: string;
+  buyerId: string;
+  buyerName: string;
   totalFees: number;
   totalFronted: number;
   amountPaid: number;
@@ -328,7 +337,7 @@ export interface SettlementLine {
 export interface SettlementHistory {
   start: string;
   end: string;
-  perRunner: RunnerSettlementRow[];
+  perBuyer: DeviceBuyerSettlementRow[];
   lines: SettlementLine[];   // individual settlements in range, newest first
   totalFees: number;
   totalFronted: number;
@@ -338,34 +347,34 @@ export interface SettlementHistory {
 
 export const settlementHistory = (
   settlements: Settlement[],
-  runners: Runner[],
+  deviceBuyers: DeviceBuyer[],
   start: string,
   end: string,
 ): SettlementHistory => {
   const [lo, hi] = order(start, end);
-  const nameOf = new Map(runners.map(r => [r.id, r.name]));
+  const nameOf = new Map(deviceBuyers.map(r => [r.id, r.name]));
   const inRangeSettlements = settlements.filter(s => inDateRange(s.date, lo, hi));
 
-  const byRunner = new Map<string, RunnerSettlementRow>();
+  const byBuyer = new Map<string, DeviceBuyerSettlementRow>();
   let totalFees = 0, totalFronted = 0, totalPaid = 0;
   const lines: SettlementLine[] = [];
 
   for (const s of inRangeSettlements) {
-    const runnerName = nameOf.get(s.runnerId) || 'Unknown runner';
+    const buyerName = nameOf.get(s.buyerId) || 'Unknown device buyer';
     const fees = s.totalFees || 0, fronted = s.totalPurchaseFronted || 0, paid = s.amountPaid || 0;
-    lines.push({ id: s.id, date: s.date, runnerId: s.runnerId, runnerName, totalFees: fees, totalFronted: fronted, amountPaid: paid });
-    const row = byRunner.get(s.runnerId) || { runnerId: s.runnerId, runnerName, settlementCount: 0, totalFees: 0, totalFronted: 0, totalPaid: 0 };
+    lines.push({ id: s.id, date: s.date, buyerId: s.buyerId, buyerName, totalFees: fees, totalFronted: fronted, amountPaid: paid });
+    const row = byBuyer.get(s.buyerId) || { buyerId: s.buyerId, buyerName, settlementCount: 0, totalFees: 0, totalFronted: 0, totalPaid: 0 };
     row.settlementCount += 1;
     row.totalFees = round2(row.totalFees + fees);
     row.totalFronted = round2(row.totalFronted + fronted);
     row.totalPaid = round2(row.totalPaid + paid);
-    byRunner.set(s.runnerId, row);
+    byBuyer.set(s.buyerId, row);
     totalFees = round2(totalFees + fees); totalFronted = round2(totalFronted + fronted); totalPaid = round2(totalPaid + paid);
   }
 
   return {
     start: lo, end: hi,
-    perRunner: [...byRunner.values()].sort((a, b) => b.totalPaid - a.totalPaid),
+    perBuyer: [...byBuyer.values()].sort((a, b) => b.totalPaid - a.totalPaid),
     lines: lines.sort((a, b) => b.date.localeCompare(a.date)),
     totalFees, totalFronted, totalPaid, count: lines.length,
   };
@@ -386,7 +395,7 @@ export interface ProfitLossInput {
   // handleSaveExpense), so cashReconciliations.cashOut is no longer summed
   // independently here — doing so would double-count it. See the PR
   // description for the full double-counting analysis (cash expenses,
-  // payroll, runner commissions).
+  // payroll, device buyer fees).
   expenses: Expense[];
   expenseCategories: ExpenseCategory[];
 }
@@ -400,8 +409,14 @@ export interface ProfitLoss {
   payroll: number;           // gross pay of pay periods paid in range
   expenses: number;          // expense ledger total in range, any payment method, excl. Wages-flagged categories
   expensesByCategory: CategoryTotal[];
-  runnerCommissions: number; // settlement fees (commission only — see note in PR)
-  netProfit: number;         // grossProfit − payroll − expenses − runnerCommissions
+  // Drop-off fees split by direction (see domain/dropoffs.ts's
+  // settlementFeeDirection). These are NOT a single signed "commissions"
+  // figure: in this shop the fee often flows TO the store, and both
+  // arrangements coexist across buyers/settlements.
+  deviceBuyerFeesCollected: number; // fees the buyer owed the store — INCOME
+  deviceBuyerFeesPaid: number;      // fees the store paid the buyer — EXPENSE
+  // grossProfit − payroll − expenses + deviceBuyerFeesCollected − deviceBuyerFeesPaid
+  netProfit: number;
 }
 
 export const profitAndLoss = (input: ProfitLossInput, start: string, end: string): ProfitLoss => {
@@ -435,15 +450,20 @@ export const profitAndLoss = (input: ProfitLossInput, start: string, end: string
   const expensesTotal = plExpenseTotal(expenses, expenseCategories, lo, hi);
   const expensesByCategory = expenseTotalsByCategory(expenses, expenseCategories, lo, hi);
 
-  const runnerCommissions = round2(settlements
-    .filter(s => inDateRange(s.date, lo, hi))
-    .reduce((s, x) => s + (x.totalFees || 0), 0));
+  // Drop-off fees are direction-aware: a fee the device buyer owes the STORE is
+  // income and RAISES net profit; a fee the store pays the buyer is an expense
+  // and lowers it. This previously subtracted every fee unconditionally, which
+  // understated profit by 2× the fee on every buyer-owes-store settlement.
+  const feeTotals = settlementFeeTotals(settlements.filter(s => inDateRange(s.date, lo, hi)));
 
   const grossProfit = round2(revenue - costOfGoods);
-  const netProfit = round2(grossProfit - payroll - expensesTotal - runnerCommissions);
+  const netProfit = round2(grossProfit - payroll - expensesTotal + feeTotals.netContribution);
   return {
     start: lo, end: hi, revenue, costOfGoods, grossProfit, payroll,
-    expenses: expensesTotal, expensesByCategory, runnerCommissions, netProfit,
+    expenses: expensesTotal, expensesByCategory,
+    deviceBuyerFeesCollected: feeTotals.feesCollected,
+    deviceBuyerFeesPaid: feeTotals.feesPaid,
+    netProfit,
   };
 };
 
@@ -459,7 +479,8 @@ export const profitLossCsvRows = (pl: ProfitLoss): Record<string, string | numbe
     Line: `Expense: ${c.label}${c.excludedFromPL ? ' (informational — not in net profit)' : ''}`,
     Amount: (-c.total).toFixed(2),
   })),
-  { Line: 'Runner commissions', Amount: (-pl.runnerCommissions).toFixed(2) },
+  { Line: 'Device buyer fees collected', Amount: pl.deviceBuyerFeesCollected.toFixed(2) },
+  { Line: 'Device buyer fees paid', Amount: (-pl.deviceBuyerFeesPaid).toFixed(2) },
   { Line: 'Net profit', Amount: pl.netProfit.toFixed(2) },
 ];
 
@@ -473,7 +494,9 @@ export interface YearEndSummary {
   payrollPaid: number;
   expenses: number;
   expensesByCategory: CategoryTotal[];
-  runnerCommissions: number;
+  // Same direction-aware split as ProfitLoss — see its doc comment.
+  deviceBuyerFeesCollected: number;
+  deviceBuyerFeesPaid: number;
   netProfit: number;
   salesTaxCollected: number;
 }
@@ -491,7 +514,8 @@ export const yearEndSummary = (input: ProfitLossInput, year: number): YearEndSum
     payrollPaid: pl.payroll,
     expenses: pl.expenses,
     expensesByCategory: pl.expensesByCategory,
-    runnerCommissions: pl.runnerCommissions,
+    deviceBuyerFeesCollected: pl.deviceBuyerFeesCollected,
+    deviceBuyerFeesPaid: pl.deviceBuyerFeesPaid,
     netProfit: pl.netProfit,
     salesTaxCollected: tax.totalTaxCollected,
   };
@@ -505,7 +529,8 @@ export const yearEndCsvRows = (s: YearEndSummary): Record<string, string | numbe
   { Metric: 'Gross profit', Value: s.grossProfit.toFixed(2) },
   { Metric: 'Payroll paid', Value: s.payrollPaid.toFixed(2) },
   ...s.expensesByCategory.map(c => ({ Metric: `Expense: ${c.label}${c.excludedFromPL ? ' (informational)' : ''}`, Value: c.total.toFixed(2) })),
-  { Metric: 'Runner commissions', Value: s.runnerCommissions.toFixed(2) },
+  { Metric: 'Device buyer fees collected', Value: s.deviceBuyerFeesCollected.toFixed(2) },
+  { Metric: 'Device buyer fees paid', Value: s.deviceBuyerFeesPaid.toFixed(2) },
   { Metric: 'Net profit', Value: s.netProfit.toFixed(2) },
   { Metric: 'Sales tax collected', Value: s.salesTaxCollected.toFixed(2) },
 ];

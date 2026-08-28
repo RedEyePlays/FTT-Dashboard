@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { X, CheckCircle, FileText, RotateCcw, AlertTriangle } from 'lucide-react';
-import { DropOff, Runner, SettlementPaymentMethod } from '../types';
+import { DropOff, DeviceBuyer, SettlementPaymentMethod } from '../types';
 import {
   SettlementReviewLine, initSettlementReview, settlementReviewTotals, buildSettlementFromReview,
   settlementDirection, settlementDirectionLabel,
@@ -9,11 +9,11 @@ import { printSettlementInvoice } from '../services/settlementInvoice';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 
 const money = (n: number) => `$${(n || 0).toFixed(2)}`;
-const PAID_BY_LABEL: Record<string, string> = { runner: 'Runner paid', store: 'Store paid', personal: 'Personal paid' };
+const PAID_BY_LABEL: Record<string, string> = { runner: 'Device buyer paid', store: 'Store paid', personal: 'Personal paid' };
 
 interface Props {
-  runner: Runner;
-  dropOffs: DropOff[]; // the settleable set for this runner (settleableDropOffs)
+  buyer: DeviceBuyer;
+  dropOffs: DropOff[]; // the settleable set for this buyer (settleableDropOffs)
   settlementId: string;
   date: string;
   paymentMethod: SettlementPaymentMethod;
@@ -35,7 +35,7 @@ interface Props {
 // writes to Firestore — this is pure review state until "Confirm Settlement"
 // is pressed, which hands the reviewed lines back up to SettlementTab.
 export const SettlementReviewModal: React.FC<Props> = ({
-  runner, dropOffs, settlementId, date, paymentMethod, notes, storeName, isSubmitting, onClose, onConfirm,
+  buyer, dropOffs, settlementId, date, paymentMethod, notes, storeName, isSubmitting, onClose, onConfirm,
 }) => {
   const [lines, setLines] = useState<SettlementReviewLine[]>(() => initSettlementReview(dropOffs));
   const [adjustmentAmount, setAdjustmentAmount] = useState('');
@@ -58,11 +58,11 @@ export const SettlementReviewModal: React.FC<Props> = ({
   };
 
   const draftSettlement = () => buildSettlementFromReview(
-    { id: settlementId, runnerId: runner.id, date, paymentMethod, notes },
+    { id: settlementId, buyerId: buyer.id, date, paymentMethod, notes },
     dropOffs, lines, adjAmount, adjustmentNote,
   );
 
-  const printPreview = () => printSettlementInvoice(draftSettlement(), runner, dropOffs, { storeName });
+  const printPreview = () => printSettlementInvoice(draftSettlement(), buyer, dropOffs, { storeName });
 
   const confirm = () => {
     if (totals.deviceCount === 0) return;
@@ -74,8 +74,8 @@ export const SettlementReviewModal: React.FC<Props> = ({
       <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-2xl border border-slate-200 dark:border-slate-700 max-h-[92vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
         <div className="px-5 py-3 border-b border-slate-100 dark:border-slate-800 flex justify-between items-center sticky top-0 bg-white dark:bg-slate-900 z-10">
           <div>
-            <h2 className="font-bold text-slate-800 dark:text-slate-100">Review Settlement — {runner.name}</h2>
-            <p className="text-xs text-slate-400">Check every line with the runner before confirming. Nothing is saved yet.</p>
+            <h2 className="font-bold text-slate-800 dark:text-slate-100">Review Settlement — {buyer.name}</h2>
+            <p className="text-xs text-slate-400">Check every line with the device buyer before confirming. Nothing is saved yet.</p>
           </div>
           <button onClick={onClose} aria-label="Close"><X className="w-5 h-5 text-slate-400" /></button>
         </div>
@@ -118,7 +118,7 @@ export const SettlementReviewModal: React.FC<Props> = ({
               <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Settlement-level adjustment ($)</label>
               <input type="number" step="0.01" value={adjustmentAmount} onChange={e => setAdjustmentAmount(e.target.value)}
                 placeholder="0.00" className="w-full p-2 bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-md text-sm" />
-              <p className="text-[11px] text-slate-400 mt-1">Positive adds to what's owed the runner; negative deducts. For a one-off correction not tied to a single device.</p>
+              <p className="text-[11px] text-slate-400 mt-1">Positive adds to what's owed the device buyer; negative deducts. For a one-off correction not tied to a single device.</p>
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Adjustment note</label>
@@ -133,11 +133,11 @@ export const SettlementReviewModal: React.FC<Props> = ({
 
           <div className="space-y-1.5 text-sm border-t border-slate-100 dark:border-slate-800 pt-3">
             <Row label="Devices this settlement" value={String(totals.deviceCount)} raw />
-            <Row label="Purchase cash fronted by runner" value={money(totals.cashFronted)} raw />
+            <Row label="Purchase cash fronted by device buyer" value={money(totals.cashFronted)} raw />
             <Row label="Total drop-off fees" value={money(totals.totalFees)} raw />
             {adjAmount !== 0 && <Row label="Settlement adjustment" value={`${adjAmount < 0 ? '-' : '+'}${money(Math.abs(adjAmount))}`} raw />}
             <div className="border-t border-slate-100 dark:border-slate-800 my-1" />
-            <div className={`rounded-lg p-2 text-center font-semibold ${direction === 'runner_owes' ? 'bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400' : 'bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-400'}`}>
+            <div className={`rounded-lg p-2 text-center font-semibold ${direction === 'buyer_owes_store' ? 'bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400' : 'bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-400'}`}>
               {settlementDirectionLabel(totals.netAmount, direction)}
             </div>
           </div>
