@@ -40,6 +40,71 @@ export function principalFunder(d: Pick<DropOff, 'paidBy'>): PrincipalFunder {
   return 'buyer';
 }
 
+// How a purchase was funded, in the words this app uses everywhere it shows a
+// drop-off's funding: the drop-off list, the settlement review screen and the
+// printed settlement invoice. Lives here, next to the model it describes, so
+// the printed drop-off label can't invent its own third phrasing for
+// 'personal' (the case most easily got wrong — see dropOffLabelMoney).
+export const PAID_BY_LABEL: Record<PaidBy, string> = {
+  runner: 'Buyer-funded (own money)', store: 'Store-funded (owed back)', personal: 'Owner-funded (owed back)',
+};
+
+/**
+ * What one device's buyer owes the store for it: the principal the store (or
+ * the owner) advanced, if any, plus the service fee. A buyer-funded device
+ * carries no principal — he spent his own money on his own device.
+ *
+ * The single definition of the per-device figure the drop-off list and the
+ * printed drop-off label both show, so the screen and the label can never
+ * disagree about what's owed on a device.
+ */
+export function dropOffOwed(d: Pick<DropOff, 'paidBy' | 'purchasePrice' | 'dropOffFee'>): number {
+  const principal = principalFunder(d) === 'buyer' ? 0 : (d.purchasePrice || 0);
+  return round2(principal + (d.dropOffFee || 0));
+}
+
+// The money on a printed drop-off label, stated per device and unambiguously
+// by funding source.
+export interface DropOffLabelMoney {
+  fundingLabel: string;  // PAID_BY_LABEL wording for this drop-off
+  moneyLine: string;     // the one-line money statement printed on the label
+  principalOwed: number; // advanced by the store/owner and owed back (0 when buyer-funded)
+  feeOwed: number;
+  totalOwed: number;     // principalOwed + feeOwed — matches dropOffOwed
+}
+
+/**
+ * The per-device money statement for a printed drop-off label.
+ *
+ * Every case names its funding source explicitly rather than printing a bare
+ * total, because the three read completely differently to whoever picks the
+ * device up:
+ *  • store-funded  — the store advanced the cash; principal AND fee are owed.
+ *  • buyer-funded  — the buyer's own money; ONLY the fee is owed, and the
+ *    line must not imply the store paid anything.
+ *  • personal-funded — the OWNER advanced his own cash. Treated exactly as
+ *    the rest of the app treats it (types.ts's PaidBy, settlementReviewTotals'
+ *    documented judgment call, settlementInvoice.ts's "of which owner-funded
+ *    out of pocket" line): the buyer owes principal + fee just like a
+ *    store-funded device, and the label says the OWNER paid — it never claims
+ *    the store's till advanced money it never advanced.
+ */
+export function dropOffLabelMoney(
+  d: Pick<DropOff, 'paidBy' | 'purchasePrice' | 'dropOffFee'>,
+): DropOffLabelMoney {
+  const funder = principalFunder(d);
+  const fee = round2(d.dropOffFee || 0);
+  const principal = funder === 'buyer' ? 0 : round2(d.purchasePrice || 0);
+  const total = round2(principal + fee);
+  const moneyLine = funder === 'buyer'
+    ? `Buyer funded · Fee ${money2(fee)} owed`
+    : `${funder === 'store' ? 'Store paid' : 'Owner paid (out of pocket)'} ${money2(principal)} · Fee ${money2(fee)} · Owed ${money2(total)}`;
+  return {
+    fundingLabel: PAID_BY_LABEL[d.paidBy] || PAID_BY_LABEL.store,
+    moneyLine, principalOwed: principal, feeOwed: fee, totalOwed: total,
+  };
+}
+
 /* ---------------- Outstanding receivable (money on the street) ---------------- */
 
 // What a device buyer currently owes the store: everything accepted/paid-out

@@ -1,13 +1,15 @@
 import React, { useState } from 'react';
 import {
   Truck, Users, CalendarCheck, Plus, X, Trash2, Phone, User, Package,
-  CheckCircle, XCircle, Wallet, ClipboardList, FileText,
+  CheckCircle, XCircle, Wallet, ClipboardList, FileText, QrCode,
 } from 'lucide-react';
 import { DeviceBuyer, DropOff, DropOffStatus, PaidBy, Settlement, SettlementPaymentMethod } from '../types';
-import { deviceBuyerOutstanding, settleableDropOffs, settlementTotals, SettlementReviewLine, buildSettlementFromReview, settlementOwedLabel, isLegacySettlement, LEGACY_SETTLEMENT_NOTE } from '../domain/dropoffs';
+import { deviceBuyerOutstanding, settleableDropOffs, settlementTotals, SettlementReviewLine, buildSettlementFromReview, settlementOwedLabel, isLegacySettlement, LEGACY_SETTLEMENT_NOTE, dropOffOwed, PAID_BY_LABEL } from '../domain/dropoffs';
 import { formatPhoneInput } from '../domain/phone';
 import { printSettlementInvoice } from '../services/settlementInvoice';
-import { getStoreProfile } from './SettingsModal';
+import { dropOffLabelContent, printDropOffLabels } from '../services/dropOffLabel';
+import { selectedLabelMedia } from '../services/labelLayout';
+import { getStoreProfile, getLabelSizes, getLabelSpacing } from './SettingsModal';
 import { SettlementReviewModal } from './SettlementReviewModal';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 import { todayISO } from '../domain/dates';
@@ -22,18 +24,44 @@ interface Props {
   // Records one completed settlement (writes the record, marks its drop-offs
   // settled, and — for a cash payment only — logs the cash-drawer effect).
   onSettle: (settlement: Settlement) => void;
+  // Whether this user may print drop-off device labels. Those labels carry the
+  // purchase price and the service fee, so printing is gated to the same
+  // permission that already exposes drop-off financials (services/
+  // dropOffLabel.ts's canPrintDropOffLabel → 'dropoffs.manage'). Off by
+  // default, so a caller that forgets to pass it shows no button rather than
+  // silently leaking cost figures onto paper.
+  canPrintLabels?: boolean;
 }
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 const today = () => todayISO();
 const money = (n: number) => `$${n.toFixed(2)}`;
 
-// How the purchase was funded. The store never buys the device — it either
-// advances the money (and is owed it back) or it doesn't (see types.ts's
-// PaidBy; 'runner' is the legacy stored value for buyer-funded).
-const PAID_BY_LABEL: Record<PaidBy, string> = {
-  runner: 'Buyer-funded (own money)', store: 'Store-funded (owed back)', personal: 'Owner-funded (owed back)',
+// How the purchase was funded (PAID_BY_LABEL, imported from domain/dropoffs.ts):
+// the store never buys the device — it either advances the money (and is owed
+// it back) or it doesn't (see types.ts's PaidBy; 'runner' is the legacy stored
+// value for buyer-funded). The wording lives with the model so this screen, the
+// settlement invoice and the printed drop-off label can't drift apart.
+
+// Print labels for the given drop-off devices — one print job, the shared
+// label system, the configured label stock and content-spacing settings.
+const printLabels = (ds: DropOff[], deviceBuyers: DeviceBuyer[]) => {
+  const store = getStoreProfile().storeName;
+  const byId = new Map(deviceBuyers.map(b => [b.id, b]));
+  const spacing = getLabelSpacing();
+  return printDropOffLabels(
+    ds.map(d => dropOffLabelContent(d, byId.get(d.buyerId), store)),
+    selectedLabelMedia(getLabelSizes()),
+    { padMm: spacing.paddingMm, lineGapMm: spacing.lineGapMm },
+  );
 };
+
+// Devices still on the hook for a buyer — what a batch label run covers.
+// Same states settleableDropOffs uses (accepted / paid out), plus 'pending':
+// a device that just came through the door is exactly the one that most needs
+// a physical tag on it.
+const labelableDropOffs = (ds: DropOff[]): DropOff[] =>
+  ds.filter(d => d.status === 'pending' || d.status === 'accepted' || d.status === 'paidout');
 
 const STATUS_META: Record<DropOffStatus, { label: string; cls: string }> = {
   pending:  { label: 'Pending review', cls: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400' },
@@ -45,6 +73,7 @@ const STATUS_META: Record<DropOffStatus, { label: string; cls: string }> = {
 
 export const DropOffView: React.FC<Props> = ({
   deviceBuyers, dropOffs, settlements, onDeviceBuyersChange, onDropOffsChange, onSettle,
+  canPrintLabels = false,
 }) => {
   const [tab, setTab] = useState<'entries' | 'deviceBuyers' | 'settlement'>('entries');
 
@@ -77,10 +106,10 @@ export const DropOffView: React.FC<Props> = ({
       </div>
 
       {tab === 'entries' && (
-        <EntriesTab deviceBuyers={deviceBuyers} dropOffs={dropOffs} onDropOffsChange={onDropOffsChange} />
+        <EntriesTab deviceBuyers={deviceBuyers} dropOffs={dropOffs} onDropOffsChange={onDropOffsChange} canPrintLabels={canPrintLabels} />
       )}
       {tab === 'deviceBuyers' && (
-        <DeviceBuyersTab deviceBuyers={deviceBuyers} dropOffs={dropOffs} onDeviceBuyersChange={onDeviceBuyersChange} />
+        <DeviceBuyersTab deviceBuyers={deviceBuyers} dropOffs={dropOffs} onDeviceBuyersChange={onDeviceBuyersChange} canPrintLabels={canPrintLabels} />
       )}
       {tab === 'settlement' && (
         <SettlementTab deviceBuyers={deviceBuyers} dropOffs={dropOffs} settlements={settlements} onSettle={onSettle} />
@@ -94,7 +123,8 @@ export const DropOffView: React.FC<Props> = ({
 const EntriesTab: React.FC<{
   deviceBuyers: DeviceBuyer[]; dropOffs: DropOff[];
   onDropOffsChange: (d: DropOff[]) => void;
-}> = ({ deviceBuyers, dropOffs, onDropOffsChange }) => {
+  canPrintLabels: boolean;
+}> = ({ deviceBuyers, dropOffs, onDropOffsChange, canPrintLabels }) => {
   const [showForm, setShowForm] = useState(false);
   const [filter, setFilter] = useState<DropOffStatus | 'all'>('all');
   // Accept moves real cash (dropOffAcceptDrawerEffect, logged in App.tsx's
@@ -175,7 +205,7 @@ const EntriesTab: React.FC<{
                   <span className="text-slate-500 dark:text-slate-400">Purchase: <b className="text-slate-700 dark:text-slate-200">{money(d.purchasePrice)}</b></span>
                   <span className="text-slate-500 dark:text-slate-400">Paid by: <b className="text-slate-700 dark:text-slate-200">{PAID_BY_LABEL[d.paidBy] || 'Store paid'}</b></span>
                   <span className="text-slate-500 dark:text-slate-400">Service fee: <b className="text-emerald-600">{money(d.dropOffFee)}</b></span>
-                  <span className="text-slate-500 dark:text-slate-400">Buyer owes: <b className="text-indigo-600 dark:text-indigo-400">{money((d.paidBy === 'runner' ? 0 : d.purchasePrice || 0) + (d.dropOffFee || 0))}</b></span>
+                  <span className="text-slate-500 dark:text-slate-400">Buyer owes: <b className="text-indigo-600 dark:text-indigo-400">{money(dropOffOwed(d))}</b></span>
                 </div>
                 {d.notes && <p className="text-xs text-slate-400 mt-1 italic">{d.notes}</p>}
               </div>
@@ -184,6 +214,16 @@ const EntriesTab: React.FC<{
 
             {/* Actions */}
             <div className="flex flex-wrap gap-2 mt-3 pt-3 border-t border-slate-100 dark:border-slate-800">
+              {/* Print this one device's label — the physical tag that goes on
+                  the device. Mirrors the inventory row's "Print Shelf Tag"
+                  action (components/InventoryView.tsx). Hidden entirely
+                  without 'dropoffs.manage': the label prints cost/fee. */}
+              {canPrintLabels && (
+                <button onClick={() => printLabels([d], deviceBuyers)}
+                  className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700">
+                  <QrCode className="w-3.5 h-3.5" /> Print Label
+                </button>
+              )}
               {d.status === 'pending' && (
                 <>
                   <button onClick={() => runRow(`accept:${d.id}`, () => update(d.id, { status: 'accepted' }))}
@@ -308,7 +348,8 @@ const EntriesTab: React.FC<{
 const DeviceBuyersTab: React.FC<{
   deviceBuyers: DeviceBuyer[]; dropOffs: DropOff[];
   onDeviceBuyersChange: (r: DeviceBuyer[]) => void;
-}> = ({ deviceBuyers, dropOffs, onDeviceBuyersChange }) => {
+  canPrintLabels: boolean;
+}> = ({ deviceBuyers, dropOffs, onDeviceBuyersChange, canPrintLabels }) => {
   const [form, setForm] = useState<DeviceBuyer>({ id: '', name: '', phone: '', notes: '' });
   const [editing, setEditing] = useState(false);
 
@@ -376,6 +417,15 @@ const DeviceBuyersTab: React.FC<{
                 {bal.count} unsettled drop-off{bal.count !== 1 ? 's' : ''}
                 {bal.principalPersonalFunded > 0 && ` · ${money(bal.principalPersonalFunded)} of the principal was owner-funded (repays the owner, not the till)`}
               </p>
+              {/* Batch: tag every device still on the hook for this buyer in
+                  ONE print job (same pattern as InventoryView's bulk
+                  "Print Shelf Tags"), rather than one popup per device. */}
+              {canPrintLabels && labelableDropOffs(dropOffs.filter(d => d.buyerId === r.id)).length > 0 && (
+                <button onClick={() => printLabels(labelableDropOffs(dropOffs.filter(d => d.buyerId === r.id)), deviceBuyers)}
+                  className="w-full mt-2 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700">
+                  <QrCode className="w-3.5 h-3.5" /> Print Device Labels ({labelableDropOffs(dropOffs.filter(d => d.buyerId === r.id)).length})
+                </button>
+              )}
             </div>
           );
         })}

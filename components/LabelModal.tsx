@@ -5,7 +5,7 @@ import JsBarcode from 'jsbarcode';
 import { jsPDF } from 'jspdf';
 import { InventoryItem, DeviceStatus } from '../types';
 import { getDeviceDisplayName, kindOf } from '../domain/inventory';
-import { LabelContent, labelPreview, labelPrintDoc, mmOf, maxSafePushDownMm, shortLabelSku, nonDymoQrSizeMm, deviceSubLine } from '../services/labelLayout';
+import { LabelContent, labelPreview, labelPrintDoc, mmOf, maxSafePushDownMm, shortLabelSku, nonDymoQrSizeMm, deviceSubLine, LABEL_PREFS_KEY } from '../services/labelLayout';
 import { getLabelSizes, getStoreProfile, getLabelSpacing } from './SettingsModal';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 
@@ -35,7 +35,10 @@ const STATUS_LABEL: Record<DeviceStatus, string> = {
 // blob (written by App.tsx), so the device QR encodes the configured field.
 type QrContent = 'sku' | 'id' | 'url' | 'imei';
 interface LabelPrefs { template: TemplateId; showBarcode: boolean; showQR: boolean; showStatus: boolean; qrContent: QrContent; }
-const PREFS_KEY = 'ftt_label_tpl_v1';
+// Shared with every other label type on this system (services/labelLayout.ts's
+// selectedLabelMedia reads the same key) so they all print on the stock the
+// owner actually selected here.
+const PREFS_KEY = LABEL_PREFS_KEY;
 const QR_CONTENTS: QrContent[] = ['sku', 'id', 'url', 'imei'];
 const loadPrefs = (): LabelPrefs => {
   try {

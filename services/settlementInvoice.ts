@@ -2,11 +2,12 @@ import { Settlement, DropOff, DeviceBuyer, SettlementPaymentMethod } from '../ty
 import { PRINT_PREVIEW_BAR_STYLE, PRINT_PREVIEW_BAR_HTML } from './printPreview';
 import {
   isLegacySettlement, legacySettlementDirection, legacySettlementDirectionLabel,
-  settlementOwedLabel, LEGACY_SETTLEMENT_NOTE,
+  settlementOwedLabel, LEGACY_SETTLEMENT_NOTE, PAID_BY_LABEL,
 } from '../domain/dropoffs';
 
 // A standard-paper invoice for a completed (or about-to-be-completed) device buyer
-// settlement — the document the buyer signs, so it must state the direction of
+// settlement — the record of the deal handed to the buyer (no signature lines:
+// they were removed at the owner's request), so it must state the direction of
 // the money unambiguously: the store FINANCED the purchase and the buyer OWES
 // the store, with principal (the device price the store advanced) and the
 // store's service fee shown as two separate lines, never one opaque total.
@@ -33,10 +34,9 @@ const PAYMENT_LABEL: Record<SettlementPaymentMethod, string> = {
 };
 
 // How the purchase was funded, from the buyer's side of the page: 'runner'
-// (legacy stored value) = his own money, so no principal to repay.
-const PAID_BY_LABEL: Record<string, string> = {
-  runner: 'Buyer-funded (own money)', store: 'Store-funded (owed back)', personal: 'Owner-funded (owed back)',
-};
+// (legacy stored value) = his own money, so no principal to repay. The wording
+// itself comes from domain/dropoffs.ts (PAID_BY_LABEL) so this invoice, the
+// drop-off screen and the printed drop-off label always say the same thing.
 
 // The full print document, built as a pure string — no window/DOM — so the
 // exact markup (and, critically, the totals baked into it) can be asserted
@@ -77,7 +77,7 @@ export function settlementInvoiceHtml(
     ? legacySettlementDirectionLabel(settlement.amountPaid, legacyDir)
     : settlementOwedLabel(owed);
 
-  // Principal and fee stay two separate printed lines. The buyer signs for a
+  // Principal and fee stay two separate printed lines. The buyer gets a
   // breakdown he can check line by line, not a single number.
   const totalsBlock = legacy ? `
         <div class="row"><span class="k">Purchase cash recorded as fronted by device buyer</span><span>${money(settlement.totalPurchaseFronted)}</span></div>
@@ -90,6 +90,11 @@ export function settlementInvoiceHtml(
         ${settlement.adjustmentAmount != null ? `<div class="row"><span class="k">Adjustment${settlement.adjustmentNote ? ` — ${esc(settlement.adjustmentNote)}` : ''}</span><span>${settlement.adjustmentAmount < 0 ? '-' : '+'}${money(Math.abs(settlement.adjustmentAmount))}</span></div>` : ''}
         <div class="row b" style="margin-top:2px"><span>Total owed to store</span><span>${money(owed)}</span></div>`;
 
+  // No signature block: signatures aren't wanted on this document, so the two
+  // ruled lines AND the rules that only ever styled them were both removed —
+  // no dead CSS shipping in every print job. The footer absorbs the vertical
+  // spacing that block used to provide (margin 12px → 20px, plus a closing
+  // rule) so the invoice ends deliberately instead of looking cut off.
   return `<html><head><title>Settlement Invoice ${esc(settlement.id)}</title>
     <style>
       body{font-family:'Inter',system-ui,Arial,sans-serif;width:480px;margin:0 auto;padding:14px;color:#000;}
@@ -102,10 +107,7 @@ export function settlementInvoiceHtml(
       td.r,th.r{text-align:right;}
       .tot{border-top:1px dashed #999;margin-top:6px;padding-top:4px;}
       .direction{margin-top:8px;padding:6px 8px;border:1px solid #000;border-radius:4px;text-align:center;font-weight:800;font-size:13px;}
-      .sig{display:flex;justify-content:space-between;gap:24px;margin-top:36px;}
-      .sig .line{flex:1;text-align:center;font-size:11px;color:#555;}
-      .sig .line .rule{border-top:1px solid #000;margin-bottom:4px;padding-top:28px;}
-      .foot{text-align:center;font-size:11px;color:#555;margin-top:12px;}
+      .foot{text-align:center;font-size:11px;color:#555;margin-top:20px;padding-top:8px;border-top:1px solid #ddd;}
       .legacy{font-size:10px;color:#b45309;text-align:center;margin:6px 0 0;}
       ${PRINT_PREVIEW_BAR_STYLE}
     </style></head><body>${PRINT_PREVIEW_BAR_HTML}
@@ -125,10 +127,6 @@ export function settlementInvoiceHtml(
       <div class="direction ${directionCls}">${esc(directionText)}</div>
       ${legacy ? `<p class="legacy">${esc(LEGACY_SETTLEMENT_NOTE)}</p>` : ''}
       ${settlement.notes ? `<h3>Notes</h3><p style="font-size:11px;color:#333">${esc(settlement.notes)}</p>` : ''}
-      <div class="sig">
-        <div class="line"><div class="rule"></div>Device buyer signature</div>
-        <div class="line"><div class="rule"></div>${esc(store)} signature</div>
-      </div>
       <div class="foot">Settlement ${esc(settlement.id)}</div>
     </body></html>`;
 }

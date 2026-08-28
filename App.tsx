@@ -40,7 +40,7 @@ import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, DeviceBuyer
 import { skuPrefix, nextSku } from './services/sku';
 import { REPAIR_PREFIX, BATCH_PREFIX, applyTechEdit, techUpdateAuditPlan, repairSalePrefill, completeRepair, completeRepairSale, dateToEpochMs } from './domain/repairs';
 import { MergePlan } from './domain/customers';
-import { can } from './services/rbac';
+import { can, canPrintDropOffLabel } from './services/rbac';
 import { downloadJson, toCSV, triggerDownload } from './services/backup';
 import { INITIAL_DATA } from './constants';
 import { auth } from './services/firebase';
@@ -2220,6 +2220,7 @@ const App: React.FC = () => {
               onDeviceBuyersChange={saveDeviceBuyers}
               onDropOffsChange={saveDropOffs}
               onSettle={handleSettleDeviceBuyer}
+              canPrintLabels={canPrintDropOffLabel(appUser?.role)}
             />
           )}
           {view === 'notes' && canSeeAnyNote && (
