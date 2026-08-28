@@ -2019,11 +2019,19 @@ const App: React.FC = () => {
               : <div className="text-center text-slate-400 py-20">Owner analytics are restricted to owners (and managers granted financial access).</div>
           )}
           {view === 'reports' && (
-            allow('cash.reconcile')
+            // Entry only requires SOME reason to be here (close the drawer, or
+            // see profit) — the profit-bearing tabs (P&L, Year-End, Daily
+            // History, Sales Tax, Settlements) are gated a second time INSIDE
+            // ReportsView via canViewProfit, so an employee who only holds
+            // cash.reconcile lands on a Reports screen with just the Cash
+            // Reconciliation (and, if granted, Expenses) tab — never a coarse
+            // permission standing in as a proxy for profit visibility.
+            (allow('cash.reconcile') || allow('reports.profit.summary'))
               ? <ReportsView salesTransactions={salesTransactions} cashReconciliations={cashReconciliations} inventory={data} payPeriods={payPeriods} settlements={settlements} deviceBuyers={deviceBuyers} onSaveReconciliation={handleSaveReconciliation} defaultOpeningFloat={settings.operations.openingFloatDefault}
                   repairs={repairs} customers={customers} auditLogs={auditLogs} activity={activityLog} timeEntries={timeEntries} users={workspaceUsers}
                   expenses={expenses} expenseCategories={settings.expenses.categories}
                   canManageExpenses={allow('expenses.manage')} recurringExpenses={recurringExpenses}
+                  canReconcile={allow('cash.reconcile')} canViewProfit={allow('reports.profit.summary')}
                   onSaveExpense={handleSaveExpense} onDeleteExpense={handleDeleteExpense}
                   onSaveRecurringExpense={handleSaveRecurringExpense} onDeleteRecurringExpense={handleDeleteRecurringExpense}
                   onGenerateRecurringExpense={handleGenerateRecurringExpense} onSkipRecurringPeriod={handleSkipRecurringPeriod} />

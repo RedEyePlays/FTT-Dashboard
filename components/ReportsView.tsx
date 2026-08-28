@@ -36,6 +36,16 @@ interface Props {
   onSkipRecurringPeriod: (r: RecurringExpense, periodKey: string) => void;
   onSaveReconciliation: SaveReconciliation;
   defaultOpeningFloat?: number;
+  // Profit visibility (reports.profit.summary) and reconcile access
+  // (cash.reconcile) are DIFFERENT permissions that happen to both reach this
+  // view — an employee commonly has the second without the first. Each tab
+  // that reveals revenue/cost/margin/profit is gated on canViewProfit
+  // directly, INSIDE this component, rather than trusting that whoever
+  // rendered <ReportsView> already restricted what's visible (that
+  // ancestor-only gate — cash.reconcile guarding the entire section — is
+  // exactly the bug this was added to fix).
+  canReconcile: boolean;
+  canViewProfit: boolean;
   // Daily History tab — everything that happened on a given day, reusing the
   // same underlying data every other view already reads (no parallel state).
   repairs: Repair[];
@@ -64,16 +74,34 @@ const card = 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-sla
 const input = 'px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500';
 const label = 'block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1';
 
+// Which permission each tab actually requires. 'cash' needs cash.reconcile;
+// 'expenses' needs expenses.manage (passed as canManageExpenses — a role can
+// hold that without profit visibility, since logging spend isn't the same as
+// seeing margin); every other tab (history, tax, pnl, settlements, yearend)
+// surfaces revenue/cost/margin/profit and needs canViewProfit
+// (reports.profit.summary). Daily History's Sales/Revenue/Gross-Profit block
+// and the settlement tab's fee-income totals are why those two are in this
+// group, not just the obviously financial pnl/yearend tabs.
+const tabAllowed = (id: TabId, perms: { canReconcile: boolean; canViewProfit: boolean; canManageExpenses: boolean }): boolean => {
+  if (id === 'cash') return perms.canReconcile;
+  if (id === 'expenses') return perms.canManageExpenses;
+  return perms.canViewProfit;
+};
+
 export const ReportsView: React.FC<Props> = ({
   salesTransactions, cashReconciliations, inventory, payPeriods, settlements, deviceBuyers, onSaveReconciliation,
   repairs, customers, auditLogs, activity, timeEntries, users, expenses, expenseCategories,
-  recurringExpenses, canManageExpenses, onSaveExpense, onDeleteExpense,
+  recurringExpenses, canManageExpenses, canReconcile, canViewProfit, onSaveExpense, onDeleteExpense,
   onSaveRecurringExpense, onDeleteRecurringExpense, onGenerateRecurringExpense, onSkipRecurringPeriod,
 }) => {
-  const [tab, setTab] = useState<TabId>('history');
+  const perms = { canReconcile, canViewProfit, canManageExpenses };
+  const tabs = TABS.filter(t => tabAllowed(t.id, perms));
+  // Default to the first tab this role can actually see — never a fixed
+  // 'history', which a cash.reconcile-only employee (canViewProfit: false)
+  // isn't permitted to view at all.
+  const [tab, setTab] = useState<TabId>(() => tabs[0]?.id ?? 'cash');
   // Shared input set for the P&L / settlement / year-end reports.
   const plInput: ProfitLossInput = { transactions: salesTransactions, inventory, payPeriods, cashReconciliations, settlements, expenses, expenseCategories };
-  const tabs = TABS.filter(t => t.id !== 'expenses' || canManageExpenses);
   return (
     <div className="max-w-5xl mx-auto space-y-6">
       <div className="flex flex-wrap items-center gap-2">
@@ -83,17 +111,20 @@ export const ReportsView: React.FC<Props> = ({
           </button>
         ))}
       </div>
-      {tab === 'history' && (
+      {/* Every block below re-checks tabAllowed itself — belt and suspenders
+          on top of the tabs[] filter above, so this component never renders a
+          money figure whose access it hasn't verified directly. */}
+      {tab === 'history' && tabAllowed('history', perms) && (
         <DailyHistoryTab
           salesTransactions={salesTransactions} cashReconciliations={cashReconciliations}
           repairs={repairs} inventory={inventory} customers={customers} auditLogs={auditLogs} activity={activity}
           timeEntries={timeEntries} users={users}
         />
       )}
-      {tab === 'cash' && <CashReconTab salesTransactions={salesTransactions} cashReconciliations={cashReconciliations} onSave={onSaveReconciliation} />}
-      {tab === 'tax' && <TaxReportTab salesTransactions={salesTransactions} />}
-      {tab === 'pnl' && <ProfitLossTab plInput={plInput} />}
-      {tab === 'expenses' && canManageExpenses && (
+      {tab === 'cash' && tabAllowed('cash', perms) && <CashReconTab salesTransactions={salesTransactions} cashReconciliations={cashReconciliations} onSave={onSaveReconciliation} />}
+      {tab === 'tax' && tabAllowed('tax', perms) && <TaxReportTab salesTransactions={salesTransactions} />}
+      {tab === 'pnl' && tabAllowed('pnl', perms) && <ProfitLossTab plInput={plInput} />}
+      {tab === 'expenses' && tabAllowed('expenses', perms) && (
         <ExpensesTab
           expenses={expenses} categories={expenseCategories} recurringExpenses={recurringExpenses}
           onSaveExpense={onSaveExpense} onDeleteExpense={onDeleteExpense}
@@ -101,19 +132,22 @@ export const ReportsView: React.FC<Props> = ({
           onGenerateRecurringExpense={onGenerateRecurringExpense} onSkipRecurringPeriod={onSkipRecurringPeriod}
         />
       )}
-      {tab === 'settlements' && <SettlementsTab settlements={settlements} deviceBuyers={deviceBuyers} />}
-      {tab === 'yearend' && <YearEndTab plInput={plInput} />}
+      {tab === 'settlements' && tabAllowed('settlements', perms) && <SettlementsTab settlements={settlements} deviceBuyers={deviceBuyers} />}
+      {tab === 'yearend' && tabAllowed('yearend', perms) && <YearEndTab plInput={plInput} />}
     </div>
   );
 };
 
 /* ---------------- Daily History ---------------- */
-// A single owner/manager-only screen (this whole view is gated by
-// cash.reconcile) that pulls together everything that happened on one
-// picked date — the Close Out screen's summary, but for any past date, not
-// just today. Every figure is read from the same domain functions the other
-// tabs/screens already use (computeAnalytics, cashDrawerSummary,
-// entriesOnDate/workedHours) — nothing here is a second calculation.
+// Gated on canViewProfit (reports.profit.summary), not cash.reconcile — it
+// shows Revenue and Gross Profit alongside the day's cash/hours/flags, so it
+// needs the profit permission even though an employee can otherwise reach
+// this whole view via cash.reconcile alone. Pulls together everything that
+// happened on one picked date — the Close Out screen's summary, but for any
+// past date, not just today. Every figure is read from the same domain
+// functions the other tabs/screens already use (computeAnalytics,
+// cashDrawerSummary, entriesOnDate/workedHours) — nothing here is a second
+// calculation.
 const DailyHistoryTab: React.FC<{
   salesTransactions: SalesTransaction[];
   cashReconciliations: CashReconciliation[];
@@ -444,10 +478,12 @@ const CashReconTab: React.FC<{
   );
 };
 
-// Owner/manager cash history (this whole Reports view is gated by cash.reconcile).
-// Full audit trail per day: opening float, cash in / out / withdrawals, closing
-// count, variance and the variance note. Defaults to the last 30 days with a
-// control to widen the window (90 / 365 / all).
+// Cash history — lives on the Cash Reconciliation tab (gated by
+// cash.reconcile, which an employee legitimately holds). Full audit trail per
+// day: opening float, cash in / out / withdrawals, closing count, variance
+// and the variance note — no revenue/cost/margin figure, so no extra
+// profit gate is needed here. Defaults to the last 30 days with a control to
+// widen the window (90 / 365 / all).
 const RANGES: { days: number; label: string }[] = [
   { days: 30, label: '30 days' }, { days: 90, label: '90 days' }, { days: 365, label: '1 year' }, { days: 0, label: 'All' },
 ];

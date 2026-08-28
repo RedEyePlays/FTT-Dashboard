@@ -50,7 +50,7 @@ export const MobileDrawer: React.FC<Props> = ({
   const nav: Item[] = [
     { label: 'Dashboard', icon: <LayoutDashboard className="w-5 h-5" />, on: () => go('dashboard'), active: view === 'dashboard', show: true },
     { label: 'Analytics', icon: <BarChart3 className="w-5 h-5" />, on: () => go('analytics'), active: view === 'analytics', show: (userRole === 'owner' || userRole === 'manager') && allow('reports.profit.detailed') },
-    { label: 'Reports', icon: <Receipt className="w-5 h-5" />, on: () => go('reports'), active: view === 'reports', show: allow('cash.reconcile') },
+    { label: 'Reports', icon: <Receipt className="w-5 h-5" />, on: () => go('reports'), active: view === 'reports', show: allow('cash.reconcile') || allow('reports.profit.summary') },
     { label: 'Inventory', icon: <Table className="w-5 h-5" />, on: () => go('grid'), active: view === 'grid', show: true },
     { label: 'Quick Sale', icon: <ShoppingCart className="w-5 h-5" />, on: () => go('pos'), active: view === 'pos', show: true },
     { label: 'Quick Purchase', icon: <ShoppingBag className="w-5 h-5" />, on: () => go('quickpurchase'), active: view === 'quickpurchase', show: allow('inventory.add') },
