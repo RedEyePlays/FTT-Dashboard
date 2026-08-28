@@ -28,13 +28,15 @@ service cloud.firestore {
     // A non-technician active member (owner/manager/employee) — the roles that
     // may write general shop data.
     function isStaffOf(ws) { return activeMemberOf(ws) && myRole() != 'technician'; }
-    // Owner or manager — the roles services/rbac.ts grants cash.reconcile,
-    // sales.void, sales.return and dropoffs.manage to (employees get cash.log
-    // but NOT reconcile/void/return/dropoffs; the generic isStaffOf() catch-all
-    // used to let an employee bypass that server-side, which the rules below
-    // for cashReconciliations/salesTransactions/dropOffs/runners (device
-    // buyers)/settlements
-    // close).
+    // Owner or manager — the payroll.manage / users.* / audit.view tier.
+    //
+    // HISTORY: this used to also gate cash.reconcile, sales.void, sales.return,
+    // dropoffs.manage and expenses.manage. Employees have since been granted
+    // all five (see services/rbac.ts's employee role) — they run the shop
+    // end-to-end and oversight comes from attribution + auditLogs, not from
+    // blocking the write. Those collections are gated by isStaffOf() now; this
+    // helper remains for the things that are genuinely still manager+:
+    // payPeriodApprovals and any-user timeEntry corrections.
     function isManagerUp(ws) { return activeMemberOf(ws) && (myRole() == 'owner' || myRole() == 'manager'); }
     // Employee or technician — active staff who are NOT manager/owner tier.
     // Both are trusted with ONLY their own timeEntries (see the match block
@@ -197,64 +199,63 @@ service cloud.firestore {
       }
 
       // Expense ledger (domain/expenses.ts) — general business expenses, any
-      // payment method. Owner/manager tier only (expenses.manage in
-      // services/rbac.ts), same read+write gating as payroll.manage below —
-      // an employee/technician may not even read expense totals, since
-      // they're profit-sensitive.
+      // payment method. expenses.manage in services/rbac.ts, now held by
+      // owner/manager/employee (isStaffOf), so an employee can log the rent
+      // cheque or a parts purchase without a manager present. Technicians
+      // still have no access at all.
+      //
+      // This ledger is business SPEND, not per-item cost/margin/profit — the
+      // latter is still gated for employees by the two reports.profit.* tiers
+      // in services/rbac.ts, which this grant does not touch.
       match /expenses/{id} {
-        allow read, write: if isManagerUp(ws);
+        allow read, write: if isStaffOf(ws);
       }
       match /recurringExpenses/{id} {
-        allow read, write: if isManagerUp(ws);
+        allow read, write: if isStaffOf(ws);
       }
 
-      // Cash drawer: any staff (incl. employees, per cash.log) may log a
-      // movement (open, cash in/out, withdrawal) or create the day's record,
-      // but only owner/manager may touch the reconcile/close fields
-      // (cash.reconcile) — an employee closing out their own drawer count
-      // unsupervised is exactly what cash.reconcile is meant to gate.
+      // Cash drawer: any staff (owner/manager/employee) may log a movement
+      // (open, cash in/out, withdrawal), create the day's record, AND count/
+      // close it. cash.reconcile is an employee permission now (see
+      // services/rbac.ts): an employee closing their own drawer at end of
+      // shift is the normal case, and the oversight is the reconciledBy/
+      // reconciledByEmail stamp on the record plus the 'cash.reconcile' audit
+      // entry — variances stay visible to owner/manager through the existing
+      // unreconciled-days flag and cash history, unchanged.
       //
-      // Every write here is a full-document overwrite, not a Firestore-level
-      // merge (App.tsx's commitDrawerRecord merges client-side, then setDoc's
-      // the whole record) — and re-opening a previously-closed day explicitly
-      // CLEARS reconciledAt/reconciledBy/reconciledByEmail/countedCash back to
-      // absent (domain/reports.ts's openDrawerPatch), which any staff must
-      // still be able to do. So the gate isn't "did a reconcile key change"
-      // (removing one on reopen is a legitimate cash.log action) — it's
-      // "is a reconcile key being SET to a real value" (present in the new
-      // doc AND different from before).
-      function reconcileKeys() { return ['reconciledAt', 'reconciledBy', 'reconciledByEmail', 'countedCash', 'note']; }
-      function settingReconcileFields() {
-        return request.resource.data.diff(resource.data).affectedKeys().hasAny(reconcileKeys())
-          && request.resource.data.keys().hasAny(reconcileKeys());
-      }
+      // Technicians still cannot touch the till at all (isStaffOf excludes
+      // them), and only the owner may delete a day's record.
       match /cashReconciliations/{id} {
         allow read: if activeMemberOf(ws);
-        allow create: if isStaffOf(ws) && (isManagerUp(ws) || !request.resource.data.keys().hasAny(reconcileKeys()));
-        allow update: if isStaffOf(ws) && (isManagerUp(ws) || !settingReconcileFields());
+        allow create, update: if isStaffOf(ws);
         allow delete: if isOwnerOf(ws);
       }
 
-      // Sales: any staff may complete a new sale (sales.complete), but only
-      // owner/manager may change a sale's `status` (sales.void / sales.return)
-      // — an employee reversing their own sale unsupervised is exactly what
-      // those permissions are meant to gate. Other field-only edits (e.g. the
-      // customer-merge relink of customerId/Phone/Email) stay open to any
-      // staff as long as status itself isn't part of the write.
+      // Sales: any staff may complete a new sale (sales.complete) and change a
+      // sale's `status` to void/return it — sales.void and sales.return are
+      // employee permissions now (services/rbac.ts). A reversal at the counter
+      // shouldn't need a manager to walk over; instead every void/return
+      // stamps voidedBy/voidedByEmail or returnedBy/returnedByEmail on the
+      // transaction itself (App.tsx's handleVoidSale/handleReturnSale) and
+      // writes a 'sale.void'/'sale.return' audit entry.
+      //
+      // Note the void/return WINDOW (settings.operations.voidWindowDays,
+      // domain/pos.ts's canVoidSale/canReturnSale) is a business rule enforced
+      // client-side; this rule is about who may write, not when.
       match /salesTransactions/{id} {
         allow read: if activeMemberOf(ws);
-        allow create: if isStaffOf(ws);
-        allow update: if isStaffOf(ws) &&
-          (isManagerUp(ws) || request.resource.data.get('status', null) == resource.data.get('status', null));
+        allow create, update: if isStaffOf(ws);
         allow delete: if isOwnerOf(ws);
       }
 
-      // Drop-offs / device buyer settlements: owner/manager only
-      // (dropoffs.manage) — an employee has no drop-off write access at all,
-      // matching rbac.ts.
+      // Drop-offs / device buyer settlements: any staff (dropoffs.manage is an
+      // employee permission now — see services/rbac.ts). Accepting a drop-off
+      // and settling a device buyer both stamp the acting user on the record
+      // (acceptedBy/settledBy) and write an audit entry. Technicians have no
+      // access; only the owner may delete.
       match /dropOffs/{id} {
         allow read: if activeMemberOf(ws);
-        allow create, update: if isManagerUp(ws);
+        allow create, update: if isStaffOf(ws);
         allow delete: if isOwnerOf(ws);
       }
       // `runners` stores DEVICE BUYERS. The concept was renamed to "device
@@ -265,12 +266,12 @@ service cloud.firestore {
       // services/firestoreDb.ts and functions/src/backups.ts.
       match /runners/{id} {
         allow read: if activeMemberOf(ws);
-        allow create, update: if isManagerUp(ws);
+        allow create, update: if isStaffOf(ws);
         allow delete: if isOwnerOf(ws);
       }
       match /settlements/{id} {
         allow read: if activeMemberOf(ws);
-        allow create, update: if isManagerUp(ws);
+        allow create, update: if isStaffOf(ws);
         allow delete: if isOwnerOf(ws);
       }
 

@@ -8,6 +8,14 @@ describe('can()', () => {
     expect(can('owner', 'inventory.delete')).toBe(true);
   });
 
+  it('every permission an employee holds is also held by a manager — the roles stay nested', () => {
+    // A shape check that outlives any individual grant: widening `employee`
+    // past `manager` would be an obvious mistake, and this catches it.
+    for (const p of ROLE_PERMISSIONS.employee) {
+      expect(ROLE_PERMISSIONS.manager).toContain(p);
+    }
+  });
+
   it('manager lacks owner-only permissions', () => {
     expect(can('manager', 'inventory.edit')).toBe(true);
     expect(can('manager', 'users.manage')).toBe(false);
@@ -70,12 +78,56 @@ describe('can()', () => {
     expect(can('manager', 'reports.profit.detailed')).toBe(false);
   });
 
-  it('employee has the minimal set', () => {
+  it('employee runs the shop end-to-end: the six operational permissions are granted', () => {
+    // The grant: an employee can reverse a sale, fix an item they just
+    // entered, close the drawer, settle a device buyer and log an expense
+    // without a manager present. Oversight is attribution + audit, not a gate.
+    expect(can('employee', 'sales.void')).toBe(true);
+    expect(can('employee', 'sales.return')).toBe(true);
+    expect(can('employee', 'inventory.edit')).toBe(true);
+    expect(can('employee', 'cash.reconcile')).toBe(true);
+    expect(can('employee', 'dropoffs.manage')).toBe(true);
+    expect(can('employee', 'expenses.manage')).toBe(true);
+    // …on top of what they already had.
     expect(can('employee', 'inventory.add')).toBe(true);
     expect(can('employee', 'sales.complete')).toBe(true);
     expect(can('employee', 'reports.view')).toBe(true);
-    expect(can('employee', 'inventory.edit')).toBe(false);
-    expect(can('employee', 'dropoffs.manage')).toBe(false);
+    expect(can('employee', 'cash.log')).toBe(true);
+    expect(can('employee', 'timeclock.use')).toBe(true);
+  });
+
+  it('the grant stops exactly where it was meant to — every listed permission stays manager/owner-only', () => {
+    // Pinned deliberately: these are the ones the operational grant did NOT
+    // include, and a future "just add one more" edit must trip this test.
+    const stillRestricted = [
+      'inventory.delete', 'users.manage', 'users.tech', 'users.pin',
+      'security.manage', 'settings.manage', 'payroll.manage', 'backup.export',
+      'staffNotes.manage', 'audit.view', 'closeout.view', 'repairs.performance',
+    ] as const;
+    for (const p of stillRestricted) {
+      expect(can('employee', p)).toBe(false);
+      expect(can('technician', p)).toBe(false);
+      // …and the financials override doesn't sneak any of them in either.
+      expect(can('employee', p, { allowProfit: true })).toBe(false);
+    }
+  });
+
+  it('INTERACTION CHECK: no employee permission reaches user management or the password-reset function', () => {
+    // The setStaffPassword Cloud Function is gated on the CALLER being an
+    // owner, read server-side (functions/src/staffPasswordPolicy.ts). The UI
+    // that can even reach it is gated on users.manage. Neither is anywhere in
+    // the employee set — pin that here so widening the employee role can
+    // never quietly open the password-reset path.
+    expect(can('employee', 'users.manage')).toBe(false);
+    expect(can('employee', 'users.tech')).toBe(false);
+    expect(can('employee', 'users.pin')).toBe(false);
+    expect(ROLE_PERMISSIONS.employee).not.toContain('users.manage');
+    expect(ROLE_PERMISSIONS.employee).not.toContain('users.tech');
+    expect(ROLE_PERMISSIONS.employee).not.toContain('users.pin');
+    // Managers can manage technicians but still not reach the reset function.
+    expect(can('manager', 'users.manage')).toBe(false);
+    // canResetPasswordFor (domain/password.ts) is the UI-side mirror; it is
+    // owner-only and never targets an owner. Covered in domain/password.test.ts.
   });
 
   it('employee profit visibility (both tiers) requires the allowProfit override', () => {
@@ -147,19 +199,21 @@ describe('can()', () => {
     expect(can(undefined, 'cash.log')).toBe(false);
   });
 
-  it('reconciling the cash drawer (cash.reconcile) is oversight — owner + manager only', () => {
+  it('reconciling the cash drawer (cash.reconcile) is for everyone who runs the register; technicians never', () => {
     expect(can('owner', 'cash.reconcile')).toBe(true);
     expect(can('manager', 'cash.reconcile')).toBe(true);
-    expect(can('employee', 'cash.reconcile')).toBe(false);
+    // Employees close their own drawer at end of shift — the reconciledBy
+    // stamp + the 'cash.reconcile' audit entry are the oversight, not a gate.
+    expect(can('employee', 'cash.reconcile')).toBe(true);
     expect(can('technician', 'cash.reconcile')).toBe(false);
-    // The financials override does not unlock reconciliation.
-    expect(can('employee', 'cash.reconcile', { allowProfit: true })).toBe(false);
   });
 
-  it('the two cash permissions are independent — logging a movement is not reconciling', () => {
-    // An employee can log a cash-out in the moment but cannot open the report.
-    expect(can('employee', 'cash.log')).toBe(true);
-    expect(can('employee', 'cash.reconcile')).toBe(false);
+  it('reviewing the numbers is still separate from closing the drawer', () => {
+    // Employees close the drawer, but the end-of-day summary that surfaces
+    // variances across days stays owner/manager.
+    expect(can('employee', 'cash.reconcile')).toBe(true);
+    expect(can('employee', 'closeout.view')).toBe(false);
+    expect(can('manager', 'closeout.view')).toBe(true);
   });
 
   it('an undefined role has no permissions', () => {
@@ -174,11 +228,29 @@ describe('can()', () => {
     expect(can(undefined, 'staffNotes.manage')).toBe(false);
   });
 
-  it('the expense ledger (expenses.manage) is owner + manager only — mirrors payroll.manage, no employee/technician override', () => {
+  it('the expense ledger (expenses.manage) is owner/manager/employee; technicians never', () => {
     expect(can('owner', 'expenses.manage')).toBe(true);
     expect(can('manager', 'expenses.manage')).toBe(true);
-    expect(can('employee', 'expenses.manage')).toBe(false);
+    expect(can('employee', 'expenses.manage')).toBe(true);
     expect(can('technician', 'expenses.manage')).toBe(false);
     expect(can(undefined, 'expenses.manage')).toBe(false);
+  });
+
+  it('REGRESSION: no cost/margin/profit figure becomes visible to an employee from the operational grant', () => {
+    // The grant added six operational permissions and touched NEITHER profit
+    // tier. Both still require the per-user allowProfit override, exactly as
+    // before — which is what keeps the inventory cost column, the AI
+    // insights/chat ops (gated server-side by aiGenerate's
+    // requireProfitVisibility) and the Reports profit surfaces closed.
+    expect(can('employee', 'reports.profit.summary')).toBe(false);
+    expect(can('employee', 'reports.profit.detailed')).toBe(false);
+    expect(can('employee', 'reports.profit.summary', { allowProfit: false })).toBe(false);
+    expect(can('employee', 'reports.profit.detailed', { allowProfit: false })).toBe(false);
+    // The override still works, and still only for the profit tiers.
+    expect(can('employee', 'reports.profit.summary', { allowProfit: true })).toBe(true);
+    expect(can('employee', 'reports.profit.detailed', { allowProfit: true })).toBe(true);
+    // Neither profit permission is baked into the role list itself.
+    expect(ROLE_PERMISSIONS.employee).not.toContain('reports.profit.summary');
+    expect(ROLE_PERMISSIONS.employee).not.toContain('reports.profit.detailed');
   });
 });

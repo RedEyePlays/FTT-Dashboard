@@ -172,6 +172,13 @@ export interface DropOff {
   notes: string;
   inventoryId?: string;      // set once accepted & added to inventory
   settlementId?: string;     // set once included in a weekly settlement
+  // Staff attribution for the accept step (the moment real cash can leave the
+  // till). Stamped from the authenticated user in App.tsx's
+  // handleAddDropOffToInventory, never client-supplied. Optional — drop-offs
+  // accepted before this field existed simply don't carry it.
+  acceptedBy?: string;
+  acceptedByEmail?: string;
+  acceptedAt?: number;
 }
 
 // A per-device fee correction made on the pre-settlement review screen —
@@ -217,6 +224,15 @@ export interface Settlement {
   // record shows it was applied, not just a mismatched total.
   adjustmentAmount?: number;
   adjustmentNote?: string;
+  // Staff attribution — who actually paid the device buyer out, and when.
+  // Stamped server-side of the client boundary in App.tsx's
+  // handleSettleDeviceBuyer from the AUTHENTICATED user (appUser), never from
+  // anything the settlement draft carried in. Optional because settlements
+  // recorded before employees held dropoffs.manage predate the fields; the
+  // audit log ('dropoff.settle') covers those.
+  settledBy?: string;
+  settledByEmail?: string;
+  settledAt?: number;
 }
 
 // A note can reference one record. This is a lightweight pointer, not an

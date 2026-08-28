@@ -69,22 +69,19 @@ const asEmployee = () => testEnv.authenticatedContext('employee-uid').firestore(
 const asTech = () => testEnv.authenticatedContext('tech-uid').firestore();
 
 describe('the catch-all cannot resurrect access a dedicated block denies', () => {
-  it('employee write to cashReconciliations reconcile fields is DENIED', async () => {
-    const db = asEmployee();
-    await assertFails(setDoc(doc(db, 'user_data', WORKSPACE, 'cashReconciliations', 'today'),
-      { reconciledAt: Date.now(), reconciledBy: 'employee-uid', countedCash: 120 }, { merge: true }));
-  });
+  // NOTE: the two cases this block originally pinned (employee reconcile,
+  // employee void) are now legitimately ALLOWED — employees hold
+  // cash.reconcile / sales.void / sales.return since the end-to-end
+  // operational grant (services/rbac.ts). They moved to the
+  // "employee operational permissions" describe below. What this block still
+  // proves is the part that did NOT change: settings, staffNotes and unlisted
+  // collections stay denied, i.e. removing the catch-all is still what's
+  // holding those closed.
 
   it('manager write to cashReconciliations reconcile fields is ALLOWED', async () => {
     const db = asManager();
     await assertSucceeds(setDoc(doc(db, 'user_data', WORKSPACE, 'cashReconciliations', 'today'),
       { reconciledAt: Date.now(), reconciledBy: 'manager-uid', countedCash: 120 }, { merge: true }));
-  });
-
-  it("employee update of salesTransactions status to 'voided' is DENIED", async () => {
-    const db = asEmployee();
-    await assertFails(setDoc(doc(db, 'user_data', WORKSPACE, 'salesTransactions', 'sale1'),
-      { status: 'voided' }, { merge: true }));
   });
 
   it("manager update of salesTransactions status to 'voided' is ALLOWED", async () => {
@@ -184,7 +181,7 @@ describe('legitimate flows still work after removing the catch-all', () => {
   });
 });
 
-describe('expense ledger (expenses.manage tier — owner/manager only)', () => {
+describe('expense ledger (expenses.manage — owner/manager/employee, never technician)', () => {
   it('manager can write and read expenses', async () => {
     await assertSucceeds(setDoc(doc(asManager(), 'user_data', WORKSPACE, 'expenses', 'e1'),
       { id: 'e1', date: '2026-07-01', amount: 40, category: 'rent', paymentMethod: 'cash', enteredBy: 'manager-uid', enteredByEmail: 'manager@shop.test', createdAt: Date.now() }));
@@ -192,27 +189,111 @@ describe('expense ledger (expenses.manage tier — owner/manager only)', () => {
     await assertSucceeds(getDoc(doc(asManager(), 'user_data', WORKSPACE, 'expenses', 'e1')));
   });
 
-  it('employee cannot write expenses', async () => {
-    await assertFails(setDoc(doc(asEmployee(), 'user_data', WORKSPACE, 'expenses', 'e2'),
-      { id: 'e2', date: '2026-07-01', amount: 40, category: 'rent', paymentMethod: 'cash', enteredBy: 'employee-uid', enteredByEmail: 'employee@shop.test', createdAt: Date.now() }));
-  });
-
-  it('employee cannot even read expense totals — profit-sensitive, same tier as payroll', async () => {
-    await testEnv.withSecurityRulesDisabled(async (ctx) => {
-      await setDoc(doc(ctx.firestore(), 'user_data', WORKSPACE, 'expenses', 'e3'), { id: 'e3', date: '2026-07-01', amount: 40, category: 'rent' });
-    });
-    const { getDoc } = await import('firebase/firestore');
-    await assertFails(getDoc(doc(asEmployee(), 'user_data', WORKSPACE, 'expenses', 'e3')));
-  });
-
   it('technician cannot write or read expenses', async () => {
     await assertFails(setDoc(doc(asTech(), 'user_data', WORKSPACE, 'expenses', 'e4'), { id: 'e4', amount: 10 }));
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'user_data', WORKSPACE, 'expenses', 'e5'), { id: 'e5', date: '2026-07-01', amount: 40, category: 'rent' });
+    });
+    const { getDoc } = await import('firebase/firestore');
+    await assertFails(getDoc(doc(asTech(), 'user_data', WORKSPACE, 'expenses', 'e5')));
   });
 
   it('recurringExpenses is gated the same as expenses', async () => {
     await assertSucceeds(setDoc(doc(asOwner(), 'user_data', WORKSPACE, 'recurringExpenses', 'r1'),
       { id: 'r1', category: 'rent', amount: 1500, paymentMethod: 'etransfer', frequency: 'monthly', startDate: '2026-01-01', active: true, createdBy: WORKSPACE, createdByEmail: 'owner@shop.test', createdAt: Date.now() }));
-    await assertFails(setDoc(doc(asEmployee(), 'user_data', WORKSPACE, 'recurringExpenses', 'r2'), { id: 'r2', amount: 10 }));
+    await assertSucceeds(setDoc(doc(asEmployee(), 'user_data', WORKSPACE, 'recurringExpenses', 'r2'),
+      { id: 'r2', category: 'supplies', amount: 10, paymentMethod: 'cash', frequency: 'monthly', startDate: '2026-01-01', active: true, createdBy: 'employee-uid', createdByEmail: 'employee@shop.test', createdAt: Date.now() }));
+    await assertFails(setDoc(doc(asTech(), 'user_data', WORKSPACE, 'recurringExpenses', 'r3'), { id: 'r3', amount: 10 }));
+  });
+});
+
+/**
+ * PART 1 of the employee-permissions change: the six operational actions an
+ * employee gained (sales.void, sales.return, inventory.edit, cash.reconcile,
+ * dropoffs.manage, expenses.manage) must actually work SERVER-SIDE, and the
+ * manager/owner-only set must stay shut. These are the emulator cases the PR
+ * body quotes.
+ */
+describe('employee operational permissions (granted)', () => {
+  it('employee can VOID a sale (status -> voided, with attribution)', async () => {
+    await assertSucceeds(setDoc(doc(asEmployee(), 'user_data', WORKSPACE, 'salesTransactions', 'sale1'),
+      { status: 'voided', voidedAt: Date.now(), voidedBy: 'employee-uid', voidedByEmail: 'employee@shop.test' }, { merge: true }));
+  });
+
+  it('employee can RETURN a sale (status -> returned, with attribution)', async () => {
+    await assertSucceeds(setDoc(doc(asEmployee(), 'user_data', WORKSPACE, 'salesTransactions', 'sale1'),
+      { status: 'returned', returnedAt: Date.now(), returnedBy: 'employee-uid', returnedByEmail: 'employee@shop.test', refundAmount: 100 }, { merge: true }));
+  });
+
+  it('employee can RECONCILE the drawer (write reconcile fields on cashReconciliations)', async () => {
+    await assertSucceeds(setDoc(doc(asEmployee(), 'user_data', WORKSPACE, 'cashReconciliations', 'today'),
+      { reconciledAt: Date.now(), reconciledBy: 'employee-uid', reconciledByEmail: 'employee@shop.test', countedCash: 120, note: 'end of shift' }, { merge: true }));
+  });
+
+  it('employee can EDIT an inventory item they created', async () => {
+    await assertSucceeds(setDoc(doc(asEmployee(), 'user_data', WORKSPACE, 'inventory', 'item1'),
+      { sku: 'FTT-0001', deviceStatus: 'ready' }));
+    await assertSucceeds(setDoc(doc(asEmployee(), 'user_data', WORKSPACE, 'inventory', 'item1'),
+      { deviceStatus: 'repair', item: 'iPhone 13 (edited)' }, { merge: true }));
+  });
+
+  it('employee can ACCEPT a drop-off and SETTLE a device buyer', async () => {
+    await assertSucceeds(setDoc(doc(asEmployee(), 'user_data', WORKSPACE, 'dropOffs', 'd1'),
+      { id: 'd1', buyerId: 'b1', item: 'Pixel 8', status: 'accepted', acceptedBy: 'employee-uid', acceptedByEmail: 'employee@shop.test', acceptedAt: Date.now() }));
+    await assertSucceeds(setDoc(doc(asEmployee(), 'user_data', WORKSPACE, 'runners', 'b1'), { id: 'b1', name: 'Device buyer' }));
+    await assertSucceeds(setDoc(doc(asEmployee(), 'user_data', WORKSPACE, 'settlements', 's1'),
+      { id: 's1', buyerId: 'b1', amountPaid: 300, settledBy: 'employee-uid', settledByEmail: 'employee@shop.test', settledAt: Date.now() }));
+  });
+
+  it('employee can LOG AN EXPENSE (and read the ledger the UI needs)', async () => {
+    await assertSucceeds(setDoc(doc(asEmployee(), 'user_data', WORKSPACE, 'expenses', 'e2'),
+      { id: 'e2', date: '2026-07-01', amount: 40, category: 'supplies', paymentMethod: 'cash', enteredBy: 'employee-uid', enteredByEmail: 'employee@shop.test', createdAt: Date.now() }));
+    const { getDoc } = await import('firebase/firestore');
+    await assertSucceeds(getDoc(doc(asEmployee(), 'user_data', WORKSPACE, 'expenses', 'e2')));
+  });
+});
+
+describe('employee restrictions that must NOT have widened', () => {
+  it('employee cannot write settings (meta.settings stays owner-only)', async () => {
+    await assertFails(setDoc(doc(asEmployee(), 'user_data', WORKSPACE, 'meta', 'app'),
+      { settings: { shopName: 'Hacked' } }, { merge: true }));
+  });
+
+  it('employee cannot read or write staffNotes (owner-only)', async () => {
+    const { getDoc } = await import('firebase/firestore');
+    await assertFails(getDoc(doc(asEmployee(), 'user_data', WORKSPACE, 'staffNotes', 'note1')));
+    await assertFails(setDoc(doc(asEmployee(), 'user_data', WORKSPACE, 'staffNotes', 'note2'), { text: 'nope' }));
+  });
+
+  it("employee cannot write another user's timeEntry", async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'user_data', WORKSPACE, 'timeEntries', 't-mgr'),
+        { id: 't-mgr', userId: 'manager-uid', userEmail: 'manager@shop.test', clockIn: Date.now() });
+    });
+    await assertFails(setDoc(doc(asEmployee(), 'user_data', WORKSPACE, 'timeEntries', 't-mgr'),
+      { clockOut: Date.now() }, { merge: true }));
+    await assertFails(setDoc(doc(asEmployee(), 'user_data', WORKSPACE, 'timeEntries', 't-new'),
+      { id: 't-new', userId: 'manager-uid', userEmail: 'manager@shop.test', clockIn: Date.now(), breaks: [], createdAt: Date.now() }));
+  });
+
+  it('employee cannot write users docs (their own role, or anyone else)', async () => {
+    await assertFails(setDoc(doc(asEmployee(), 'users', 'employee-uid'), { role: 'owner' }, { merge: true }));
+    await assertFails(setDoc(doc(asEmployee(), 'users', 'tech-uid'), { disabled: true }, { merge: true }));
+    await assertFails(setDoc(doc(asEmployee(), 'users', 'employee-uid'),
+      { pinHash: 'x', pinSalt: 'y', pinIterations: 1, pinUpdatedAt: Date.now(), pinUpdatedBy: 'employee-uid', pinUpdatedByEmail: 'employee@shop.test' }, { merge: true }));
+  });
+
+  it('employee cannot delete inventory (inventory.delete stays owner-only)', async () => {
+    const { deleteDoc } = await import('firebase/firestore');
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'user_data', WORKSPACE, 'inventory', 'del1'), { sku: 'FTT-9' });
+    });
+    await assertFails(deleteDoc(doc(asEmployee(), 'user_data', WORKSPACE, 'inventory', 'del1')));
+  });
+
+  it('employee cannot mark a pay period paid or approved (payroll stays manager+/owner)', async () => {
+    await assertFails(setDoc(doc(asEmployee(), 'user_data', WORKSPACE, 'payPeriods', 'p9'), { periodEnd: '2026-01-15' }));
+    await assertFails(setDoc(doc(asEmployee(), 'user_data', WORKSPACE, 'payPeriodApprovals', 'a9'), { periodEnd: '2026-01-15' }));
   });
 });
 

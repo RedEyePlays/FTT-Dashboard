@@ -63,6 +63,8 @@ import type { QuickPurchaseSaveInput } from './components/QuickPurchaseView';
 import { listingPlatformsLabel } from './domain/listing';
 import { AppSettings } from './domain/settings';
 import { techUpdateRepair } from './services/repairFunctions';
+import { setStaffPassword } from './services/userFunctions';
+import { stampVoid, stampReturn, stampReconcile, stampSettlement, stampDropOffAccept, stampExpense } from './domain/attribution';
 import { useWorkspaceData } from './hooks/useWorkspaceData';
 import { newId, mkActivity } from './domain/ids';
 import { collectionFor, stockChange, applyDirectSale } from './domain/inventory';
@@ -815,7 +817,8 @@ const App: React.FC = () => {
     return transaction;
   };
 
-  // Reverse a completed sale (owner/manager, same-day window). Returns sold
+  // Reverse a completed sale (anyone with sales.void — owner/manager/employee
+  // — inside the same-day window). Returns sold
   // devices to stock, restocks accessories atomically, and flags the transaction
   // voided (kept for audit). Does NOT touch custom lines (no inventoryId).
   const handleVoidSale = (tx: SalesTransaction) => {
@@ -842,7 +845,7 @@ const App: React.FC = () => {
     )];
     voidSale(uid, {
       transactionId: tx.id, devices, accessoryUpdates,
-      voided: { voidedAt: Date.now(), voidedBy: appUser.id, voidedByEmail: appUser.email },
+      voided: stampVoid(appUser, Date.now()),
       activity,
     }).catch(e => console.error('Void failed', e));
     audit('sale.void', 'sale', tx.id, { totalPaid: tx.totalPaid }, { devices: devices.length, accessories: accessoryUpdates.length });
@@ -894,7 +897,7 @@ const App: React.FC = () => {
     )];
     returnSale(uid, {
       transactionId: tx.id, resellDevices, defectiveDevices, accessoryUpdates,
-      returned: { returnedAt: Date.now(), returnedBy: appUser.id, returnedByEmail: appUser.email, restockingFee, refundAmount },
+      returned: { ...stampReturn(appUser, Date.now()), restockingFee, refundAmount },
       activity,
     }).catch(e => console.error('Return failed', e));
     audit('sale.return', 'sale', tx.id, { totalPaid: tx.totalPaid },
@@ -938,14 +941,19 @@ const App: React.FC = () => {
     return merged;
   };
 
-  // Reconcile (count + close) a day — owner/manager only. Recomputes expected /
-  // variance from the shared math and stamps the reconciled-by/at close markers.
+  // Reconcile (count + close) a day — any staff who runs the register
+  // (cash.reconcile, held by owner/manager/employee). Recomputes expected /
+  // variance from the shared math and stamps the reconciled-by/at close
+  // markers from the AUTHENTICATED user. Variances stay visible to owner/
+  // manager exactly as before (the unreconciled-days flag and cash history
+  // read the same fields) — who may CLOSE the drawer changed, not who may
+  // review it.
   const handleSaveReconciliation = (r: ReconciliationInput) => {
     if (!uid || !appUser || !allow('cash.reconcile')) return;
     const saved = commitDrawerRecord(r.date, {
       openingFloat: r.openingFloat, cashIn: r.cashIn, cashOut: r.cashOut, withdrawals: r.withdrawals,
       countedCash: r.countedCash, note: r.note,
-      reconciledAt: Date.now(), reconciledBy: appUser.id, reconciledByEmail: appUser.email,
+      ...stampReconcile(appUser, Date.now()),
     });
     if (saved) audit('cash.reconcile', 'cashReconciliation', r.date, undefined, { expected: saved.expectedCash, counted: saved.countedCash, variance: saved.variance });
   };
@@ -955,13 +963,14 @@ const App: React.FC = () => {
   // from the full Reports > Cash tab. commitDrawerRecord merges over today's
   // existing record, so the opening float and any logged cash in/out/withdrawal
   // entries carry through unchanged; this only adds the count + note and stamps
-  // the reconciled-by/at markers. Owner/manager only (cash.reconcile).
+  // the reconciled-by/at markers. Anyone with cash.reconcile (owner/manager/
+  // employee) — closing up is the employee's own end-of-shift action.
   const handleCloseDrawer = (countedCash: number, note?: string) => {
     if (!uid || !appUser || !allow('cash.reconcile')) return;
     const date = todayISO();
     const saved = commitDrawerRecord(date, {
       countedCash, note,
-      reconciledAt: Date.now(), reconciledBy: appUser.id, reconciledByEmail: appUser.email,
+      ...stampReconcile(appUser, Date.now()),
     });
     if (saved) {
       const variance = saved.variance;
@@ -1001,26 +1010,26 @@ const App: React.FC = () => {
     audit('cash.log', 'cashReconciliation', date, undefined, { kind, amount });
 
     // "Cash out" is a general same-till payout (rent, supplies, paying a
-    // device buyer COD, misc) — the same concept as the new expense ledger. Only
-    // back it with an Expense record when the actor actually holds
-    // expenses.manage (owner/manager): cash.log itself is open to employees
-    // too, but firestore.rules gates the expenses collection to
-    // expenses.manage, so an employee-written Expense would just be
-    // rejected. An employee's "Cash out" therefore stays a raw drawer entry
-    // only, exactly as it behaved before this PR — not part of the unified
-    // ledger's P&L line, a stated, deliberate limitation (see the PR
-    // description), not a bug.
+    // device buyer COD, misc) — the same concept as the expense ledger, so it
+    // is backed by a real Expense record whenever the actor holds
+    // expenses.manage. That is now owner/manager/employee (technicians never
+    // hold cash.log at all), so in practice every "Cash out" logged at the
+    // register lands in the ledger's P&L line — the employee-only gap this
+    // check used to leave is closed. The `allow` check stays because the
+    // permission, not the role list, is the contract.
     if (kind === 'cashOut' && allow('expenses.manage')) {
-      const rec: Expense = {
+      const rec: Expense = stampExpense({
         id: newId(), date, amount, category: 'other', paymentMethod: 'cash', payee: note,
-        enteredBy: appUser.id, enteredByEmail: appUser.email, createdAt: Date.now(), cashDrawerLinked: true,
-      };
+        enteredBy: '', enteredByEmail: '', createdAt: 0, cashDrawerLinked: true,
+      }, appUser, Date.now());
       saveExpense(uid, rec).catch(e => console.error('Expense save failed', e));
       audit('expense.create', 'expense', rec.id, undefined, { amount, category: 'other', paymentMethod: 'cash', viaCashLog: true });
     }
   };
 
-  // Owner/manager expense ledger (expenses.manage — mirrors payroll.manage).
+  // Expense ledger (expenses.manage — owner/manager/employee; technicians
+  // never). Every expense records enteredBy/enteredByEmail from the
+  // authenticated user plus an 'expense.create'/'expense.update' audit entry.
   // A cash-paid expense ALSO appends a matching drawer cash-out entry via the
   // SAME commitDrawerRecord helper every other cash effect in this file uses
   // — never a parallel write path — so the till and the ledger can't drift.
@@ -1031,9 +1040,7 @@ const App: React.FC = () => {
   const handleSaveExpense = (expense: Expense, isNew: boolean) => {
     if (!uid || !appUser || !allow('expenses.manage')) return;
     const before = isNew ? undefined : expenses.find(e => e.id === expense.id);
-    const next: Expense = isNew
-      ? { ...expense, enteredBy: appUser.id, enteredByEmail: appUser.email, createdAt: Date.now() }
-      : expense;
+    const next: Expense = isNew ? stampExpense(expense, appUser, Date.now()) : expense;
     if (isNew && next.paymentMethod === 'cash') {
       const existing = cashReconciliations.find(r => r.date === next.date);
       const entry = { id: newId(), amount: next.amount, note: `${next.category} — ${next.payee || next.note || 'expense'}` };
@@ -1220,7 +1227,7 @@ const App: React.FC = () => {
   // at Accept (see saveDropOffs' dropOffAcceptDrawerEffect call); logging it
   // again here would double-count the same cash.
   const handleAddDropOffToInventory = (d: DropOff) => {
-    if (!uid || !allow('dropoffs.manage')) return;
+    if (!uid || !appUser || !allow('dropoffs.manage')) return;
     const buyer = deviceBuyersRef.current.find(r => r.id === d.buyerId);
     const newItem: InventoryItem = {
       id: newId(), kind: 'device', date: d.dateDropped || todayISO(),
@@ -1232,7 +1239,12 @@ const App: React.FC = () => {
       notes: d.notes ? `Drop-off: ${d.notes}` : 'Added from drop-off',
     };
     saveItem(uid, 'inventory', newItem);
-    saveItem(uid, 'dropOffs', { ...d, inventoryId: newItem.id });
+    // Attribution goes on the RECORD, not just in the audit log: an employee
+    // may accept a drop-off now (dropoffs.manage), and accepting can hand real
+    // cash to the seller. acceptedBy is stamped from the authenticated user
+    // (appUser), never from `d`, so a hand-crafted drop-off payload can't
+    // attribute the accept to someone else.
+    saveItem(uid, 'dropOffs', stampDropOffAccept({ ...d, inventoryId: newItem.id }, appUser, Date.now()));
     logActivity(`${newItem.item} added from drop-off`);
     audit('dropoff.accept', 'dropOff', d.id, undefined, { inventoryId: newItem.id });
   };
@@ -1277,14 +1289,21 @@ const App: React.FC = () => {
   // through the same commitDrawerRecord path as every other drawer movement,
   // so the register's live total and the reconciliation screen can't drift.
   const handleSettleDeviceBuyer = (settlement: Settlement) => {
-    if (!uid || !allow('dropoffs.manage')) return;
+    if (!uid || !appUser || !allow('dropoffs.manage')) return;
+    // Stamp the acting user onto the settlement record itself (not only the
+    // audit entry) — employees can settle a device buyer now, and a payout is
+    // exactly the kind of action the owner needs to trace back to a person on
+    // the record. Spread LAST so a settlement draft that already carried
+    // settledBy/settledByEmail (client-supplied) can never override the
+    // authenticated identity.
+    const attributed = stampSettlement(settlement, appUser, Date.now());
     // Saving the settlement and flagging its drop-offs 'settled' happen in one
     // atomic commit — settleableDropOffs (domain/dropoffs.ts) only excludes
     // 'settled'/'accepted'-gone-'paidout' drop-offs, so if this ever landed as
     // two separate writes, a failure (or just a slow second write) between
     // them would leave the same drop-offs eligible for a second settlement —
     // the device buyer could get paid twice for the same batch of devices.
-    settleDeviceBuyer(uid, { settlement, dropOffIds: settlement.dropOffIds }).catch(e => console.error('Settle device buyer failed', e));
+    settleDeviceBuyer(uid, { settlement: attributed, dropOffIds: attributed.dropOffIds }).catch(e => console.error('Settle device buyer failed', e));
     // Every edit made on the pre-settlement review screen (components/
     // SettlementReviewModal.tsx) is already ON the settlement record itself
     // (lineAdjustments / adjustmentAmount / adjustmentNote — see
@@ -1328,6 +1347,34 @@ const App: React.FC = () => {
     audit(disabled ? 'user.disable' : 'user.enable', 'user', targetUid,
       { email: target?.email, disabled: !disabled }, { disabled });
   };
+  // Reset a staff member's password. The browser can't do this — setting
+  // another user's password needs the Admin SDK — so this posts to the
+  // setStaffPassword Cloud Function (functions/src/staffPassword.ts), which
+  // re-derives the caller's role and workspace from Firestore server-side and
+  // refuses anything that isn't an owner acting on a NON-owner in their own
+  // workspace. The allow('users.manage') check here is UI-level only; it is
+  // not what protects the operation.
+  //
+  // The audit entry ('user.password_reset') is written BY THE FUNCTION, with
+  // the Admin SDK, into the same append-only auditLogs collection audit()
+  // uses — not from here — so the acting identity on it is the authenticated
+  // one and it can't be skipped by a client that just doesn't call audit().
+  // The password itself is never stored in app state, logged, or included in
+  // any error surfaced here.
+  //
+  // Resolves to null on success, or a message to show in the dialog.
+  const handleResetStaffPassword = async (targetUid: string, newPassword: string): Promise<string | null> => {
+    if (!allow('users.manage') || targetUid === appUser?.id) return 'You cannot reset that password.';
+    try {
+      await setStaffPassword(targetUid, newPassword);
+      return null;
+    } catch (e: any) {
+      return typeof e?.message === 'string' && e.message
+        ? e.message.replace(/^.*?:\s*/, '')
+        : 'Could not reset the password. Please try again.';
+    }
+  };
+
   const handleSetAllowProfit = (targetUid: string, allowProfit: boolean) => {
     if (!allow('users.manage')) return;
     updateUserDoc(targetUid, { allowProfit }).catch(() => {});
@@ -2150,6 +2197,7 @@ const App: React.FC = () => {
               onInvite={handleInvite}
               onDeleteInvite={handleDeleteInvite}
               onSetPin={allow('users.pin') ? handleSetPin : undefined}
+              onResetPassword={allow('users.manage') ? handleResetStaffPassword : undefined}
               canManageSecurity={allow('security.manage')}
               autoLockMinutes={settings.operations.autoLockMinutes}
               onSetAutoLockMinutes={allow('security.manage') ? handleSetAutoLockMinutes : undefined}

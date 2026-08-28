@@ -16,6 +16,12 @@ export { repairStatusLookup } from "./repairLookup";
 // that firestore.rules excludes them from direct client writes (see repairs.ts).
 export { techUpdateRepair } from "./repairs";
 
+// Owner-only, in-app staff password reset (see staffPassword.ts). Firebase's
+// email reset is useless for staff accounts here — they routinely use
+// addresses that don't receive mail — so the owner sets the password directly
+// via the Admin SDK and hands it over out-of-band.
+export { setStaffPassword } from "./staffPassword";
+
 // The Gemini API key lives in Firebase's server-side Secret Manager — it is
 // NEVER shipped to the client. Set it before deploy with:
 //   firebase functions:secrets:set GEMINI_API_KEY

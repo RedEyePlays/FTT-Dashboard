@@ -54,6 +54,10 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   'user.enable': 'User enabled',
   'user.allow_profit': 'Financial access changed',
   'user.set_rate': 'Pay rate changed',
+  // Written server-side by the setStaffPassword Cloud Function
+  // (functions/src/staffPassword.ts), never by the client — and it never
+  // carries the password, only who reset whose.
+  'user.password_reset': 'Password reset',
   'user.invite': 'User invited',
   'user.invite_revoke': 'Invite revoked',
   // Time clock
