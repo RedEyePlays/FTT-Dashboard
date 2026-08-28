@@ -88,3 +88,18 @@ export const can = (
   }
   return ROLE_PERMISSIONS[role].includes(perm);
 };
+
+/**
+ * Who may print a drop-off device label. Those labels carry the device's
+ * purchase price and the store's service fee — profit-sensitive figures — so
+ * printing is gated to the same permission that already exposes drop-off
+ * financials on screen.
+ *
+ * It lives HERE, and not next to the label itself in services/dropOffLabel.ts,
+ * for a concrete reason: App.tsx needs the gate to decide whether to offer the
+ * action, and dropOffLabel.ts pulls in the `qrcode` library. Importing the gate
+ * from there would drag QR generation into the main bundle, when it currently
+ * only ever loads inside the lazy label/drop-off chunks (measured: +37 kB raw
+ * / +14 kB gzip on the main chunk before this was moved).
+ */
+export const canPrintDropOffLabel = (role: Role | undefined): boolean => can(role, 'dropoffs.manage');

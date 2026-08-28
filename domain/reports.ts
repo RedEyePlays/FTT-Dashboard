@@ -30,10 +30,29 @@ const round2 = (n: number): number => Math.round((n || 0) * 100) / 100;
 // balance payment's own cash effect is posted separately, against the day
 // it's actually taken (App.tsx's handleCollectBalance, same pattern as
 // void/return's refund entries) — never folded back in here.
-const collectedOnTx = (t: SalesTransaction): number => {
-  if (isReversed(t)) return 0;
-  return t.deposit !== undefined ? (t.deposit || 0) : (t.totalPaid || 0);
-};
+//
+// A REVERSED (voided/returned) sale is deliberately NOT zeroed here. This
+// used to `return 0` for one, which double-counted the reversal: the money
+// was removed twice from the expected drawer total, once by this exclusion
+// (retroactively, against the ORIGINAL sale date) and once by the explicit
+// refund cash-out entry that handleVoidSale/handleReturnSale already write
+// against TODAY's drawer (domain/pos.ts's saleRefundDrawerEffect). A voided
+// $400 cash sale left the expected drawer $400 short of reality, and
+// re-ringing the device only ever restored one of the two deductions —
+// exactly the reported "cash goes out on void and re-selling doesn't bring
+// the balance back" symptom.
+//
+// The refund entry is the correct half to keep: it lands on the day the
+// reversal was actually processed, which is where the cash physically
+// leaves the till. Zeroing the original transaction instead rewrites a past
+// (often already-counted and closed) day, which is precisely what every
+// other money path in this file refuses to do (see the balance-payment note
+// above, and handleCollectBalance's own today-only drawer posting). So the
+// cash a reversed sale took in still counts on ITS OWN original date — it
+// really was in the till that day — and the reversal is accounted for once,
+// later, where it happened.
+const collectedOnTx = (t: SalesTransaction): number =>
+  t.deposit !== undefined ? (t.deposit || 0) : (t.totalPaid || 0);
 
 // --- Part 1: daily cash reconciliation ------------------------------------
 
@@ -42,7 +61,14 @@ const collectedOnTx = (t: SalesTransaction): number => {
  *  • cash sales → the whole collected amount,
  *  • mixed sales → their recorded cash portion,
  *  • card sales → nothing.
- * Reversed (voided/returned) sales contribute nothing.
+ *
+ * Reversed (voided/returned) sales STILL count, on their own original date:
+ * that cash genuinely was collected and sat in the till that day. The refund
+ * is a separate, later cash-out entry posted against the day the reversal is
+ * actually processed (App.tsx's handleVoidSale/handleReturnSale via
+ * domain/pos.ts's saleRefundDrawerEffect), so the money is removed exactly
+ * once and never retroactively out of an already-reconciled day. See
+ * collectedOnTx above for the full reasoning.
  */
 export const cashCollectedOnTx = (t: SalesTransaction): number => {
   const collected = collectedOnTx(t);

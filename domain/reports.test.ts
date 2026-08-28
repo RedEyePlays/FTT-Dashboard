@@ -7,6 +7,7 @@ import {
   profitAndLoss, profitLossCsvRows, settlementHistory, yearEndSummary, ProfitLossInput,
   cashSalesAfterClose, unreconciledDays,
 } from './reports';
+import { saleRefundDrawerEffect, cashCollectedOnSale, returnRefund } from './pos';
 import { DEFAULT_EXPENSE_CATEGORIES } from './expenses';
 
 const tx = (p: Partial<SalesTransaction>): SalesTransaction => ({
@@ -60,9 +61,19 @@ describe('cashCollectedOnTx', () => {
   it('counts only the deposit of a cash layaway (balance not yet collected)', () => {
     expect(cashCollectedOnTx(tx({ paymentMethod: 'cash', totalPaid: 500, deposit: 100, balanceOwing: 400 }))).toBe(100);
   });
-  it('counts nothing for a reversed (voided/returned) sale', () => {
-    expect(cashCollectedOnTx(tx({ paymentMethod: 'cash', totalPaid: 100, status: 'voided' }))).toBe(0);
-    expect(cashCollectedOnTx(tx({ paymentMethod: 'cash', totalPaid: 100, status: 'returned' }))).toBe(0);
+  it('STILL counts a reversed (voided/returned) sale on its own original date', () => {
+    // The cash really was collected and really was in the till that day. The
+    // refund is removed separately, by the cash-out entry handleVoidSale/
+    // handleReturnSale post against the day the reversal is processed. Zeroing
+    // it here too was the double-deduction bug.
+    expect(cashCollectedOnTx(tx({ paymentMethod: 'cash', totalPaid: 100, status: 'voided' }))).toBe(100);
+    expect(cashCollectedOnTx(tx({ paymentMethod: 'cash', totalPaid: 100, status: 'returned' }))).toBe(100);
+  });
+  it('a reversed CARD sale still contributes no cash (the reversal changes nothing about that)', () => {
+    expect(cashCollectedOnTx(tx({ paymentMethod: 'card', totalPaid: 400, status: 'voided' }))).toBe(0);
+  });
+  it('a reversed MIXED sale still contributes only its cash portion', () => {
+    expect(cashCollectedOnTx(tx({ paymentMethod: 'mixed', totalPaid: 400, cashAmount: 150, cardAmount: 250, status: 'voided' }))).toBe(150);
   });
   it('counts nothing for an e-transfer sale — no physical cash ever changed hands', () => {
     expect(cashCollectedOnTx(tx({ paymentMethod: 'etransfer', totalPaid: 250 }))).toBe(0);
@@ -86,11 +97,14 @@ describe('expectedCashForDate', () => {
     tx({ id: 'b', date: '2026-07-20', paymentMethod: 'mixed', totalPaid: 200, cashAmount: 50 }),
     tx({ id: 'c', date: '2026-07-20', paymentMethod: 'card', totalPaid: 80 }),   // no cash
     tx({ id: 'd', date: '2026-07-19', paymentMethod: 'cash', totalPaid: 999 }),   // other day
-    tx({ id: 'e', date: '2026-07-20', paymentMethod: 'cash', totalPaid: 300, status: 'voided' }), // reversed
+    tx({ id: 'e', date: '2026-07-20', paymentMethod: 'cash', totalPaid: 300, status: 'voided' }), // reversed — its cash still counted on this day
     tx({ id: 'f', date: '2026-07-20', paymentMethod: 'etransfer', totalPaid: 400 }), // no cash either
   ];
   it('sums the cash portion of the given day only', () => {
-    expect(expectedCashForDate(txns, '2026-07-20')).toBe(150); // 100 + 50 — etransfer's 400 never counted
+    // 100 + 50 + the voided sale's 300 — etransfer's 400 and the card sale
+    // never counted. The voided sale's refund is a separate cash-out entry on
+    // the day it was processed, not a retroactive subtraction here.
+    expect(expectedCashForDate(txns, '2026-07-20')).toBe(450);
   });
   it('is zero for a day with no cash sales', () => {
     expect(expectedCashForDate(txns, '2026-01-01')).toBe(0);
@@ -98,6 +112,150 @@ describe('expectedCashForDate', () => {
   it('a day of ONLY e-transfer sales has zero expected cash', () => {
     const etransferOnly = [tx({ id: 'g', date: '2026-08-01', paymentMethod: 'etransfer', totalPaid: 999 })];
     expect(expectedCashForDate(etransferOnly, '2026-08-01')).toBe(0);
+  });
+});
+
+// --- Void/return double-deduction regression --------------------------------
+//
+// Reproduces the reported bug end-to-end at the domain level: a voided sale
+// used to be deducted TWICE from the expected drawer — once by
+// cashCollectedOnTx zeroing the reversed transaction, and once by the explicit
+// refund cash-out entry App.tsx writes via saleRefundDrawerEffect. These tests
+// model exactly what App.tsx does (compute the refund with cashCollectedOnSale
+// / returnRefund, push it onto the day's cashOut list, then read the day's
+// expected cash back through expectedEndingCash) so the two mechanisms are
+// exercised together, not in isolation.
+describe('voiding/returning a sale deducts its cash exactly once', () => {
+  const OPENING = 200;
+
+  // What App.tsx's handleVoidSale/handleReturnSale actually append to today's
+  // drawer record — nothing here is a stand-in, it calls the same domain fns.
+  const refundEntry = (t: SalesTransaction, restockingFee?: number) => {
+    const effect = saleRefundDrawerEffect(
+      restockingFee === undefined
+        ? cashCollectedOnSale(t)
+        : returnRefund(cashCollectedOnSale(t), restockingFee),
+    );
+    return effect ? [{ id: 'refund', amount: effect.amount }] : [];
+  };
+
+  // The full expected-drawer figure for a day: float + that day's cash sales
+  // − whatever cash was paid out of it.
+  const expectedDrawer = (
+    txns: SalesTransaction[], dateISO: string, cashOut: { amount: number }[],
+  ): number => expectedEndingCash({
+    openingFloat: OPENING,
+    cashSales: expectedCashForDate(txns, dateISO),
+    cashOut: sumDrawerEntries(cashOut),
+  });
+
+  const sale400 = tx({ id: 'v1', date: '2026-07-20', paymentMethod: 'cash', totalPaid: 400 });
+
+  it('a $400 cash sale voided the same day reduces the expected drawer by exactly $400, not $800', () => {
+    const before = expectedDrawer([sale400], '2026-07-20', []);
+    expect(before).toBe(600); // 200 float + 400 cash sale
+
+    // The void: the transaction is flagged reversed AND a refund cash-out is
+    // posted against the same (today's) drawer.
+    const voided = { ...sale400, status: 'voided' } as SalesTransaction;
+    const after = expectedDrawer([voided], '2026-07-20', refundEntry(sale400));
+
+    expect(after).toBe(200);            // back to just the float
+    expect(before - after).toBe(400);   // ← the bug: this was 800
+  });
+
+  it('re-ringing the voided device at $400 returns the expected drawer to its pre-void value', () => {
+    const before = expectedDrawer([sale400], '2026-07-20', []);
+    const voided = { ...sale400, status: 'voided' } as SalesTransaction;
+    const reRung = tx({ id: 'v2', date: '2026-07-20', paymentMethod: 'cash', totalPaid: 400 });
+    const after = expectedDrawer([voided, reRung], '2026-07-20', refundEntry(sale400));
+    expect(after).toBe(before); // 600 — the phantom deduction is gone
+  });
+
+  it('voiding a CARD sale changes the drawer by $0 (no refund entry at all)', () => {
+    const card = tx({ id: 'c1', date: '2026-07-20', paymentMethod: 'card', totalPaid: 400 });
+    const before = expectedDrawer([card], '2026-07-20', []);
+    expect(refundEntry(card)).toEqual([]); // never touches the till
+    const after = expectedDrawer([{ ...card, status: 'voided' } as SalesTransaction], '2026-07-20', []);
+    expect(after).toBe(before);
+    expect(before).toBe(200);
+  });
+
+  it('voiding a MIXED sale deducts only its cash portion, once', () => {
+    const mixed = tx({ id: 'm1', date: '2026-07-20', paymentMethod: 'mixed', totalPaid: 400, cashAmount: 150, cardAmount: 250 });
+    const before = expectedDrawer([mixed], '2026-07-20', []);
+    expect(before).toBe(350); // 200 float + only the 150 cash portion
+
+    const entries = refundEntry(mixed);
+    expect(entries).toEqual([{ id: 'refund', amount: 150 }]); // card half never refunded from the till
+    const after = expectedDrawer([{ ...mixed, status: 'voided' } as SalesTransaction], '2026-07-20', entries);
+    expect(before - after).toBe(150);
+    expect(after).toBe(200);
+  });
+
+  it('RETURNING a cash sale deducts its cash exactly once too (same pair of mechanisms)', () => {
+    const before = expectedDrawer([sale400], '2026-07-20', []);
+    const returned = { ...sale400, status: 'returned' } as SalesTransaction;
+    const after = expectedDrawer([returned], '2026-07-20', refundEntry(sale400, 0));
+    expect(before - after).toBe(400);
+    expect(after).toBe(200);
+  });
+
+  it('a return with a restocking fee keeps the fee in the till, deducted once', () => {
+    const before = expectedDrawer([sale400], '2026-07-20', []);
+    const returned = { ...sale400, status: 'returned' } as SalesTransaction;
+    const entries = refundEntry(sale400, 50);
+    expect(entries).toEqual([{ id: 'refund', amount: 350 }]);
+    const after = expectedDrawer([returned], '2026-07-20', entries);
+    expect(before - after).toBe(350); // the $50 fee stays
+    expect(after).toBe(250);
+  });
+
+  it('cancelling a cash layaway refunds only the deposit (plus any cash balance payments), once', () => {
+    // Layaway cancellation runs through the very same handleVoidSale /
+    // handleReturnSale path (App.tsx only varies the activity wording), so it
+    // is fixed by the same change — but the refund base is what was actually
+    // collected, never the $500 grand total.
+    const layaway = tx({
+      id: 'l1', date: '2026-07-20', paymentMethod: 'cash',
+      totalPaid: 500, deposit: 100, balanceOwing: 400,
+    });
+    const before = expectedDrawer([layaway], '2026-07-20', []);
+    expect(before).toBe(300); // 200 float + the 100 deposit only
+
+    const entries = refundEntry(layaway);
+    expect(entries).toEqual([{ id: 'refund', amount: 100 }]);
+    const after = expectedDrawer([{ ...layaway, status: 'voided' } as SalesTransaction], '2026-07-20', entries);
+    expect(before - after).toBe(100);
+    expect(after).toBe(200);
+  });
+
+  describe('cross-day: voiding a prior day\'s sale', () => {
+    const YESTERDAY = '2026-07-19', TODAY = '2026-07-20';
+    const priorSale = tx({ id: 'p1', date: YESTERDAY, paymentMethod: 'cash', totalPaid: 400 });
+    const todaySale = tx({ id: 'p2', date: TODAY, paymentMethod: 'cash', totalPaid: 60 });
+
+    it('leaves the ORIGINAL (already-reconciled) day\'s expected cash completely unchanged', () => {
+      const beforeVoid = expectedCashForDate([priorSale, todaySale], YESTERDAY);
+      expect(beforeVoid).toBe(400);
+
+      const afterVoid = expectedCashForDate(
+        [{ ...priorSale, status: 'voided' } as SalesTransaction, todaySale], YESTERDAY,
+      );
+      expect(afterVoid).toBe(beforeVoid); // ← was silently rewritten to 0 before the fix
+      expect(afterVoid).toBe(400);
+    });
+
+    it('takes the refund out of TODAY\'s drawer instead, exactly once', () => {
+      const entries = refundEntry(priorSale);
+      expect(entries).toEqual([{ id: 'refund', amount: 400 }]);
+
+      const txns = [{ ...priorSale, status: 'voided' } as SalesTransaction, todaySale];
+      // Today: float 200 + today's own 60 cash sale − the 400 refund.
+      expect(expectedDrawer(txns, TODAY, entries)).toBe(-140);
+      // And yesterday's drawer is untouched by any of it.
+      expect(expectedDrawer(txns, YESTERDAY, [])).toBe(600);
+    });
   });
 });
 
@@ -503,9 +661,9 @@ describe('cashSalesAfterClose', () => {
     expect(cashSalesAfterClose([mixed, card], '2026-08-26', CLOSE)).toBe(120);
   });
 
-  it('excludes a post-close sale that was then voided', () => {
+  it('still counts a post-close sale that was later voided — its refund is its own cash-out entry', () => {
     const voided = { ...tx('v', '2026-08-26', 200, CLOSE + 1), status: 'voided' } as SalesTransaction;
-    expect(cashSalesAfterClose([voided], '2026-08-26', CLOSE)).toBe(0);
+    expect(cashSalesAfterClose([voided], '2026-08-26', CLOSE)).toBe(200);
   });
 });
 

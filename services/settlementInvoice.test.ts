@@ -116,11 +116,44 @@ describe('settlementInvoiceHtml — the printed breakdown\'s totals match the co
     expect(html).not.toContain('Total owed to store');
   });
 
-  it('includes a signature line for the buyer and for the store', () => {
-    const lines = initSettlementReview(dropOffs);
-    const settlement = buildSettlementFromReview({ id: 'S-1', buyerId: 'r1', date: '2026-08-15', paymentMethod: 'cash', notes: '' }, dropOffs, lines, 0, '');
-    const html = settlementInvoiceHtml(settlement, buyer, dropOffs, { storeName: 'FlipThatTech' });
-    expect(html).toContain('Device buyer signature');
-    expect(html).toContain('FlipThatTech signature');
+  // Signature lines were removed at the owner's request — this document isn't
+  // signed. These lock in that they're gone AND that nothing was left behind:
+  // no empty markup and no dead CSS still shipping in every printout.
+  describe('no signature block', () => {
+    const printed = () => {
+      const lines = initSettlementReview(dropOffs);
+      const settlement = buildSettlementFromReview({ id: 'S-1', buyerId: 'r1', date: '2026-08-15', paymentMethod: 'cash', notes: '' }, dropOffs, lines, 0, '');
+      return settlementInvoiceHtml(settlement, buyer, dropOffs, { storeName: 'FlipThatTech' });
+    };
+
+    it('renders no signature lines at all', () => {
+      const html = printed();
+      expect(html).not.toContain('Device buyer signature');
+      expect(html).not.toContain('FlipThatTech signature');
+      expect(html).not.toMatch(/signature/i);
+    });
+
+    it('leaves no empty block where the signatures used to be, and no dead CSS for it', () => {
+      const html = printed();
+      // The markup: no leftover container/rule divs that would print as blank
+      // space at the bottom of the page.
+      expect(html).not.toContain('class="sig"');
+      expect(html).not.toContain('class="rule"');
+      expect(html).not.toContain('<div class="line">');
+      // The stylesheet: the rules that only ever styled that block are gone
+      // too, rather than shipping unused in every print job.
+      expect(html).not.toContain('.sig');
+      expect(html).not.toMatch(/\.rule\s*\{/);
+    });
+
+    it('still closes the document deliberately — the footer keeps its own spacing and rule', () => {
+      const html = printed();
+      // The 36px of separation the signature block used to provide is now the
+      // footer's own margin + closing rule, so the invoice doesn't end
+      // abruptly right under the totals.
+      expect(html).toMatch(/\.foot\{[^}]*margin-top:20px/);
+      expect(html).toMatch(/\.foot\{[^}]*border-top:1px solid #ddd/);
+      expect(html).toContain('Settlement S-1');
+    });
   });
 });
