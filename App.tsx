@@ -1285,8 +1285,16 @@ const App: React.FC = () => {
     // them would leave the same drop-offs eligible for a second settlement —
     // the runner could get paid twice for the same batch of devices.
     settleRunner(uid, { settlement, dropOffIds: settlement.dropOffIds }).catch(e => console.error('Settle runner failed', e));
+    // Every edit made on the pre-settlement review screen (components/
+    // SettlementReviewModal.tsx) is already ON the settlement record itself
+    // (lineAdjustments / adjustmentAmount / adjustmentNote — see
+    // domain/dropoffs.ts's buildSettlementFromReview), so surfacing them here
+    // too means the audit log shows exactly what was corrected, by whom
+    // (audit() stamps the acting user), and — via adjustmentNote — why,
+    // without needing a separate before/after diff mechanism.
     audit('dropoff.settle', 'settlement', settlement.id, undefined, {
       runnerId: settlement.runnerId, amountPaid: settlement.amountPaid, paymentMethod: settlement.paymentMethod,
+      lineAdjustments: settlement.lineAdjustments, adjustmentAmount: settlement.adjustmentAmount, adjustmentNote: settlement.adjustmentNote,
     });
     const effect = settlementDrawerEffect(settlement);
     if (effect) {

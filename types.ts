@@ -149,19 +149,40 @@ export interface DropOff {
   settlementId?: string;     // set once included in a weekly settlement
 }
 
+// A per-device fee correction made on the pre-settlement review screen —
+// kept on the settlement record (not just applied silently) so the record
+// itself shows exactly what was changed. `originalFee` is the drop-off's
+// dropOffFee at review time; `adjustedFee` is what was actually paid for
+// that device in this settlement.
+export interface SettlementLineAdjustment {
+  dropOffId: string;
+  originalFee: number;
+  adjustedFee: number;
+}
+
 export interface Settlement {
   id: string;
   runnerId: string;
   date: string;              // YYYY-MM-DD settled
-  dropOffIds: string[];
+  dropOffIds: string[];       // devices actually included in this settlement — a device reviewed but excluded is simply left out (still 'accepted'/'paidout', eligible for a later settlement)
   totalPurchaseFronted: number; // cash the runner fronted to sellers
-  totalFees: number;            // drop-off fees paid to runner
-  amountPaid: number;           // net amount paid to runner (or negative = owed to store)
+  totalFees: number;            // drop-off fees paid to runner, AFTER any per-line adjustments below
+  amountPaid: number;           // net amount paid to runner (or negative = owed to store) — totalPurchaseFronted + totalFees + adjustmentAmount
   // How amountPaid was actually paid out. Optional for backward compatibility
   // with settlements recorded before this field existed — absent is treated as
   // 'cash' (matching how every settlement was implicitly handled previously).
   paymentMethod?: SettlementPaymentMethod;
   notes: string;
+  // Per-device fee corrections made on the review screen — only entries
+  // where the fee actually changed from the drop-off's stored dropOffFee.
+  // Undefined/empty when nothing was adjusted.
+  lineAdjustments?: SettlementLineAdjustment[];
+  // A settlement-level correction (e.g. a one-off credit/deduction agreed
+  // with the runner) that doesn't belong to any single device line. Folded
+  // into amountPaid; kept here separately (with its note) so the settlement
+  // record shows it was applied, not just a mismatched total.
+  adjustmentAmount?: number;
+  adjustmentNote?: string;
 }
 
 // A note can reference one record. This is a lightweight pointer, not an

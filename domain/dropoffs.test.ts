@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { runnerBalance, settleableDropOffs, settlementTotals, dropOffPurchaseCost, settlementDrawerEffect, dropOffAcceptDrawerEffect } from './dropoffs';
+import {
+  runnerBalance, settleableDropOffs, settlementTotals, dropOffPurchaseCost, settlementDrawerEffect, dropOffAcceptDrawerEffect,
+  initSettlementReview, settlementReviewTotals, buildLineAdjustments, settlementDirection, settlementDirectionLabel, buildSettlementFromReview,
+} from './dropoffs';
 import { DropOff, DropOffStatus, PaidBy, Settlement } from '../types';
 
 const d = (p: Partial<DropOff>): DropOff => ({
@@ -170,5 +173,117 @@ describe('dropOffAcceptDrawerEffect', () => {
 
   it('treats a missing purchase price as zero', () => {
     expect(dropOffAcceptDrawerEffect({ paidBy: 'store', purchasePrice: undefined as any })).toBeNull();
+  });
+});
+
+describe('pre-settlement review — editable per-device fees, exclusion, totals', () => {
+  const dropOffs: DropOff[] = [
+    d({ id: '1', runnerId: 'r1', item: 'iPhone 13', purchasePrice: 300, dropOffFee: 20, paidBy: 'runner', status: 'accepted' }),
+    d({ id: '2', runnerId: 'r1', item: 'iPhone 14', purchasePrice: 500, dropOffFee: 30, paidBy: 'store', status: 'paidout' }),
+    d({ id: '3', runnerId: 'r1', item: 'Pixel 8', purchasePrice: 200, dropOffFee: 15, paidBy: 'runner', status: 'accepted' }),
+  ];
+
+  it('initSettlementReview seeds one included, unedited line per drop-off', () => {
+    const lines = initSettlementReview(dropOffs);
+    expect(lines).toEqual([
+      { dropOffId: '1', included: true, fee: 20 },
+      { dropOffId: '2', included: true, fee: 30 },
+      { dropOffId: '3', included: true, fee: 15 },
+    ]);
+  });
+
+  it('unedited totals match settlementTotals for the same set (no drift between the two totals functions)', () => {
+    const lines = initSettlementReview(dropOffs);
+    const totals = settlementReviewTotals(dropOffs, lines, 0);
+    const legacy = settlementTotals(dropOffs);
+    expect(totals.cashFronted).toBe(legacy.cashFronted);
+    expect(totals.totalFees).toBe(legacy.totalFees);
+    expect(totals.netAmount).toBe(legacy.amountToPay);
+    expect(totals.deviceCount).toBe(3);
+  });
+
+  it('editing a per-device fee updates the totals live', () => {
+    const lines = initSettlementReview(dropOffs);
+    lines[0].fee = 25; // was 20 — a $5 correction
+    const totals = settlementReviewTotals(dropOffs, lines, 0);
+    expect(totals.totalFees).toBe(70); // 25 + 30 + 15
+    expect(totals.netAmount).toBe(500 + 70); // cashFronted (#1 300 + #3 200, both runner-paid) + fees
+  });
+
+  it('editing a per-device fee is recorded as a line adjustment (original vs adjusted)', () => {
+    const lines = initSettlementReview(dropOffs);
+    lines[0].fee = 25;
+    const adjustments = buildLineAdjustments(dropOffs, lines);
+    expect(adjustments).toEqual([{ dropOffId: '1', originalFee: 20, adjustedFee: 25 }]);
+  });
+
+  it('leaving every fee untouched produces no adjustments', () => {
+    const lines = initSettlementReview(dropOffs);
+    expect(buildLineAdjustments(dropOffs, lines)).toEqual([]);
+  });
+
+  it('excluding a line removes it from totals and from the built settlement\'s dropOffIds, without altering the drop-off itself', () => {
+    const lines = initSettlementReview(dropOffs);
+    lines[1].included = false; // exclude #2 (store-paid, fee 30)
+    const totals = settlementReviewTotals(dropOffs, lines, 0);
+    expect(totals.deviceCount).toBe(2);
+    expect(totals.totalFees).toBe(35); // 20 + 15, #2 excluded
+    const settlement = buildSettlementFromReview({ id: 's1', runnerId: 'r1', date: '2026-08-01', paymentMethod: 'cash', notes: '' }, dropOffs, lines, 0, '');
+    expect(settlement.dropOffIds).toEqual(['1', '3']); // #2 left out — stays unsettled, eligible later
+    expect(settlement.dropOffIds).not.toContain('2');
+  });
+
+  it('an excluded line produces no adjustment entry even if its fee was also edited before being excluded', () => {
+    const lines = initSettlementReview(dropOffs);
+    lines[1].fee = 999; // edited...
+    lines[1].included = false; // ...then excluded
+    expect(buildLineAdjustments(dropOffs, lines)).toEqual([]);
+  });
+
+  it('a settlement-level adjustment folds into the net amount and is kept with its note', () => {
+    const lines = initSettlementReview(dropOffs);
+    const settlement = buildSettlementFromReview(
+      { id: 's1', runnerId: 'r1', date: '2026-08-01', paymentMethod: 'cash', notes: '' },
+      dropOffs, lines, -10, 'Runner agreed to a $10 deduction for a late drop-off',
+    );
+    expect(settlement.adjustmentAmount).toBe(-10);
+    expect(settlement.adjustmentNote).toBe('Runner agreed to a $10 deduction for a late drop-off');
+    // cashFronted (#1 300 + #3 200) + fees (20+30+15=65) - 10 adjustment
+    expect(settlement.amountPaid).toBe(500 + 65 - 10);
+  });
+
+  it('a zero settlement-level adjustment (or blank note) is omitted from the built settlement, not stored as noise', () => {
+    const lines = initSettlementReview(dropOffs);
+    const settlement = buildSettlementFromReview({ id: 's1', runnerId: 'r1', date: '2026-08-01', paymentMethod: 'cash', notes: '' }, dropOffs, lines, 0, '   ');
+    expect(settlement.adjustmentAmount).toBeUndefined();
+    expect(settlement.adjustmentNote).toBeUndefined();
+  });
+
+  it('buildSettlementFromReview with no edits matches building from settlementTotals directly (no double-accounting)', () => {
+    const lines = initSettlementReview(dropOffs);
+    const settlement = buildSettlementFromReview({ id: 's1', runnerId: 'r1', date: '2026-08-01', paymentMethod: 'cash', notes: '' }, dropOffs, lines, 0, '');
+    const legacy = settlementTotals(dropOffs);
+    expect(settlement.totalPurchaseFronted).toBe(legacy.cashFronted);
+    expect(settlement.totalFees).toBe(legacy.totalFees);
+    expect(settlement.amountPaid).toBe(legacy.amountToPay);
+    expect(settlement.lineAdjustments).toBeUndefined();
+  });
+});
+
+describe('settlementDirection / settlementDirectionLabel — stating the net direction in plain words', () => {
+  it('a positive net amount means the store pays the runner', () => {
+    expect(settlementDirection(150)).toBe('pay_runner');
+    expect(settlementDirectionLabel(150)).toBe('Store pays runner $150.00');
+  });
+
+  it('a negative net amount means the runner owes the store', () => {
+    expect(settlementDirection(-40)).toBe('runner_owes');
+    expect(settlementDirectionLabel(-40)).toBe('Runner owes store $40.00');
+  });
+
+  it('a net amount at (or extremely near) zero reads as settled even, not as either direction', () => {
+    expect(settlementDirection(0)).toBe('even');
+    expect(settlementDirection(0.001)).toBe('even');
+    expect(settlementDirectionLabel(0)).toBe('Settled even — no balance either way');
   });
 });
