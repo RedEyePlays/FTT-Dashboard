@@ -7,7 +7,7 @@ import { AUDIT_ACTION_LABELS } from './audit';
 import { DropOff, Expense, Settlement } from '../types';
 
 // Employees hold sales.void, sales.return, cash.reconcile, dropoffs.manage and
-// expenses.manage now (services/rbac.ts). The trade for removing the manager
+// most operational actions now (services/rbac.ts). The trade for removing the manager
 // gate was that each of those six actions must (a) name the acting employee ON
 // THE RECORD and (b) write an audit entry. These tests pin both halves.
 

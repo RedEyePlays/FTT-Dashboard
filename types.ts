@@ -380,10 +380,27 @@ export interface Expense {
 // generatedPeriods/skippedPeriods make "one Expense per period, skippable"
 // idempotent — domain/expenses.ts's duePeriodsFor never re-offers a period
 // that's already in either list.
+// How a recurring template's amount is decided when a period comes due.
+//   'fixed'    — the template's `amount` is used verbatim (rent, a subscription).
+//   'variable' — the template carries NO authoritative amount (utilities,
+//                phone, card-processing fees). The period stays PENDING until
+//                someone types the real figure; it must never post
+//                automatically at a guessed/last-month number, which would
+//                silently corrupt the P&L.
+// Undefined is treated as 'fixed' so every template that existed before this
+// field keeps its exact previous behavior.
+export type RecurringAmountMode = 'fixed' | 'variable';
+
 export interface RecurringExpense {
   id: string;
   category: string;
+  /** The amount posted each period when amountMode is 'fixed'. Ignored (and
+   * conventionally 0) for 'variable' templates — see estimatedAmount. */
   amount: number;
+  amountMode?: RecurringAmountMode;   // undefined === 'fixed' (back-compat)
+  /** Variable templates only: a typical/expected figure used purely to
+   * PREFILL the "enter the amount" field. Never posted on its own. */
+  estimatedAmount?: number;
   paymentMethod: ExpensePaymentMethod;
   payee?: string;
   note?: string;
@@ -428,7 +445,11 @@ export type Permission =
   | 'closeout.view'   // end-of-day close-out summary (owner + manager)
   | 'audit.view' | 'backup.export' | 'settings.manage'
   | 'staffNotes.manage' // owner-only internal staff shoutout/notes log
-  | 'expenses.manage';  // enter/edit/delete the expense ledger + viewing its totals (owner + manager)
+  // The expense ledger is split into two permissions because entering spend
+  // and BROWSING everyone's spend are different levels of trust — amounts are
+  // cost/profit-sensitive data.
+  | 'expenses.add'       // create an expense (owner + manager). A manager may also edit/delete their OWN entries.
+  | 'expenses.viewAll';  // browse the full ledger, its totals + per-category breakdowns, and manage categories/recurring templates (owner only)
 
 export interface AppUser {
   id: string;            // Firebase Auth uid

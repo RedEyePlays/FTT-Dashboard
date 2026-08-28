@@ -1,7 +1,10 @@
 import React, { useMemo, useState } from 'react';
 import { Wallet, Receipt, Download, Save, AlertTriangle, CheckCircle2, Plus, Trash2, Scale, FileArchive, Truck, DoorOpen, History, LockOpen, Banknote, Pencil, Repeat, SkipForward } from 'lucide-react';
-import { SalesTransaction, CashReconciliation, CashDrawerEntry, InventoryItem, PayPeriodPaid, Settlement, DeviceBuyer, Repair, Customer, AuditEntry, ActivityEntry, TimeEntry, AppUser, Expense, RecurringExpense, ExpensePaymentMethod, RecurringFrequency } from '../types';
-import { ExpenseCategory, duePeriodsFor, DuePeriod } from '../domain/expenses';
+import { SalesTransaction, CashReconciliation, CashDrawerEntry, InventoryItem, PayPeriodPaid, Settlement, DeviceBuyer, Repair, Customer, AuditEntry, ActivityEntry, TimeEntry, AppUser, Expense, RecurringExpense, ExpensePaymentMethod, RecurringFrequency, RecurringAmountMode } from '../types';
+import {
+  ExpenseCategory, duePeriodsFor, DuePeriod, isVariableRecurring, lastAmountsForRecurring,
+  visibleExpensesFor, canMutateExpense,
+} from '../domain/expenses';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 import {
   expectedCashForDate, expectedEndingCash, sumDrawerEntries, reconcileCash, taxRemittance, taxReportCsvRows, TaxGrouping,
@@ -27,12 +30,22 @@ interface Props {
   expenses: Expense[];
   expenseCategories: ExpenseCategory[];
   recurringExpenses: RecurringExpense[];
-  canManageExpenses: boolean;
+  // The expense ledger's two permissions (services/rbac.ts):
+  //   canAddExpense      (expenses.add, owner + manager) — may enter an
+  //     expense, and see/edit/delete ONLY the ones they entered themselves.
+  //   canViewAllExpenses (expenses.viewAll, owner only) — the full ledger,
+  //     its totals and per-category breakdown, plus recurring-template config.
+  // An employee/technician holds neither and never sees the tab at all.
+  canAddExpense: boolean;
+  canViewAllExpenses: boolean;
+  currentUserId: string;
   onSaveExpense: (e: Expense, isNew: boolean) => void;
   onDeleteExpense: (e: Expense) => void;
   onSaveRecurringExpense: (r: RecurringExpense, isNew: boolean) => void;
   onDeleteRecurringExpense: (id: string) => void;
-  onGenerateRecurringExpense: (r: RecurringExpense, period: DuePeriod) => void;
+  // `enteredAmount` is required for a VARIABLE template and optional for a
+  // fixed one — see domain/expenses.ts's buildRecurringExpense.
+  onGenerateRecurringExpense: (r: RecurringExpense, period: DuePeriod, enteredAmount?: number) => void;
   onSkipRecurringPeriod: (r: RecurringExpense, periodKey: string) => void;
   onSaveReconciliation: SaveReconciliation;
   defaultOpeningFloat?: number;
@@ -75,32 +88,41 @@ const input = 'px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark
 const label = 'block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1';
 
 // Which permission each tab actually requires. 'cash' needs cash.reconcile;
-// 'expenses' needs expenses.manage (passed as canManageExpenses — a role can
-// hold that without profit visibility, since logging spend isn't the same as
-// seeing margin); every other tab (history, tax, pnl, settlements, yearend)
+// 'expenses' needs EITHER half of the expense split — expenses.add (a manager,
+// who gets a "my submitted expenses" view) or expenses.viewAll (the owner, who
+// gets the whole ledger). Either is independent of profit visibility, since
+// logging spend isn't the same as seeing margin; every other tab (history, tax, pnl, settlements, yearend)
 // surfaces revenue/cost/margin/profit and needs canViewProfit
 // (reports.profit.summary). Daily History's Sales/Revenue/Gross-Profit block
 // and the settlement tab's fee-income totals are why those two are in this
 // group, not just the obviously financial pnl/yearend tabs.
-const tabAllowed = (id: TabId, perms: { canReconcile: boolean; canViewProfit: boolean; canManageExpenses: boolean }): boolean => {
+const tabAllowed = (id: TabId, perms: { canReconcile: boolean; canViewProfit: boolean; canAddExpense: boolean; canViewAllExpenses: boolean }): boolean => {
   if (id === 'cash') return perms.canReconcile;
-  if (id === 'expenses') return perms.canManageExpenses;
+  if (id === 'expenses') return perms.canAddExpense || perms.canViewAllExpenses;
   return perms.canViewProfit;
 };
 
 export const ReportsView: React.FC<Props> = ({
   salesTransactions, cashReconciliations, inventory, payPeriods, settlements, deviceBuyers, onSaveReconciliation,
   repairs, customers, auditLogs, activity, timeEntries, users, expenses, expenseCategories,
-  recurringExpenses, canManageExpenses, canReconcile, canViewProfit, onSaveExpense, onDeleteExpense,
+  recurringExpenses, canAddExpense, canViewAllExpenses, currentUserId, canReconcile, canViewProfit,
+  onSaveExpense, onDeleteExpense,
   onSaveRecurringExpense, onDeleteRecurringExpense, onGenerateRecurringExpense, onSkipRecurringPeriod,
 }) => {
-  const perms = { canReconcile, canViewProfit, canManageExpenses };
+  const perms = { canReconcile, canViewProfit, canAddExpense, canViewAllExpenses };
   const tabs = TABS.filter(t => tabAllowed(t.id, perms));
   // Default to the first tab this role can actually see — never a fixed
   // 'history', which a cash.reconcile-only employee (canViewProfit: false)
   // isn't permitted to view at all.
   const [tab, setTab] = useState<TabId>(() => tabs[0]?.id ?? 'cash');
   // Shared input set for the P&L / settlement / year-end reports.
+  //
+  // NOTE (deliberate, load-bearing): `expenses` here is the FULL workspace
+  // array, never the per-viewer filtered one. The expenses.viewAll split
+  // changes who may BROWSE the ledger, not what the accounting includes — net
+  // profit must keep subtracting every workspace expense. The own-entries
+  // filter lives exclusively in ExpensesTab (via visibleExpensesFor); it must
+  // never be applied to ProfitLossInput.
   const plInput: ProfitLossInput = { transactions: salesTransactions, inventory, payPeriods, cashReconciliations, settlements, expenses, expenseCategories };
   return (
     <div className="max-w-5xl mx-auto space-y-6">
@@ -123,17 +145,18 @@ export const ReportsView: React.FC<Props> = ({
       )}
       {tab === 'cash' && tabAllowed('cash', perms) && <CashReconTab salesTransactions={salesTransactions} cashReconciliations={cashReconciliations} onSave={onSaveReconciliation} />}
       {tab === 'tax' && tabAllowed('tax', perms) && <TaxReportTab salesTransactions={salesTransactions} />}
-      {tab === 'pnl' && tabAllowed('pnl', perms) && <ProfitLossTab plInput={plInput} />}
+      {tab === 'pnl' && tabAllowed('pnl', perms) && <ProfitLossTab plInput={plInput} showExpenseCategories={canViewAllExpenses} />}
       {tab === 'expenses' && tabAllowed('expenses', perms) && (
         <ExpensesTab
           expenses={expenses} categories={expenseCategories} recurringExpenses={recurringExpenses}
+          canViewAll={canViewAllExpenses} currentUserId={currentUserId}
           onSaveExpense={onSaveExpense} onDeleteExpense={onDeleteExpense}
           onSaveRecurringExpense={onSaveRecurringExpense} onDeleteRecurringExpense={onDeleteRecurringExpense}
           onGenerateRecurringExpense={onGenerateRecurringExpense} onSkipRecurringPeriod={onSkipRecurringPeriod}
         />
       )}
       {tab === 'settlements' && tabAllowed('settlements', perms) && <SettlementsTab settlements={settlements} deviceBuyers={deviceBuyers} />}
-      {tab === 'yearend' && tabAllowed('yearend', perms) && <YearEndTab plInput={plInput} />}
+      {tab === 'yearend' && tabAllowed('yearend', perms) && <YearEndTab plInput={plInput} showExpenseCategories={canViewAllExpenses} />}
     </div>
   );
 };
@@ -642,11 +665,16 @@ const PLRow: React.FC<{ label: string; value: number; negative?: boolean; income
 );
 
 /* ---------------- Profit & Loss ---------------- */
-const ProfitLossTab: React.FC<{ plInput: ProfitLossInput }> = ({ plInput }) => {
+// showExpenseCategories === the viewer holds expenses.viewAll. When false (a
+// manager) the per-category expense rows collapse into one "Expenses" line —
+// the ARITHMETIC is unchanged: pl.expenses is still the full workspace expense
+// total and pl.netProfit still subtracts it. The split governs who may browse
+// the ledger, not what the accounting includes.
+const ProfitLossTab: React.FC<{ plInput: ProfitLossInput; showExpenseCategories: boolean }> = ({ plInput, showExpenseCategories }) => {
   const [start, setStart] = useState(monthStartISO());
   const [end, setEnd] = useState(todayISO());
   const pl = useMemo(() => profitAndLoss(plInput, start, end), [plInput, start, end]);
-  const exportCsv = () => triggerDownload(`profit-loss_${pl.start}_to_${pl.end}.csv`, toCSV(profitLossCsvRows(pl)), 'text/csv;charset=utf-8;');
+  const exportCsv = () => triggerDownload(`profit-loss_${pl.start}_to_${pl.end}.csv`, toCSV(profitLossCsvRows(pl, showExpenseCategories)), 'text/csv;charset=utf-8;');
 
   return (
     <div className="space-y-6">
@@ -664,9 +692,11 @@ const ProfitLossTab: React.FC<{ plInput: ProfitLossInput }> = ({ plInput }) => {
           <PLRow label="Cost of goods sold" value={pl.costOfGoods} negative />
           <PLRow label="Gross profit" value={pl.grossProfit} bold />
           <PLRow label="Payroll" value={pl.payroll} negative />
-          {pl.expensesByCategory.map(c => (
-            <PLRow key={c.category} label={`Expense: ${c.label}${c.excludedFromPL ? ' (informational)' : ''}`} value={c.total} negative={!c.excludedFromPL} />
-          ))}
+          {showExpenseCategories
+            ? pl.expensesByCategory.map(c => (
+                <PLRow key={c.category} label={`Expense: ${c.label}${c.excludedFromPL ? ' (informational)' : ''}`} value={c.total} negative={!c.excludedFromPL} />
+              ))
+            : <PLRow label="Expenses" value={pl.expenses} negative />}
           <PLRow label="Device buyer service fees (income)" value={pl.deviceBuyerFeeIncome} income />
           <PLRow label="Net profit" value={pl.netProfit} total />
         </div>
@@ -771,19 +801,21 @@ const SettlementsTab: React.FC<{ settlements: Settlement[]; deviceBuyers: Device
 };
 
 /* ---------------- Year-end accountant export ---------------- */
-const YearEndTab: React.FC<{ plInput: ProfitLossInput }> = ({ plInput }) => {
+const YearEndTab: React.FC<{ plInput: ProfitLossInput; showExpenseCategories: boolean }> = ({ plInput, showExpenseCategories }) => {
   const thisYear = new Date().getFullYear();
   const [year, setYear] = useState(thisYear);
   const summary = useMemo(() => yearEndSummary(plInput, year), [plInput, year]);
   const years = Array.from({ length: 6 }, (_, i) => thisYear - i);
-  const exportCsv = () => triggerDownload(`year-end-summary_${year}.csv`, toCSV(yearEndCsvRows(summary)), 'text/csv;charset=utf-8;');
+  const exportCsv = () => triggerDownload(`year-end-summary_${year}.csv`, toCSV(yearEndCsvRows(summary, showExpenseCategories)), 'text/csv;charset=utf-8;');
 
   const rows: { label: string; value: number; strong?: boolean }[] = [
     { label: 'Revenue', value: summary.revenue },
     { label: 'Cost of goods sold', value: summary.costOfGoods },
     { label: 'Gross profit', value: summary.grossProfit, strong: true },
     { label: 'Payroll paid', value: summary.payrollPaid },
-    ...summary.expensesByCategory.map(c => ({ label: `Expense: ${c.label}${c.excludedFromPL ? ' (informational)' : ''}`, value: c.total })),
+    ...(showExpenseCategories
+      ? summary.expensesByCategory.map(c => ({ label: `Expense: ${c.label}${c.excludedFromPL ? ' (informational)' : ''}`, value: c.total }))
+      : [{ label: 'Expenses', value: summary.expenses }]),
     { label: 'Device buyer service fees (income)', value: summary.deviceBuyerFeeIncome },
     { label: 'Net profit', value: summary.netProfit, strong: true },
     { label: 'Sales tax collected', value: summary.salesTaxCollected },
@@ -825,6 +857,14 @@ const PAYMENT_METHOD_LABEL: Record<ExpensePaymentMethod, string> = {
   cash: 'Cash', card: 'Card', etransfer: 'E-transfer', debit: 'Debit', other: 'Other',
 };
 const FREQUENCY_LABEL: Record<RecurringFrequency, string> = { weekly: 'Weekly', monthly: 'Monthly', yearly: 'Yearly' };
+
+/** How a template's amount reads in a list: a real figure for a fixed one,
+ * "amount varies" for a variable one (with its estimate marked as a hint, so
+ * it can never be mistaken for the figure that will post). */
+const recurringAmountLabel = (r: RecurringExpense): string =>
+  isVariableRecurring(r)
+    ? (r.estimatedAmount ? `amount varies (~${money(r.estimatedAmount)})` : 'amount varies')
+    : money(r.amount);
 
 const emptyExpenseDraft = (categories: ExpenseCategory[]): Omit<Expense, 'id' | 'enteredBy' | 'enteredByEmail' | 'createdAt'> => ({
   date: todayISO(), amount: 0, category: categories.find(c => !c.archived)?.key || 'other', paymentMethod: 'cash', payee: '', note: '',
@@ -880,12 +920,22 @@ const RecurringModal: React.FC<{
   onSave: (r: RecurringExpense, isNew: boolean) => void;
 }> = ({ categories, onClose, onSave }) => {
   const [draft, setDraft] = useState<Omit<RecurringExpense, 'id' | 'createdBy' | 'createdByEmail' | 'createdAt'>>({
-    category: categories.find(c => !c.archived)?.key || 'other', amount: 0, paymentMethod: 'etransfer',
+    category: categories.find(c => !c.archived)?.key || 'other', amount: 0, amountMode: 'fixed', paymentMethod: 'etransfer',
     payee: '', note: '', frequency: 'monthly', startDate: todayISO(), active: true,
   });
   useEscapeKey(onClose);
+  const variable = draft.amountMode === 'variable';
+  // A fixed template needs its amount up front; a variable one deliberately
+  // has none — its estimate is optional and is only ever a prefill hint.
+  const valid = variable || draft.amount > 0;
   const save = () => {
-    if (draft.amount > 0) onSave({ id: newId(), createdBy: '', createdByEmail: '', createdAt: 0, ...draft }, true);
+    if (!valid) return;
+    // Never carry a stale fixed amount onto a variable template: `amount` is
+    // forced to 0 so nothing downstream can mistake it for a real figure.
+    const next = variable
+      ? { ...draft, amount: 0, estimatedAmount: draft.estimatedAmount && draft.estimatedAmount > 0 ? draft.estimatedAmount : undefined }
+      : { ...draft, estimatedAmount: undefined };
+    onSave({ id: newId(), createdBy: '', createdByEmail: '', createdAt: 0, ...next }, true);
     onClose();
   };
   return (
@@ -893,7 +943,18 @@ const RecurringModal: React.FC<{
       <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-3">
         <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100">New recurring expense</h3>
         <div className="grid grid-cols-2 gap-3">
-          <div><label className={label}>Amount ($)</label><input type="number" min={0} step={0.01} value={draft.amount || ''} onChange={e => setDraft(d => ({ ...d, amount: parseFloat(e.target.value) || 0 }))} className={`${input} w-full`} /></div>
+          <div>
+            <label className={label}>Amount type</label>
+            <select value={draft.amountMode || 'fixed'} onChange={e => setDraft(d => ({ ...d, amountMode: e.target.value as RecurringAmountMode }))} className={`${input} w-full`}>
+              <option value="fixed">Fixed — same every period</option>
+              <option value="variable">Variable — enter each period</option>
+            </select>
+          </div>
+          {variable ? (
+            <div><label className={label}>Typical amount ($, optional)</label><input type="number" min={0} step={0.01} value={draft.estimatedAmount || ''} onChange={e => setDraft(d => ({ ...d, estimatedAmount: parseFloat(e.target.value) || 0 }))} className={`${input} w-full`} /></div>
+          ) : (
+            <div><label className={label}>Amount ($)</label><input type="number" min={0} step={0.01} value={draft.amount || ''} onChange={e => setDraft(d => ({ ...d, amount: parseFloat(e.target.value) || 0 }))} className={`${input} w-full`} /></div>
+          )}
           <div>
             <label className={label}>Frequency</label>
             <select value={draft.frequency} onChange={e => setDraft(d => ({ ...d, frequency: e.target.value as RecurringFrequency }))} className={`${input} w-full`}>
@@ -915,10 +976,57 @@ const RecurringModal: React.FC<{
           <div><label className={label}>Start date</label><input type="date" value={draft.startDate} onChange={e => setDraft(d => ({ ...d, startDate: e.target.value }))} className={`${input} w-full`} /></div>
           <div><label className={label}>Payee / vendor (optional)</label><input value={draft.payee || ''} onChange={e => setDraft(d => ({ ...d, payee: e.target.value }))} className={`${input} w-full`} /></div>
         </div>
-        <p className="text-xs text-slate-400">One expense will be generated per {draft.frequency === 'monthly' ? 'month' : draft.frequency === 'yearly' ? 'year' : 'week'} starting {draft.startDate} — you'll approve or skip each period from the Expenses tab.</p>
+        <p className="text-xs text-slate-400">
+          {variable
+            ? `Each ${draft.frequency === 'monthly' ? 'month' : draft.frequency === 'yearly' ? 'year' : 'week'} from ${draft.startDate} this appears in the Expenses tab as "amount needed" — nothing is posted until you enter the real figure. The typical amount is only a prefill hint.`
+            : `One expense will be generated per ${draft.frequency === 'monthly' ? 'month' : draft.frequency === 'yearly' ? 'year' : 'week'} starting ${draft.startDate} — you'll approve or skip each period from the Expenses tab.`}
+        </p>
         <div className="flex justify-end gap-2 pt-2">
           <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800">Cancel</button>
-          <button onClick={save} disabled={!(draft.amount > 0)} className="px-4 py-2 rounded-lg text-sm font-medium bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white">Create</button>
+          <button onClick={save} disabled={!valid} className="px-4 py-2 rounded-lg text-sm font-medium bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white">Create</button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/**
+ * The "enter the actual amount" step for a VARIABLE recurring bill (utilities,
+ * phone, card fees). This modal is the only way such a period becomes a real
+ * Expense — nothing auto-posts, so an unentered bill can never land in the P&L
+ * at a guessed figure. The last few posted amounts are shown so an unusual
+ * bill is obvious at a glance.
+ */
+const VariableAmountModal: React.FC<{
+  recurring: RecurringExpense;
+  period: DuePeriod;
+  categoryLabel: string;
+  recentAmounts: number[];
+  onClose: () => void;
+  onConfirm: (amount: number) => void;
+}> = ({ recurring, period, categoryLabel, recentAmounts, onClose, onConfirm }) => {
+  // Prefilled from the template's estimate purely as a convenience — the value
+  // still has to be confirmed by a person before anything posts.
+  const [amount, setAmount] = useState<number>(recurring.estimatedAmount || 0);
+  useEscapeKey(onClose);
+  const valid = amount > 0;
+  return (
+    <div className="fixed inset-0 z-[80] flex items-center justify-center p-4 bg-black/40">
+      <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-sm p-6 space-y-3">
+        <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100">Enter amount</h3>
+        <p className="text-sm text-slate-500 dark:text-slate-400">
+          {categoryLabel}{recurring.payee ? ` · ${recurring.payee}` : ''} — period {period.key} ({period.date})
+        </p>
+        <div>
+          <label className={label}>Actual amount ($)</label>
+          <input autoFocus type="number" min={0} step={0.01} value={amount || ''} onChange={e => setAmount(parseFloat(e.target.value) || 0)} className={`${input} w-full`} />
+        </div>
+        {recentAmounts.length > 0 && (
+          <p className="text-xs text-slate-400">Last {recentAmounts.length}: {recentAmounts.map(a => money(a)).join(', ')}</p>
+        )}
+        <div className="flex justify-end gap-2 pt-2">
+          <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800">Cancel</button>
+          <button onClick={() => { if (valid) { onConfirm(amount); onClose(); } }} disabled={!valid} className="px-4 py-2 rounded-lg text-sm font-medium bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white">Save expense</button>
         </div>
       </div>
     </div>
@@ -929,19 +1037,30 @@ const ExpensesTab: React.FC<{
   expenses: Expense[];
   categories: ExpenseCategory[];
   recurringExpenses: RecurringExpense[];
+  /** expenses.viewAll — the owner. False for a manager, whose view is scoped
+   * to "my submitted expenses": no workspace total, no category breakdown,
+   * no recurring-template configuration. */
+  canViewAll: boolean;
+  currentUserId: string;
   onSaveExpense: (e: Expense, isNew: boolean) => void;
   onDeleteExpense: (e: Expense) => void;
   onSaveRecurringExpense: (r: RecurringExpense, isNew: boolean) => void;
   onDeleteRecurringExpense: (id: string) => void;
-  onGenerateRecurringExpense: (r: RecurringExpense, period: DuePeriod) => void;
+  onGenerateRecurringExpense: (r: RecurringExpense, period: DuePeriod, enteredAmount?: number) => void;
   onSkipRecurringPeriod: (r: RecurringExpense, periodKey: string) => void;
-}> = ({ expenses, categories, recurringExpenses, onSaveExpense, onDeleteExpense, onSaveRecurringExpense, onDeleteRecurringExpense, onGenerateRecurringExpense, onSkipRecurringPeriod }) => {
+}> = ({ expenses, categories, recurringExpenses, canViewAll, currentUserId, onSaveExpense, onDeleteExpense, onSaveRecurringExpense, onDeleteRecurringExpense, onGenerateRecurringExpense, onSkipRecurringPeriod }) => {
   const [start, setStart] = useState(monthStartISO());
   const [end, setEnd] = useState(todayISO());
   const [editing, setEditing] = useState<Expense | null | 'new'>(null);
   const [addingRecurring, setAddingRecurring] = useState(false);
+  const [enteringVariable, setEnteringVariable] = useState<{ r: RecurringExpense; p: DuePeriod } | null>(null);
 
-  const inRange = useMemo(() => expenses.filter(e => e.date >= start && e.date <= end).sort((a, b) => b.date.localeCompare(a.date)), [expenses, start, end]);
+  const viewer = { id: currentUserId, canViewAll };
+  // The browse scope: everything for an owner, own entries only for a manager
+  // (keyed on the server-stamped enteredBy). NOTE this filter is confined to
+  // this list — the P&L input upstream keeps the full array.
+  const visible = useMemo(() => visibleExpensesFor(expenses, viewer), [expenses, currentUserId, canViewAll]);
+  const inRange = useMemo(() => visible.filter(e => e.date >= start && e.date <= end).sort((a, b) => b.date.localeCompare(a.date)), [visible, start, end]);
   const total = inRange.reduce((s, e) => s + e.amount, 0);
   const categoryLabel = (key: string) => categories.find(c => c.key === key)?.label || key;
 
@@ -951,9 +1070,13 @@ const ExpensesTab: React.FC<{
   };
 
   const now = Date.now();
+  // Recurring templates are owner-only configuration, so a manager never sees
+  // the due list or the template list at all.
   const dueByRecurring = useMemo(
-    () => recurringExpenses.filter(r => r.active).map(r => ({ r, due: duePeriodsFor(r, now) })).filter(x => x.due.length > 0),
-    [recurringExpenses, now],
+    () => canViewAll
+      ? recurringExpenses.filter(r => r.active).map(r => ({ r, due: duePeriodsFor(r, now) })).filter(x => x.due.length > 0)
+      : [],
+    [recurringExpenses, now, canViewAll],
   );
 
   return (
@@ -971,12 +1094,21 @@ const ExpensesTab: React.FC<{
           <div className="space-y-2">
             {dueByRecurring.map(({ r, due }) => (
               <div key={r.id} className="flex flex-wrap items-center justify-between gap-2 py-1.5 border-b border-slate-100 dark:border-slate-800 last:border-0">
-                <span className="text-sm text-slate-700 dark:text-slate-200">{categoryLabel(r.category)}{r.payee ? ` · ${r.payee}` : ''} — {money(r.amount)}/{FREQUENCY_LABEL[r.frequency].toLowerCase()}</span>
+                <span className="text-sm text-slate-700 dark:text-slate-200">
+                  {categoryLabel(r.category)}{r.payee ? ` · ${r.payee}` : ''} — {recurringAmountLabel(r)}/{FREQUENCY_LABEL[r.frequency].toLowerCase()}
+                </span>
                 <div className="flex items-center gap-2 flex-wrap">
                   {due.map(p => (
-                    <span key={p.key} className="inline-flex items-center gap-1 text-xs bg-slate-100 dark:bg-slate-800 rounded-full pl-2 pr-1 py-0.5">
+                    <span key={p.key} className={`inline-flex items-center gap-1 text-xs rounded-full pl-2 pr-1 py-0.5 ${isVariableRecurring(r) ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-200' : 'bg-slate-100 dark:bg-slate-800'}`}>
                       {p.key}
-                      <button onClick={() => onGenerateRecurringExpense(r, p)} title="Generate this period" className="p-1 text-emerald-600 hover:text-emerald-700"><CheckCircle2 className="w-3.5 h-3.5" /></button>
+                      {isVariableRecurring(r) ? (
+                        // Variable: reads as "amount needed", never a one-click
+                        // generate. Nothing posts until a figure is typed.
+                        <button onClick={() => setEnteringVariable({ r, p })} className="ml-1 px-1.5 py-0.5 rounded-full font-medium text-amber-800 dark:text-amber-100 hover:underline">Amount needed</button>
+                      ) : (
+                        <button onClick={() => onGenerateRecurringExpense(r, p)} title="Generate this period" className="p-1 text-emerald-600 hover:text-emerald-700"><CheckCircle2 className="w-3.5 h-3.5" /></button>
+                      )}
+                      {/* Skipping is one shared path for both modes. */}
                       <button onClick={() => onSkipRecurringPeriod(r, p.key)} title="Skip this period" className="p-1 text-slate-400 hover:text-rose-500"><SkipForward className="w-3.5 h-3.5" /></button>
                     </span>
                   ))}
@@ -989,11 +1121,13 @@ const ExpensesTab: React.FC<{
 
       <div className={`${card} p-5`}>
         <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200">Expenses · {start} → {end}</h3>
-          <span className="text-sm font-bold text-slate-900 dark:text-white tabular-nums">{money(total)}</span>
+          <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200">{canViewAll ? 'Expenses' : 'My submitted expenses'} · {start} → {end}</h3>
+          {/* The workspace expense total is part of expenses.viewAll — a
+              manager sees their own rows but no aggregate spend figure. */}
+          {canViewAll && <span className="text-sm font-bold text-slate-900 dark:text-white tabular-nums">{money(total)}</span>}
         </div>
         {inRange.length === 0 ? (
-          <p className="text-sm text-slate-400 py-6 text-center">No expenses in this range.</p>
+          <p className="text-sm text-slate-400 py-6 text-center">{canViewAll ? 'No expenses in this range.' : 'You have not submitted any expenses in this range.'}</p>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -1011,8 +1145,13 @@ const ExpensesTab: React.FC<{
                     <td className="py-2 pr-3 text-slate-500 dark:text-slate-400">{PAYMENT_METHOD_LABEL[e.paymentMethod]}</td>
                     <td className="py-2 px-2 text-right tabular-nums font-semibold text-slate-800 dark:text-slate-100">{money(e.amount)}</td>
                     <td className="py-2 pl-2 text-right">
-                      <button onClick={() => setEditing(e)} className="p-1 text-slate-400 hover:text-indigo-600"><Pencil className="w-3.5 h-3.5" /></button>
-                      <button onClick={() => onDeleteExpense(e)} className="p-1 text-slate-400 hover:text-rose-500"><Trash2 className="w-3.5 h-3.5" /></button>
+                      {/* Redundant with the list filter above (a manager only
+                          ever sees their own rows) but stated explicitly so the
+                          UI can never offer an action the rules would reject. */}
+                      {canMutateExpense(e, viewer) && (<>
+                        <button onClick={() => setEditing(e)} className="p-1 text-slate-400 hover:text-indigo-600"><Pencil className="w-3.5 h-3.5" /></button>
+                        <button onClick={() => onDeleteExpense(e)} className="p-1 text-slate-400 hover:text-rose-500"><Trash2 className="w-3.5 h-3.5" /></button>
+                      </>)}
                     </td>
                   </tr>
                 ))}
@@ -1022,7 +1161,7 @@ const ExpensesTab: React.FC<{
         )}
       </div>
 
-      <div className={`${card} p-5`}>
+      {canViewAll && <div className={`${card} p-5`}>
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200 flex items-center gap-2"><Repeat className="w-4 h-4 text-indigo-500" /> Recurring templates</h3>
           <button onClick={() => setAddingRecurring(true)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:text-indigo-600"><Plus className="w-3.5 h-3.5" /> New</button>
@@ -1034,7 +1173,7 @@ const ExpensesTab: React.FC<{
             {recurringExpenses.map(r => (
               <div key={r.id} className="flex items-center justify-between py-2 gap-2">
                 <span className={`text-sm ${r.active ? 'text-slate-700 dark:text-slate-200' : 'text-slate-400 line-through'}`}>
-                  {categoryLabel(r.category)}{r.payee ? ` · ${r.payee}` : ''} — {money(r.amount)}/{FREQUENCY_LABEL[r.frequency].toLowerCase()}
+                  {categoryLabel(r.category)}{r.payee ? ` · ${r.payee}` : ''} — {recurringAmountLabel(r)}/{FREQUENCY_LABEL[r.frequency].toLowerCase()}
                 </span>
                 <div className="flex items-center gap-2">
                   <button onClick={() => onSaveRecurringExpense({ ...r, active: !r.active }, false)} className="text-xs text-slate-500 hover:text-indigo-600">{r.active ? 'Pause' : 'Resume'}</button>
@@ -1044,7 +1183,7 @@ const ExpensesTab: React.FC<{
             ))}
           </div>
         )}
-      </div>
+      </div>}
 
       {editing && (
         <ExpenseModal
@@ -1056,6 +1195,15 @@ const ExpensesTab: React.FC<{
       )}
       {addingRecurring && (
         <RecurringModal categories={categories} onClose={() => setAddingRecurring(false)} onSave={onSaveRecurringExpense} />
+      )}
+      {enteringVariable && (
+        <VariableAmountModal
+          recurring={enteringVariable.r} period={enteringVariable.p}
+          categoryLabel={categoryLabel(enteringVariable.r.category)}
+          recentAmounts={lastAmountsForRecurring(expenses, enteringVariable.r.id)}
+          onClose={() => setEnteringVariable(null)}
+          onConfirm={amount => onGenerateRecurringExpense(enteringVariable.r, enteringVariable.p, amount)}
+        />
       )}
     </div>
   );

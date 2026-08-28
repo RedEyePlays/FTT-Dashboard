@@ -78,16 +78,17 @@ describe('can()', () => {
     expect(can('manager', 'reports.profit.detailed')).toBe(false);
   });
 
-  it('employee runs the shop end-to-end: the six operational permissions are granted', () => {
+  it('employee runs the shop end-to-end: the five operational permissions are granted', () => {
     // The grant: an employee can reverse a sale, fix an item they just
-    // entered, close the drawer, settle a device buyer and log an expense
-    // without a manager present. Oversight is attribution + audit, not a gate.
+    // entered, close the drawer and settle a device buyer without a manager
+    // present. Oversight is attribution + audit, not a gate. (Logging an
+    // expense was part of this grant originally and has since been REVOKED —
+    // expense amounts are cost/profit-sensitive; see the expense-split test.)
     expect(can('employee', 'sales.void')).toBe(true);
     expect(can('employee', 'sales.return')).toBe(true);
     expect(can('employee', 'inventory.edit')).toBe(true);
     expect(can('employee', 'cash.reconcile')).toBe(true);
     expect(can('employee', 'dropoffs.manage')).toBe(true);
-    expect(can('employee', 'expenses.manage')).toBe(true);
     // …on top of what they already had.
     expect(can('employee', 'inventory.add')).toBe(true);
     expect(can('employee', 'sales.complete')).toBe(true);
@@ -228,12 +229,36 @@ describe('can()', () => {
     expect(can(undefined, 'staffNotes.manage')).toBe(false);
   });
 
-  it('the expense ledger (expenses.manage) is owner/manager/employee; technicians never', () => {
-    expect(can('owner', 'expenses.manage')).toBe(true);
-    expect(can('manager', 'expenses.manage')).toBe(true);
-    expect(can('employee', 'expenses.manage')).toBe(true);
-    expect(can('technician', 'expenses.manage')).toBe(false);
-    expect(can(undefined, 'expenses.manage')).toBe(false);
+  it('expenses.add (enter an expense) is owner + manager only', () => {
+    expect(can('owner', 'expenses.add')).toBe(true);
+    expect(can('manager', 'expenses.add')).toBe(true);
+    expect(can('employee', 'expenses.add')).toBe(false);
+    expect(can('technician', 'expenses.add')).toBe(false);
+    expect(can(undefined, 'expenses.add')).toBe(false);
+  });
+
+  it('expenses.viewAll (browse the whole ledger + totals + recurring config) is OWNER ONLY', () => {
+    expect(can('owner', 'expenses.viewAll')).toBe(true);
+    expect(can('manager', 'expenses.viewAll')).toBe(false);
+    expect(can('employee', 'expenses.viewAll')).toBe(false);
+    expect(can('technician', 'expenses.viewAll')).toBe(false);
+    expect(can(undefined, 'expenses.viewAll')).toBe(false);
+  });
+
+  it('a manager can ADD an expense but not browse the ledger — the whole point of the split', () => {
+    expect(can('manager', 'expenses.add')).toBe(true);
+    expect(can('manager', 'expenses.viewAll')).toBe(false);
+  });
+
+  it('employees have NO expense access anywhere — the old expenses.manage grant is fully revoked', () => {
+    // Both halves, and the allowProfit override must not resurrect either:
+    // allowProfit only ever moves the two reports.profit.* tiers.
+    expect(can('employee', 'expenses.add')).toBe(false);
+    expect(can('employee', 'expenses.viewAll')).toBe(false);
+    expect(can('employee', 'expenses.add', { allowProfit: true })).toBe(false);
+    expect(can('employee', 'expenses.viewAll', { allowProfit: true })).toBe(false);
+    expect(can('technician', 'expenses.add', { allowProfit: true })).toBe(false);
+    expect(can('technician', 'expenses.viewAll', { allowProfit: true })).toBe(false);
   });
 
   it('REGRESSION: no cost/margin/profit figure becomes visible to an employee from the operational grant', () => {

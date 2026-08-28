@@ -72,7 +72,7 @@ import { collectionFor, stockChange, applyDirectSale } from './domain/inventory'
 import { canVoidSale, canReturnSale, returnRefund, saleAccessoryRestock, saleDeviceListedPlatforms, collectedOnSale, cashCollectedOnSale, saleRefundDrawerEffect } from './domain/pos';
 import { applyBalancePayment, cashPortionOfPayment } from './domain/layaway';
 import { expectedCashForDate, expectedEndingCash, sumDrawerEntries, cashDrawerSummary, openDrawerPatch, ReconciliationInput } from './domain/reports';
-import { duePeriodsFor, buildRecurringExpense } from './domain/expenses';
+import { duePeriodsFor, buildRecurringExpense, canMutateExpense } from './domain/expenses';
 import { isEligibleForReviewRequest, ReviewEligibility, reviewRequestsSentOn, underDailyReviewRequestCap } from './domain/reviews';
 const RequestReviewModal = lazy(() => import('./components/RequestReviewModal').then(m => ({ default: m.RequestReviewModal })));
 import type { CashMovementKind } from './components/LogCashMovementModal';
@@ -1009,12 +1009,12 @@ const App: React.FC = () => {
     // "Cash out" is a general same-till payout (rent, supplies, paying a
     // device buyer COD, misc) — the same concept as the expense ledger, so it
     // is backed by a real Expense record whenever the actor holds
-    // expenses.manage. That is now owner/manager/employee (technicians never
-    // hold cash.log at all), so in practice every "Cash out" logged at the
-    // register lands in the ledger's P&L line — the employee-only gap this
-    // check used to leave is closed. The `allow` check stays because the
-    // permission, not the role list, is the contract.
-    if (kind === 'cashOut' && allow('expenses.manage')) {
+    // expenses.add (owner + manager). An employee no longer holds any expense
+    // permission, so their cash-out stays a drawer entry only — it is still
+    // logged, attributed and audited above, it just doesn't create a ledger
+    // row they would have no right to write. The `allow` check stays because
+    // the permission, not the role list, is the contract.
+    if (kind === 'cashOut' && allow('expenses.add')) {
       const rec: Expense = stampExpense({
         id: newId(), date, amount, category: 'other', paymentMethod: 'cash', payee: note,
         enteredBy: '', enteredByEmail: '', createdAt: 0, cashDrawerLinked: true,
@@ -1024,8 +1024,15 @@ const App: React.FC = () => {
     }
   };
 
-  // Expense ledger (expenses.manage — owner/manager/employee; technicians
-  // never). Every expense records enteredBy/enteredByEmail from the
+  // Expense ledger. Two permissions, deliberately split (services/rbac.ts):
+  //   • expenses.add     — owner + manager: create an expense. A manager may
+  //                        also edit/delete their OWN entries, identified by
+  //                        the server-stamped enteredBy field.
+  //   • expenses.viewAll — owner only: browse the whole ledger + its totals,
+  //                        edit/delete ANYONE's entry, and manage recurring
+  //                        templates and categories.
+  // Employees and technicians hold neither and have no expense access at all.
+  // Every expense records enteredBy/enteredByEmail from the
   // authenticated user plus an 'expense.create'/'expense.update' audit entry.
   // A cash-paid expense ALSO appends a matching drawer cash-out entry via the
   // SAME commitDrawerRecord helper every other cash effect in this file uses
@@ -1034,9 +1041,14 @@ const App: React.FC = () => {
   // previously-applied drawer entry (that would silently rewrite a day that
   // may already be reconciled/closed); cashDrawerLinked simply records that
   // the effect was applied once, at creation.
+  const expenseViewer = { id: appUser?.id || '', canViewAll: allow('expenses.viewAll') };
+
   const handleSaveExpense = (expense: Expense, isNew: boolean) => {
-    if (!uid || !appUser || !allow('expenses.manage')) return;
+    if (!uid || !appUser || !allow('expenses.add')) return;
     const before = isNew ? undefined : expenses.find(e => e.id === expense.id);
+    // Editing someone else's entry is owner-only — a manager may only touch
+    // rows they submitted. Mirrored server-side in firestore.rules.
+    if (!isNew && (!before || !canMutateExpense(before, expenseViewer))) return;
     const next: Expense = isNew ? stampExpense(expense, appUser, Date.now()) : expense;
     if (isNew && next.paymentMethod === 'cash') {
       const existing = cashReconciliations.find(r => r.date === next.date);
@@ -1049,7 +1061,8 @@ const App: React.FC = () => {
   };
 
   const handleDeleteExpense = (expense: Expense) => {
-    if (!uid || !allow('expenses.manage')) return;
+    if (!uid || !allow('expenses.add')) return;
+    if (!canMutateExpense(expense, expenseViewer)) return;
     deleteExpense(uid, expense.id).catch(e => console.error('Expense delete failed', e));
     // Deleting an expense never reaches back to reverse its drawer effect
     // (same reasoning as edits above — the drawer entry is a historical
@@ -1059,15 +1072,17 @@ const App: React.FC = () => {
     audit('expense.delete', 'expense', expense.id, expense, undefined);
   };
 
+  // Recurring templates and expense categories are owner-only configuration
+  // — gated on expenses.viewAll, the owner-only half of the split.
   const handleSaveRecurringExpense = (r: RecurringExpense, isNew: boolean) => {
-    if (!uid || !appUser || !allow('expenses.manage')) return;
+    if (!uid || !appUser || !allow('expenses.viewAll')) return;
     const next = isNew ? { ...r, createdBy: appUser.id, createdByEmail: appUser.email, createdAt: Date.now() } : r;
     saveRecurringExpense(uid, next).catch(e => console.error('Recurring expense save failed', e));
     audit(isNew ? 'expense.recurring_create' : 'expense.recurring_update', 'recurringExpense', next.id, undefined, next);
   };
 
   const handleDeleteRecurringExpense = (id: string) => {
-    if (!uid || !allow('expenses.manage')) return;
+    if (!uid || !allow('expenses.viewAll')) return;
     deleteRecurringExpense(uid, id).catch(e => console.error('Recurring expense delete failed', e));
     audit('expense.recurring_delete', 'recurringExpense', id);
   };
@@ -1077,9 +1092,22 @@ const App: React.FC = () => {
   // ones — and records the period as generated on the template so it's
   // never offered again. Skipping is the same idea without creating an
   // Expense: the period still gets recorded so it stops being "due".
-  const handleGenerateRecurringExpense = (r: RecurringExpense, period: { key: string; date: string }) => {
-    if (!uid || !appUser || !allow('expenses.manage')) return;
-    const draft = buildRecurringExpense(r, period, { id: appUser.id, email: appUser.email }, Date.now());
+  //
+  // A VARIABLE template (utilities, phone, card fees) carries no authoritative
+  // amount, so `enteredAmount` is required for it: domain/expenses.ts's
+  // buildRecurringExpense refuses to build a draft without one, which is what
+  // guarantees a variable bill can never auto-post at a guessed figure. The
+  // UI reaches this handler for a variable period only after someone has typed
+  // the real number; the try/catch is the belt-and-suspenders backstop.
+  const handleGenerateRecurringExpense = (r: RecurringExpense, period: { key: string; date: string }, enteredAmount?: number) => {
+    if (!uid || !appUser || !allow('expenses.viewAll')) return;
+    let draft: Omit<Expense, 'id'>;
+    try {
+      draft = buildRecurringExpense(r, period, { id: appUser.id, email: appUser.email }, Date.now(), enteredAmount);
+    } catch (e) {
+      console.error('Recurring expense needs an amount before it can post', e);
+      return;
+    }
     const expense: Expense = { ...draft, id: newId() };
     if (expense.paymentMethod === 'cash') {
       const existing = cashReconciliations.find(rec => rec.date === expense.date);
@@ -1093,8 +1121,10 @@ const App: React.FC = () => {
       .catch(e => console.error('Recurring expense update failed', e));
   };
 
+  // Skipping is identical for fixed and variable templates — one shared
+  // skippedPeriods path, never forked per mode.
   const handleSkipRecurringPeriod = (r: RecurringExpense, periodKey: string) => {
-    if (!uid || !allow('expenses.manage')) return;
+    if (!uid || !allow('expenses.viewAll')) return;
     saveRecurringExpense(uid, { ...r, skippedPeriods: [...(r.skippedPeriods || []), periodKey] })
       .catch(e => console.error('Recurring expense update failed', e));
     audit('expense.recurring_skip', 'recurringExpense', r.id, undefined, { periodKey });
@@ -2030,7 +2060,8 @@ const App: React.FC = () => {
               ? <ReportsView salesTransactions={salesTransactions} cashReconciliations={cashReconciliations} inventory={data} payPeriods={payPeriods} settlements={settlements} deviceBuyers={deviceBuyers} onSaveReconciliation={handleSaveReconciliation} defaultOpeningFloat={settings.operations.openingFloatDefault}
                   repairs={repairs} customers={customers} auditLogs={auditLogs} activity={activityLog} timeEntries={timeEntries} users={workspaceUsers}
                   expenses={expenses} expenseCategories={settings.expenses.categories}
-                  canManageExpenses={allow('expenses.manage')} recurringExpenses={recurringExpenses}
+                  canAddExpense={allow('expenses.add')} canViewAllExpenses={allow('expenses.viewAll')}
+                  currentUserId={appUser?.id || ''} recurringExpenses={recurringExpenses}
                   canReconcile={allow('cash.reconcile')} canViewProfit={allow('reports.profit.summary')}
                   onSaveExpense={handleSaveExpense} onDeleteExpense={handleDeleteExpense}
                   onSaveRecurringExpense={handleSaveRecurringExpense} onDeleteRecurringExpense={handleDeleteRecurringExpense}

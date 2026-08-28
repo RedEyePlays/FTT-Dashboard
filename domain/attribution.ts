@@ -2,7 +2,8 @@ import { DropOff, Expense, Settlement } from '../types';
 
 // Staff attribution for the six operational actions employees were granted
 // (sales.void, sales.return, cash.reconcile, dropoffs.manage's accept +
-// settle, expenses.manage) — see services/rbac.ts.
+// settle) — see services/rbac.ts. (The expense grant was later rolled back:
+// expenses.add is owner/manager only.)
 //
 // WHY THIS MODULE EXISTS
 // ----------------------

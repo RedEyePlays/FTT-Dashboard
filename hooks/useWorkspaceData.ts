@@ -256,22 +256,30 @@ export function useWorkspaceData() {
     return subscribeCollection<StaffNote>(workspaceId, 'staffNotes', setStaffNotes, onErr);
   }, [user, appUser, workspaceId, reconnectKey]);
 
-  // Expense ledger (owner/manager/employee — expenses.manage in
-  // services/rbac.ts and isStaffOf() in firestore.rules; employees were
-  // granted it when they took over end-to-end shop operation). Its own
-  // effect, role-gated like staffNotes, so a technician never even attempts a
-  // subscription firestore.rules would reject anyway. NOTE: this ledger is
-  // business spend (rent, supplies, payouts) — it is NOT per-item cost/margin/
-  // profit, which stays behind the two reports.profit.* tiers for employees.
+  // Expense ledger. Role-gated like staffNotes so no role ever attempts a
+  // subscription firestore.rules would reject anyway:
+  //   • expenses          — owner + manager only (expenses.add /
+  //     expenses.viewAll in services/rbac.ts; employees and technicians lost
+  //     expense access entirely). The manager subscribes to the FULL
+  //     collection deliberately: domain/reports.ts's profitAndLoss must
+  //     subtract every workspace expense, and a truncated array would
+  //     OVERSTATE their net profit. The "only my own entries" scoping is a
+  //     BROWSE filter applied in ReportsView's ExpensesTab
+  //     (domain/expenses.ts's visibleExpensesFor) — never here, and never on
+  //     the P&L input.
+  //   • recurringExpenses — owner only; recurring templates are owner-only
+  //     configuration, matching the firestore.rules block.
   useEffect(() => {
-    if (!user || !appUser || !workspaceId || appUser.role === 'technician') {
+    if (!user || !appUser || !workspaceId || (appUser.role !== 'owner' && appUser.role !== 'manager')) {
       setExpenses([]); setRecurringExpenses([]); return;
     }
     const onErr = (e: Error) => { console.error('Firestore error (expenses):', e); };
-    const subs = [
-      subscribeCollection<Expense>(workspaceId, 'expenses', setExpenses, onErr),
-      subscribeCollection<RecurringExpense>(workspaceId, 'recurringExpenses', setRecurringExpenses, onErr),
-    ];
+    const subs = [subscribeCollection<Expense>(workspaceId, 'expenses', setExpenses, onErr)];
+    if (appUser.role === 'owner') {
+      subs.push(subscribeCollection<RecurringExpense>(workspaceId, 'recurringExpenses', setRecurringExpenses, onErr));
+    } else {
+      setRecurringExpenses([]);
+    }
     return () => subs.forEach(u => u());
   }, [user, appUser, workspaceId, reconnectKey]);
 
