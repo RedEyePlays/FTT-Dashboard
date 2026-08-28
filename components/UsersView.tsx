@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Users, UserPlus, ShieldCheck, Ban, CheckCircle2, Trash2, Mail, Eye, DollarSign, KeyRound, X, Lock, MessageSquarePlus, AlertTriangle, RotateCcw } from 'lucide-react';
+import { Users, UserPlus, ShieldCheck, Ban, CheckCircle2, Trash2, Mail, Eye, DollarSign, KeyRound, X, Lock, MessageSquarePlus, AlertTriangle, RotateCcw, UserCog } from 'lucide-react';
 import { AppUser, WorkspaceInvite, Role, StaffNote } from '../types';
 import { ROLE_LABEL } from '../services/rbac';
 import { canAssignPin, isValidPinFormat, PIN_MAX_LENGTH } from '../domain/pin';
@@ -20,6 +20,14 @@ interface Props {
   onSetHourlyRate?: (uid: string, rate: number) => void; // owner only
   onInvite: (email: string, role: Role) => void;
   onDeleteInvite: (email: string) => void;
+  // Create a fully-usable account directly — email, password and an optional
+  // PIN, set right now (createStaffUser Cloud Function), instead of a
+  // "pending invite" the new hire has to self-claim by signing in with a
+  // password only they know. Owner may create manager/employee/technician;
+  // a manager (canManageAll false) may create technician only — same role
+  // ceiling as onInvite's inviteRoles. Resolves to null on success, or an
+  // error message to show in the dialog.
+  onCreateUser?: (input: { email: string; password: string; role: Role; pin?: string }) => Promise<string | null>;
   // Auto-lock PIN — a manager/owner may set a PIN for anyone strictly below
   // their role (never a peer or above; see domain/pin.ts canAssignPin).
   onSetPin?: (uid: string, pin: string) => Promise<boolean>;
@@ -221,8 +229,122 @@ const ResetPasswordModal: React.FC<{
   );
 };
 
+// Create a fully-usable staff account in one step — email, password, and an
+// optional PIN, set directly by the owner/manager creating it, rather than a
+// "pending invite" that sits unclaimed until the new hire signs in on their
+// own with a password only they know. This is the direct answer to "why
+// can't I just set their password and PIN": now you can.
+const CreateUserModal: React.FC<{
+  roles: Role[];
+  onClose: () => void;
+  onSave: (input: { email: string; password: string; role: Role; pin?: string }) => Promise<string | null>;
+}> = ({ roles, onClose, onSave }) => {
+  const [email, setEmail] = useState('');
+  const [role, setRole] = useState<Role>(roles[0]);
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [setPinNow, setSetPinNow] = useState(false);
+  const [pin, setPin] = useState('');
+  const [confirmPin, setConfirmPin] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const { isSubmitting, run } = useSubmitGuard();
+
+  useEscapeKey(onClose);
+
+  const digitsOnly = (v: string) => v.replace(/\D/g, '').slice(0, PIN_MAX_LENGTH);
+  const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+  const strengthError = password ? validatePassword(password) : null;
+  const passwordsMatch = password.length > 0 && password === confirmPassword;
+  const pinValid = !setPinNow || (isValidPinFormat(pin) && pin === confirmPin);
+  const canSave = emailValid && !strengthError && passwordsMatch && pinValid && !isSubmitting;
+
+  const save = () => {
+    if (!canSave) return;
+    run(() => {
+      setError(null);
+      onSave({ email: email.trim(), password, role, pin: setPinNow ? pin : undefined })
+        .then(msg => { if (msg) setError(msg); else onClose(); })
+        .catch(() => setError('Could not create the account. Please try again.'));
+    });
+  };
+
+  const field = 'w-full px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md text-sm';
+  const pinInput = 'w-full px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md text-sm tracking-[0.4em] text-center';
+
+  return (
+    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={onClose}>
+      <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-sm border border-slate-200 dark:border-slate-700" onClick={e => e.stopPropagation()} role="dialog" aria-label="Create user">
+        <div className="px-5 py-3 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
+          <h2 className="font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2"><UserCog className="w-4 h-4" /> Create a user</h2>
+          <button onClick={onClose} aria-label="Close"><X className="w-5 h-5 text-slate-400" /></button>
+        </div>
+        <div className="p-5 space-y-3">
+          <div className="flex gap-2 items-start text-xs text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/50 rounded-lg p-3">
+            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+            <span><strong>No email is sent.</strong> Give this password (and PIN, if set) to them directly.</span>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1" htmlFor="new-user-email">Email</label>
+            <div className="relative">
+              <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input id="new-user-email" autoFocus value={email} onChange={e => { setEmail(e.target.value); setError(null); }}
+                placeholder="jordan@yourshop.local" className={`${field} pl-9`} />
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Role</label>
+            <select value={role} onChange={e => setRole(e.target.value as Role)} className={field} disabled={roles.length === 1}>
+              {roles.map(r => <option key={r} value={r}>{ROLE_LABEL[r]}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1" htmlFor="new-user-password">Password</label>
+            <input id="new-user-password" type="password" autoComplete="new-password" value={password}
+              onChange={e => { setPassword(e.target.value); setError(null); }} className={field} placeholder={`At least ${MIN_PASSWORD_LENGTH} characters`} />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1" htmlFor="new-user-confirm-password">Confirm password</label>
+            <input id="new-user-confirm-password" type="password" autoComplete="new-password" value={confirmPassword}
+              onChange={e => setConfirmPassword(e.target.value)} className={field} placeholder="Type it again" />
+          </div>
+          {strengthError && <p className="text-xs text-amber-600 dark:text-amber-400">{strengthError}</p>}
+          {!strengthError && confirmPassword && !passwordsMatch && <p className="text-xs text-rose-500">Passwords don't match.</p>}
+
+          <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300 pt-1">
+            <input type="checkbox" checked={setPinNow} onChange={e => setSetPinNow(e.target.checked)} className="rounded" />
+            Set a PIN now too <span className="text-xs text-slate-400">(unlocks the app after inactivity — optional, can be added later)</span>
+          </label>
+          {setPinNow && (
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">PIN</label>
+                <input type="password" inputMode="numeric" autoComplete="off" value={pin}
+                  onChange={e => setPin(digitsOnly(e.target.value))} className={pinInput} placeholder="••••" />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Confirm PIN</label>
+                <input type="password" inputMode="numeric" autoComplete="off" value={confirmPin}
+                  onChange={e => setConfirmPin(digitsOnly(e.target.value))} className={pinInput} placeholder="••••" />
+              </div>
+              {pin && !isValidPinFormat(pin) && <p className="col-span-2 text-xs text-amber-600 dark:text-amber-400">PIN must be 4–6 digits.</p>}
+              {isValidPinFormat(pin) && confirmPin && pin !== confirmPin && <p className="col-span-2 text-xs text-rose-500">PINs don't match.</p>}
+            </div>
+          )}
+          {error && <p className="text-xs text-rose-500">{error}</p>}
+        </div>
+        <div className="px-5 py-3 border-t border-slate-100 dark:border-slate-800 flex justify-end gap-2">
+          <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm font-medium bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">Cancel</button>
+          <button onClick={save} disabled={!canSave} className="px-4 py-2 rounded-lg text-sm font-medium bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white">
+            {isSubmitting ? 'Creating…' : 'Create User'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 export const UsersView: React.FC<Props> = ({
-  me, users, invites, canManageAll = true, onSetRole, onSetDisabled, onSetAllowProfit, onSetHourlyRate, onInvite, onDeleteInvite,
+  me, users, invites, canManageAll = true, onSetRole, onSetDisabled, onSetAllowProfit, onSetHourlyRate, onInvite, onDeleteInvite, onCreateUser,
   onSetPin, canManageSecurity, autoLockMinutes, onSetAutoLockMinutes, onResetPassword,
   staffNotes = [], canManageStaffNotes = false, onAddStaffNote, onDeleteStaffNote,
 }) => {
@@ -231,6 +353,12 @@ export const UsersView: React.FC<Props> = ({
   const [pinTarget, setPinTarget] = useState<AppUser | null>(null);
   const [pwTarget, setPwTarget] = useState<AppUser | null>(null);
   const [noteText, setNoteText] = useState('');
+  const [showCreate, setShowCreate] = useState(false);
+  // The invite panel (self-claimed, no password set here) is now the
+  // fallback path — "Create a user" above sets everything up front. Kept
+  // available rather than removed: a shop that would rather the new hire
+  // pick their own password can still do that.
+  const [showInvitePanel, setShowInvitePanel] = useState(false);
 
   // Managers may only invite/manage technicians; owners manage every role.
   const inviteRoles: Role[] = canManageAll ? ['manager', 'employee', 'technician'] : ['technician'];
@@ -285,7 +413,35 @@ export const UsersView: React.FC<Props> = ({
         </div>
       )}
 
-      {/* Invite */}
+      {/* Create a user — sets email, password and an optional PIN directly,
+          no self-claimed "pending invite" step. */}
+      {onCreateUser && (
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl p-5">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h3 className="font-semibold text-slate-800 dark:text-slate-100 flex items-center gap-2"><UserCog className="w-4 h-4 text-indigo-500" /> {canManageAll ? 'Create a user' : 'Create a technician'}</h3>
+              <p className="text-xs text-slate-400 mt-1">Set their email, password, and (optionally) their PIN right now — nothing to claim, nothing emailed.</p>
+            </div>
+            <button onClick={() => setShowCreate(true)} className="shrink-0 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium">Create User</button>
+          </div>
+          {canManageAll && (
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-3 border-t border-slate-100 dark:border-slate-800 pt-2">
+              <strong className="text-slate-600 dark:text-slate-300">Staff addresses don't have to be real mailboxes.</strong>{' '}
+              A sign-in address is just an identifier here — nothing is ever verified or emailed, so <code className="text-[11px]">jordan@yourshop.local</code> works fine.
+              You're the reset path for it too — use <strong>Reset password</strong> on their row below whenever it needs to change.
+            </p>
+          )}
+          <button onClick={() => setShowInvitePanel(v => !v)} className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline mt-3">
+            {showInvitePanel ? 'Hide' : (canManageAll ? 'Or send an invite instead (they set their own password) →' : 'Or send an invite instead →')}
+          </button>
+        </div>
+      )}
+
+      {/* Invite — the fallback path when someone would rather pick their own
+          password than have it set for them. Self-claimed the first time
+          that email signs in (see hooks/useWorkspaceData.ts). Always shown
+          when onCreateUser isn't wired (keeps this view usable either way). */}
+      {(!onCreateUser || showInvitePanel) && (
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl p-5">
         <h3 className="font-semibold text-slate-800 dark:text-slate-100 mb-3 flex items-center gap-2"><UserPlus className="w-4 h-4 text-indigo-500" /> {canManageAll ? 'Invite a user' : 'Invite a technician'}</h3>
         <div className="flex flex-wrap gap-2 items-end">
@@ -327,6 +483,7 @@ export const UsersView: React.FC<Props> = ({
           </div>
         )}
       </div>
+      )}
 
       {/* Users list */}
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl overflow-hidden">
@@ -415,6 +572,10 @@ export const UsersView: React.FC<Props> = ({
             ))}
           </div>
         </div>
+      )}
+
+      {showCreate && onCreateUser && (
+        <CreateUserModal roles={inviteRoles} onClose={() => setShowCreate(false)} onSave={onCreateUser} />
       )}
 
       {pinTarget && onSetPin && (
