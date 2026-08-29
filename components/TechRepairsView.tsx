@@ -6,6 +6,7 @@ import {
   repairAgeDays, balanceOwing, matchesRepair,
 } from '../domain/repairs';
 import { RepairLabelModal } from './RepairLabelModal';
+import { isPrivateBatch } from '../domain/autoInventory';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 import { useConnectionStatus } from '../hooks/useConnectionStatus';
 
@@ -327,7 +328,7 @@ const TechRepairDrawer: React.FC<{
       {label && (
         <RepairLabelModal
           repair={r}
-          context={batch ? { batchNumber: batch.batchNumber } : undefined}
+          context={batch ? { batchNumber: batch.batchNumber, isPrivate: isPrivateBatch(batch) } : undefined}
           onClose={() => setLabel(false)}
           onPrinted={() => onPrintAudit?.('repair', r.id, 'QR label')}
         />

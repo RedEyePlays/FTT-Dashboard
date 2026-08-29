@@ -21,7 +21,12 @@ export interface LabelMedia {
 
 export interface LabelContent {
   org: string;      // FlipThatTech
-  code: string;     // SKU (inventory) or Repair ID (repairs) — very large
+  // SKU (inventory) or Repair ID (repairs) — very large. OPTIONAL: the
+  // wholesale repair label omits it entirely (the owner asked to drop the
+  // batch number from the label — "I don't care which wholesale batch it's
+  // from"). Inventory and retail repair labels always pass a real value, so
+  // their rendered output is byte-for-byte unchanged by this being optional.
+  code?: string;
   // Device / accessory name. OPTIONAL: the repair labels (both retail and
   // wholesale) deliberately omit it — a repair tag sits on the device the
   // technician is already holding, so the brand/model line is redundant there.
@@ -64,15 +69,18 @@ export type LabelVariant = 'inventory' | 'repairRetail' | 'repairWholesale';
 //    worst-case fit check in maxSafePushDownMm/the tests, not picked freehand:
 //    4 lines at 1.15× still occupy less height than the inventory label's 5
 //    lines at 1.0×, on the tightest (2×1") template.
-//  • repairWholesale 0.8 — the owner asked for smaller text on this one
-//    specifically, and it has to make room for a brand-new full-width issue
-//    row. 0.8 is the largest round reduction that leaves the issue line 2–3
+//  • repairWholesale 0.9 — the owner first asked for smaller text on this
+//    one (it had to make room for a brand-new full-width issue row) then,
+//    once the full IMEI line was dropped in favor of a short "Wholesale -
+//    1234" sub-line, asked for the remaining text bumped back up a bit. 0.9
+//    is the largest round increase that still leaves the issue line 2–3
 //    readable wrapped lines at 2×1" (proven with measured geometry in
-//    labelLayout.test.ts rather than assumed).
+//    labelLayout.test.ts rather than assumed) — up from the original 0.8,
+//    which was tuned back when this label still carried a full IMEI line.
 const VARIANT_TEXT_SCALE: Record<LabelVariant, number> = {
   inventory: 1,
   repairRetail: 1.15,
-  repairWholesale: 0.8,
+  repairWholesale: 0.9,
 };
 
 // Multiplier on the computed QR size, per variant. The repair labels' QR
@@ -206,7 +214,7 @@ const BASE_PAD_MM = 0.85;
  */
 export function maxSafePushDownMm(
   m: LabelMedia,
-  c: Pick<LabelContent, 'device' | 'sub' | 'serial' | 'issue'>,
+  c: Pick<LabelContent, 'code' | 'device' | 'sub' | 'serial' | 'issue'>,
   opts: { padMm?: number; lineGapMm?: number; showBarcode: boolean; hasBarcodeImage: boolean; variant?: LabelVariant },
   ceilingMm: number = MAX_PUSH_DOWN_MM,
 ): number {
@@ -227,11 +235,13 @@ export function maxSafePushDownMm(
 
   const { fOrg, fCode, fDevice, fSub, fSerial } = nonDymoFontSizesMm(m, variant);
   // Rendered line-box heights = font-size × line-height (matches the
-  // line-height values labelBody actually sets on each line below). The device
-  // line is conditional now that the repair labels omit it, the same way `sub`
-  // and `serial` already were — inventory labels always pass one, so their
-  // result is unchanged.
-  const lineHeights = [fOrg * 1, fCode * 1];
+  // line-height values labelBody actually sets on each line below). The
+  // device and code lines are conditional now that the wholesale repair
+  // label omits both, the same way `sub` and `serial` already were —
+  // inventory and retail repair labels always pass a code, so their result
+  // is unchanged.
+  const lineHeights = [fOrg * 1];
+  if (c.code) lineHeights.push(fCode * 1);
   if (c.device) lineHeights.push(fDevice * 1.05);
   if (c.sub) lineHeights.push(fSub * 1);
   if (c.serial) lineHeights.push(fSerial * 1.05);
@@ -440,7 +450,7 @@ function labelBody(u: U, m: LabelMedia, c: LabelContent, img: LabelImages, o: La
         <div style="flex:1;min-height:0;display:flex;gap:${u(2)};">
           <div style="flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:${u(1.1)};">
             <div style="font-weight:800;font-size:${u(fOrg)};letter-spacing:.5px;line-height:1;">${esc(c.org)}</div>
-            <div style="font-family:'Courier New',monospace;font-weight:800;font-size:${u(fCode)};line-height:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(c.code)}</div>
+            ${c.code ? `<div style="font-family:'Courier New',monospace;font-weight:800;font-size:${u(fCode)};line-height:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(c.code)}</div>` : ''}
             ${c.device ? `<div style="font-weight:700;font-size:${u(fDevice)};line-height:1.05;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(c.device)}</div>` : ''}
             ${c.sub ? `<div style="font-size:${u(fSub)};font-weight:600;color:#000;line-height:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(c.sub)}</div>` : ''}
             ${c.serial ? `<div style="font-family:'Courier New',monospace;font-weight:800;font-size:${u(fSerial)};color:#000;line-height:1.05;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(c.serial)}</div>` : ''}
@@ -544,7 +554,7 @@ function labelBody(u: U, m: LabelMedia, c: LabelContent, img: LabelImages, o: La
             <span style="font-weight:800;font-size:${u(fOrg)};letter-spacing:.5px;line-height:1;">${esc(c.org)}</span>
             ${pill}
           </div>
-          <div style="flex-shrink:0;font-family:'Courier New',monospace;font-weight:800;font-size:${u(fCode)};line-height:1.05;max-height:${u(fCode * 2.1)};overflow-wrap:anywhere;word-break:break-all;overflow:hidden;">${esc(c.code)}</div>
+          ${c.code ? `<div style="flex-shrink:0;font-family:'Courier New',monospace;font-weight:800;font-size:${u(fCode)};line-height:1.05;max-height:${u(fCode * 2.1)};overflow-wrap:anywhere;word-break:break-all;overflow:hidden;">${esc(c.code)}</div>` : ''}
           ${c.device ? `<div style="flex-shrink:0;font-weight:700;font-size:${u(fDevice)};line-height:1.05;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(c.device)}</div>` : ''}
           ${c.sub ? `<div style="flex-shrink:0;font-size:${u(fSub)};font-weight:600;color:#000;line-height:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(c.sub)}</div>` : ''}
           ${c.serial ? `<div style="flex-shrink:0;font-family:'Courier New',monospace;font-weight:800;font-size:${u(fSerial)};color:#000;line-height:1.05;max-height:${u(fSerial * 2.1)};overflow-wrap:anywhere;word-break:break-all;overflow:hidden;">${esc(c.serial)}</div>` : ''}
@@ -605,12 +615,6 @@ export interface DropOffLabelOpts {
 const DROPOFF_PAD_MM = 1.6;
 const DROPOFF_QR_GAP_MM = 2;
 
-// The smallest this label's QR is ever allowed to shrink to. 9mm is the size
-// already shipped and proven in production on the DYMO shelf tag's corner QR
-// (services/shelfTag.ts) for exactly this payload — an IMEI — which is the
-// only real-world "how small still scans" evidence this codebase has.
-export const MIN_DROPOFF_QR_MM = 9;
-
 /**
  * Font sizes (mm) for the drop-off label, scaled from the DYMO 89mm landscape
  * template the shop actually prints on so the same layout works on every
@@ -619,7 +623,7 @@ export const MIN_DROPOFF_QR_MM = 9;
  * nonDymoFontSizesMm).
  */
 export function dropOffFontSizesMm(m: LabelMedia): {
-  fOrg: number; fBuyer: number; fDevice: number; fSerial: number; fMoney: number;
+  fOrg: number; fBuyer: number; fDevice: number; fMoney: number;
 } {
   const { w } = mmOf(m);
   const s = clamp(w / 89, 0.6, 1.2);
@@ -628,44 +632,36 @@ export function dropOffFontSizesMm(m: LabelMedia): {
   // from this label at the owner's request — the label now ENDS at the money
   // line — so the size that only ever fed that row is gone with it rather
   // than left behind as an unused export.
-  return { fOrg: r(2.7), fBuyer: r(5.0), fDevice: r(4.0), fSerial: r(3.7), fMoney: r(4.0) };
+  // No `fSerial` either, for the same reason: the label no longer PRINTS the
+  // IMEI/serial as text (removed at the owner's request) — the QR is the
+  // only place it appears now.
+  return { fOrg: r(2.7), fBuyer: r(5.0), fDevice: r(4.0), fMoney: r(4.0) };
 }
 
 /**
- * The QR's rendered size (mm) for this content — SHRINK THE QR BEFORE THE TEXT.
+ * The QR's rendered size (mm) — a comfortably scannable square. This label
+ * gets scanned off a shelf or a bin, so it's sized generously (0.55 of the
+ * short side, well above the 9mm floor and the inventory label's text-heavy
+ * 0.34/0.47), capped so the full-width money row beneath still gets its
+ * height.
  *
- * Same non-truncation rule as the inventory label work (services/
- * labelLayout.ts's nonDymoQrSizeMm + textColumnWidthMm, services/shelfTag.ts's
- * flex-shrink:0 fit): the IMEI and the money figures are the whole point of
- * this label and must never ellipsis-clip, so when the serial's measured width
- * (estimateTextWidthMm, the same analytical geometry used everywhere else in
- * this file — no DOM needed, so it runs identically in tests) doesn't fit
- * beside an ideally-sized QR, the QR gives up width first.
- *
- * The QR never shrinks below MIN_DROPOFF_QR_MM: past that it stops scanning,
- * which would defeat the label. In that (very long serial) case the serial
- * line WRAPS instead — it is rendered with overflow-wrap:anywhere and no
- * ellipsis, exactly like the inventory label's code/serial lines — so the
- * value is still printed in full, never cut.
+ * Used to shrink to make room for a printed serial line next to it — the
+ * label no longer prints the IMEI/serial as text at all (removed at the
+ * owner's request; the QR is the only place it appears now), so there is
+ * nothing else on this row for the QR to negotiate width with, and the size
+ * is now a fixed function of the media alone.
  */
 export function dropOffQrSizeMm(
   m: LabelMedia,
-  c: Pick<DropOffLabelContent, 'serial'>,
   opts: { padMm?: number } = {},
 ): number {
   const { w, h } = mmOf(m);
   const pad = opts.padMm ?? DROPOFF_PAD_MM;
-  // Ideal: a comfortably scannable square — this label gets scanned off a
-  // shelf or a bin, so it's sized generously (0.55 of the short side, well
-  // above the 9mm floor and the inventory label's text-heavy 0.34/0.47) —
-  // capped so the full-width money/meta rows beneath still get their height.
-  const ideal = +Math.min(Math.min(w, h) * 0.55, (h - pad * 2) * 0.62).toFixed(2);
-  const serial = (c.serial || '').trim();
-  if (!serial) return ideal;
-  const { fSerial } = dropOffFontSizesMm(m);
-  // Widest QR that still leaves the serial its full measured width on one line.
-  const fits = w - pad * 2 - DROPOFF_QR_GAP_MM - estimateTextWidthMm(serial, fSerial);
-  return +clamp(Math.min(ideal, fits), Math.min(MIN_DROPOFF_QR_MM, ideal), ideal).toFixed(2);
+  // 0.42/0.47 (down from 0.55/0.62) — a further, explicit size-down of an
+  // already-scannable QR, per the owner's request. Still comfortably above
+  // the ~9mm floor proven scannable on the shelf tag's own IMEI QR
+  // (services/shelfTag.ts) at any configured label size.
+  return +Math.min(Math.min(w, h) * 0.42, (h - pad * 2) * 0.47).toFixed(2);
 }
 
 /**
@@ -676,12 +672,11 @@ export function dropOffQrSizeMm(
  */
 export function dropOffTextColumnWidthMm(
   m: LabelMedia,
-  c: Pick<DropOffLabelContent, 'serial'>,
   opts: { padMm?: number; showQr: boolean },
 ): number {
   const { w } = mmOf(m);
   const pad = opts.padMm ?? DROPOFF_PAD_MM;
-  const qrW = opts.showQr ? dropOffQrSizeMm(m, c, { padMm: opts.padMm }) + DROPOFF_QR_GAP_MM : 0;
+  const qrW = opts.showQr ? dropOffQrSizeMm(m, { padMm: opts.padMm }) + DROPOFF_QR_GAP_MM : 0;
   return +(w - pad * 2 - qrW).toFixed(2);
 }
 
@@ -701,16 +696,21 @@ export function dropOffTextColumnWidthMm(
  * the inventory label and the shelf tag (see labelBody's long comment): a flex
  * column's default flex-shrink:1 SILENTLY COMPRESSES lines to fit rather than
  * letting them overflow, which on a physical print reads as squashed/cut-off
- * text. With it, content either fits or cleanly clips — and the two lines that
- * must never clip (serial, money) wrap instead of clipping.
+ * text. With it, content either fits or cleanly clips — and the money line
+ * that must never clip wraps instead of clipping.
+ *
+ * The IMEI/serial is deliberately NOT printed as text here (removed at the
+ * owner's request) — it still goes into the QR (see dropOffLabelContent /
+ * serialQr in services/dropOffLabel.ts), which is the only place it appears
+ * on the label now.
  */
 function dropOffLabelBody(u: U, m: LabelMedia, c: DropOffLabelContent, qr: string | undefined, o: DropOffLabelOpts): string {
   const pad = o.padMm ?? DROPOFF_PAD_MM;
   const lineGap = clamp(o.lineGapMm ?? 0.9, 0, 1.5);
   const f = dropOffFontSizesMm(m);
-  const qrS = dropOffQrSizeMm(m, c, { padMm: o.padMm });
+  const qrS = dropOffQrSizeMm(m, { padMm: o.padMm });
   // Never ellipsis: wrap the value instead. Same rule (and same CSS) the
-  // inventory label's code/serial lines use.
+  // inventory label's code line uses.
   const noClip = 'overflow-wrap:anywhere;word-break:break-all;';
   return `
     <div style="box-sizing:border-box;width:100%;height:100%;padding:${u(pad)};background:#fff;color:#000;
@@ -720,7 +720,6 @@ function dropOffLabelBody(u: U, m: LabelMedia, c: DropOffLabelContent, qr: strin
           <div style="flex-shrink:0;font-weight:800;font-size:${u(f.fOrg)};letter-spacing:.5px;line-height:1;text-transform:uppercase;">${esc(c.org)}</div>
           <div style="flex-shrink:0;font-weight:800;font-size:${u(f.fBuyer)};line-height:1.05;${noClip}overflow:hidden;">${esc(c.buyerName)}</div>
           <div style="flex-shrink:0;font-weight:700;font-size:${u(f.fDevice)};line-height:1.05;${noClip}overflow:hidden;">${esc(c.device)}</div>
-          ${c.serial ? `<div style="flex-shrink:0;font-family:'Courier New',monospace;font-weight:800;font-size:${u(f.fSerial)};line-height:1.05;${noClip}overflow:hidden;">${esc(c.serial)}</div>` : ''}
         </div>
         ${qr ? `<img src="${qr}" style="width:${u(qrS)};height:${u(qrS)};flex-shrink:0;align-self:flex-start;image-rendering:pixelated;" />` : ''}
       </div>

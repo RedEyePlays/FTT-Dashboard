@@ -49,7 +49,7 @@ async function mount(ui: React.ReactElement) {
 // The rendered label preview is the exact HTML labelPrintDoc puts on paper
 // (labelPreview and labelPrintDoc share labelBody), so asserting on it is
 // asserting on the printed tag.
-const label = async (r: Repair, context?: { batchNumber?: string; lineNumber?: number }) => {
+const label = async (r: Repair, context?: { batchNumber?: string; lineNumber?: number; isPrivate?: boolean }) => {
   const { host, unmount } = await mount(<RepairLabelModal repair={r} context={context} onClose={() => {}} />);
   const html = host.innerHTML;
   unmount();
@@ -103,25 +103,38 @@ describe('retail repair label — shortened code, no device/model', () => {
   });
 });
 
-describe('wholesale repair label — batch only, no line number, no model, issue printed', () => {
-  const wholesale = () => repair({ type: 'wholesale' as RepairType });
+describe('wholesale repair label — no batch number, "Store Device" only for the shop\'s own stock', () => {
+  const wholesale = (p: Partial<Repair> = {}) => repair({ type: 'wholesale' as RepairType, ...p });
 
-  it('prints the batch number but not the "· #{line}" line number', async () => {
-    const html = await label(wholesale(), { batchNumber: 'WB-45', lineNumber: 3 });
-    expect(html).toContain('WB-45');
+  it('never prints a batch number — private or a real client batch — and never the old "· #{line}" line number', async () => {
+    const html = await label(wholesale(), { batchNumber: 'WB-45', lineNumber: 3, isPrivate: true });
+    expect(html).not.toContain('WB-45');
     expect(html).not.toContain('#3');
     expect(html).not.toContain('· #');
   });
 
+  it('a real (non-private) wholesale batch label carries no sub-line text at all', async () => {
+    const html = await label(wholesale(), { batchNumber: 'WB-45', isPrivate: false });
+    expect(html).not.toContain('Wholesale');
+    expect(html).not.toContain('Store Device');
+  });
+
+  it('the shop\'s own ("private") batch is labeled "Store Device", on the smaller sub-line — not the big code font', async () => {
+    const html = await label(wholesale(), { batchNumber: 'WB-45', isPrivate: true });
+    const subDiv = html.match(/<div[^>]*>Store Device<\/div>/)![0];
+    expect(subDiv).not.toContain("Courier New"); // that's the big id-line/serial font, not this
+    expect(subDiv).toContain('font-weight:600'); // the sub line's own weight
+  });
+
   it('prints no brand/model text anywhere on the label', async () => {
-    const html = await label(wholesale(), { batchNumber: 'WB-45', lineNumber: 3 });
+    const html = await label(wholesale(), { batchNumber: 'WB-45', isPrivate: true });
     expect(html).not.toContain('Apple');
     expect(html).not.toContain('iPhone 14 Pro');
   });
 
   it('prints the reported issue in full, wrapped rather than ellipsis-clipped', async () => {
     const r = wholesale();
-    const html = await label(r, { batchNumber: 'WB-45', lineNumber: 3 });
+    const html = await label(r, { batchNumber: 'WB-45', isPrivate: true });
     expect(html).toContain(r.issue);
     const issueDiv = html.match(new RegExp(`<div[^>]*>${r.issue}</div>`))![0];
     expect(issueDiv).toContain('overflow-wrap:anywhere');
@@ -134,11 +147,15 @@ describe('wholesale repair label — batch only, no line number, no model, issue
     expect(html).not.toContain(r.issue);
   });
 
-  it('its text is smaller than the retail label\'s, measured off the rendered code line', async () => {
-    const codeSize = (html: string) =>
-      Number(html.match(/font-family:\s*'Courier New'[^"]*font-size:\s*([\d.]+)px/)![1]);
-    const retail = await label(repair({}));
-    const whole = await label(wholesale(), { batchNumber: 'WB-45', lineNumber: 3 });
-    expect(codeSize(whole)).toBeLessThan(codeSize(retail));
+  it('never prints the full IMEI anywhere on the wholesale label', async () => {
+    const r = wholesale({ imei: '356789101234567' });
+    const html = await label(r, { batchNumber: 'WB-45', isPrivate: true });
+    expect(html).not.toContain('356789101234567');
+  });
+
+  it('the RETAIL label is unaffected — still "Retail repair" and the full IMEI', async () => {
+    const html = await label(repair({}));
+    expect(html).toContain('Retail repair');
+    expect(html).toContain('356789101234567');
   });
 });

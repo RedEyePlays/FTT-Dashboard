@@ -16,8 +16,15 @@ import { useEscapeKey } from '../hooks/useEscapeKey';
 
 interface Props {
   repair: Repair;
-  // For wholesale devices: the parent batch number + 1-based line number.
-  context?: { batchNumber?: string; lineNumber?: number };
+  // For wholesale devices: the parent batch's identity. `batchNumber` and
+  // `lineNumber` are no longer printed on the label itself (both removed at
+  // the owner's request) but are kept on the type since callers still
+  // resolve them for other purposes (e.g. printSheet's device sheet).
+  // `isPrivate` is RepairBatch.private (via domain/autoInventory.ts's
+  // isPrivateBatch) — whether this is the shop's own stock rather than a
+  // real wholesale client's — and is the ONLY one of the three this modal
+  // actually reads.
+  context?: { batchNumber?: string; lineNumber?: number; isPrivate?: boolean };
   onClose: () => void;
   onPrinted?: () => void;
 }
@@ -69,17 +76,15 @@ export const RepairLabelModal: React.FC<Props> = ({ repair: r, context, onClose,
   // The human-readable code line on the printed tag. DISPLAY ONLY — see
   // `barcodeValue` below, which is what actually gets scanned.
   //
-  //  • WHOLESALE: the batch number ALONE. The owner asked to "remove the
-  //    number", i.e. the "· #3" line number that used to follow it. The batch
-  //    number itself stays: dropping every identifier would leave no way to
-  //    match a device back to its batch, and the line number is the part that
-  //    is redundant once the device is physically in hand.
-  //  • RETAIL: "R" + the ticket's digits ("RPR-000123" → "R000123") — see
-  //    shortRepairCode. Display-only shortening, exactly like the inventory
-  //    label's shortLabelSku.
-  const repairId = isWholesale
-    ? (context?.batchNumber || 'Batch')
-    : shortRepairCode(r.repairNumber);
+  //  • WHOLESALE: no code line at all any more. The owner doesn't care which
+  //    batch a device came from ("remove wb-0000 whatever"), so the batch
+  //    number that used to print here is gone entirely — the label's
+  //    `code` field is left undefined (see LabelContent.code in
+  //    services/labelLayout.ts, which skips the whole line when unset).
+  //  • RETAIL: unchanged — "R" + the ticket's digits ("RPR-000123" →
+  //    "R000123"), see shortRepairCode. Display-only shortening, exactly
+  //    like the inventory label's shortLabelSku.
+  const repairId = isWholesale ? undefined : shortRepairCode(r.repairNumber);
   // Unchanged: the barcode and QR keep encoding the FULL repair number, so a
   // scan still resolves the real ticket even though the printed line is short.
   const barcodeValue = r.repairNumber || r.id;
@@ -88,7 +93,19 @@ export const RepairLabelModal: React.FC<Props> = ({ repair: r, context, onClose,
   // A repair tag is attached to the device the technician is already holding,
   // so the brand/model line was redundant — removed from all three output
   // paths (browser print, PDF, Zebra ZPL) so they stay visually consistent.
-  const repairType = r.type ? `${r.type[0].toUpperCase()}${r.type.slice(1)} repair` : '';
+  //
+  // WHOLESALE sub-line: only the shop's OWN stock (a "private"/personal
+  // batch, e.g. an "FTT Personal" batch — see RepairBatch.private /
+  // domain/autoInventory.ts's isPrivateBatch) gets any text here at all, and
+  // it's just "Store Device" — no batch identifier, no "wholesale" wording,
+  // nothing else. Every other (real, third-party) wholesale batch label
+  // carries NO sub-line either ("others don't have anything on the label").
+  // Deliberately rendered via `sub` (the smaller line), not `code` (the big
+  // one) — the owner explicitly asked for it not to print big.
+  // RETAIL: unchanged "Retail repair"/"Internal repair" wording.
+  const repairType = isWholesale
+    ? (context?.isPrivate ? 'Store Device' : undefined)
+    : (r.type ? `${r.type[0].toUpperCase()}${r.type.slice(1)} repair` : '');
   const statusLabel = r.status ? REPAIR_STATUS_LABEL[r.status] : '';
   const media = SIZES.find(s => s.id === size) || SIZES[0];
 
@@ -130,8 +147,13 @@ export const RepairLabelModal: React.FC<Props> = ({ repair: r, context, onClose,
   const content: LabelContent = {
     org: storeName,
     code: repairId,
-    sub: repairType || undefined,
-    serial: r.imei || undefined,
+    sub: repairType,
+    // WHOLESALE: no full IMEI/serial line at all any more (removed at the
+    // owner's request — it isn't recovered elsewhere on this label either,
+    // since the "Wholesale - 1234" idea this once used was itself replaced
+    // by the "Store Device"/nothing sub-line above). RETAIL keeps printing
+    // the full IMEI as before; this only changes wholesale.
+    serial: isWholesale ? undefined : (r.imei || undefined),
     status: statusLabel || undefined,
     issue: isWholesale ? (r.issue || undefined) : undefined,
   };
@@ -164,8 +186,12 @@ export const RepairLabelModal: React.FC<Props> = ({ repair: r, context, onClose,
     const issueLine = settings.showStatus ? (statusLabel || r.issue) : r.issue;
     // `device` is omitted here for the same reason it's omitted from `content`
     // above — so the Zebra output matches the browser-print and PDF output.
+    // `idLine` is omitted for wholesale (no batch number on the label any
+    // more); `imei` likewise (full IMEI no longer prints anywhere on this
+    // label); `sub` carries the same "Store Device"/nothing text the other
+    // two output paths show, so the ZPL label isn't missing it.
     const zpl = buildZpl(
-      { org: storeName, idLine: repairId, imei: r.imei, issue: issueLine, qrData: barcodeValue },
+      { org: storeName, idLine: repairId, sub: isWholesale ? repairType : undefined, imei: isWholesale ? undefined : r.imei, issue: issueLine, qrData: barcodeValue },
       media, settings.dpi, settings.density === '' ? undefined : settings.density,
       media.dymo ? undefined : { padMm: spacing.paddingMm, lineGapMm: spacing.lineGapMm, pushDownMm: spacing.pushDownMm },
     );
@@ -208,20 +234,32 @@ export const RepairLabelModal: React.FC<Props> = ({ repair: r, context, onClose,
     // matches the flex row's real width in the HTML preview/print path.
     const colW = media.dymo ? undefined : Math.max(10, w - pad * 2 - (qr ? qrS + 2 : 0));
     pdf.setFont('helvetica', 'bold'); pdf.setFontSize(pt(7)); pdf.text(storeName, pad, pad + 2.6 + pushDown);
-    pdf.setFont('courier', 'bold'); pdf.setFontSize(pt(media.dymo ? 20 : 14));
-    const idLineH = media.dymo ? 7 : 5;
-    const idLines = colW ? (pdf.splitTextToSize(repairId.slice(0, 22), colW) as string[]).slice(0, 2) : [repairId.slice(0, 22)];
-    idLines.forEach((ln, i) => pdf.text(ln, pad, pad + 9 + pushDown + i * idLineH));
-    const idExtra = (idLines.length - 1) * idLineH;
-    // The device/model line used to be drawn here, at `pad + 14.5 + pushDown`,
-    // with the next line starting 4.5mm below it at `pad + 19`. It's gone from
-    // this label (see the note by `barcodeValue` above), so everything below it
-    // moves UP into its slot — starting the cursor at 14.5 rather than 19 —
-    // instead of leaving a 4.5mm hole where the model used to be.
+    // The id/code line — WHOLESALE no longer has one (see `repairId` above),
+    // same "conditional line, reclaim its slot" pattern the device line
+    // below already uses: when it's skipped, the next line starts right
+    // after `org` (pad + 9) instead of leaving the ~5.5mm the code line
+    // would have taken as a blank gap.
+    let y: number;
+    if (repairId) {
+      pdf.setFont('courier', 'bold'); pdf.setFontSize(pt(media.dymo ? 20 : 14));
+      const idLineH = media.dymo ? 7 : 5;
+      const idLines = colW ? (pdf.splitTextToSize(repairId.slice(0, 22), colW) as string[]).slice(0, 2) : [repairId.slice(0, 22)];
+      idLines.forEach((ln, i) => pdf.text(ln, pad, pad + 9 + pushDown + i * idLineH));
+      const idExtra = (idLines.length - 1) * idLineH;
+      // The device/model line used to be drawn here, at `pad + 14.5 + pushDown`,
+      // with the next line starting 4.5mm below it at `pad + 19`. It's gone from
+      // this label (see the note by `barcodeValue` above), so everything below it
+      // moves UP into its slot — starting the cursor at 14.5 rather than 19 —
+      // instead of leaving a 4.5mm hole where the model used to be.
+      y = pad + 14.5 + pushDown + idExtra;
+    } else {
+      y = pad + 9 + pushDown;
+    }
     pdf.setFont('helvetica', 'normal'); pdf.setFontSize(pt(8));
-    let y = pad + 14.5 + pushDown + idExtra;
     if (repairType) { pdf.text(repairType, pad, y); y += 4.5 + lineGapExtra; }
-    if (r.imei) {
+    if (!isWholesale && r.imei) {
+      // WHOLESALE never reaches this block any more — the full IMEI is not
+      // printed anywhere on that label. RETAIL is unchanged.
       // Safety net (Fix 3): a 15-digit IMEI that doesn't fit the column wraps
       // to a 2nd line instead of running under the QR/off the edge — never
       // truncated. Capped at 2 lines, same rule the HTML path follows.
