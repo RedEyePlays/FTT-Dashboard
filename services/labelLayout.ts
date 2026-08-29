@@ -22,17 +22,102 @@ export interface LabelMedia {
 export interface LabelContent {
   org: string;      // FlipThatTech
   code: string;     // SKU (inventory) or Repair ID (repairs) — very large
-  device: string;   // device / accessory name
+  // Device / accessory name. OPTIONAL: the repair labels (both retail and
+  // wholesale) deliberately omit it — a repair tag sits on the device the
+  // technician is already holding, so the brand/model line is redundant there.
+  // Inventory and accessory labels always pass a real value, so their rendered
+  // output is byte-for-byte unchanged by this being optional.
+  device?: string;
   sub?: string;     // storage · color · battery health, or repair type
   serial?: string;  // IMEI / serial — large, bold, high-contrast
   status?: string;  // status badge label
+  // Reported issue — WHOLESALE REPAIR LABEL ONLY. Rendered as a full-width
+  // row beneath the text/QR row (same trick the drop-off label's money line
+  // uses: the content that must stay legible never competes with the QR for
+  // width). Inventory labels never set it, so it never renders for them.
+  issue?: string;
 }
+
+/**
+ * Which label TYPE is being rendered — the one knob that lets the repair
+ * labels re-proportion this shared body without touching the inventory
+ * label's own (already correct, separately-tuned) sizing.
+ *
+ * This is deliberately a variant tag on the SHARED renderer rather than a
+ * forked copy of it: same philosophy as the drop-off label lower in this file
+ * ("a second label TYPE on this same system, not a second label system"). Only
+ * the type scale and the QR scale below vary; the geometry, the flex-shrink:0
+ * non-shrink rule, the push-down mechanism and the print page are identical
+ * for every variant.
+ */
+export type LabelVariant = 'inventory' | 'repairRetail' | 'repairWholesale';
+
+// Multiplier on every text size, per variant. `inventory` is 1 by definition —
+// it is the baseline these constants were physically print-tested at, and must
+// never move as a side effect of a repair-label change.
+//
+//  • repairRetail 1.15 — this label lost its device/model line (5 content lines
+//    down to 4) and its code line shrank from a full "RPR-000123" to "R000123"
+//    (10 chars → 7). At the unchanged inventory scale the result read visibly
+//    undersized for the space: a sparse tag with a big empty lower half. 1.15
+//    spends the freed vertical room on legibility. It is bounded by the
+//    worst-case fit check in maxSafePushDownMm/the tests, not picked freehand:
+//    4 lines at 1.15× still occupy less height than the inventory label's 5
+//    lines at 1.0×, on the tightest (2×1") template.
+//  • repairWholesale 0.8 — the owner asked for smaller text on this one
+//    specifically, and it has to make room for a brand-new full-width issue
+//    row. 0.8 is the largest round reduction that leaves the issue line 2–3
+//    readable wrapped lines at 2×1" (proven with measured geometry in
+//    labelLayout.test.ts rather than assumed).
+const VARIANT_TEXT_SCALE: Record<LabelVariant, number> = {
+  inventory: 1,
+  repairRetail: 1.15,
+  repairWholesale: 0.8,
+};
+
+// Multiplier on the computed QR size, per variant. The repair labels' QR
+// encodes one short repair number and is scanned from a bench a few inches
+// away — not off a shelf across the room like an inventory tag — so it does
+// not need the inventory label's generous target. 0.65 is a deliberate ~⅓
+// reduction that still lands the 2×1" repair QR at ~7.8mm, i.e. close to the
+// 9mm corner QR already shipping and scanning reliably in production on the
+// DYMO shelf tag (services/shelfTag.ts) — this codebase's only real-world
+// "how small still scans" evidence — for a comparable short payload. As with
+// nonDymoQrSizeMm's own note: no physical print + phone-camera scan test was
+// possible in this environment; confirm on a real print before relying on it.
+// The freed width is reclaimed automatically by the text column (it is
+// `flex:1` beside a `flex-shrink:0` QR), so no gap is left behind.
+const VARIANT_QR_SCALE: Record<LabelVariant, number> = {
+  inventory: 1,
+  repairRetail: 0.65,
+  repairWholesale: 0.65,
+};
+
+// How many lines the wholesale label's issue row is allowed to wrap to. The
+// non-truncation rule this file follows everywhere (wrap, never ellipsis)
+// means the issue is never cut mid-word by CSS; this cap is what stops a
+// pathologically long issue from pushing the whole row past the label edge,
+// and it is the same "measured multi-line cap" the code/serial lines already
+// use (`max-height: font-size × lines × line-height`). 3 lines at the
+// wholesale scale is ~2× a typical "Cracked screen, no touch" issue.
+export const ISSUE_MAX_LINES = 3;
+
+// The two variant factors above, exposed for the OTHER renderers of these same
+// labels — the jsPDF export in components/RepairLabelModal.tsx lays each line
+// out by hand and has to scale by exactly the same numbers, or the PDF and the
+// browser print would drift apart. Same reasoning as nonDymoFontSizesMm being
+// the single source shared by labelBody and maxSafePushDownMm.
+export const labelTextScale = (variant: LabelVariant = 'inventory'): number => VARIANT_TEXT_SCALE[variant] ?? 1;
+export const labelQrScale = (variant: LabelVariant = 'inventory'): number => VARIANT_QR_SCALE[variant] ?? 1;
 
 export interface LabelImages { qr?: string; barcode?: string; }
 export interface LabelOpts {
   showBarcode: boolean;
   showStatus: boolean;
   barcodeOnly?: boolean;
+  // Which label TYPE this render is — see LabelVariant. Undefined means
+  // 'inventory', so every existing caller keeps byte-identical output.
+  variant?: LabelVariant;
   // Owner-configurable overrides (Settings → Labels & Printing) for the
   // non-Dymo (inch/ZP 450) templates only — undefined uses the built-in
   // default. Dymo keeps its own separately-tuned constants.
@@ -121,8 +206,8 @@ const BASE_PAD_MM = 0.85;
  */
 export function maxSafePushDownMm(
   m: LabelMedia,
-  c: Pick<LabelContent, 'sub' | 'serial'>,
-  opts: { padMm?: number; lineGapMm?: number; showBarcode: boolean; hasBarcodeImage: boolean },
+  c: Pick<LabelContent, 'device' | 'sub' | 'serial' | 'issue'>,
+  opts: { padMm?: number; lineGapMm?: number; showBarcode: boolean; hasBarcodeImage: boolean; variant?: LabelVariant },
   ceilingMm: number = MAX_PUSH_DOWN_MM,
 ): number {
   if (m.dymo) return 0; // Dymo keeps its own separately-tuned layout; push-down never applies there.
@@ -131,12 +216,23 @@ export function maxSafePushDownMm(
   const lineGap = clamp(opts.lineGapMm ?? 1.1, 0, 1.5);
   const showBarcode = opts.showBarcode && opts.hasBarcodeImage;
   const bcH = showBarcode ? h * 0.14 : 0;
-  const available = (h - pad * 2) - (showBarcode ? bcH + 1 : 0);
+  const variant = opts.variant ?? 'inventory';
+  // The wholesale issue row lives OUTSIDE the pushed-down text column (it's a
+  // full-width row beneath it, like the drop-off label's money line), so it
+  // eats into the space that column has available — exactly the way the
+  // barcode row already does.
+  const { fIssue } = nonDymoFontSizesMm(m, variant);
+  const issueH = c.issue ? fIssue * ISSUE_MAX_LINES * 1.15 + 1 : 0;
+  const available = (h - pad * 2) - (showBarcode ? bcH + 1 : 0) - issueH;
 
-  const { fOrg, fCode, fDevice, fSub, fSerial } = nonDymoFontSizesMm(m);
+  const { fOrg, fCode, fDevice, fSub, fSerial } = nonDymoFontSizesMm(m, variant);
   // Rendered line-box heights = font-size × line-height (matches the
-  // line-height values labelBody actually sets on each line below).
-  const lineHeights = [fOrg * 1, fCode * 1, fDevice * 1.05];
+  // line-height values labelBody actually sets on each line below). The device
+  // line is conditional now that the repair labels omit it, the same way `sub`
+  // and `serial` already were — inventory labels always pass one, so their
+  // result is unchanged.
+  const lineHeights = [fOrg * 1, fCode * 1];
+  if (c.device) lineHeights.push(fDevice * 1.05);
   if (c.sub) lineHeights.push(fSub * 1);
   if (c.serial) lineHeights.push(fSerial * 1.05);
   const gaps = lineGap * (lineHeights.length - 1);
@@ -153,14 +249,20 @@ const esc = (s?: string) => (s || '').replace(/[<>&]/g, c => ({ '<': '&lt;', '>'
 
 // Font sizes (mm) for the generic inch/ZP 450 templates — the single source
 // both labelBody and maxSafePushDownMm read, so the two can never drift.
-export function nonDymoFontSizesMm(m: LabelMedia): { fOrg: number; fCode: number; fDevice: number; fSub: number; fSerial: number } {
+export function nonDymoFontSizesMm(m: LabelMedia, variant: LabelVariant = 'inventory'): { fOrg: number; fCode: number; fDevice: number; fSub: number; fSerial: number; fIssue: number } {
   const large = m.w >= 4;
+  const s = VARIANT_TEXT_SCALE[variant] ?? 1;
+  const r = (n: number) => +(n * s).toFixed(2);
   return {
-    fOrg: large ? 3.2 : 2.6,
-    fCode: large ? 7.5 : 5.2,
-    fDevice: large ? 4.6 : 3.6,
-    fSub: large ? 3.4 : 2.8,
-    fSerial: large ? 4.4 : 3.6,
+    fOrg: r(large ? 3.2 : 2.6),
+    fCode: r(large ? 7.5 : 5.2),
+    fDevice: r(large ? 4.6 : 3.6),
+    fSub: r(large ? 3.4 : 2.8),
+    fSerial: r(large ? 4.4 : 3.6),
+    // The wholesale issue row. Sized off the `sub` line rather than given its
+    // own independent constant so it moves with the variant scale like every
+    // other line, and reads as body text, not a heading.
+    fIssue: r(large ? 3.4 : 2.8),
   };
 }
 
@@ -176,9 +278,10 @@ export function nonDymoFontSizesMm(m: LabelMedia): { fOrg: number; fCode: number
 // physical ZP 450 print + phone-camera scan test was performed for this
 // change (not available in this environment); confirm on a real print
 // before relying on it, per the task's own instruction.
-export function nonDymoQrSizeMm(m: LabelMedia): number {
+export function nonDymoQrSizeMm(m: LabelMedia, variant: LabelVariant = 'inventory'): number {
   const { w, h } = mmOf(m);
-  return +(Math.min(w, h) * (m.h >= 3 ? 0.34 : 0.47)).toFixed(2);
+  const base = Math.min(w, h) * (m.h >= 3 ? 0.34 : 0.47);
+  return +(base * (VARIANT_QR_SCALE[variant] ?? 1)).toFixed(2);
 }
 
 // Approximate monospace glyph width as a fraction of font-size — the same
@@ -196,12 +299,26 @@ export const estimateTextWidthMm = (text: string, fontSizeMm: number): number =>
 // minus padding on both sides, minus the QR (+ its row gap) when one is
 // shown — mirrors the subtraction labelBody's flex row performs, computed
 // standalone so tests (and PDF export) can work from the same real geometry.
-export function textColumnWidthMm(m: LabelMedia, opts: { padMm?: number; showQr: boolean }): number {
+export function textColumnWidthMm(m: LabelMedia, opts: { padMm?: number; showQr: boolean; variant?: LabelVariant }): number {
   const { w } = mmOf(m);
   const pad = opts.padMm ?? 2.0;
   const qrGap = 2; // matches labelBody's `gap:${u(2)}` on the text/QR row
-  const qrW = opts.showQr ? nonDymoQrSizeMm(m) + qrGap : 0;
+  const qrW = opts.showQr ? nonDymoQrSizeMm(m, opts.variant ?? 'inventory') + qrGap : 0;
   return +(w - pad * 2 - qrW).toFixed(2);
+}
+
+/**
+ * The width (mm) available to the wholesale label's full-width issue row: the
+ * whole label minus padding, since that row sits BENEATH the text/QR row and
+ * so never competes with the QR for width (same deliberate arrangement as the
+ * drop-off label's money line). Exported so the fit tests can prove, with real
+ * measured geometry, that a realistic issue wraps within ISSUE_MAX_LINES
+ * instead of only asserting the string is present.
+ */
+export function issueRowWidthMm(m: LabelMedia, opts: { padMm?: number } = {}): number {
+  const { w } = mmOf(m);
+  const pad = opts.padMm ?? 2.0;
+  return +(w - pad * 2).toFixed(2);
 }
 
 // Strip the shop's own SKU prefix + separator for on-label DISPLAY ONLY.
@@ -217,6 +334,30 @@ export function textColumnWidthMm(m: LabelMedia, opts: { padMm?: number; showQr:
 export function shortLabelSku(sku: string): string {
   const prefix = `${INVENTORY_SKU_PREFIX}-`;
   return sku.startsWith(prefix) ? sku.slice(prefix.length) : sku;
+}
+
+/**
+ * The RETAIL REPAIR label's code line, DISPLAY ONLY: a single "R" plus the
+ * ticket's numeric suffix — "RPR-000123" prints as "R000123".
+ *
+ * Same rationale (and same display-only contract) as shortLabelSku above: the
+ * alphabetic prefix is identical on every ticket this shop issues, so on a tag
+ * that already prints the store name it is pure wasted width on the largest,
+ * most clip-prone line of the label. The stored `repair.repairNumber`, the
+ * CODE128 barcode payload and the QR payload all keep the FULL value, so a
+ * scan still resolves the real ticket.
+ *
+ * The digits are taken with a trailing-digit-run regex rather than by slicing
+ * a hardcoded "RPR-" literal, because the repair-number prefix format is
+ * services/sku.ts's concern and may change.
+ *
+ * FALLBACK: a value with NO trailing digits at all (foreign/legacy data) is
+ * returned completely unchanged — no "R" is prepended — since "R" + an
+ * arbitrary string would be a fabricated identifier, not a shortening.
+ */
+export function shortRepairCode(repairNumber: string): string {
+  const digits = (repairNumber || '').match(/(\d+)\s*$/);
+  return digits ? `R${digits[1]}` : repairNumber;
 }
 
 // The device label's "sub" line (LabelContent.sub): storage · color · battery
@@ -264,6 +405,11 @@ function labelBody(u: U, m: LabelMedia, c: LabelContent, img: LabelImages, o: La
   }
   const showStatus = o.showStatus && !!c.status;
   const showBarcode = o.showBarcode && !!img.barcode;
+  const variant = o.variant ?? 'inventory';
+  // Never ellipsis — wrap the value instead. The same rule (and the same CSS)
+  // the code/serial lines below already use, applied to the wholesale issue
+  // row: a half-printed fault description is worse than a wrapped one.
+  const noClip = 'overflow-wrap:anywhere;word-break:break-all;';
 
   const pill = showStatus
     ? `<span style="align-self:flex-start;border:${u(0.3)} solid #000;border-radius:${u(1.4)};padding:${u(0.4)} ${u(1.2)};font-size:${u(dymo ? 2.6 : 2.2)};font-weight:800;text-transform:uppercase;letter-spacing:.4px;line-height:1;white-space:nowrap;">${esc(c.status)}</span>`
@@ -272,12 +418,22 @@ function labelBody(u: U, m: LabelMedia, c: LabelContent, img: LabelImages, o: La
   if (dymo) {
     // Landscape 89 × 36 mm: text column on the left, large square QR on the
     // right, full-width barcode across the bottom.
-    const fOrg = 2.7, fCode = 7.2, fDevice = 4.4, fSub = 3.0, fSerial = 4.2;
+    // Scaled per label type (see VARIANT_TEXT_SCALE); ×1 for inventory, so the
+    // inventory label's separately-tuned DYMO sizes are literally unchanged.
+    const ts = VARIANT_TEXT_SCALE[variant] ?? 1;
+    const t = (n: number) => +(n * ts).toFixed(2);
+    const fOrg = t(2.7), fCode = t(7.2), fDevice = t(4.4), fSub = t(3.0), fSerial = t(4.2);
+    const fIssue = t(3.0);
     const gap = 1.0;
     const bcH = showBarcode ? 5.5 : 0;
     const { h } = mmOf(m);
-    // QR fills the height of the top region (label height − padding − barcode).
-    const qrS = +(h - pad * 2 - (bcH ? bcH + gap : 0)).toFixed(2);
+    // Full-width issue row (wholesale only) sits between the text/QR row and
+    // the barcode, so it takes its height off the top region — which is what
+    // the QR is sized from.
+    const issueH = c.issue ? +(fIssue * ISSUE_MAX_LINES * 1.15).toFixed(2) : 0;
+    // QR fills the height of the top region (label height − padding − barcode
+    // − issue row), then scales by the variant's QR factor.
+    const qrS = +((h - pad * 2 - (bcH ? bcH + gap : 0) - (issueH ? issueH + gap : 0)) * (VARIANT_QR_SCALE[variant] ?? 1)).toFixed(2);
     return `
       <div style="box-sizing:border-box;width:100%;height:100%;padding:${u(pad)};background:#fff;color:#000;
         font-family:'Inter',system-ui,Arial,sans-serif;display:flex;flex-direction:column;gap:${u(gap)};overflow:hidden;">
@@ -285,13 +441,14 @@ function labelBody(u: U, m: LabelMedia, c: LabelContent, img: LabelImages, o: La
           <div style="flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:${u(1.1)};">
             <div style="font-weight:800;font-size:${u(fOrg)};letter-spacing:.5px;line-height:1;">${esc(c.org)}</div>
             <div style="font-family:'Courier New',monospace;font-weight:800;font-size:${u(fCode)};line-height:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(c.code)}</div>
-            <div style="font-weight:700;font-size:${u(fDevice)};line-height:1.05;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(c.device)}</div>
+            ${c.device ? `<div style="font-weight:700;font-size:${u(fDevice)};line-height:1.05;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(c.device)}</div>` : ''}
             ${c.sub ? `<div style="font-size:${u(fSub)};font-weight:600;color:#000;line-height:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(c.sub)}</div>` : ''}
             ${c.serial ? `<div style="font-family:'Courier New',monospace;font-weight:800;font-size:${u(fSerial)};color:#000;line-height:1.05;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(c.serial)}</div>` : ''}
             ${pill}
           </div>
           ${img.qr ? `<img src="${img.qr}" style="width:${u(qrS)};height:${u(qrS)};flex-shrink:0;align-self:center;image-rendering:pixelated;" />` : ''}
         </div>
+        ${c.issue ? `<div style="flex-shrink:0;font-weight:600;font-size:${u(fIssue)};line-height:1.15;max-height:${u(fIssue * ISSUE_MAX_LINES * 1.15)};${noClip}overflow:hidden;">${esc(c.issue)}</div>` : ''}
         ${showBarcode ? `<img src="${img.barcode}" style="width:100%;height:${u(bcH)};object-fit:fill;" />` : ''}
       </div>`;
   }
@@ -299,9 +456,15 @@ function labelBody(u: U, m: LabelMedia, c: LabelContent, img: LabelImages, o: La
   // Generic layout for the inch (thermal roll) templates: branding row, text +
   // QR, optional barcode. Bigger, bolder, high-contrast — same content rules.
   const { w, h } = mmOf(m);
-  const { fOrg, fCode, fDevice, fSub, fSerial } = nonDymoFontSizesMm(m);
-  const qrS = nonDymoQrSizeMm(m);
+  const { fOrg, fCode, fDevice, fSub, fSerial, fIssue } = nonDymoFontSizesMm(m, variant);
+  const qrS = nonDymoQrSizeMm(m, variant);
   const bcH = showBarcode ? h * 0.14 : 0;
+  // Full-width issue row (wholesale repair label only) — see the drop-off
+  // label's money row for the same deliberate arrangement: content that must
+  // stay legible goes on its OWN full-width row so it never competes with the
+  // QR for width. Its height is reserved here and subtracted in
+  // maxSafePushDownMm identically, so the two can't drift.
+  const issueH = c.issue ? +(fIssue * ISSUE_MAX_LINES * 1.15).toFixed(2) : 0;
   // Vertical gap between content lines (org/code/device/sub/serial). 1.1mm
   // is the physically-confirmed known-good default at pad=2.0 — a larger
   // default (1.6mm) was tried for the smaller inch templates but physical
@@ -356,7 +519,7 @@ function labelBody(u: U, m: LabelMedia, c: LabelContent, img: LabelImages, o: La
   const basePad = BASE_PAD_MM;
   const pushDown = clamp(
     o.pushDownMm ?? 0, 0,
-    maxSafePushDownMm(m, c, { padMm: o.padMm, lineGapMm: o.lineGapMm, showBarcode: o.showBarcode, hasBarcodeImage: !!img.barcode }),
+    maxSafePushDownMm(m, c, { padMm: o.padMm, lineGapMm: o.lineGapMm, showBarcode: o.showBarcode, hasBarcodeImage: !!img.barcode, variant }),
   );
   const contentPadTop = basePad + pushDown;
   // `flex-shrink:0` on every line below is load-bearing, not decoration: the
@@ -382,12 +545,13 @@ function labelBody(u: U, m: LabelMedia, c: LabelContent, img: LabelImages, o: La
             ${pill}
           </div>
           <div style="flex-shrink:0;font-family:'Courier New',monospace;font-weight:800;font-size:${u(fCode)};line-height:1.05;max-height:${u(fCode * 2.1)};overflow-wrap:anywhere;word-break:break-all;overflow:hidden;">${esc(c.code)}</div>
-          <div style="flex-shrink:0;font-weight:700;font-size:${u(fDevice)};line-height:1.05;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(c.device)}</div>
+          ${c.device ? `<div style="flex-shrink:0;font-weight:700;font-size:${u(fDevice)};line-height:1.05;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(c.device)}</div>` : ''}
           ${c.sub ? `<div style="flex-shrink:0;font-size:${u(fSub)};font-weight:600;color:#000;line-height:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(c.sub)}</div>` : ''}
           ${c.serial ? `<div style="flex-shrink:0;font-family:'Courier New',monospace;font-weight:800;font-size:${u(fSerial)};color:#000;line-height:1.05;max-height:${u(fSerial * 2.1)};overflow-wrap:anywhere;word-break:break-all;overflow:hidden;">${esc(c.serial)}</div>` : ''}
         </div>
         ${img.qr ? `<img src="${img.qr}" style="width:${u(qrS)};height:${u(qrS)};flex-shrink:0;align-self:center;image-rendering:pixelated;" />` : ''}
       </div>
+      ${c.issue ? `<div style="flex-shrink:0;font-weight:600;font-size:${u(fIssue)};line-height:1.15;max-height:${u(issueH)};${noClip}overflow:hidden;">${esc(c.issue)}</div>` : ''}
       ${showBarcode ? `<img src="${img.barcode}" style="width:100%;height:${u(bcH)};object-fit:fill;" />` : ''}
     </div>`;
 }
@@ -416,6 +580,11 @@ export interface DropOffLabelContent {
   serial?: string;      // IMEI / serial (also the QR payload)
   fundingLabel: string; // domain/dropoffs.ts's PAID_BY_LABEL wording
   moneyLine: string;    // domain/dropoffs.ts's dropOffLabelMoney().moneyLine
+  // Neither of these is PRINTED on the label any more (the bottom
+  // "Dropped {date} · Ref {id}" meta row was removed at the owner's request —
+  // the label ends at the money line). They stay on the content shape because
+  // they're still real, populated drop-off facts other code reads: `ref` names
+  // the print job in services/dropOffLabel.ts's dropOffLabelsPrintDoc title.
   dateDropped: string;  // YYYY-MM-DD
   ref: string;          // drop-off / device reference id
 }
@@ -428,8 +597,11 @@ export interface DropOffLabelOpts {
 }
 
 // Content padding default for this template. Slightly tighter than the
-// inventory label's 2.0mm because this label carries two full-width lines
-// (money + meta) under the text/QR row and needs the vertical room.
+// inventory label's 2.0mm because this label carries a full-width money row
+// under the text/QR row and needs the vertical room. (It used to carry two
+// such rows — money + a date/ref meta row — before the meta row was removed;
+// the tighter padding is kept as-is, physically tested, rather than re-tuned
+// on the back of a content removal that only ever frees space.)
 const DROPOFF_PAD_MM = 1.6;
 const DROPOFF_QR_GAP_MM = 2;
 
@@ -447,12 +619,16 @@ export const MIN_DROPOFF_QR_MM = 9;
  * nonDymoFontSizesMm).
  */
 export function dropOffFontSizesMm(m: LabelMedia): {
-  fOrg: number; fBuyer: number; fDevice: number; fSerial: number; fMoney: number; fMeta: number;
+  fOrg: number; fBuyer: number; fDevice: number; fSerial: number; fMoney: number;
 } {
   const { w } = mmOf(m);
   const s = clamp(w / 89, 0.6, 1.2);
   const r = (n: number) => +(n * s).toFixed(2);
-  return { fOrg: r(2.7), fBuyer: r(5.0), fDevice: r(4.0), fSerial: r(3.7), fMoney: r(4.0), fMeta: r(2.6) };
+  // No `fMeta`: the bottom meta row ("Dropped {date} · Ref {id}") was removed
+  // from this label at the owner's request — the label now ENDS at the money
+  // line — so the size that only ever fed that row is gone with it rather
+  // than left behind as an unused export.
+  return { fOrg: r(2.7), fBuyer: r(5.0), fDevice: r(4.0), fSerial: r(3.7), fMoney: r(4.0) };
 }
 
 /**
@@ -514,8 +690,9 @@ export function dropOffTextColumnWidthMm(
  * labelBody, so it drops straight into the shared preview box and print page.
  *
  * Layout: store name / buyer / device / serial in a left column with the QR
- * beside it, then the money line and the date + reference across the FULL
- * label width beneath. Putting the money on its own full-width row (rather
+ * beside it, then the money line across the FULL label width beneath — and
+ * the label ENDS there (no date/reference meta row; removed at the owner's
+ * request). Putting the money on its own full-width row (rather
  * than in the QR-adjacent column) is deliberate: the figures are the most
  * clip-sensitive content on the label, and this way the QR never competes
  * with them for width at all.
@@ -548,7 +725,6 @@ function dropOffLabelBody(u: U, m: LabelMedia, c: DropOffLabelContent, qr: strin
         ${qr ? `<img src="${qr}" style="width:${u(qrS)};height:${u(qrS)};flex-shrink:0;align-self:flex-start;image-rendering:pixelated;" />` : ''}
       </div>
       <div style="flex-shrink:0;font-weight:800;font-size:${u(f.fMoney)};line-height:1.1;${noClip}border-top:${u(0.3)} solid #000;padding-top:${u(0.6)};">${esc(c.moneyLine)}</div>
-      <div style="flex-shrink:0;font-size:${u(f.fMeta)};font-weight:600;line-height:1.1;${noClip}">Dropped ${esc(c.dateDropped)} · Ref ${esc(c.ref)}</div>
     </div>`;
 }
 

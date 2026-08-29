@@ -7,7 +7,10 @@ import { Repair } from '../types';
 import { REPAIR_STATUS_LABEL } from '../domain/repairs';
 import { Dpi, buildZpl } from '../services/zpl';
 import { detectZebra, sendZpl, ZebraDetect } from '../services/zebra';
-import { LabelContent, labelPreview, labelPrintDoc, mmOf, maxSafePushDownMm, nonDymoQrSizeMm } from '../services/labelLayout';
+import {
+  LabelContent, LabelVariant, labelPreview, labelPrintDoc, mmOf, maxSafePushDownMm, nonDymoQrSizeMm,
+  shortRepairCode, ISSUE_MAX_LINES, labelTextScale, labelQrScale,
+} from '../services/labelLayout';
 import { getLabelSizes, getStoreProfile, getLabelSpacing } from './SettingsModal';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 
@@ -62,12 +65,29 @@ export const RepairLabelModal: React.FC<Props> = ({ repair: r, context, onClose,
   const [status, setStatus] = useState<{ kind: 'ok' | 'err'; msg: string } | null>(null);
 
   const isWholesale = r.type === 'wholesale';
-  // The human-readable Repair ID (retail ticket number, or batch + line no.).
+  const variant: LabelVariant = isWholesale ? 'repairWholesale' : 'repairRetail';
+  // The human-readable code line on the printed tag. DISPLAY ONLY — see
+  // `barcodeValue` below, which is what actually gets scanned.
+  //
+  //  • WHOLESALE: the batch number ALONE. The owner asked to "remove the
+  //    number", i.e. the "· #3" line number that used to follow it. The batch
+  //    number itself stays: dropping every identifier would leave no way to
+  //    match a device back to its batch, and the line number is the part that
+  //    is redundant once the device is physically in hand.
+  //  • RETAIL: "R" + the ticket's digits ("RPR-000123" → "R000123") — see
+  //    shortRepairCode. Display-only shortening, exactly like the inventory
+  //    label's shortLabelSku.
   const repairId = isWholesale
-    ? `${context?.batchNumber || 'Batch'}${context?.lineNumber ? ` · #${context.lineNumber}` : ''}`
-    : r.repairNumber;
+    ? (context?.batchNumber || 'Batch')
+    : shortRepairCode(r.repairNumber);
+  // Unchanged: the barcode and QR keep encoding the FULL repair number, so a
+  // scan still resolves the real ticket even though the printed line is short.
   const barcodeValue = r.repairNumber || r.id;
-  const device = [r.brand, r.model].filter(Boolean).join(' ') || r.deviceType || 'Device';
+  // NOTE: there is deliberately no `device` line on this label any more (it
+  // used to be `[r.brand, r.model].filter(Boolean).join(' ') || r.deviceType`).
+  // A repair tag is attached to the device the technician is already holding,
+  // so the brand/model line was redundant — removed from all three output
+  // paths (browser print, PDF, Zebra ZPL) so they stay visually consistent.
   const repairType = r.type ? `${r.type[0].toUpperCase()}${r.type.slice(1)} repair` : '';
   const statusLabel = r.status ? REPAIR_STATUS_LABEL[r.status] : '';
   const media = SIZES.find(s => s.id === size) || SIZES[0];
@@ -102,13 +122,18 @@ export const RepairLabelModal: React.FC<Props> = ({ repair: r, context, onClose,
   };
 
   const storeName = getStoreProfile().storeName;
+  // `device` is intentionally OMITTED (not passed as an empty string) — see
+  // LabelContent.device in services/labelLayout.ts, which is optional purely
+  // so the repair labels can leave the model line off. The wholesale label
+  // additionally carries the reported issue, which the technician can't get
+  // from looking at the device; the retail label doesn't (the ticket does).
   const content: LabelContent = {
     org: storeName,
     code: repairId,
-    device,
     sub: repairType || undefined,
     serial: r.imei || undefined,
     status: statusLabel || undefined,
+    issue: isWholesale ? (r.issue || undefined) : undefined,
   };
   const images = { qr, barcode };
   // Owner-configured content padding / line spacing / push-down offset
@@ -118,7 +143,7 @@ export const RepairLabelModal: React.FC<Props> = ({ repair: r, context, onClose,
   // reload) shows up immediately next time this modal opens. It's a cheap
   // localStorage read — not worth caching at the cost of going stale.
   const spacing = getLabelSpacing();
-  const opts = { showBarcode: settings.showBarcode, showStatus: settings.showStatus, padMm: spacing.paddingMm, lineGapMm: spacing.lineGapMm, pushDownMm: spacing.pushDownMm };
+  const opts = { showBarcode: settings.showBarcode, showStatus: settings.showStatus, padMm: spacing.paddingMm, lineGapMm: spacing.lineGapMm, pushDownMm: spacing.pushDownMm, variant };
 
   const handlePrint = () => {
     const win = window.open('', '_blank', 'width=520,height=680');
@@ -137,8 +162,10 @@ export const RepairLabelModal: React.FC<Props> = ({ repair: r, context, onClose,
     // `opts.showStatus` for those). Previously this always included statusLabel
     // whenever one existed, ignoring the toggle entirely.
     const issueLine = settings.showStatus ? (statusLabel || r.issue) : r.issue;
+    // `device` is omitted here for the same reason it's omitted from `content`
+    // above — so the Zebra output matches the browser-print and PDF output.
     const zpl = buildZpl(
-      { org: storeName, idLine: repairId, device, imei: r.imei, issue: issueLine, qrData: barcodeValue },
+      { org: storeName, idLine: repairId, imei: r.imei, issue: issueLine, qrData: barcodeValue },
       media, settings.dpi, settings.density === '' ? undefined : settings.density,
       media.dymo ? undefined : { padMm: spacing.paddingMm, lineGapMm: spacing.lineGapMm, pushDownMm: spacing.pushDownMm },
     );
@@ -164,36 +191,60 @@ export const RepairLabelModal: React.FC<Props> = ({ repair: r, context, onClose,
     // beyond what's actually safe would push content past the label's
     // bottom edge in the PDF export with no guard at all.
     const pushDown = media.dymo ? 0 : clamp(spacing.pushDownMm ?? 0, 0,
-      maxSafePushDownMm(media, content, { padMm: spacing.paddingMm, lineGapMm: spacing.lineGapMm, showBarcode: settings.showBarcode, hasBarcodeImage: !!barcode }));
+      maxSafePushDownMm(media, content, { padMm: spacing.paddingMm, lineGapMm: spacing.lineGapMm, showBarcode: settings.showBarcode, hasBarcodeImage: !!barcode, variant }));
     // Same clamp as labelBody's lineGap — the extra distance above the
     // 1.1mm known-good default is added between each line so "Line spacing"
     // spreads the PDF layout the same way it does the HTML preview/print.
     const lineGapExtra = media.dymo ? 0 : (Math.min(1.5, Math.max(0, spacing.lineGapMm ?? 1.1)) - 1.1);
-    const qrS = media.dymo ? h - pad * 2 - (settings.showBarcode ? 6.5 : 0) : nonDymoQrSizeMm(media);
+    // Type scale + QR scale come from services/labelLayout.ts (labelTextScale /
+    // labelQrScale) rather than being re-tuned here, so this hand-laid-out PDF
+    // and the HTML/print path shrink and grow by exactly the same factors —
+    // the retail tag's slightly larger type, the wholesale tag's smaller type,
+    // and the repair tags' ~35%-smaller QR all reach the PDF automatically.
+    const ts = labelTextScale(variant);
+    const pt = (n: number) => +(n * ts).toFixed(1);
+    const qrS = (media.dymo ? h - pad * 2 - (settings.showBarcode ? 6.5 : 0) : nonDymoQrSizeMm(media)) * labelQrScale(variant);
     // Text column stops before the QR so a wrapped value never runs under it —
     // matches the flex row's real width in the HTML preview/print path.
     const colW = media.dymo ? undefined : Math.max(10, w - pad * 2 - (qr ? qrS + 2 : 0));
-    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(7); pdf.text(storeName, pad, pad + 2.6 + pushDown);
-    pdf.setFont('courier', 'bold'); pdf.setFontSize(media.dymo ? 20 : 14);
+    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(pt(7)); pdf.text(storeName, pad, pad + 2.6 + pushDown);
+    pdf.setFont('courier', 'bold'); pdf.setFontSize(pt(media.dymo ? 20 : 14));
     const idLineH = media.dymo ? 7 : 5;
     const idLines = colW ? (pdf.splitTextToSize(repairId.slice(0, 22), colW) as string[]).slice(0, 2) : [repairId.slice(0, 22)];
     idLines.forEach((ln, i) => pdf.text(ln, pad, pad + 9 + pushDown + i * idLineH));
     const idExtra = (idLines.length - 1) * idLineH;
-    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(media.dymo ? 12 : 10); pdf.text(device.slice(0, 30), pad, pad + 14.5 + pushDown + idExtra);
-    pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8);
-    let y = pad + 19 + pushDown + idExtra;
+    // The device/model line used to be drawn here, at `pad + 14.5 + pushDown`,
+    // with the next line starting 4.5mm below it at `pad + 19`. It's gone from
+    // this label (see the note by `barcodeValue` above), so everything below it
+    // moves UP into its slot — starting the cursor at 14.5 rather than 19 —
+    // instead of leaving a 4.5mm hole where the model used to be.
+    pdf.setFont('helvetica', 'normal'); pdf.setFontSize(pt(8));
+    let y = pad + 14.5 + pushDown + idExtra;
     if (repairType) { pdf.text(repairType, pad, y); y += 4.5 + lineGapExtra; }
     if (r.imei) {
       // Safety net (Fix 3): a 15-digit IMEI that doesn't fit the column wraps
       // to a 2nd line instead of running under the QR/off the edge — never
       // truncated. Capped at 2 lines, same rule the HTML path follows.
-      pdf.setFont('courier', 'bold'); pdf.setFontSize(11);
+      pdf.setFont('courier', 'bold'); pdf.setFontSize(pt(11));
       const imeiLines = colW ? (pdf.splitTextToSize(r.imei, colW) as string[]).slice(0, 2) : [r.imei];
       imeiLines.forEach((ln, i) => pdf.text(ln, pad, y + i * 5));
       y += imeiLines.length * 5 + lineGapExtra;
-      pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8);
+      pdf.setFont('helvetica', 'normal'); pdf.setFontSize(pt(8));
     }
-    if (settings.showStatus && statusLabel) { pdf.setFont('helvetica', 'bold'); pdf.text(statusLabel.toUpperCase(), pad, y); pdf.setFont('helvetica', 'normal'); }
+    if (settings.showStatus && statusLabel) { pdf.setFont('helvetica', 'bold'); pdf.text(statusLabel.toUpperCase(), pad, y); pdf.setFont('helvetica', 'normal'); y += 4.5 + lineGapExtra; }
+    if (content.issue) {
+      // Wholesale only: the reported issue, WRAPPED (splitTextToSize — the
+      // same mechanism this function already uses for a long repair id and a
+      // long IMEI) rather than truncated to one clipped line, capped at the
+      // same ISSUE_MAX_LINES the HTML path caps at. It runs the FULL label
+      // width — like the HTML path's full-width issue row — except when it
+      // would still be beside the QR, in which case it stays inside the text
+      // column so it can never print underneath the QR bitmap.
+      const issueW = (colW && y < pad + qrS) ? colW : w - pad * 2;
+      pdf.setFontSize(pt(8));
+      const issueLines = (pdf.splitTextToSize(content.issue, issueW) as string[]).slice(0, ISSUE_MAX_LINES);
+      issueLines.forEach((ln, i) => pdf.text(ln, pad, y + i * 3.6));
+    }
     if (qr) pdf.addImage(qr, 'PNG', w - pad - qrS, pad, qrS, qrS);
     if (settings.showBarcode && barcode) pdf.addImage(barcode, 'PNG', pad, h - pad - 5.5, w - pad * 2, 5.5);
     pdf.save(`${r.repairNumber || 'repair-label'}.pdf`);
