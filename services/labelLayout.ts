@@ -684,13 +684,22 @@ export function dropOffTextColumnWidthMm(
  * The drop-off label body, sized to fill its parent — same contract as
  * labelBody, so it drops straight into the shared preview box and print page.
  *
- * Layout: store name / buyer / device / serial in a left column with the QR
- * beside it, then the money line across the FULL label width beneath — and
- * the label ENDS there (no date/reference meta row; removed at the owner's
+ * Layout: store name / buyer / device in a left column with the QR beside
+ * it, then the money line across the FULL label width beneath — and the
+ * label ENDS there (no date/reference meta row; removed at the owner's
  * request). Putting the money on its own full-width row (rather
  * than in the QR-adjacent column) is deliberate: the figures are the most
  * clip-sensitive content on the label, and this way the QR never competes
  * with them for width at all.
+ *
+ * Both the text column and the QR are VERTICALLY CENTERED in the top row
+ * (`justify-content:center` / `align-self:center`, previously both
+ * flex-start). Once the serial line and the date/ref meta row were removed
+ * this label had noticeably more height than content, and top-aligning both
+ * left all of that as one dead band under the text and beside the QR. The
+ * money row keeps its own separate rule about staying last. The divider
+ * line that used to sit above the money row was removed at the owner's
+ * request too — the size and weight jump already separates it.
  *
  * `flex-shrink:0` on every line is load-bearing for the same reason it is on
  * the inventory label and the shelf tag (see labelBody's long comment): a flex
@@ -716,14 +725,14 @@ function dropOffLabelBody(u: U, m: LabelMedia, c: DropOffLabelContent, qr: strin
     <div style="box-sizing:border-box;width:100%;height:100%;padding:${u(pad)};background:#fff;color:#000;
       font-family:'Inter',system-ui,Arial,sans-serif;display:flex;flex-direction:column;gap:${u(lineGap)};overflow:hidden;">
       <div style="flex:1;min-height:0;display:flex;gap:${u(DROPOFF_QR_GAP_MM)};">
-        <div style="flex:1;min-width:0;display:flex;flex-direction:column;justify-content:flex-start;gap:${u(lineGap)};overflow:hidden;">
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:${u(lineGap)};overflow:hidden;">
           <div style="flex-shrink:0;font-weight:800;font-size:${u(f.fOrg)};letter-spacing:.5px;line-height:1;text-transform:uppercase;">${esc(c.org)}</div>
           <div style="flex-shrink:0;font-weight:800;font-size:${u(f.fBuyer)};line-height:1.05;${noClip}overflow:hidden;">${esc(c.buyerName)}</div>
           <div style="flex-shrink:0;font-weight:700;font-size:${u(f.fDevice)};line-height:1.05;${noClip}overflow:hidden;">${esc(c.device)}</div>
         </div>
-        ${qr ? `<img src="${qr}" style="width:${u(qrS)};height:${u(qrS)};flex-shrink:0;align-self:flex-start;image-rendering:pixelated;" />` : ''}
+        ${qr ? `<img src="${qr}" style="width:${u(qrS)};height:${u(qrS)};flex-shrink:0;align-self:center;image-rendering:pixelated;" />` : ''}
       </div>
-      <div style="flex-shrink:0;font-weight:800;font-size:${u(f.fMoney)};line-height:1.1;${noClip}border-top:${u(0.3)} solid #000;padding-top:${u(0.6)};">${esc(c.moneyLine)}</div>
+      <div style="flex-shrink:0;font-weight:800;font-size:${u(f.fMoney)};line-height:1.1;${noClip}">${esc(c.moneyLine)}</div>
     </div>`;
 }
 

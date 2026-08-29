@@ -105,9 +105,24 @@ describe('drop-off label content — who and what (the bottom meta row is gone)'
     expect(html).toContain('$100.00+20.00');
     // Nothing renders after the money row: its <div> is the final element
     // inside the label body, immediately followed by the body's closing tag.
-    const moneyDiv = html.match(/<div style="[^"]*border-top[^"]*">[^<]*<\/div>/)![0];
-    expect(moneyDiv).toContain('$100.00+20.00');
+    const moneyDiv = html.match(/<div style="[^"]*">\$100\.00\+20\.00<\/div>/)![0];
     expect(html).toContain(`${moneyDiv}\n    </div>`);
+  });
+
+  it('draws no divider rule above the money line (removed at the owner\'s request)', () => {
+    const html = printed({ paidBy: 'store', purchasePrice: 100, dropOffFee: 20 });
+    expect(html).not.toContain('border-top');
+  });
+
+  it('vertically centers the text column and the QR instead of stranding empty space beneath them', () => {
+    const html = printed({});
+    // The top row's text column centers its lines...
+    expect(html).toContain('justify-content:center');
+    expect(html).not.toContain('justify-content:flex-start');
+    // ...and the QR beside it is centered too, rather than pinned to the top.
+    const img = html.match(/<img src="data:image\/png;base64,QR"[^>]*>/)![0];
+    expect(img).toContain('align-self:center');
+    expect(img).not.toContain('align-self:flex-start');
   });
 
   it('falls back to a clear placeholder rather than a blank name when the buyer record is missing', () => {
