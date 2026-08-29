@@ -1,5 +1,5 @@
 import { SalesTransaction, InventoryItem, PayPeriodPaid, CashReconciliation, CashDrawerEntry, Settlement, DeviceBuyer, Expense } from '../types';
-import { isLegacySettlement } from './dropoffs';
+import { isLegacySettlement, settlementFeeIncome } from './dropoffs';
 import { isReversed } from './pos';
 import { kindOf } from './inventory';
 import { ExpenseCategory, plExpenseTotal, expenseTotalsByCategory, CategoryTotal } from './expenses';
@@ -492,9 +492,12 @@ export const profitAndLoss = (input: ProfitLossInput, start: string, end: string
   // the financier collecting a fee, never the party paying one. Only the fee
   // is counted: the principal repayment on the same settlement is a
   // receivable being settled and never touches revenue or profit.
-  const deviceBuyerFeeIncome = round2(settlements
-    .filter(s => inDateRange(s.date, lo, hi))
-    .reduce((sum, s) => sum + (s.totalFees || 0), 0));
+  // settlementFeeIncome (domain/dropoffs.ts) is the SHARED derivation — the
+  // analytics path (Dashboard tiles / Close Out / Daily History) calls the
+  // same function, so the two can't drift on what counts as fee income.
+  const deviceBuyerFeeIncome = round2(settlementFeeIncome(
+    settlements.filter(s => inDateRange(s.date, lo, hi)),
+  ));
 
   const grossProfit = round2(revenue - costOfGoods);
   const netProfit = round2(grossProfit - payroll - expensesTotal + deviceBuyerFeeIncome);

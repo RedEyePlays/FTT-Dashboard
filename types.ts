@@ -858,6 +858,20 @@ export interface Repair {
   partsUsed?: string;        // parts used (free text — legacy / quick note)
   parts?: RepairPart[];      // structured parts breakdown (name/unitCost/quantity)
   partsCost?: number;        // parts cost total (denormalized from `parts` when present; legacy fallback otherwise)
+  // How much of this ticket's cost is CURRENTLY reflected in the linked
+  // inventory item's `repairCost` (see domain/repairCostWriteback.ts).
+  //
+  // This is the per-ticket receipt that makes the write-back additive and
+  // reversible. `inventoryItem.repairCost` is a single running total shared by
+  // every ticket that has ever touched the device, so without recording what
+  // THIS ticket put in there, a second repair could only overwrite the first,
+  // and a cancellation could only guess how much to take back out.
+  //
+  // `undefined` means "this ticket has contributed nothing" — the state every
+  // pre-existing ticket is in, which is what makes the change safe to deploy
+  // without a migration. Never edited by hand; only ever set to the value the
+  // write-back just applied.
+  inventoryRepairCostApplied?: number;
   testingResults?: string;   // testing results / notes
   testChecks?: string[];     // testing checklist selections
 

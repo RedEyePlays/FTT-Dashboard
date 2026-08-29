@@ -1,8 +1,10 @@
-import { SalesTransaction, Repair, InventoryItem, Customer, AuditEntry, ActivityEntry, DeviceType } from '../types';
+import { SalesTransaction, Repair, InventoryItem, Customer, AuditEntry, ActivityEntry, DeviceType, Settlement } from '../types';
 import { kindOf } from './inventory';
 import { isRepairOpen, repairPartsCost as partsCostOf } from './repairs';
 import { customerStats } from './customers';
 import { isReversed } from './pos';
+import { settlementFeeIncome } from './dropoffs';
+import { repairCostMovedToInventory } from './repairCostWriteback';
 import { toISODate } from './dates';
 
 // Owner analytics — every figure is DERIVED from existing sales, repairs,
@@ -49,6 +51,12 @@ export interface Analytics {
   // profit calc
   deviceProfit: number; accessoryProfit: number;
   repairRevenue: number; repairPartsCost: number; repairLabourRevenue: number; repairProfit: number;
+  // Device-buyer settlement SERVICE FEES settled in range — store income,
+  // included in grossProfit above. The principal repaid on the same
+  // settlement is a receivable, never revenue or profit; see
+  // settlementFeeIncome in domain/dropoffs.ts, the shared derivation this and
+  // the P&L report both use.
+  deviceBuyerFeeIncome: number;
   // payments
   payments: { cash: number; card: number; etransfer: number; storeCredit: number; other: number };
   // categories
@@ -73,6 +81,9 @@ export interface Analytics {
 export interface EndOfDay {
   label: string;
   revenue: number; grossProfit: number; sales: number; repairs: number;
+  // Settled device-buyer fees included in grossProfit — broken out so Close
+  // Out can show WHY profit moved without a matching sale.
+  deviceBuyerFeeIncome: number;
   cashReceived: number; cardReceived: number; etransferReceived: number;
   repairsCompleted: number; devicesSold: number; openRepairs: number; devicesWaitingPickup: number;
 }
@@ -84,6 +95,10 @@ export interface AnalyticsInput {
   customers: Customer[];
   auditLogs: AuditEntry[];
   activity: ActivityEntry[];
+  // Device-buyer settlements. Only their SERVICE FEES are income (see
+  // deviceBuyerFeeIncome below). Optional so existing callers/tests that pass
+  // no settlements keep their exact previous numbers.
+  settlements?: Settlement[];
 }
 
 const DEVICE_CATEGORY = (t?: DeviceType): string => {
@@ -97,7 +112,7 @@ const DEVICE_CATEGORY = (t?: DeviceType): string => {
 };
 
 export function computeAnalytics(range: DateRange, input: AnalyticsInput, now: number = Date.now()): Analytics {
-  const { salesTransactions, repairs, inventory, customers, auditLogs, activity } = input;
+  const { salesTransactions, repairs, inventory, customers, auditLogs, activity, settlements } = input;
   const invById = new Map(inventory.map(i => [i.id, i]));
   const invBySku = new Map(inventory.filter(i => i.sku).map(i => [i.sku!, i]));
   const lineCost = (l: { inventoryId?: string; sku?: string }) => {
@@ -210,7 +225,14 @@ export function computeAnalytics(range: DateRange, input: AnalyticsInput, now: n
   // counted above (via their sales transaction). Only the rest — open tickets,
   // legacy completions, wholesale/internal work — are tallied from the records so
   // the money is never counted twice.
-  const unlinkedInRange = repairsInRange.filter(r => !r.salesTransactionId);
+  // A ticket whose parts cost has been written onto its linked inventory item
+  // (domain/repairCostWriteback.ts — the FTT Personal / internal refurb flow)
+  // is EXCLUDED here too. That cost is now part of the device's cost basis and
+  // will be charged against profit when the device sells; counting it again as
+  // a repair-side cost would charge the shop for the same parts twice — once
+  // in the Repairs category and again in the device's margin. Exactly one
+  // place, and the receipt on the ticket is what says which place that is.
+  const unlinkedInRange = repairsInRange.filter(r => !r.salesTransactionId && !repairCostMovedToInventory(r));
   const recRepairRevenue = unlinkedInRange.reduce((s, r) => s + (r.repairPrice || 0), 0);
   const recRepairPartsCost = unlinkedInRange.reduce((s, r) => s + partsCostOf(r), 0);
   const repairRevenue = repairTxnRevenue + recRepairRevenue;
@@ -229,6 +251,28 @@ export function computeAnalytics(range: DateRange, input: AnalyticsInput, now: n
 
   const completedTimes = completedInRange.filter(r => r.completedAt && r.createdAt).map(r => (r.completedAt! - r.createdAt) / DAY);
   const avgCompletionDays = completedTimes.length ? completedTimes.reduce((a, b) => a + b, 0) / completedTimes.length : 0;
+
+  // --- Device-buyer settlements: FEE INCOME ONLY -----------------------------
+  // Settling a buyer used to move the P&L report and leave these figures —
+  // the ones the owner actually looks at (Dashboard tiles, Close Out, Daily
+  // History) — completely unchanged, because this module had no notion of
+  // settlements at all.
+  //
+  // Only the SERVICE FEE is income. The principal the buyer repays is the
+  // store's own purchase money coming back: a receivable being settled, not
+  // revenue. Counting it would report a $100 device with a $20 fee as $120 of
+  // profit. settlementFeeIncome (domain/dropoffs.ts) is the one shared
+  // derivation of that rule, called here and by profitAndLoss, so the two can
+  // never drift.
+  //
+  // It lands in grossProfit but NOT in revenue: a fee is margin with no cost
+  // of goods behind it, and adding it to revenue would distort gross margin
+  // and the revenue-per-sale averages. This matches the P&L, where fee income
+  // is applied at the net-profit line rather than to the revenue line.
+  const settledInRange = (settlements || []).filter(s => inRange(ymdMs(s.date), range));
+  const deviceBuyerFeeIncome = settlementFeeIncome(settledInRange);
+  grossProfit += deviceBuyerFeeIncome;
+  bumpCat('Device Buyer Fees', 0, deviceBuyerFeeIncome, settledInRange.length);
 
   // Trade-ins: reserved category (0 until a trade-in module lands).
   bumpCat('Trade-Ins', 0, 0, 0);
@@ -265,7 +309,7 @@ export function computeAnalytics(range: DateRange, input: AnalyticsInput, now: n
   const outOfStock = accessories.filter(i => (i.quantity || 0) <= 0).length;
 
   // --- Chart series (daily buckets across the range, capped) ---
-  const revenueSeries = buildDailySeries(range, txns, inventory, txnInvIds);
+  const revenueSeries = buildDailySeries(range, txns, inventory, txnInvIds, settledInRange);
   const categories = [...cat.values()].filter(c => c.count > 0 || c.revenue !== 0).sort((a, b) => b.revenue - a.revenue);
   const categorySeries = categories.map(c => ({ name: c.name, value: Math.round(c.revenue) }));
   const paymentSeries = [
@@ -288,6 +332,7 @@ export function computeAnalytics(range: DateRange, input: AnalyticsInput, now: n
   const eod: EndOfDay = {
     label: range.label,
     revenue, grossProfit, sales: salesCount, repairs: repairsInRange.length,
+    deviceBuyerFeeIncome,
     cashReceived: payments.cash, cardReceived: payments.card, etransferReceived: payments.etransfer,
     repairsCompleted: completedInRange.length, devicesSold,
     openRepairs: repairs.filter(isRepairOpen).length,
@@ -301,6 +346,7 @@ export function computeAnalytics(range: DateRange, input: AnalyticsInput, now: n
     avgRepair: repairsInRange.length ? repairRevenue / repairsInRange.length : 0,
     deviceProfit, accessoryProfit,
     repairRevenue, repairPartsCost, repairLabourRevenue, repairProfit,
+    deviceBuyerFeeIncome,
     payments, categories,
     topDevices: [...devAgg.values()].sort((a, b) => b.revenue - a.revenue).slice(0, 5),
     topAccessories: [...accAgg.values()].sort((a, b) => b.count - a.count).slice(0, 5),
@@ -319,7 +365,13 @@ export function computeAnalytics(range: DateRange, input: AnalyticsInput, now: n
 }
 
 // Daily revenue/profit series across the range (max ~60 points).
-function buildDailySeries(range: DateRange, txns: SalesTransaction[], inventory: InventoryItem[], txnInvIds: Set<string>) {
+function buildDailySeries(
+  range: DateRange,
+  txns: SalesTransaction[],
+  inventory: InventoryItem[],
+  txnInvIds: Set<string>,
+  settledInRange: Settlement[] = [],
+) {
   const days = Math.min(60, Math.max(1, Math.round((range.end - range.start) / DAY)));
   const buckets = new Map<string, { revenue: number; profit: number }>();
   const keyOf = (ms: number) => toISODate(ms);
@@ -333,6 +385,11 @@ function buildDailySeries(range: DateRange, txns: SalesTransaction[], inventory:
       add(i.soldDate, i.salePrice || 0, (i.salePrice || 0) - (i.purchaseCost || 0) - (i.repairCost || 0) - (i.platformFees || 0));
     }
   });
+  // Settlement fee income, on the day it settled — profit only, never revenue
+  // (see the fee-income block in computeAnalytics). Without this the Daily
+  // History chart would disagree with the headline profit tile above it on any
+  // day a buyer was settled.
+  settledInRange.forEach(s => add(s.date, 0, settlementFeeIncome([s])));
   return [...buckets.entries()].map(([date, v]) => ({ date: date.slice(5), revenue: Math.round(v.revenue), profit: Math.round(v.profit) }));
 }
 
@@ -342,6 +399,7 @@ export function eodRows(eod: EndOfDay): [string, string][] {
   return [
     ['Period', eod.label],
     ['Revenue', m(eod.revenue)],
+    ['Device Buyer Fees', m(eod.deviceBuyerFeeIncome)],
     ['Gross Profit', m(eod.grossProfit)],
     ['Sales', String(eod.sales)],
     ['Repairs', String(eod.repairs)],

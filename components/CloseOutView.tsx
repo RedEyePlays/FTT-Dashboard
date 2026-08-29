@@ -4,7 +4,7 @@ import {
 } from 'lucide-react';
 import {
   SalesTransaction, Repair, InventoryItem, Customer, AuditEntry, ActivityEntry,
-  TimeEntry, AppUser, CashReconciliation, ViewState,
+  TimeEntry, AppUser, CashReconciliation, ViewState, Settlement,
 } from '../types';
 import { computeAnalytics, presetRange } from '../domain/analytics';
 import { CashDrawerSummary } from '../domain/reports';
@@ -24,6 +24,9 @@ interface Props {
   // shows (low stock, overdue/awaiting-pickup repairs, aging inventory), and the
   // same live drawer figures the POS panel and cash reconciliation screen use.
   alerts: Alert[];
+  // Device-buyer settlements — their SERVICE FEES are store income on the day
+  // they settle, and belong in today's profit like any other margin.
+  settlements: Settlement[];
   todayDrawer: CashDrawerSummary;
   todayRecon?: CashReconciliation;
   onNavigate: (v: ViewState) => void;
@@ -38,7 +41,7 @@ const Card: React.FC<{ children: React.ReactNode; className?: string }> = ({ chi
 
 export const CloseOutView: React.FC<Props> = ({
   salesTransactions, repairs, inventory, customers, auditLogs, activity, timeEntries, users,
-  alerts, todayDrawer, todayRecon, onNavigate,
+  alerts, settlements, todayDrawer, todayRecon, onNavigate,
 }) => {
   const now = Date.now();
 
@@ -46,8 +49,8 @@ export const CloseOutView: React.FC<Props> = ({
   // figures Owner Analytics computes, not a second calculation of them.
   const range = useMemo(() => presetRange('today', now), [now]);
   const a = useMemo(
-    () => computeAnalytics(range, { salesTransactions, repairs, inventory, customers, auditLogs, activity }, now),
-    [range, salesTransactions, repairs, inventory, customers, auditLogs, activity, now],
+    () => computeAnalytics(range, { salesTransactions, repairs, inventory, customers, auditLogs, activity, settlements }, now),
+    [range, salesTransactions, repairs, inventory, customers, auditLogs, activity, settlements, now],
   );
   const eod = a.eod;
 
@@ -88,6 +91,16 @@ export const CloseOutView: React.FC<Props> = ({
           <Stat label="Gross Profit" value={money(eod.grossProfit)} tone={eod.grossProfit >= 0 ? 'good' : 'bad'} />
           <Stat label="Repairs Completed" value={String(eod.repairsCompleted)} />
         </div>
+        {/* Broken out only when there IS fee income, so the owner can see why
+            profit moved on a day with no matching sale. It's already inside
+            Gross Profit above — this is a breakdown, not an addition. Revenue
+            deliberately excludes it: a fee is margin with no cost of goods. */}
+        {eod.deviceBuyerFeeIncome > 0 && (
+          <p className="mt-3 text-xs text-slate-500 dark:text-slate-400">
+            Includes <span className="font-semibold text-slate-700 dark:text-slate-200">{money(eod.deviceBuyerFeeIncome)}</span> in
+            settled device-buyer fees (profit only — principal repaid is not revenue).
+          </p>
+        )}
       </Card>
 
       {/* --- Cash reconciliation -------------------------------------------- */}

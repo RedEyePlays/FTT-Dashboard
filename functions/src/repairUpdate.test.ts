@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildTechRepairUpdate, computeWarrantyUntil } from "./repairUpdate";
+import { buildTechRepairUpdate, computeWarrantyUntil, techRepairCostApplied } from "./repairUpdate";
 
 // This is the server-side equivalent of a Firestore rules test — it can't be
 // exercised via the Rules Playground/emulator in this repo's CI (see
@@ -87,4 +87,65 @@ test("computeWarrantyUntil mirrors domain/repairs.ts: empty without a positive w
   assert.equal(computeWarrantyUntil("2026-01-01", 0), "");
   assert.equal(computeWarrantyUntil("2026-01-01", undefined), "");
   assert.equal(computeWarrantyUntil("2026-01-01", 10), "2026-01-11");
+});
+
+// --- Repair cost write-back receipt -----------------------------------------
+// A technician can move a ticket to picked_up/cancelled — both terminal — so
+// this path has to derive the write-back receipt too, or a tech-completed
+// refurb keeps reporting repairCost: 0 and overstates profit at sale.
+// Derived from `stored` only: a technician cannot edit parts, so they can
+// influence WHETHER a cost applies, never HOW MUCH.
+
+const linked = {
+  status: "in_repair",
+  inventoryId: "inv-1",
+  parts: [{ name: "Screen", unitCost: 60, quantity: 1 }],
+};
+
+test("techRepairCostApplied: a terminal status on a linked ticket applies the parts cost", () => {
+  assert.equal(techRepairCostApplied(linked, "picked_up"), 60);
+  assert.equal(techRepairCostApplied(linked, "completed"), 60);
+});
+
+test("techRepairCostApplied: an open or cancelled ticket applies nothing", () => {
+  for (const s of ["in_repair", "testing", "ready_pickup", "cancelled", undefined]) {
+    assert.equal(techRepairCostApplied(linked, s), 0, `expected 0 for ${s}`);
+  }
+});
+
+test("techRepairCostApplied: an unlinked ticket applies nothing", () => {
+  assert.equal(techRepairCostApplied({ ...linked, inventoryId: undefined }, "picked_up"), 0);
+});
+
+test("techRepairCostApplied: sums parts by quantity, and falls back to a flat partsCost", () => {
+  assert.equal(techRepairCostApplied({
+    ...linked, parts: [{ name: "A", unitCost: 10, quantity: 3 }, { name: "B", unitCost: 5, quantity: 2 }],
+  }, "picked_up"), 40);
+  assert.equal(techRepairCostApplied({ ...linked, parts: undefined, partsCost: 45 }, "picked_up"), 45);
+});
+
+test("buildTechRepairUpdate: stamps the receipt when a technician finishes a linked ticket", () => {
+  const update = buildTechRepairUpdate(linked, { status: "picked_up" }, "tech-uid", Date.now());
+  assert.equal(update.inventoryRepairCostApplied, 60);
+});
+
+test("buildTechRepairUpdate: CLEARS the receipt when a finished ticket is cancelled", () => {
+  // Dropping to 0 is what tells the client to reverse the device's repairCost.
+  const stored = { ...linked, status: "picked_up", completedAt: 1, inventoryRepairCostApplied: 60 };
+  const update = buildTechRepairUpdate(stored, { status: "cancelled" }, "tech-uid", Date.now());
+  assert.equal(update.inventoryRepairCostApplied, 0);
+});
+
+test("buildTechRepairUpdate: omits the receipt entirely when nothing changed", () => {
+  const stored = { ...linked, status: "picked_up", completedAt: 1, inventoryRepairCostApplied: 60 };
+  const update = buildTechRepairUpdate(stored, { techNotes: "tidied up" }, "tech-uid", Date.now());
+  assert.equal("inventoryRepairCostApplied" in update, false);
+});
+
+test("buildTechRepairUpdate: a draft can NEVER set the cost receipt itself", () => {
+  // The amount comes from the ticket's real parts, never from the client.
+  const update = buildTechRepairUpdate(linked, {
+    status: "picked_up", inventoryRepairCostApplied: 99999,
+  } as Record<string, unknown>, "tech-uid", Date.now());
+  assert.equal(update.inventoryRepairCostApplied, 60);
 });
