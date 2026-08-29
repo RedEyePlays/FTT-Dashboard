@@ -2,11 +2,13 @@ import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { Camera, X, Loader2, Sparkles, RotateCcw, ShieldAlert, CheckCircle2, ScanBarcode, ScanText } from 'lucide-react';
 import { extractImeiFromImage } from '../services/geminiService';
 import { OfflineError } from '../services/functionsGuard';
-import { detectBarcodes, isBarcodeDetectionSupported } from '../services/imeiBarcode';
+import { detectBarcodes, isBarcodeScanningAvailable, liveScanIntervalMs, prewarmBarcodeFallback } from '../services/imeiBarcode';
 import { runOcrTier } from '../services/imeiOcr';
 import {
   ScannedField, ScanTier, classifyScannedValues, validateExtractedFields, mergeScannedFields, hasVerifiedField,
 } from '../domain/imeiScan';
+import { describeCameraError, describeScanError, describeScanNotFound, ScanFailure } from '../domain/scannerErrors';
+import { captureError } from '../services/errorReporting';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 
 interface ImeiScannerProps {
@@ -36,13 +38,23 @@ function cropToRegionOfInterest(source: HTMLCanvasElement): HTMLCanvasElement {
 }
 
 /**
- * Three-tier camera scanner: (1) the browser's native BarcodeDetector, free
- * and instant — tried live off the video stream and, as a backstop, once
- * more on the captured frame; (2) on-device OCR (native TextDetector, else
- * tesseract.js lazy-loaded on first use), still free and offline; (3) Gemini,
- * only when both of the above find nothing. Each tier's candidates are run
- * through domain/imeiScan.ts's classification/validation before ever being
- * shown as a usable field, so a misread never gets silently accepted.
+ * Tiered camera scanner, cheapest and fastest first:
+ *   1  the browser's native BarcodeDetector — free, instant, offline;
+ *   1b a lazy-loaded JS barcode/QR decoder (services/imeiBarcodeFallback.ts)
+ *      where the native API is missing, which on iOS — and especially in the
+ *      installed PWA — it usually is. Also free and offline. Without this,
+ *      tier 1 silently found nothing there and every scan, including scans of
+ *      the shop's own QR-coded inventory labels, fell through to the paid AI
+ *      tier. Both 1 and 1b run live off the video stream AND, as a backstop,
+ *      once more on the captured frame;
+ *   2  on-device OCR (native TextDetector, else tesseract.js lazy-loaded on
+ *      first use) — still free and offline;
+ *   3  Gemini, ONLY when everything above finds nothing.
+ *
+ * Each tier's candidates are run through domain/imeiScan.ts's classification/
+ * validation (including the IMEI Luhn check) before ever being shown as a
+ * usable field, so no decoder's raw output is trusted on its own and a misread
+ * never gets silently accepted.
  */
 export const ImeiScanner: React.FC<ImeiScannerProps> = ({ onScan, onClose }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -59,6 +71,10 @@ export const ImeiScanner: React.FC<ImeiScannerProps> = ({ onScan, onClose }) => 
 
   useEffect(() => {
     startCamera();
+    // Fetch the JS barcode decoder now if this browser has no native one, so
+    // the first live frame isn't waiting on the download — and so the chunk
+    // lands in the PWA's service-worker cache for later offline scans.
+    prewarmBarcodeFallback();
     return () => {
       stopCamera();
       stopLiveBarcodeLoop();
@@ -66,7 +82,27 @@ export const ImeiScanner: React.FC<ImeiScannerProps> = ({ onScan, onClose }) => 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // One place every scanner failure goes: the real exception ALWAYS reaches
+  // the console with context, unexpected faults additionally reach error
+  // monitoring, and the user gets the classified message rather than a
+  // catch-all. Previously the exception was discarded outright, which is why
+  // "it just says failed" was undiagnosable.
+  const reportFailure = (failure: ScanFailure, err: unknown, context: Record<string, unknown>) => {
+    console.error(`[ImeiScanner] ${failure.kind}`, err, context);
+    if (failure.unexpected) captureError(err, { source: 'ImeiScanner', kind: failure.kind, ...context });
+    setError(failure.message);
+  };
+
   const startCamera = async () => {
+    const secureContext = typeof window !== 'undefined' ? window.isSecureContext !== false : true;
+    const hasMediaDevices = typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getUserMedia;
+    // Checked BEFORE the call: on plain http `navigator.mediaDevices` is
+    // undefined, so calling it throws a TypeError that says nothing useful.
+    if (!secureContext || !hasMediaDevices) {
+      const failure = describeCameraError(null, { secureContext, hasMediaDevices });
+      reportFailure(failure, new Error(failure.kind), { secureContext, hasMediaDevices });
+      return;
+    }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'environment' }
@@ -76,8 +112,7 @@ export const ImeiScanner: React.FC<ImeiScannerProps> = ({ onScan, onClose }) => 
         setIsStreaming(true);
       }
     } catch (err) {
-      setError("Could not access camera. Please allow permissions.");
-      console.error(err);
+      reportFailure(describeCameraError(err, { secureContext, hasMediaDevices }), err, { phase: 'startCamera' });
     }
   };
 
@@ -120,12 +155,19 @@ export const ImeiScanner: React.FC<ImeiScannerProps> = ({ onScan, onClose }) => 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onScan]);
 
-  // Tier 1, live: polls the raw video stream for a barcode every ~600ms
-  // while the modal sits in the live view. Feature-detected — silently never
-  // starts if BarcodeDetector isn't supported (notably variable on iOS/
-  // iPadOS Safari).
+  // Tier 1, live: polls the raw video stream for a barcode while the modal
+  // sits in the live view, so a code is caught by simply pointing the camera.
+  //
+  // Gated on isBarcodeScanningAvailable(), NOT on the native
+  // isBarcodeDetectionSupported() it used to check. That native-only gate is
+  // the bug: on iOS (and especially the installed PWA, a WebKit web view
+  // where BarcodeDetector is commonly absent) the live loop never started at
+  // all, so pointing the camera at a barcode did nothing and every scan fell
+  // through to OCR and then to the paid AI tier — including scans of the
+  // shop's own QR-coded ZP 450 inventory labels. detectBarcodes now falls
+  // back to a lazy-loaded JS decoder, so this loop runs everywhere.
   useEffect(() => {
-    if (!isStreaming || phase !== 'live' || !isBarcodeDetectionSupported()) return;
+    if (!isStreaming || phase !== 'live' || !isBarcodeScanningAvailable()) return;
     liveScanTimer.current = setInterval(async () => {
       if (liveScanBusy.current || !videoRef.current || isProcessing) return;
       liveScanBusy.current = true;
@@ -140,10 +182,16 @@ export const ImeiScanner: React.FC<ImeiScannerProps> = ({ onScan, onClose }) => 
           stopLiveBarcodeLoop();
           applyTierResult('barcode', classified);
         }
+      } catch (err) {
+        // A live-loop frame failing is not worth an error banner (the next
+        // frame is ~1s away and usually fine), but it must not be silent —
+        // a persistent decoder fault would otherwise look exactly like
+        // "the camera just never picks anything up".
+        console.error('[ImeiScanner] live barcode frame failed', err);
       } finally {
         liveScanBusy.current = false;
       }
-    }, 600);
+    }, liveScanIntervalMs());
     return stopLiveBarcodeLoop;
   }, [isStreaming, phase, isProcessing, applyTierResult]);
 
@@ -187,7 +235,11 @@ export const ImeiScanner: React.FC<ImeiScannerProps> = ({ onScan, onClose }) => 
 
     try {
       const canvas = captureFrame();
-      if (!canvas) { setError('Failed to process image.'); return; }
+      if (!canvas) {
+        const failure = describeScanError(new Error('Camera frame unavailable'), { online: navigator.onLine });
+        reportFailure(failure, new Error('captureFrame returned null'), { phase: 'captureFrame', isStreaming });
+        return;
+      }
 
       // Tier 1 backstop: a barcode that never registered during the live
       // loop (or the loop wasn't supported) might still be caught on the
@@ -215,10 +267,17 @@ export const ImeiScanner: React.FC<ImeiScannerProps> = ({ onScan, onClose }) => 
       const gotAi = await runAiTier(canvas);
       if (!gotAi) {
         if (weakFields.length) applyTierResult(weakTier!, weakFields);
-        else setError('No IMEI or serial detected. Try moving closer, reducing glare, or use "Scan with AI".');
+        // A clean run that found nothing is NOT a failure — no console.error,
+        // no monitoring report, just the "try moving closer" hint (which also
+        // stops suggesting AI when we already know we're offline).
+        else setError(describeScanNotFound({ online: navigator.onLine }).message);
       }
     } catch (err) {
-      setError('Failed to process image.');
+      // Was: `setError('Failed to process image.')` with the exception thrown
+      // away — the reason a missing BarcodeDetector, a tesseract.js load
+      // failure and a rejected Cloud Function were indistinguishable and
+      // invisible.
+      reportFailure(describeScanError(err, { online: navigator.onLine }), err, { phase: 'handleCapture' });
     } finally {
       setIsProcessing(false);
       setProcessingLabel('');
@@ -235,11 +294,18 @@ export const ImeiScanner: React.FC<ImeiScannerProps> = ({ onScan, onClose }) => 
     setError(null);
     try {
       const canvas = captureFrame();
-      if (!canvas) { setError('Failed to process image.'); return; }
+      if (!canvas) {
+        reportFailure(describeScanError(new Error('Camera frame unavailable'), { online: navigator.onLine }),
+          new Error('captureFrame returned null'), { phase: 'handleUseAi/captureFrame', isStreaming });
+        return;
+      }
       const gotAi = await runAiTier(canvas);
       if (!gotAi) setError('No IMEI or serial detected by AI either. Try a clearer, closer shot.');
     } catch (err) {
-      setError('Failed to process image.');
+      // Same fix as handleCapture: the AI tier rejecting (a Cloud Function
+      // error, a quota refusal) now says so and reaches the console, instead
+      // of the generic "Failed to process image." that hid it.
+      reportFailure(describeScanError(err, { online: navigator.onLine }), err, { phase: 'handleUseAi' });
     } finally {
       setIsProcessing(false);
       setProcessingLabel('');

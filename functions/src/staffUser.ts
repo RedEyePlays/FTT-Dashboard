@@ -3,6 +3,8 @@ import * as admin from "firebase-admin";
 import {
   authorizeStaffUserCreate,
   buildCreateAuditEntry,
+  buildFailureLog,
+  classifyCreateUserError,
   recordAttempt,
   Role,
   UserRecord,
@@ -99,16 +101,25 @@ export const createStaffUser = onCall(
 
     let uid: string;
     try {
+      // NOTE: staff accounts are real Firebase Auth accounts — that is what
+      // signs them in — but NO email is ever sent. createUser() does not send
+      // anything, and this project never calls generateEmailVerificationLink
+      // or sendPasswordResetEmail: the owner sets the password directly here
+      // and resets it via setStaffPassword. That's the intended "no real
+      // mailbox needed" behaviour — the email is a login identifier only.
       const created = await admin.auth().createUser({ email, password });
       uid = created.uid;
-    } catch (err: any) {
-      if (err?.code === "auth/email-already-exists") {
-        throw new HttpsError("already-exists", "An account with that email already exists.");
-      }
-      if (err?.code === "auth/invalid-email") {
-        throw new HttpsError("invalid-argument", "That doesn't look like a valid email address.");
-      }
-      throw new HttpsError("internal", "Could not create the account. Please try again.");
+    } catch (err: unknown) {
+      const classified = classifyCreateUserError(err);
+      // Log the FULL error server-side with enough context to debug (caller,
+      // target, stage, the Auth code) — `password` is deliberately not in
+      // scope of anything logged here, and buildFailureLog has no field that
+      // could carry a credential.
+      console.error(
+        JSON.stringify(buildFailureLog({ stage: "auth", callerUid, targetEmail: email, targetRole, err, classified })),
+        classified.unexpected ? err : "",
+      );
+      throw new HttpsError(classified.code, classified.message);
     }
 
     const now = Date.now();
@@ -132,13 +143,27 @@ export const createStaffUser = onCall(
 
     try {
       await db.collection("users").doc(uid).set(userDoc);
-    } catch (err) {
+    } catch (err: unknown) {
       // The Auth account exists but the Firestore doc failed — clean up
       // rather than leave an unusable half-created account with no
       // workspace/role, which would otherwise be stuck (they can't sign in
       // usefully, and re-running create would hit "email already exists").
-      await admin.auth().deleteUser(uid).catch(() => {});
-      throw new HttpsError("internal", "Could not finish creating the account. Please try again.");
+      const classified = classifyCreateUserError(err);
+      console.error(
+        JSON.stringify(buildFailureLog({ stage: "firestore", callerUid, targetEmail: email, targetRole, err, classified })),
+        err,
+      );
+      const rolledBack = await admin.auth().deleteUser(uid).then(() => true).catch(() => false);
+      // Distinguish the two very different outcomes: a clean rollback is
+      // safely retryable, a failed one has left an orphan Auth account that
+      // will collide with "email already exists" on the next attempt — the
+      // operator needs to be told that, not handed a generic retry.
+      throw new HttpsError(
+        rolledBack ? "unavailable" : "failed-precondition",
+        rolledBack
+          ? "Couldn't save the new user's profile, so the account was rolled back. Please try again."
+          : "The account was created but its profile couldn't be saved, and the rollback also failed. An owner should delete this user in the Firebase console before retrying.",
+      );
     }
 
     // A leftover pending invite for this email (created before this direct-
