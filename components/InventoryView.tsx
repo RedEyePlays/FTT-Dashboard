@@ -7,7 +7,8 @@ import {
 } from 'lucide-react';
 import { InventoryItem, DeviceBuyer, ItemKind, DeviceType, DeviceStatus, ActivityEntry, AuditEntry, Repair, Note, Role, Customer } from '../types';
 import { CustomerDraft } from '../domain/customers';
-import { linkedRepairFor, REPAIR_STATUS_LABEL } from '../domain/repairs';
+import { linkedRepairFor, openRepairFor, REPAIR_STATUS_LABEL } from '../domain/repairs';
+import { isStalePendingRepair, isOrphanedPendingRepair, PENDING_REPAIR_STALE_DAYS } from '../domain/alerts';
 import { printShelfTag, printShelfTagsBatch } from '../services/shelfTag';
 import { getStoreProfile } from './SettingsModal';
 import { ItemFormModal } from './ItemFormModal';
@@ -133,6 +134,16 @@ const STATUS_OPTS: { value: DeviceStatus; label: string }[] = [
   { value: 'sold', label: 'Sold' },
   { value: 'returned', label: 'Returned' },
 ];
+// Extra Filters entries beyond a plain deviceStatus match — the two ways the
+// in-repair flag goes wrong and leaves a device silently out of stock (see
+// domain/alerts.ts's pendingRepairIssues).
+const FLAG_STALE_REPAIR = 'flag:stale_repair';
+const FLAG_ORPHANED_REPAIR = 'flag:orphan_repair';
+const FLAG_OPTS: { value: string; label: string }[] = [
+  { value: FLAG_STALE_REPAIR, label: `In repair > ${PENDING_REPAIR_STALE_DAYS} days` },
+  { value: FLAG_ORPHANED_REPAIR, label: 'In repair · no open ticket' },
+];
+
 const STATUS_CELL: Record<DeviceStatus, string> = {
   pending_purchase: 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300',
   pending_repair: 'bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300',
@@ -141,6 +152,13 @@ const STATUS_CELL: Record<DeviceStatus, string> = {
   sold: 'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200',
   returned: 'bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-300',
 };
+// The SKU cell's in-repair treatment: the exact `pending_repair` orange from
+// STATUS_CELL above (never a second, parallel color for the same state), sized
+// to fit the narrow frozen SKU column — the wrench icon shrinks rather than
+// widening the column, and the SKU itself truncates.
+const REPAIR_SKU_CELL = `${STATUS_CELL.pending_repair} font-mono text-xs`;
+const repairSkuTitle = (r: Repair): string => `In repair — ${r.repairNumber} · ${REPAIR_STATUS_LABEL[r.status]}`;
+
 // Short labels for the compact in-table status pill (values are unchanged).
 const STATUS_SHORT: Record<DeviceStatus, string> = {
   pending_purchase: 'Purchase',
@@ -209,8 +227,12 @@ const DEVICE_COLS: Col[] = [
   // grid — status is still stored and driven via the Filters, the item form,
   // bulk actions, sold detection and analytics.)
   { key: 'soldDate', label: 'Date Sold', type: 'date', w: 96, min: 50, max: 150 },
-  { key: 'soldTo', label: 'Customer', type: 'text', w: 104, min: 46, max: 220 },
+  // Notes before Customer: `soldTo` is only filled in after a sale, so it reads
+  // last. Both columns keep every property they had — this is a reorder only,
+  // and every saved layout (hidden columns, widths, saved views) is keyed by
+  // column `key`, never by position, so stored layouts survive it untouched.
   { key: 'notes', label: 'Notes', type: 'text', w: 140, min: 54, max: 300, flex: true, emphasis: 'muted' },
+  { key: 'soldTo', label: 'Customer', type: 'text', w: 104, min: 46, max: 220 },
 ];
 const ACCESSORY_COLS: Col[] = [
   { key: 'date', label: 'Date Added', type: 'date', w: 130, min: 72, max: 150 },
@@ -268,6 +290,9 @@ const parseCSV = (text: string): Record<string, string>[] => {
 
 export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activity, auditLogs = [], canViewCost = false, userId, section, onSelectSection, onSave, onUpdate, onDelete, onGenerateSku, onSeed, repairs = [], customers, onCreateCustomer, onCreateRepair, onOpenRepair, notes, noteRole, onOpenNote }) => {
   const linkedRepairOf = (id: string): Repair | undefined => linkedRepairFor(id, repairs);
+  // Only a STILL-OPEN ticket flags the device as in repair; a completed/picked
+  // up/cancelled one leaves the SKU cell exactly as it was.
+  const openRepairOf = (id: string): Repair | undefined => openRepairFor(id, repairs);
   const isMobile = useIsMobile();
   const [selectMode, setSelectMode] = useState(false); // mobile multi-select
   const [mobileFilter, setMobileFilter] = useState(false);
@@ -336,13 +361,15 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
   // Devices ("in stock") view and the Sold view.
   const deviceRows = useMemo(() => {
     let r = inventory.filter(i => kindOf(i) === 'device' && matchesQuery(i));
-    if (statusFilter !== 'all') r = r.filter(i => i.deviceStatus === statusFilter);
+    if (statusFilter === FLAG_STALE_REPAIR) r = r.filter(i => isStalePendingRepair(i, repairs, Date.now()));
+    else if (statusFilter === FLAG_ORPHANED_REPAIR) r = r.filter(i => isOrphanedPendingRepair(i, repairs));
+    else if (statusFilter !== 'all') r = r.filter(i => i.deviceStatus === statusFilter);
     // Default order: oldest Date In first, so aging stock surfaces at the top and
     // nothing sits forgotten at the bottom. A user's column-header sort overrides
     // this via applySort.
     r = r.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
     return applySort(r, DEVICE_COLS);
-  }, [inventory, query, statusFilter, sort]);
+  }, [inventory, repairs, query, statusFilter, sort]);
   // Devices tab = current stock only: once a device is sold it drops out of here
   // and lives only under the Sold tab.
   const devices = useMemo(() => deviceRows.filter(i => !isSold(i)), [deviceRows]);
@@ -556,6 +583,9 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
                     <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="w-full p-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md text-sm">
                       <option value="all">All statuses</option>
                       {STATUS_OPTS.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+                      <optgroup label="Needs attention">
+                        {FLAG_OPTS.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
+                      </optgroup>
                     </select>
                   </div>
                 )}
@@ -663,7 +693,7 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
                   <InvCard key={i.id} item={i} canViewCost={canViewCost} selectMode={selectMode} selected={selected.has(i.id)}
                     onToggleSel={() => toggleSel(i.id)} onOpen={() => setExpandItem(i)} onLabel={() => setLabelItem(i)}
                     onUpdate={onUpdate} onDelete={onDelete} onDuplicate={duplicate} onHistory={mode => setHistoryItem({ item: i, mode })}
-                    linkedRepair={linkedRepairOf(i.id)} onCreateRepair={onCreateRepair} onOpenRepair={onOpenRepair} />
+                    linkedRepair={linkedRepairOf(i.id)} openRepair={openRepairOf(i.id)} onCreateRepair={onCreateRepair} onOpenRepair={onOpenRepair} />
                 ))}
             </div>
           )}
@@ -675,7 +705,7 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
                 sort={sort} onSort={onSortToggle} selected={selected} onToggleSel={toggleSel} onToggleAll={toggleSelAll}
                 onUpdate={onUpdate} onDelete={onDelete} onDuplicate={duplicate} onExpand={setExpandItem} onLabel={setLabelItem}
                 onHistory={(it, mode) => setHistoryItem({ item: it, mode })}
-                linkedRepairOf={linkedRepairOf} onCreateRepair={onCreateRepair} onOpenRepair={onOpenRepair}
+                linkedRepairOf={linkedRepairOf} onCreateRepair={onCreateRepair} onOpenRepair={onOpenRepair} openRepairOf={openRepairOf}
                 widths={colW[activeKind]} onResize={(key, w) => setColumnWidth(activeKind, key, w)} onResetWidth={(key) => resetColumnWidth(activeKind, key)}
                 onAddRow={(page === 'devices' || page === 'accessories') ? (activeKind === 'device' ? addDeviceRow : addAccessoryRow) : undefined}
                 addLabel={activeKind === 'device' ? 'Add Device row' : 'Add Accessory row'} lowFlag={page === 'lowstock'} />
@@ -746,6 +776,9 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
               <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="w-full p-2.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm">
                 <option value="all">All statuses</option>
                 {STATUS_OPTS.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+                <optgroup label="Needs attention">
+                  {FLAG_OPTS.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
+                </optgroup>
               </select>
             </div>
           )}
@@ -864,9 +897,12 @@ const Sheet: React.FC<{
   linkedRepairOf?: (id: string) => Repair | undefined;
   onCreateRepair?: (i: InventoryItem) => void;
   onOpenRepair?: (repairId: string) => void;
+  // The still-open ticket (if any) on a device — drives the SKU cell's in-repair
+  // highlight. Distinct from linkedRepairOf, which also returns closed tickets.
+  openRepairOf?: (id: string) => Repair | undefined;
   widths?: Record<string, number>; onResize?: (key: string, w: number) => void; onResetWidth?: (key: string) => void;
   onAddRow?: () => void; addLabel: string; lowFlag?: boolean;
-}> = ({ title, total, cols, rows, sort, onSort, selected, onToggleSel, onToggleAll, onUpdate, onDelete, onDuplicate, onExpand, onLabel, onHistory, linkedRepairOf, onCreateRepair, onOpenRepair, widths, onResize, onResetWidth, onAddRow, addLabel, lowFlag }) => {
+}> = ({ title, total, cols, rows, sort, onSort, selected, onToggleSel, onToggleAll, onUpdate, onDelete, onDuplicate, onExpand, onLabel, onHistory, linkedRepairOf, onCreateRepair, onOpenRepair, openRepairOf, widths, onResize, onResetWidth, onAddRow, addLabel, lowFlag }) => {
   // Row overflow menu. State lives at the Sheet root and the menu renders outside
   // the sticky table subtree (fixed-positioned) so it isn't clipped or trapped
   // under the sticky columns' stacking context.
@@ -1010,6 +1046,7 @@ const Sheet: React.FC<{
             {rows.map(i => {
               const low = lowFlag && isLow(i);
               const sel = selected.has(i.id);
+              const openRepair = openRepairOf?.(i.id);
               // Frozen cells need an opaque background so scrolled content can't show through.
               const frozenBg = sel ? 'bg-indigo-50 dark:bg-slate-800' : 'bg-white dark:bg-slate-900';
               return (
@@ -1026,7 +1063,17 @@ const Sheet: React.FC<{
                     <td key={c.key}
                       style={{ overflow: 'hidden', ...(c.frozen ? { left: `var(--l-${c.key})`, position: 'sticky' as const } : {}) }}
                       className={`p-0 align-top ${c.frozen ? `sticky z-10 ${frozenBg}` : ''}`}>
-                      {c.key === 'notes' ? (
+                      {c.key === 'sku' && openRepair ? (
+                        // Device is on the bench: the SKU cell itself carries the
+                        // flag (the owner's device table has no Status column and
+                        // isn't getting one) and opens the ticket on click.
+                        <button onClick={() => onOpenRepair?.(openRepair.id)} title={repairSkuTitle(openRepair)}
+                          disabled={!onOpenRepair}
+                          className={`w-full h-full text-left px-2 py-1.5 flex items-center gap-1 ${REPAIR_SKU_CELL} ${onOpenRepair ? 'cursor-pointer hover:brightness-95' : 'cursor-default'}`}>
+                          <Wrench className="w-3 h-3 shrink-0" />
+                          <span className="truncate">{(i.sku as any) || '—'}</span>
+                        </button>
+                      ) : c.key === 'notes' ? (
                         // Notes: truncated in the grid; click opens the full note in a drawer.
                         <button onClick={() => setNotesItem(i)} title={String((i.notes as any) ?? '')}
                           className={`w-full text-left px-2 py-1.5 text-sm truncate rounded hover:bg-indigo-50 dark:hover:bg-indigo-900/20 ${emph(c)}`}>
@@ -1186,9 +1233,10 @@ const InvCard: React.FC<{
   onDuplicate: (i: InventoryItem) => void;
   onHistory: (mode: 'history' | 'audit') => void;
   linkedRepair?: Repair;
+  openRepair?: Repair;   // still-open ticket — highlights the card's SKU row
   onCreateRepair?: (i: InventoryItem) => void;
   onOpenRepair?: (repairId: string) => void;
-}> = ({ item: i, canViewCost, selectMode, selected, onToggleSel, onOpen, onLabel, onDelete, onDuplicate, onHistory, linkedRepair, onCreateRepair, onOpenRepair }) => {
+}> = ({ item: i, canViewCost, selectMode, selected, onToggleSel, onOpen, onLabel, onDelete, onDuplicate, onHistory, linkedRepair, openRepair, onCreateRepair, onOpenRepair }) => {
   const [menu, setMenu] = useState(false);
   const isDevice = kindOf(i) === 'device';
   const copy = (v?: string) => v && navigator.clipboard?.writeText(v).catch(() => {});
@@ -1233,7 +1281,15 @@ const InvCard: React.FC<{
       </div>
 
       <button onClick={tap} className="w-full text-left mt-2 block">
-        <Row label="SKU"><span className="font-mono">{i.sku || '—'}</span></Row>
+        <Row label="SKU">
+          {openRepair ? (
+            // Same in-repair treatment as the table's SKU cell, on the card's SKU row.
+            <span onClick={e => { e.stopPropagation(); onOpenRepair?.(openRepair.id); }} title={repairSkuTitle(openRepair)}
+              className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded ${REPAIR_SKU_CELL}`}>
+              <Wrench className="w-3 h-3 shrink-0" />{i.sku || '—'}
+            </span>
+          ) : <span className="font-mono">{i.sku || '—'}</span>}
+        </Row>
         {isDevice && i.imei && <Row label="IMEI / Serial"><span className="font-mono">{i.imei}</span></Row>}
         {isDevice && (i.storage || i.color) && <Row label="Storage / Color">{[i.storage, i.color].filter(Boolean).join(' · ') || '—'}</Row>}
         <Row label="Sale price"><span className="font-semibold">{money(salePriceOf(i))}</span></Row>

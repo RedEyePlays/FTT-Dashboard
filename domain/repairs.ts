@@ -1,4 +1,4 @@
-import { Repair, RepairBatch, RepairStatus, RepairType, RepairPart } from '../types';
+import { DeviceStatus, InventoryItem, Repair, RepairBatch, RepairStatus, RepairType, RepairPart } from '../types';
 import { toISODate } from './dates';
 
 // --- Numbering prefixes (reuse the meta.skuCounters mechanism) ---
@@ -128,6 +128,66 @@ export const linkedRepairFor = (inventoryId: string, repairs: Repair[]): Repair 
 // Whole days a repair has been open (received → now).
 export const repairAgeDays = (r: Repair, now: number = Date.now()): number =>
   Math.max(0, Math.floor((now - (r.createdAt || now)) / 86400000));
+
+// --- Device "in repair" flag ------------------------------------------------
+//
+// A device physically on the bench must not read as sellable. The auto-inventory
+// path (domain/autoInventory.ts + App's handleSaveRepair) already flipped its own
+// records to `pending_repair` on ticket creation and captured the record's prior
+// status on the ticket (Repair.inventoryPreviousStatus) so it could be restored.
+// These helpers generalize exactly that mechanism — same status, same field — to
+// ANY ticket linked to an inventory item, including one opened against a device
+// that was already in inventory the normal (manual) way.
+
+/** Every open ticket linked to this inventory item, most recent first. */
+export const openRepairsFor = (inventoryId: string, repairs: Repair[]): Repair[] =>
+  repairs
+    .filter(r => r.inventoryId === inventoryId && isRepairOpen(r))
+    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+
+/** The most recent open ticket linked to this inventory item, if any. */
+export const openRepairFor = (inventoryId: string, repairs: Repair[]): Repair | undefined =>
+  openRepairsFor(inventoryId, repairs)[0];
+
+/**
+ * What opening a ticket against `item` should do to that device's status:
+ * `pending_repair`, plus the status to capture on the ticket for restoring later.
+ * Returns null when nothing should change:
+ *  - already `pending_repair` — another ticket is (or was) holding the device;
+ *    re-capturing would overwrite the real previous status with `pending_repair`
+ *    and the device could never be restored to what it actually was.
+ *  - `sold` — a post-sale warranty ticket must never drag a sold device back
+ *    into the sellable/holding inventory flow.
+ */
+export function flagDeviceForRepair(
+  item: Pick<InventoryItem, 'deviceStatus'>,
+): { deviceStatus: DeviceStatus; previousStatus: DeviceStatus } | null {
+  const current = item.deviceStatus || 'ready';
+  if (current === 'pending_repair' || current === 'sold') return null;
+  return { deviceStatus: 'pending_repair', previousStatus: current };
+}
+
+/**
+ * The status a device should be restored to when `closing` reaches a terminal
+ * state (completed / picked up / cancelled) or is deleted — or null to leave the
+ * device alone. Never assumes `ready`: a device that was reserved on a layaway
+ * before the ticket goes back to `reserved`, not onto the sales floor.
+ *
+ * Returns null when:
+ *  - the device isn't flagged `pending_repair` (it was sold, returned or set by
+ *    hand since — that deliberate status wins over this restore).
+ *  - another ticket linked to the same device is still open — closing ticket A
+ *    while ticket B is still open must not make the device sellable again.
+ */
+export function restoredDeviceStatus(
+  item: Pick<InventoryItem, 'id' | 'deviceStatus'>,
+  closing: Pick<Repair, 'id' | 'inventoryPreviousStatus'>,
+  repairs: Repair[],
+): DeviceStatus | null {
+  if ((item.deviceStatus || 'ready') !== 'pending_repair') return null;
+  if (openRepairsFor(item.id, repairs).some(r => r.id !== closing.id)) return null;
+  return closing.inventoryPreviousStatus || 'ready';
+}
 
 // --- Cosmetic condition checklist ---
 export const COSMETIC_OPTIONS = [

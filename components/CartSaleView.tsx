@@ -66,6 +66,7 @@ export const CartSaleView: React.FC<Props> = (props) => {
     lineSubtotal, subtotal, purchaseCostTotal, repairCostTotal, totalCost, taxApplies, tax, platformFee, totalPaid, netProfit,
     isZeroPricedDevice, hasZeroPricedDevice, allowZeroPrice, setAllowZeroPrice, blockedByZeroPrice,
     hasListedElsewhereDevice, allowListedElsewhereSale, setAllowListedElsewhereSale, blockedByListedElsewhere, delistReminders,
+    hasOpenRepairDevice, openRepairLines, allowOpenRepairSale, setAllowOpenRepairSale, blockedByOpenRepair,
     addDevice, addAccessory, updateLine, removeLine, num, addCustomItem, handleScan, handleCheckout, isSubmitting, reset, printReceipt, printInvoice, emailReceipt, soldDeviceRows,
     scanResults, addScanResult, repairMatches, addRepair,
     printReceiptOnComplete, setPrintReceiptOnComplete,
@@ -453,12 +454,27 @@ export const CartSaleView: React.FC<Props> = (props) => {
           </div>
         )}
 
+        {hasOpenRepairDevice && (
+          <div className="bg-orange-50 dark:bg-orange-900/20 border border-orange-300 dark:border-orange-500/40 rounded-xl p-3 text-sm">
+            <p className="flex items-center gap-2 font-semibold text-orange-800 dark:text-orange-300"><Wrench className="w-4 h-4" /> Open repair ticket</p>
+            {openRepairLines.map(l => (
+              <p key={l.key} className="text-xs text-orange-700/80 dark:text-orange-300/80 mt-1">
+                {l.name} has an open repair ticket {l.openRepairNumber} — confirm the device is complete, or that this is a deliberate as-is sale.
+              </p>
+            ))}
+            <label className="flex items-center gap-2 mt-2 text-orange-800 dark:text-orange-300 cursor-pointer">
+              <input type="checkbox" checked={allowOpenRepairSale} onChange={e => setAllowOpenRepairSale(e.target.checked)} className="rounded" />
+              Sell anyway
+            </label>
+          </div>
+        )}
+
         <label className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300 cursor-pointer select-none">
           <input type="checkbox" checked={printReceiptOnComplete} onChange={e => setPrintReceiptOnComplete(e.target.checked)} className="rounded" />
           <Printer className="w-3.5 h-3.5 text-slate-400" /> Print receipt on completion
         </label>
 
-        <button onClick={handleCheckout} disabled={isSubmitting || cart.length === 0 || blockedByZeroPrice || blockedByListedElsewhere || mixedPaymentMismatch}
+        <button onClick={handleCheckout} disabled={isSubmitting || cart.length === 0 || blockedByZeroPrice || blockedByListedElsewhere || blockedByOpenRepair || mixedPaymentMismatch}
           className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold rounded-xl text-sm transition-colors flex items-center justify-center gap-2">
           <ShoppingCart className="w-4 h-4" /> {isSubmitting ? 'Processing…' : isLayaway ? `Take Deposit · ${money(cx.depositAmount)}` : `Complete Sale · ${money(totalPaid)}`}
         </button>
