@@ -4,8 +4,8 @@ import { dropOffLabelContent } from './dropOffLabel';
 import { canPrintDropOffLabel } from './rbac';
 import { dropOffLabelMoney, dropOffOwed } from '../domain/dropoffs';
 import {
-  dropOffLabelsPrintDoc, dropOffLabelPreview, dropOffQrSizeMm, dropOffFontSizesMm,
-  dropOffTextColumnWidthMm, estimateTextWidthMm, MIN_DROPOFF_QR_MM, LabelMedia, DropOffLabelContent,
+  dropOffLabelsPrintDoc, dropOffLabelPreview, dropOffQrSizeMm,
+  LabelMedia, DropOffLabelContent,
 } from './labelLayout';
 
 // The DYMO 36 × 89 mm stock this shop actually prints labels on, plus the
@@ -70,12 +70,21 @@ describe('drop-off label money — just the amount owed, no funding-source wordi
 });
 
 describe('drop-off label content — who and what (the bottom meta row is gone)', () => {
-  it('names the device buyer, the device and the IMEI', () => {
+  it('names the device buyer and the device (the IMEI is no longer printed as text)', () => {
     const html = printed({});
     expect(html).toContain('Marcus Webb');
     expect(html).toContain('iPhone 13 Pro');
-    expect(html).toContain('356789012345678');
     expect(html).toContain('FlipThatTech');
+  });
+
+  // The written IMEI line was removed at the owner's request — the QR is now
+  // the ONLY place the IMEI/serial appears on the label.
+  it('never prints the IMEI/serial as text, even though the QR still encodes it', () => {
+    const html = printed({});
+    expect(html).not.toContain('356789012345678');
+    // The QR image is still there, still built from that same value.
+    expect(content({}).serial).toBe('356789012345678');
+    expect(html).toContain('<img src="data:image/png;base64,QR"');
   });
 
   // The bottom meta row ("Dropped {date} · Ref {id}") was removed at the
@@ -133,54 +142,38 @@ describe('drop-off label QR — encodes the IMEI/serial, matching the inventory 
 // Same guarantee (and the same measured-geometry method) as the inventory
 // label's non-truncation work in labelLayout.test.ts: prove the fit with real
 // numbers, and prove the CSS can't ellipsis-clip the value either way.
-describe('non-truncation — the IMEI and the money figures never ellipsis-clip', () => {
-  it('the serial and money lines use wrap-not-ellipsis CSS, and never white-space:nowrap', () => {
+describe('non-truncation — the money figure never ellipsis-clips', () => {
+  it('the money line uses wrap-not-ellipsis CSS, and never white-space:nowrap', () => {
     const html = printed({ paidBy: 'store', purchasePrice: 1299.99, dropOffFee: 149.5 });
-    for (const value of ['356789012345678', '$1299.99+149.50']) {
-      const div = html.match(new RegExp(`<div style="[^"]*">${value.replace(/[$.*+?()|[\]\\]/g, '\\$&')}</div>`));
-      expect(div, `${value} should render in its own line box`).toBeTruthy();
-      expect(div![0]).toContain('overflow-wrap:anywhere');
-      expect(div![0]).not.toContain('white-space:nowrap');
-      expect(div![0]).not.toContain('text-overflow:ellipsis');
-    }
+    const value = '$1299.99+149.50';
+    const div = html.match(new RegExp(`<div style="[^"]*">${value.replace(/[$.*+?()|[\]\\]/g, '\\$&')}</div>`));
+    expect(div, `${value} should render in its own line box`).toBeTruthy();
+    expect(div![0]).toContain('overflow-wrap:anywhere');
+    expect(div![0]).not.toContain('white-space:nowrap');
+    expect(div![0]).not.toContain('text-overflow:ellipsis');
     expect(html).not.toContain('text-overflow:ellipsis'); // nowhere on this label
   });
 
   it('every content line disables flex-shrink, so none can be silently compressed to fit', () => {
     const html = printed({ paidBy: 'store', purchasePrice: 100, dropOffFee: 20 });
-    // One per line: store, buyer, device, serial, money, meta (+ the QR img).
+    // One per line: store, buyer, device, money (+ the QR img). The IMEI/
+    // serial line was removed (no longer printed as text — QR only) and the
+    // meta row (Dropped/Ref) was removed earlier, so the count dropped from 6+ to 5+.
     const shrinkGuards = html.match(/flex-shrink:0/g) || [];
-    expect(shrinkGuards.length).toBeGreaterThanOrEqual(6);
+    expect(shrinkGuards.length).toBeGreaterThanOrEqual(5);
   });
 
-  it('a real 15-digit IMEI needs no compromise at all: the full-size QR and the whole IMEI both fit, measured', () => {
-    const imei = { serial: '356789012345678' };
-    expect(dropOffQrSizeMm(dymo, imei)).toBe(dropOffQrSizeMm(dymo, { serial: undefined })); // no shrink needed
-    const colW = dropOffTextColumnWidthMm(dymo, imei, { showQr: true });
-    expect(estimateTextWidthMm(imei.serial, dropOffFontSizesMm(dymo).fSerial)).toBeLessThan(colW);
-  });
-
-  it('the QR SHRINKS to make room for an over-long serial rather than the serial being clipped', () => {
-    const long = { serial: '3567890123456789012345678901AB' }; // 30 chars — far beyond an IMEI
-    const ideal = dropOffQrSizeMm(dymo, { serial: undefined });
-    const shrunk = dropOffQrSizeMm(dymo, long);
-    expect(shrunk).toBeLessThan(ideal);
-    expect(shrunk).toBeGreaterThan(MIN_DROPOFF_QR_MM); // gave up width, not scannability
-    // ...and the shrink actually buys the text the width it needs (measured
-    // geometry, not an assumption).
-    const colW = dropOffTextColumnWidthMm(dymo, long, { showQr: true });
-    expect(estimateTextWidthMm(long.serial, dropOffFontSizesMm(dymo).fSerial)).toBeLessThanOrEqual(colW + 0.01);
-  });
-
-  it('the QR never shrinks below the scannable floor — an absurd serial wraps instead of killing the QR', () => {
-    const absurd = { serial: '1'.repeat(80) };
-    expect(dropOffQrSizeMm(dymo, absurd)).toBe(MIN_DROPOFF_QR_MM);
-    // The full value is still printed, in full, wrapped.
-    const html = dropOffLabelsPrintDoc('t', media2x1, [{
-      content: { ...content({}), serial: absurd.serial }, qr: 'data:image/png;base64,QR',
+  // The QR no longer has a printed serial line to negotiate width with, so
+  // it always renders at its comfortably-scannable "ideal" size regardless
+  // of how long the underlying IMEI/serial is — there's nothing left on this
+  // label for it to shrink for.
+  it('the QR size is constant regardless of the (no longer printed) serial length', () => {
+    const short = dropOffQrSizeMm(dymo);
+    const withLongImei = dropOffLabelsPrintDoc('t', dymo, [{
+      content: { ...content({}), serial: '1'.repeat(80) }, qr: 'data:image/png;base64,QR',
     }]);
-    expect(html).toContain(absurd.serial);
-    expect(html).toContain('overflow-wrap:anywhere');
+    expect(withLongImei).not.toContain('1'.repeat(80)); // never printed as text
+    expect(dropOffQrSizeMm(dymo)).toBe(short); // sizing has no serial-length input at all
   });
 
   it('a long device name and a long buyer name are printed in full, not cut short', () => {

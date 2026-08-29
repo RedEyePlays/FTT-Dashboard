@@ -119,7 +119,7 @@ export const RepairsView: React.FC<Props> = (props) => {
   const [drawer, setDrawer] = useState<{ repair: Repair; isNew: boolean } | null>(null);
   const [openBatchId, setOpenBatchId] = useState<string | null>(null);
   const [batchForm, setBatchForm] = useState<{ batch: RepairBatch; isNew: boolean } | null>(null);
-  const [labelTarget, setLabelTarget] = useState<{ repair: Repair; context?: { batchNumber?: string; lineNumber?: number } } | null>(null);
+  const [labelTarget, setLabelTarget] = useState<{ repair: Repair; context?: { batchNumber?: string; lineNumber?: number; isPrivate?: boolean } } | null>(null);
   // Performance tab date range — defaults to the last 30 days (inclusive of today).
   const [perfFrom, setPerfFrom] = useState(() => { const d = new Date(); d.setDate(d.getDate() - 29); return toISODate(d); });
   const [perfTo, setPerfTo] = useState(() => today());
@@ -178,7 +178,7 @@ export const RepairsView: React.FC<Props> = (props) => {
     if (r.batchId) {
       const b = batches.find(x => x.id === r.batchId);
       const devs = repairs.filter(x => x.batchId === r.batchId).sort((a, c) => a.createdAt - c.createdAt);
-      setLabelTarget({ repair: r, context: { batchNumber: b?.batchNumber, lineNumber: devs.findIndex(x => x.id === r.id) + 1 } });
+      setLabelTarget({ repair: r, context: { batchNumber: b?.batchNumber, lineNumber: devs.findIndex(x => x.id === r.id) + 1, isPrivate: isPrivateBatch(b) } });
     } else {
       setLabelTarget({ repair: r });
     }

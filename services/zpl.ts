@@ -21,13 +21,24 @@ export type Dpi = 203 | 300;
 
 export interface ZplLabelData {
   org: string;      // "FlipThatTech"
-  idLine: string;   // short repair code (retail) or batch number (wholesale)
+  // Short repair code (retail) or nothing at all (wholesale — the owner
+  // asked for no batch identifier on that label). OPTIONAL for the same
+  // reason `device`/`sub` below are: RepairLabelModal omits it for
+  // wholesale, and the interface stays general-purpose for a caller that
+  // does have one.
+  idLine?: string;
   // Device name. OPTIONAL: the repair label no longer prints a device/model
   // line at all (the tag is attached to the device itself), so
   // RepairLabelModal omits it — matching the HTML/print and PDF paths. Left on
   // the interface because this builder is a general-purpose ZPL renderer and a
   // caller that DOES have a device name to print still gets the line.
   device?: string;
+  // Repair type / sub-line — e.g. wholesale's "Store Device" (private/shop
+  // stock only; every other wholesale batch has none). Optional and
+  // rendered only when present, same pattern as `device`: this builder is
+  // general-purpose and a caller without one (retail, currently) simply
+  // omits the line.
+  sub?: string;
   imei?: string;    // IMEI / serial
   issue?: string;   // reported issue
   qrData: string;   // encoded into the QR (the repair/device document id)
@@ -115,13 +126,17 @@ export function buildZpl(data: ZplLabelData, dims: LabelDims, dpi: Dpi, density?
   // line's box extending past the label's bottom edge.
   const presentLines: { fh: number; gapAfter: number; text: string }[] = [
     { fh: fSml, gapAfter: Math.round(fSml * 0.35) + lineGapExtra, text: zplText(data.org, 24) },
-    { fh: fBig, gapAfter: Math.round(fBig * 0.25) + lineGapExtra, text: zplText(data.idLine, 22) },
   ];
+  // Conditional, like device/imei/issue below — an omitted idLine (the
+  // wholesale label's batch number, now dropped entirely) must not reserve
+  // (and then leave blank) the vertical space its line would have taken.
+  if (data.idLine) presentLines.push({ fh: fBig, gapAfter: Math.round(fBig * 0.25) + lineGapExtra, text: zplText(data.idLine, 22) });
   // Conditional, like imei/issue below — an omitted device must not reserve
   // (and then leave blank) the vertical space its line would have taken, which
   // is what pushing it unconditionally would do to contentH and to every
   // line's y position beneath it.
   if (data.device) presentLines.push({ fh: fMid, gapAfter: Math.round(fMid * 0.3) + lineGapExtra, text: zplText(data.device, 28) });
+  if (data.sub) presentLines.push({ fh: fMid, gapAfter: Math.round(fMid * 0.3) + lineGapExtra, text: zplText(data.sub, 28) });
   if (data.imei) presentLines.push({ fh: fSml, gapAfter: Math.round(fSml * 0.3) + lineGapExtra, text: zplText(data.imei, 26) });
   if (data.issue) presentLines.push({ fh: fSml, gapAfter: 0, text: zplText(data.issue, 30) });
   const contentH = presentLines.reduce((sum, l) => sum + l.fh + l.gapAfter, 0) - presentLines[presentLines.length - 1].gapAfter;

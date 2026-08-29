@@ -63,6 +63,16 @@ describe('buildZpl', () => {
     expect(z).toContain('A B C');
   });
 
+  it('omits idLine entirely when not provided — no reserved blank line (wholesale, batch number dropped)', () => {
+    const z = buildZpl({ org: 'FlipThatTech', qrData: 'x' }, dims('2x1'), 203);
+    expect(z).not.toContain('undefined');
+  });
+
+  it('renders an optional `sub` line when provided (e.g. wholesale\'s "Store Device")', () => {
+    const z = buildZpl({ org: 'FlipThatTech', sub: 'Store Device', qrData: 'x' }, dims('2x1'), 203);
+    expect(z).toContain('Store Device');
+  });
+
   it('prints a user-added custom size the same way (sourced from the merged list)', () => {
     // A size someone adds in Settings must work on the Zebra path with no extra
     // wiring — buildZpl just takes the chosen dims from the merged list.
