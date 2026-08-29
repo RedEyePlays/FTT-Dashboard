@@ -18,7 +18,7 @@ import { useIsMobile } from '../hooks/useMediaQuery';
 import { ResponsiveDialog, EmptyState } from './responsive';
 import { InvSection, INV_SECTIONS } from '../domain/inventoryNav';
 import { getDeviceDisplayName, priceFieldFor, isCostRevealingColumn } from '../domain/inventory';
-import { listingPlatformsLabel } from '../domain/listing';
+import { listingPlatformsLabel, listingBadgeText, listedElsewhereTitle } from '../domain/listing';
 import { clampWidth, fitWidths } from '../domain/columnLayout';
 import { usePersistedFilter } from '../hooks/usePersistedFilter';
 import { todayISO } from '../domain/dates';
@@ -158,6 +158,14 @@ const STATUS_CELL: Record<DeviceStatus, string> = {
 // widening the column, and the SKU itself truncates.
 const REPAIR_SKU_CELL = `${STATUS_CELL.pending_repair} font-mono text-xs`;
 const repairSkuTitle = (r: Repair): string => `In repair — ${r.repairNumber} · ${REPAIR_STATUS_LABEL[r.status]}`;
+
+// The Item cell's listed-elsewhere treatment. Deliberately the SAME amber as
+// the mobile item card's badge (components/InventoryView.tsx's ItemCard) so one
+// state has one color across both views — and deliberately a different hue from
+// REPAIR_SKU_CELL's orange above, since a device can be BOTH in repair and
+// listed elsewhere at once and the two flags must stay tellable apart. They
+// also live on different cells (SKU vs Item), so they never compete for width.
+const LISTED_CELL = 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300';
 
 // Short labels for the compact in-table status pill (values are unchanged).
 const STATUS_SHORT: Record<DeviceStatus, string> = {
@@ -1083,10 +1091,35 @@ const Sheet: React.FC<{
                         // Item: a single plain text field typed straight into `item`.
                         // Empty legacy rows show their brand+model name as a
                         // placeholder (still displayed everywhere via the helper).
-                        <input type="text" value={(i.item as any) ?? ''} title={c.compute!(i)}
-                          placeholder={c.compute!(i) === '—' ? 'Item name' : c.compute!(i)}
-                          onChange={e => onUpdate(i.id, 'item', e.target.value)}
-                          className={`${cellBase} ${emph(c)}`} />
+                        //
+                        // A device also listed on an external marketplace carries
+                        // its flag HERE, beside the name — the same cell the mobile
+                        // item card badges, and the same reasoning as the in-repair
+                        // SKU cell above: this table has no Status column and isn't
+                        // getting one, so an existing cell has to carry the state.
+                        // The badge is `shrink-0` beside a `flex-1 min-w-0` input,
+                        // so it never widens the column or clips itself — the input
+                        // gives up the width, exactly as the SKU truncates for the
+                        // wrench icon. Unlisted devices render the bare input, byte
+                        // for byte what they rendered before.
+                        (i.listedPlatforms?.length || 0) > 0 ? (
+                          <div className="flex items-center gap-1 pr-1">
+                            <input type="text" value={(i.item as any) ?? ''} title={c.compute!(i)}
+                              placeholder={c.compute!(i) === '—' ? 'Item name' : c.compute!(i)}
+                              onChange={e => onUpdate(i.id, 'item', e.target.value)}
+                              className={`${cellBase} flex-1 min-w-0 ${emph(c)}`} />
+                            <span title={listedElsewhereTitle(i.listedPlatforms)}
+                              className={`shrink-0 inline-flex items-center gap-0.5 text-[10px] font-semibold px-1 py-0.5 rounded ${LISTED_CELL}`}>
+                              <Tag className="w-3 h-3 shrink-0" />
+                              {listingBadgeText(i.listedPlatforms)}
+                            </span>
+                          </div>
+                        ) : (
+                          <input type="text" value={(i.item as any) ?? ''} title={c.compute!(i)}
+                            placeholder={c.compute!(i) === '—' ? 'Item name' : c.compute!(i)}
+                            onChange={e => onUpdate(i.id, 'item', e.target.value)}
+                            className={`${cellBase} ${emph(c)}`} />
+                        )
                       ) : c.type === 'computed' ? (
                         <div title={c.compute!(i)} className={`px-2 py-1.5 text-sm truncate ${c.align === 'right' ? 'text-right font-mono' : ''} ${emph(c)}`}>
                           {c.key === '__profit' && i.soldDate ? <span className={profitOf(i) >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}>{c.compute!(i)}</span> : c.compute!(i)}
