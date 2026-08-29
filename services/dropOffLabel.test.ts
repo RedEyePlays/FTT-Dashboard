@@ -59,7 +59,7 @@ describe('drop-off label money — just the amount owed, no funding-source wordi
     expect(dropOffLabelMoney(d({ paidBy: 'personal', purchasePrice: 100, dropOffFee: 20 })).totalOwed).toBe(120);
   });
 
-  it('no PAID_BY_LABEL / funding-source wording prints on the label at all — the bottom meta row is date + ref only', () => {
+  it('no PAID_BY_LABEL / funding-source wording prints on the label at all', () => {
     for (const paidBy of ['store', 'runner', 'personal'] as const) {
       const html = printed({ paidBy });
       expect(html).not.toContain('Store-funded');
@@ -69,15 +69,36 @@ describe('drop-off label money — just the amount owed, no funding-source wordi
   });
 });
 
-describe('drop-off label content — who, what, when, which', () => {
-  it('names the device buyer, the device, the IMEI, the drop-off date and a reference id', () => {
+describe('drop-off label content — who and what (the bottom meta row is gone)', () => {
+  it('names the device buyer, the device and the IMEI', () => {
     const html = printed({});
     expect(html).toContain('Marcus Webb');
     expect(html).toContain('iPhone 13 Pro');
     expect(html).toContain('356789012345678');
-    expect(html).toContain('Dropped 2026-08-20');
-    expect(html).toContain('Ref do-12345'); // the drop-off id, shortened like sale refs
     expect(html).toContain('FlipThatTech');
+  });
+
+  // The bottom meta row ("Dropped {date} · Ref {id}") was removed at the
+  // owner's request: the label now ENDS at the money line. These assertions
+  // used to require exactly the opposite (toContain 'Dropped 2026-08-20' /
+  // 'Ref do-12345') — they're inverted here rather than deleted, so the
+  // removal itself is what's pinned down, not merely un-checked.
+  it('prints no "Dropped {date}" text and no "Ref {id}" text anywhere', () => {
+    const html = printed({});
+    expect(html).not.toContain('Dropped');
+    expect(html).not.toContain('Ref ');
+    expect(html).not.toContain('2026-08-20'); // the date value itself, not just its label
+    expect(html).not.toContain('do-12345');   // the reference value itself
+  });
+
+  it('the money line is unaffected — it is still present, and it is now the LAST thing on the label', () => {
+    const html = printed({ paidBy: 'store', purchasePrice: 100, dropOffFee: 20 });
+    expect(html).toContain('$100.00+20.00');
+    // Nothing renders after the money row: its <div> is the final element
+    // inside the label body, immediately followed by the body's closing tag.
+    const moneyDiv = html.match(/<div style="[^"]*border-top[^"]*">[^<]*<\/div>/)![0];
+    expect(moneyDiv).toContain('$100.00+20.00');
+    expect(html).toContain(`${moneyDiv}\n    </div>`);
   });
 
   it('falls back to a clear placeholder rather than a blank name when the buyer record is missing', () => {

@@ -21,8 +21,13 @@ export type Dpi = 203 | 300;
 
 export interface ZplLabelData {
   org: string;      // "FlipThatTech"
-  idLine: string;   // repair number (retail) or batch number + line (wholesale)
-  device: string;   // device name
+  idLine: string;   // short repair code (retail) or batch number (wholesale)
+  // Device name. OPTIONAL: the repair label no longer prints a device/model
+  // line at all (the tag is attached to the device itself), so
+  // RepairLabelModal omits it — matching the HTML/print and PDF paths. Left on
+  // the interface because this builder is a general-purpose ZPL renderer and a
+  // caller that DOES have a device name to print still gets the line.
+  device?: string;
   imei?: string;    // IMEI / serial
   issue?: string;   // reported issue
   qrData: string;   // encoded into the QR (the repair/device document id)
@@ -68,6 +73,18 @@ export function buildZpl(data: ZplLabelData, dims: LabelDims, dpi: Dpi, density?
 
   // QR magnification: target ~40–62% of the short edge; a v1–v4 QR is ~21–33
   // modules, so mag = target / ~30, clamped to a sane thermal range.
+  //
+  // DELIBERATELY LEFT AS-IS while the HTML/print and PDF paths shrank the
+  // repair label's QR by ~35% (services/labelLayout.ts's VARIANT_QR_SCALE).
+  // ZPL is a physically different renderer: this size is not a continuous mm
+  // value but an INTEGER module magnification, so on the 2×1" stock at 203dpi
+  // a 0.65 factor is not a 35% trim — it steps mag 4 → 3, a 25% jump that
+  // lands the printed QR near the smallest reliably-scanning size this
+  // codebase has evidence for, with no intermediate value available and no
+  // physical Zebra print possible in this environment to verify it. The
+  // conservative choice on a print path that is the PRIMARY button whenever a
+  // Zebra is attached is to keep a size already proven in production rather
+  // than trade scan reliability for cosmetic parity with the other two paths.
   const qrTarget = Math.min(w, h) * (dims.h >= 3 ? 0.4 : 0.62);
   const qrMag = Math.max(2, Math.min(10, Math.round(qrTarget / 30)));
   const qrPx = qrMag * 30; // approximate rendered size for placement
@@ -99,8 +116,12 @@ export function buildZpl(data: ZplLabelData, dims: LabelDims, dpi: Dpi, density?
   const presentLines: { fh: number; gapAfter: number; text: string }[] = [
     { fh: fSml, gapAfter: Math.round(fSml * 0.35) + lineGapExtra, text: zplText(data.org, 24) },
     { fh: fBig, gapAfter: Math.round(fBig * 0.25) + lineGapExtra, text: zplText(data.idLine, 22) },
-    { fh: fMid, gapAfter: Math.round(fMid * 0.3) + lineGapExtra, text: zplText(data.device, 28) },
   ];
+  // Conditional, like imei/issue below — an omitted device must not reserve
+  // (and then leave blank) the vertical space its line would have taken, which
+  // is what pushing it unconditionally would do to contentH and to every
+  // line's y position beneath it.
+  if (data.device) presentLines.push({ fh: fMid, gapAfter: Math.round(fMid * 0.3) + lineGapExtra, text: zplText(data.device, 28) });
   if (data.imei) presentLines.push({ fh: fSml, gapAfter: Math.round(fSml * 0.3) + lineGapExtra, text: zplText(data.imei, 26) });
   if (data.issue) presentLines.push({ fh: fSml, gapAfter: 0, text: zplText(data.issue, 30) });
   const contentH = presentLines.reduce((sum, l) => sum + l.fh + l.gapAfter, 0) - presentLines[presentLines.length - 1].gapAfter;
