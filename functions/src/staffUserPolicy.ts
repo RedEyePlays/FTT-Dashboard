@@ -100,6 +100,138 @@ export function validatePinTriple(input: { pinHash?: unknown; pinSalt?: unknown;
 // mechanism, just its own ATTEMPTS map keyed by caller uid.
 export { recordAttempt, RATE_LIMIT_WINDOW_MS, RATE_LIMIT_MAX_PER_WINDOW } from "./staffPasswordPolicy";
 
+// --- Failure classification --------------------------------------------------
+// `internal` is what a callable returns for ANY unhandled exception, so a bare
+// `internal` told the person hitting it nothing and left the real cause only in
+// the Functions logs, which they can't read. Every failure mode we can name is
+// classified here into a specific code + message, so `internal` is left to mean
+// only what it should: a genuine unexpected crash.
+
+export type CreateUserErrorCode =
+  | "already-exists"
+  | "invalid-argument"
+  | "permission-denied"
+  | "unavailable"
+  | "resource-exhausted"
+  | "failed-precondition"
+  | "internal";
+
+export interface ClassifiedError {
+  code: CreateUserErrorCode;
+  message: string;
+  /** True only for a genuine crash — the one case worth paging on. */
+  unexpected: boolean;
+}
+
+// Firebase Admin Auth error codes, mapped to what the operator can actually do
+// about each. Anything not listed falls through to `internal`.
+const AUTH_ERROR_MAP: Record<string, { code: CreateUserErrorCode; message: string }> = {
+  "auth/email-already-exists": {
+    code: "already-exists",
+    message: "An account with that email already exists. Use a different email, or reset that account's password instead.",
+  },
+  "auth/invalid-email": {
+    code: "invalid-argument",
+    message: "That doesn't look like a valid email address.",
+  },
+  "auth/invalid-password": {
+    code: "invalid-argument",
+    message: `The password doesn't meet Firebase's requirements (at least ${MIN_PASSWORD_LENGTH} characters).`,
+  },
+  "auth/weak-password": {
+    code: "invalid-argument",
+    message: `That password is too weak. Use at least ${MIN_PASSWORD_LENGTH} characters.`,
+  },
+  "auth/uid-already-exists": {
+    code: "already-exists",
+    message: "An account with that id already exists.",
+  },
+  "auth/insufficient-permission": {
+    code: "failed-precondition",
+    message: "The server isn't permitted to create accounts. An administrator needs to check the service account's permissions.",
+  },
+  "auth/internal-error": {
+    code: "unavailable",
+    message: "The account service is temporarily unavailable. Please try again in a moment.",
+  },
+  "auth/too-many-requests": {
+    code: "resource-exhausted",
+    message: "Too many attempts against the account service. Please wait a minute and try again.",
+  },
+  "auth/operation-not-allowed": {
+    code: "failed-precondition",
+    message: "Email/password sign-in is disabled for this project. Enable it in the Firebase console, then try again.",
+  },
+};
+
+/**
+ * Classify a thrown Admin-SDK error into a specific callable error. Pure and
+ * dependency-free so every branch is unit-testable without the Functions
+ * runtime — the same split the rest of this file uses.
+ */
+export function classifyCreateUserError(err: unknown): ClassifiedError {
+  const code = typeof (err as { code?: unknown })?.code === "string" ? (err as { code: string }).code : "";
+  const mapped = AUTH_ERROR_MAP[code];
+  if (mapped) return { ...mapped, unexpected: false };
+
+  // Network/transport failures reaching Google's APIs — retryable, and very
+  // much not a bug in this function.
+  if (code === "ECONNRESET" || code === "ETIMEDOUT" || code === "ENOTFOUND" || code === "EAI_AGAIN") {
+    return {
+      code: "unavailable",
+      message: "Couldn't reach the account service. Check the connection and try again.",
+      unexpected: false,
+    };
+  }
+  return {
+    code: "internal",
+    message: "Something went wrong creating the account. The error has been logged — please report it if it keeps happening.",
+    unexpected: true,
+  };
+}
+
+/**
+ * The safe-to-log shape of a failed create. Deliberately takes NO password and
+ * has no field that could hold one — the structural reason a credential cannot
+ * end up in a log line, rather than a rule someone has to remember. The email
+ * is included because it's the only way to correlate a report ("I couldn't add
+ * Sam") with a log entry, and it's already stored in plain text on the user doc
+ * and in the audit log.
+ */
+export interface CreateUserFailureLog {
+  event: "createStaffUser.failure";
+  stage: "auth" | "firestore" | "audit";
+  callerUid: string;
+  targetEmail: string;
+  targetRole: string;
+  authCode: string;
+  resultCode: CreateUserErrorCode;
+  unexpected: boolean;
+}
+
+export function buildFailureLog(params: {
+  stage: "auth" | "firestore" | "audit";
+  callerUid: string;
+  targetEmail: string;
+  targetRole: unknown;
+  err: unknown;
+  classified: ClassifiedError;
+}): CreateUserFailureLog {
+  const authCode = typeof (params.err as { code?: unknown })?.code === "string"
+    ? (params.err as { code: string }).code
+    : "";
+  return {
+    event: "createStaffUser.failure",
+    stage: params.stage,
+    callerUid: params.callerUid,
+    targetEmail: params.targetEmail,
+    targetRole: typeof params.targetRole === "string" ? params.targetRole : "",
+    authCode,
+    resultCode: params.classified.code,
+    unexpected: params.classified.unexpected,
+  };
+}
+
 /**
  * The audit payload written for a successful create. Takes no password or PIN
  * material at all — the structural reason it cannot leak either.

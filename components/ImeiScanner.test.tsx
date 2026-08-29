@@ -17,6 +17,14 @@ import { ImeiScanner } from './ImeiScanner';
 
 vi.mock('../services/imeiBarcode', () => ({
   isBarcodeDetectionSupported: vi.fn(() => false),
+  // The scanner's live loop now gates on this, NOT on the native-only
+  // isBarcodeDetectionSupported — barcode scanning is always available since
+  // a JS fallback ships (services/imeiBarcodeFallback.ts). The tier order
+  // these tests assert (barcode → OCR → AI) is unchanged; what changed is
+  // that tier 1 no longer silently no-ops where the native API is missing.
+  isBarcodeScanningAvailable: vi.fn(() => true),
+  liveScanIntervalMs: vi.fn(() => 600),
+  prewarmBarcodeFallback: vi.fn(),
   detectBarcodes: vi.fn(async () => [] as string[]),
 }));
 vi.mock('../services/imeiOcr', () => ({

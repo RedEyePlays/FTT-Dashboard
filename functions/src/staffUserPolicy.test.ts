@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import {
   authorizeStaffUserCreate,
   buildCreateAuditEntry,
+  buildFailureLog,
+  classifyCreateUserError,
   UserRecord,
   validateEmail,
   validatePinTriple,
@@ -148,4 +150,116 @@ test("the create audit entry identifies who created whom, and contains no passwo
   const json = JSON.stringify(entry);
   assert.equal(json.toLowerCase().includes("password"), false);
   assert.equal(json.toLowerCase().includes("pin"), false);
+});
+
+// --- Failure classification --------------------------------------------------
+// A bare `internal` is what a callable returns for ANY unhandled exception, so
+// it told the person hitting it nothing and left the real cause visible only in
+// the Functions logs. These lock in that every named failure gets its own code,
+// that `internal` is reserved for a genuine crash, and — the security-relevant
+// one — that no log line can carry a credential.
+
+test("classifyCreateUserError: a duplicate email is 'already-exists', not 'internal'", () => {
+  const c = classifyCreateUserError({ code: "auth/email-already-exists" });
+  assert.equal(c.code, "already-exists");
+  assert.equal(c.unexpected, false);
+  assert.match(c.message, /already exists/i);
+});
+
+test("classifyCreateUserError: invalid email and weak password are both invalid-argument", () => {
+  assert.equal(classifyCreateUserError({ code: "auth/invalid-email" }).code, "invalid-argument");
+  assert.equal(classifyCreateUserError({ code: "auth/invalid-password" }).code, "invalid-argument");
+  assert.equal(classifyCreateUserError({ code: "auth/weak-password" }).code, "invalid-argument");
+});
+
+test("classifyCreateUserError: a server-side permission problem is failed-precondition, with actionable advice", () => {
+  const c = classifyCreateUserError({ code: "auth/insufficient-permission" });
+  assert.equal(c.code, "failed-precondition");
+  assert.equal(c.unexpected, false);
+  assert.match(c.message, /permissions/i);
+
+  // Email/password sign-in disabled is a project misconfiguration, not a crash.
+  const off = classifyCreateUserError({ code: "auth/operation-not-allowed" });
+  assert.equal(off.code, "failed-precondition");
+  assert.match(off.message, /Firebase console/i);
+});
+
+test("classifyCreateUserError: transient service and network failures are retryable, not crashes", () => {
+  for (const code of ["auth/internal-error", "ECONNRESET", "ETIMEDOUT", "ENOTFOUND", "EAI_AGAIN"]) {
+    const c = classifyCreateUserError({ code });
+    assert.equal(c.code, "unavailable", `expected ${code} -> unavailable`);
+    assert.equal(c.unexpected, false);
+  }
+  assert.equal(classifyCreateUserError({ code: "auth/too-many-requests" }).code, "resource-exhausted");
+});
+
+test("classifyCreateUserError: 'internal' is reserved for genuinely unexpected failures", () => {
+  for (const err of [new Error("kaboom"), { code: "something/unheard-of" }, null, undefined, "a string"]) {
+    const c = classifyCreateUserError(err);
+    assert.equal(c.code, "internal");
+    assert.equal(c.unexpected, true); // the ONLY case flagged as a real crash
+  }
+});
+
+test("buildFailureLog: carries enough to debug — caller, target, stage, auth code", () => {
+  const err = { code: "auth/email-already-exists" };
+  const log = buildFailureLog({
+    stage: "auth",
+    callerUid: "owner-uid",
+    targetEmail: "jordan@yourshop.local",
+    targetRole: "employee",
+    err,
+    classified: classifyCreateUserError(err),
+  });
+  assert.equal(log.event, "createStaffUser.failure");
+  assert.equal(log.stage, "auth");
+  assert.equal(log.callerUid, "owner-uid");
+  assert.equal(log.authCode, "auth/email-already-exists");
+  assert.equal(log.resultCode, "already-exists");
+  assert.equal(log.unexpected, false);
+});
+
+test("buildFailureLog: NEVER carries a password or PIN, even when handed one", () => {
+  // The structural guarantee: the builder has no password/PIN parameter, so an
+  // extra property on the thrown error cannot reach the serialized log line.
+  const err = Object.assign(new Error("boom"), {
+    code: "auth/invalid-password",
+    password: "hunter2-super-secret",
+    pinHash: "deadbeef",
+  });
+  const log = buildFailureLog({
+    stage: "auth",
+    callerUid: "owner-uid",
+    targetEmail: "jordan@yourshop.local",
+    targetRole: "technician",
+    err,
+    classified: classifyCreateUserError(err),
+  });
+  const json = JSON.stringify(log).toLowerCase();
+  // The credential VALUES are what must never appear.
+  assert.equal(json.includes("hunter2"), false);
+  assert.equal(json.includes("deadbeef"), false);
+  // And no field carries them: the log's keys are a closed, known set. (The
+  // literal word "password" CAN legitimately appear inside `authCode` — e.g.
+  // "auth/invalid-password" — which is a Firebase error code, not a secret,
+  // and is exactly the sort of detail that makes a failure debuggable.)
+  assert.deepEqual(Object.keys(log).sort(), [
+    "authCode", "callerUid", "event", "resultCode", "stage", "targetEmail", "targetRole", "unexpected",
+  ]);
+  assert.equal(log.authCode, "auth/invalid-password");
+  const asRecord = log as unknown as Record<string, unknown>;
+  assert.equal(asRecord.password, undefined);
+  assert.equal(asRecord.pinHash, undefined);
+});
+
+test("no classified message ever echoes a credential back to the caller", () => {
+  // Every message is a fixed string chosen by code — none is built from input.
+  for (const code of [
+    "auth/email-already-exists", "auth/invalid-email", "auth/invalid-password", "auth/weak-password",
+    "auth/uid-already-exists", "auth/insufficient-permission", "auth/internal-error",
+    "auth/too-many-requests", "auth/operation-not-allowed", "unknown/whatever",
+  ]) {
+    const msg = classifyCreateUserError({ code, password: "hunter2-super-secret" }).message.toLowerCase();
+    assert.equal(msg.includes("hunter2"), false, `leaked for ${code}`);
+  }
 });

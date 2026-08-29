@@ -62,6 +62,7 @@ import { decideAutoInventory, autoInventoryPurchaseDrawerEffect, AutoInventoryNo
 import { buildQuickPurchaseItem, quickPurchaseDrawerEffect } from './domain/quickPurchase';
 import type { QuickPurchaseSaveInput } from './components/QuickPurchaseView';
 import { listingPlatformsLabel } from './domain/listing';
+import { describeCallableError } from './domain/callableErrors';
 import { AppSettings } from './domain/settings';
 import { techUpdateRepair } from './services/repairFunctions';
 import { setStaffPassword, createStaffUser } from './services/userFunctions';
@@ -1440,10 +1441,19 @@ const App: React.FC = () => {
     try {
       await createStaffUser(input);
       return null;
-    } catch (e: any) {
-      return typeof e?.message === 'string' && e.message
-        ? e.message.replace(/^.*?:\s*/, '')
-        : 'Could not create the account. Please try again.';
+    } catch (e: unknown) {
+      // The bare `internal` this used to surface said nothing actionable. The
+      // callable now returns a specific code per known failure mode, and this
+      // classifies what's left — offline / unreachable / a deliberate server
+      // refusal / a genuine crash — always logging the real error (never the
+      // password: `input` is deliberately not passed to either sink).
+      const failure = describeCallableError(e, {
+        online: navigator.onLine,
+        fallback: 'Could not create the account. Please try again.',
+      });
+      console.error('[createStaffUser]', failure.kind, e, { role: input.role });
+      if (failure.unexpected) captureError(e, { source: 'createStaffUser', kind: failure.kind, role: input.role });
+      return failure.message;
     }
   };
 
