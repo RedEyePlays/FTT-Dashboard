@@ -1,6 +1,7 @@
 import { InventoryItem, Repair, ViewState } from '../types';
 import { kindOf, getDeviceDisplayName } from './inventory';
 import { toISODate } from './dates';
+import { openRepairFor, repairAgeDays } from './repairs';
 
 // --- Actionable alerts ------------------------------------------------------
 //
@@ -20,7 +21,15 @@ export const READY_PICKUP_STALE_DAYS = 3;
 // READY_PICKUP_STALE_DAYS — the alert-threshold pattern in this module.
 export const AGING_INVENTORY_DAYS = 30;
 
-export type AlertKind = 'low_stock' | 'repair_overdue' | 'repair_awaiting_pickup' | 'aging_inventory';
+// How long a device may sit flagged `pending_repair` on a still-open ticket
+// before it reads as a forgotten ticket. Same overridable alert-threshold
+// pattern as READY_PICKUP_STALE_DAYS / AGING_INVENTORY_DAYS above; sits between
+// them (a bench repair legitimately outlives the 3-day pickup nudge, but a
+// device off the sales floor for half the 30-day aging window is a problem).
+export const PENDING_REPAIR_STALE_DAYS = 14;
+
+export type AlertKind = 'low_stock' | 'repair_overdue' | 'repair_awaiting_pickup' | 'aging_inventory'
+  | 'repair_flag_stale' | 'repair_flag_orphaned';
 
 export interface Alert {
   id: string;           // stable, dedupable (e.g. "low_stock:<itemId>")
@@ -82,6 +91,58 @@ export const isAgingDevice = (i: InventoryItem, now: number, agingDays: number =
   i.deviceStatus !== 'sold' && i.deviceStatus !== 'reserved' && i.deviceStatus !== 'returned' &&
   intakeMs(i) > 0 && now - intakeMs(i) > agingDays * DAY_MS;
 
+// --- Forgotten / orphaned in-repair flags -----------------------------------
+//
+// The two failure modes of the `pending_repair` flag, both of which leave a
+// device silently out of stock with nobody looking at it:
+//  - stale:    the ticket is still open but has been for ages ("we forgot to
+//              complete the ticket").
+//  - orphaned: the device is flagged but no open ticket references it at all
+//              (the ticket was deleted or voided) — the device would otherwise
+//              be stuck out of the sellable pool forever.
+
+export type PendingRepairIssueKind = 'stale' | 'orphaned';
+
+export interface PendingRepairIssue {
+  item: InventoryItem;
+  kind: PendingRepairIssueKind;
+  repair?: Repair;  // the open ticket, for 'stale' only
+  days: number;     // days the ticket has been open ('stale') or the device held ('orphaned')
+}
+
+const isPendingRepairDevice = (i: InventoryItem): boolean =>
+  kindOf(i) === 'device' && i.deviceStatus === 'pending_repair';
+
+/** A `pending_repair` device whose linked ticket has been open longer than `staleDays`. */
+export const isStalePendingRepair = (
+  i: InventoryItem, repairs: Repair[], now: number, staleDays: number = PENDING_REPAIR_STALE_DAYS,
+): boolean => {
+  if (!isPendingRepairDevice(i)) return false;
+  const open = openRepairFor(i.id, repairs);
+  return !!open && now - (open.createdAt || now) > staleDays * DAY_MS;
+};
+
+/** A `pending_repair` device with no open ticket at all — a stale flag to clear. */
+export const isOrphanedPendingRepair = (i: InventoryItem, repairs: Repair[]): boolean =>
+  isPendingRepairDevice(i) && !openRepairFor(i.id, repairs);
+
+/** Both kinds above, in one pass — drives the Inventory filters and the Dashboard flag. */
+export const pendingRepairIssues = (
+  inventory: InventoryItem[], repairs: Repair[], now: number,
+  staleDays: number = PENDING_REPAIR_STALE_DAYS,
+): PendingRepairIssue[] => {
+  const out: PendingRepairIssue[] = [];
+  for (const i of inventory) {
+    if (!isPendingRepairDevice(i)) continue;
+    const open = openRepairFor(i.id, repairs);
+    if (!open) { out.push({ item: i, kind: 'orphaned', days: deviceAgeDays(i, now) }); continue; }
+    if (now - (open.createdAt || now) > staleDays * DAY_MS) {
+      out.push({ item: i, kind: 'stale', repair: open, days: repairAgeDays(open, now) });
+    }
+  }
+  return out;
+};
+
 // --- Builder ----------------------------------------------------------------
 
 export interface AlertsInput {
@@ -90,14 +151,16 @@ export interface AlertsInput {
   now: number;
   readyStaleDays?: number;
   agingDays?: number;
+  pendingRepairStaleDays?: number;
 }
 
 /**
  * Build the current actionable alert set: low-stock accessories, overdue repairs,
- * repairs awaiting pickup too long, and unsold devices aging in inventory.
+ * repairs awaiting pickup too long, unsold devices aging in inventory, and
+ * devices stuck flagged in-repair (a long-open or a vanished ticket).
  * Warnings first, then info.
  */
-export const buildAlerts = ({ inventory, repairs, now, readyStaleDays = READY_PICKUP_STALE_DAYS, agingDays = AGING_INVENTORY_DAYS }: AlertsInput): Alert[] => {
+export const buildAlerts = ({ inventory, repairs, now, readyStaleDays = READY_PICKUP_STALE_DAYS, agingDays = AGING_INVENTORY_DAYS, pendingRepairStaleDays = PENDING_REPAIR_STALE_DAYS }: AlertsInput): Alert[] => {
   const alerts: Alert[] = [];
 
   for (const i of inventory) {
@@ -147,6 +210,26 @@ export const buildAlerts = ({ inventory, repairs, now, readyStaleDays = READY_PI
         text: `${name === '—' ? (i.sku || 'Device') : name} has sat unsold ${deviceAgeDays(i, now)} days`,
       });
     }
+  }
+
+  for (const issue of pendingRepairIssues(inventory, repairs, now, pendingRepairStaleDays)) {
+    const name = getDeviceDisplayName(issue.item);
+    const label = name === '—' ? (issue.item.sku || 'Device') : name;
+    alerts.push(issue.kind === 'stale'
+      ? {
+        id: `repair_flag_stale:${issue.item.id}`,
+        kind: 'repair_flag_stale',
+        severity: 'warning',
+        view: 'repairs',
+        text: `${label} has been in repair ${issue.days} days — ${issue.repair!.repairNumber} still open`,
+      }
+      : {
+        id: `repair_flag_orphaned:${issue.item.id}`,
+        kind: 'repair_flag_orphaned',
+        severity: 'warning',
+        view: 'grid',
+        text: `${label} is flagged in repair but has no open ticket — clear the flag or reopen a ticket`,
+      });
   }
 
   return alerts;

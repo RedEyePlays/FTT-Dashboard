@@ -378,6 +378,17 @@ export const MobileCheckout: React.FC<Props> = (props) => {
               <label className="flex items-center gap-2 mt-2 text-amber-800 dark:text-amber-300"><input type="checkbox" checked={cx.allowListedElsewhereSale} onChange={e => cx.setAllowListedElsewhereSale(e.target.checked)} className="rounded" /> Confirmed — not already sold elsewhere</label>
             </div>
           )}
+          {cx.hasOpenRepairDevice && (
+            <div className="bg-orange-50 dark:bg-orange-900/20 border border-orange-300 dark:border-orange-500/40 rounded-xl p-3 text-sm">
+              <p className="flex items-center gap-2 font-semibold text-orange-800 dark:text-orange-300"><Wrench className="w-4 h-4" /> Open repair ticket</p>
+              {cx.openRepairLines.map(l => (
+                <p key={l.key} className="text-xs text-orange-700/80 dark:text-orange-300/80 mt-1">
+                  {l.name} has an open repair ticket {l.openRepairNumber} — confirm the device is complete, or that this is a deliberate as-is sale.
+                </p>
+              ))}
+              <label className="flex items-center gap-2 mt-2 text-orange-800 dark:text-orange-300"><input type="checkbox" checked={cx.allowOpenRepairSale} onChange={e => cx.setAllowOpenRepairSale(e.target.checked)} className="rounded" /> Sell anyway</label>
+            </div>
+          )}
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-4 space-y-1.5 text-sm">
             <div className="flex justify-between"><span className="text-slate-500 dark:text-slate-400">Subtotal</span><span className="text-slate-800 dark:text-slate-100">{money(cx.subtotal)}</span></div>
             <div className="flex justify-between"><span className="text-slate-500 dark:text-slate-400">Tax</span><span className="text-slate-600 dark:text-slate-300">{money(cx.tax)}</span></div>
@@ -405,7 +416,7 @@ export const MobileCheckout: React.FC<Props> = (props) => {
         {step < 3 ? (
           <button onClick={next} disabled={!canNext} className="ml-auto px-6 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white rounded-xl text-sm font-semibold">Next</button>
         ) : (
-          <button onClick={cx.handleCheckout} disabled={cx.isSubmitting || cx.cart.length === 0 || cx.blockedByZeroPrice || cx.blockedByListedElsewhere || cx.mixedPaymentMismatch} className="ml-auto px-6 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white rounded-xl text-sm font-semibold flex items-center gap-2"><CheckCircle className="w-4 h-4" /> {cx.isSubmitting ? 'Processing…' : cx.isLayaway ? 'Take Deposit' : 'Complete Sale'}</button>
+          <button onClick={cx.handleCheckout} disabled={cx.isSubmitting || cx.cart.length === 0 || cx.blockedByZeroPrice || cx.blockedByListedElsewhere || cx.blockedByOpenRepair || cx.mixedPaymentMismatch} className="ml-auto px-6 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white rounded-xl text-sm font-semibold flex items-center gap-2"><CheckCircle className="w-4 h-4" /> {cx.isSubmitting ? 'Processing…' : cx.isLayaway ? 'Take Deposit' : 'Complete Sale'}</button>
         )}
       </div>
 

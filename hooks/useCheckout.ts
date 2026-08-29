@@ -5,7 +5,7 @@ import { newId } from '../domain/ids';
 import { kindOf, getDeviceDisplayName } from '../domain/inventory';
 import { isZeroPricedDevice as isZeroPricedLine, cartHasZeroPricedDevice, searchCheckoutInventory, salesBalanceOwing, mixedPaymentMismatch as computeMixedPaymentMismatch, taxAppliesForSale } from '../domain/pos';
 import { hasListedElsewhere } from '../domain/listing';
-import { RepairSalePrefill, repairSalePrefill, isRepairOpen, matchesRepair } from '../domain/repairs';
+import { RepairSalePrefill, repairSalePrefill, isRepairOpen, matchesRepair, openRepairFor } from '../domain/repairs';
 import { printSalesReceipt, PAYMENT_METHOD_LABEL } from '../services/salesReceipt';
 import { PRINT_PREVIEW_BAR_STYLE, PRINT_PREVIEW_BAR_HTML } from '../services/printPreview';
 import { todayISO } from '../domain/dates';
@@ -52,6 +52,11 @@ export interface CartLine {
   // Snapshot of the source item's InventoryItem.listedPlatforms at add-to-cart
   // time (domain/listing.ts) — drives the pre-checkout double-sell warning.
   listedPlatforms?: ListingPlatform[];
+  // Snapshot of the still-open repair ticket on the source device at
+  // add-to-cart time — drives the pre-checkout "this device is on the bench"
+  // acknowledgement (same non-blocking-but-acknowledged gate as
+  // listedPlatforms above; selling a device as-is is legitimate).
+  openRepairNumber?: string;
 }
 
 // A device sold that was flagged listed elsewhere — surfaced on the post-sale
@@ -97,6 +102,10 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
   // listed elsewhere (domain/listing.ts) — same non-blocking-but-acknowledged
   // pattern as the $0-price safeguard above.
   const [allowListedElsewhereSale, setAllowListedElsewhereSale] = useState(false);
+  // Explicit override to allow completing a sale that has a device with an open
+  // repair ticket — same acknowledge-don't-block pattern as the two above (an
+  // as-is sale of a device mid-repair is a real thing; a silent one isn't).
+  const [allowOpenRepairSale, setAllowOpenRepairSale] = useState(false);
   // Sold devices that were flagged listed elsewhere, captured at the moment of
   // checkout so the confirmation screen can remind the seller to delist them —
   // guaranteed to surface at least once, independent of the Firestore write.
@@ -390,6 +399,14 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
   const hasListedElsewhereDevice = hasListedElsewhere(cart.filter(l => l.kind === 'device'));
   const blockedByListedElsewhere = hasListedElsewhereDevice && !allowListedElsewhereSale;
 
+  // Open-repair safeguard: a device whose ticket is still open is physically on
+  // the bench (often in pieces). It stays searchable and addable — an as-is sale
+  // is legitimate — but checkout is gated on an explicit acknowledgement naming
+  // the ticket, so it can never be sold silently.
+  const openRepairLines = cart.filter(l => l.kind === 'device' && !!l.openRepairNumber);
+  const hasOpenRepairDevice = openRepairLines.length > 0;
+  const blockedByOpenRepair = hasOpenRepairDevice && !allowOpenRepairSale;
+
   // ---- mutations ----
   const addDevice = (i: InventoryItem) => {
     setCart(c => [...c, {
@@ -397,6 +414,7 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
       code: i.sku || i.imei, quantity: 1, maxQty: 1, deviceType: i.deviceType,
       unitPrice: i.targetSalePrice || 0, purchaseCost: i.purchaseCost, repairCost: i.repairCost || 0,
       taxable: true, discount: 0, listedPlatforms: i.listedPlatforms,
+      openRepairNumber: openRepairFor(i.id, repairs)?.repairNumber,
     }]);
     setPicker(null); setSearch('');
   };
@@ -516,7 +534,7 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
   // stale state twice.
   const handleCheckout = async () => {
     if (isSubmittingRef.current) return;
-    if (cart.length === 0 || blockedByZeroPrice || blockedByListedElsewhere || mixedPaymentMismatch) return;
+    if (cart.length === 0 || blockedByZeroPrice || blockedByListedElsewhere || blockedByOpenRepair || mixedPaymentMismatch) return;
     isSubmittingRef.current = true;
     setIsSubmitting(true);
     try {
@@ -788,6 +806,7 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
     lineSubtotal, subtotal, discountTotal, purchaseCostTotal, repairCostTotal, totalCost, taxableBase, taxApplies, tax, platformFee, totalPaid, netProfit,
     isZeroPricedDevice, hasZeroPricedDevice, allowZeroPrice, setAllowZeroPrice, blockedByZeroPrice,
     hasListedElsewhereDevice, allowListedElsewhereSale, setAllowListedElsewhereSale, blockedByListedElsewhere, delistReminders,
+    hasOpenRepairDevice, openRepairLines, allowOpenRepairSale, setAllowOpenRepairSale, blockedByOpenRepair,
     addDevice, addAccessory, updateLine, removeLine, num, addCustomItem, handleScan, handleCheckout, isSubmitting, reset, printReceipt, printInvoice, emailReceipt, soldDeviceRows,
     scanResults, addScanResult,
     eligibleRepairs, repairMatches, addRepair,

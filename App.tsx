@@ -38,7 +38,7 @@ const TimeClockView = lazy(() => import('./components/TimeClockView').then(m => 
 const CloseOutView = lazy(() => import('./components/CloseOutView').then(m => ({ default: m.CloseOutView })));
 import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, DeviceBuyer, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission, Repair, RepairBatch, TimeEntry, PayPeriodPaid, PayPeriodApproval, BreakReason, SalesTransaction, CashReconciliation, StaffNote, BalancePayment, Expense, RecurringExpense } from './types';
 import { skuPrefix, nextSku } from './services/sku';
-import { REPAIR_PREFIX, BATCH_PREFIX, applyTechEdit, techUpdateAuditPlan, repairSalePrefill, completeRepair, completeRepairSale, dateToEpochMs } from './domain/repairs';
+import { REPAIR_PREFIX, BATCH_PREFIX, applyTechEdit, techUpdateAuditPlan, repairSalePrefill, completeRepair, completeRepairSale, dateToEpochMs, isRepairOpen, flagDeviceForRepair, restoredDeviceStatus } from './domain/repairs';
 import { MergePlan, resolveCustomerForDraft, CustomerDraft } from './domain/customers';
 import { can, canPrintDropOffLabel } from './services/rbac';
 import { downloadJson, toCSV, triggerDownload } from './services/backup';
@@ -1644,14 +1644,22 @@ const App: React.FC = () => {
   // alone (this ticket just loses its link); one referenced by nobody else is
   // flagged for review, never hard-deleted. No-op for tickets that were never
   // resolved through domain/autoInventory.ts (inventoryAutoCreated undefined).
-  const cleanupOrphanedAutoInventory = (repair: Repair): Partial<Repair> => {
-    if (!uid || !repair.inventoryId || repair.inventoryAutoCreated === undefined) return {};
-    const item = dataRef.current.find(i => i.id === repair.inventoryId);
-    if (!item?.autoCreated) return {};
+  //
+  // `itemPatch` (e.g. the in-repair status being restored as the ticket closes)
+  // is folded into whatever write this performs, and `wroteItem` reports whether
+  // it was applied — the two writes must never be issued separately against the
+  // same stale record, or the second silently clobbers the first.
+  const cleanupOrphanedAutoInventory = (
+    repair: Repair, itemPatch?: Partial<InventoryItem>,
+  ): { repair: Partial<Repair>; wroteItem: boolean } => {
+    const item = repair.inventoryId ? dataRef.current.find(i => i.id === repair.inventoryId) : undefined;
+    if (!uid || !item) return { repair: {}, wroteItem: false };
+    const applyPatch = () => { if (itemPatch) saveItem(uid, 'inventory', { ...item, ...itemPatch }); return !!itemPatch; };
+    if (repair.inventoryAutoCreated === undefined || !item.autoCreated) return { repair: {}, wroteItem: applyPatch() };
     const stillReferenced = repairsRef.current.some(r => r.id !== repair.id && r.inventoryId === repair.inventoryId);
-    if (stillReferenced) return { inventoryId: undefined };
-    saveItem(uid, 'inventory', { ...item, flaggedForReview: true });
-    return {};
+    if (stillReferenced) return { repair: { inventoryId: undefined }, wroteItem: applyPatch() };
+    saveItem(uid, 'inventory', { ...item, ...itemPatch, flaggedForReview: true });
+    return { repair: {}, wroteItem: true };
   };
 
   const handleSaveRepair = async (repair: Repair, prev?: Repair): Promise<AutoInventoryNotice | undefined> => {
@@ -1669,6 +1677,9 @@ const App: React.FC = () => {
     // wholesale device ticket is first created under a batch — a ticket's
     // inventory link, once resolved, is fixed for its lifetime.
     let notice: AutoInventoryNotice | undefined;
+    // Set when the auto-inventory path above already wrote the device's
+    // in-repair flag, so the generic flag below doesn't write it twice.
+    let inventoryFlagged = false;
     if (isNew && next.type === 'wholesale' && next.batchId && !next.inventoryId) {
       const batch = repairBatchesRef.current.find(b => b.id === next.batchId);
       const decision = decideAutoInventory(batch, next.wantsAutoInventory, next.imei, dataRef.current);
@@ -1698,6 +1709,7 @@ const App: React.FC = () => {
         next.inventoryId = result.item.id;
         if (result.action === 'create') {
           next.inventoryAutoCreated = true;
+          inventoryFlagged = true; // the created record is born 'pending_repair'
           notice = { kind: 'created', sku: result.item.sku || '' };
           // Real cash left the drawer right now if this device's cost came out
           // of store cash — mirrors the drop-off accept fix's drawer-effect
@@ -1714,8 +1726,17 @@ const App: React.FC = () => {
           }
         } else {
           next.inventoryAutoCreated = false;
-          next.inventoryPreviousStatus = result.item.deviceStatus;
-          saveItem(uid, 'inventory', { ...result.item, deviceStatus: 'pending_repair', sourceTicketId: next.id });
+          // Same flag-and-capture as any other ticket opened against an existing
+          // device (flagDeviceForRepair) — a record already flagged pending_repair
+          // by another open ticket keeps its originally captured previous status.
+          const flag = flagDeviceForRepair(result.item);
+          if (flag) {
+            next.inventoryPreviousStatus = flag.previousStatus;
+            saveItem(uid, 'inventory', { ...result.item, deviceStatus: flag.deviceStatus, sourceTicketId: next.id });
+          } else {
+            saveItem(uid, 'inventory', { ...result.item, sourceTicketId: next.id });
+          }
+          inventoryFlagged = true;
           notice = { kind: 'attached', sku: result.item.sku, previousStatus: result.item.deviceStatus };
         }
       }
@@ -1730,17 +1751,38 @@ const App: React.FC = () => {
     if ((next.status === 'completed' || next.status === 'picked_up') && !next.completedAt) {
       next = { ...completeRepair(next, Date.now(), next.status), completedBy: appUser.id };
     }
-    // Auto-inventory devices become sellable once their ticket completes — Case A
-    // (this ticket created the record) and Case B (attached to an existing one)
-    // both land here, since only auto-inventory-resolved links set this field.
-    if ((next.status === 'completed' || next.status === 'picked_up') && next.inventoryAutoCreated !== undefined && next.inventoryId) {
+    // A device with an open ticket is on the bench, not on the sales floor: any
+    // NEW ticket linked to an inventory item flags that device 'pending_repair'
+    // and captures what it was before, exactly as the auto-inventory path above
+    // always did for its own records — including a device that was already in
+    // inventory the normal (manual) way, which is the gap this closes.
+    if (isNew && isRepairOpen(next) && next.inventoryId && !inventoryFlagged) {
       const invItem = dataRef.current.find(i => i.id === next.inventoryId);
-      if (invItem && invItem.deviceStatus !== 'ready') saveItem(uid, 'inventory', { ...invItem, deviceStatus: 'ready' });
+      const flag = invItem ? flagDeviceForRepair(invItem) : null;
+      if (invItem && flag) {
+        next.inventoryPreviousStatus = flag.previousStatus;
+        saveItem(uid, 'inventory', { ...invItem, deviceStatus: flag.deviceStatus });
+      }
+    }
+    // Ticket done (completed / picked up / cancelled): put the device back the
+    // way it was. Never assumes 'ready' — a device that was reserved on a
+    // layaway goes back to 'reserved', not onto the sales floor — and leaves it
+    // flagged while a second ticket on the same device is still open
+    // (domain/repairs.ts's restoredDeviceStatus). The restore and the cancelled
+    // cleanup below share ONE inventory write, so neither clobbers the other.
+    const linkedItem = next.inventoryId ? dataRef.current.find(i => i.id === next.inventoryId) : undefined;
+    let itemPatch: Partial<InventoryItem> | undefined;
+    if (linkedItem && !isRepairOpen(next) && prev && isRepairOpen(prev)) {
+      const restored = restoredDeviceStatus(linkedItem, next, repairsRef.current);
+      if (restored && restored !== linkedItem.deviceStatus) itemPatch = { deviceStatus: restored };
     }
     // Ticket cancelled: clean up its auto-inventory link per spec point 6.
     if (next.status === 'cancelled' && prev && prev.status !== 'cancelled' && next.inventoryAutoCreated !== undefined) {
-      next = { ...next, ...cleanupOrphanedAutoInventory(next) };
+      const cleanup = cleanupOrphanedAutoInventory(next, itemPatch);
+      next = { ...next, ...cleanup.repair };
+      if (cleanup.wroteItem) itemPatch = undefined;
     }
+    if (itemPatch && linkedItem) saveItem(uid, 'inventory', { ...linkedItem, ...itemPatch });
 
     saveItem(uid, 'repairs', next);
     if (isNew) {
@@ -1787,11 +1829,14 @@ const App: React.FC = () => {
     // optimistically. An audit entry (or any of these) must never exist for a
     // change that didn't actually happen.
     techUpdateRepair(stored.id, draft).then(() => {
-      // Auto-inventory devices become sellable once their ticket completes
-      // (same rule as handleSaveRepair — see spec point 5).
-      if ((next.status === 'picked_up' || next.status === 'completed') && next.inventoryAutoCreated !== undefined && next.inventoryId) {
+      // The linked device goes back to what it was before the ticket once that
+      // ticket is done (same rule/helper as handleSaveRepair above).
+      if (!isRepairOpen(next) && isRepairOpen(stored) && next.inventoryId) {
         const invItem = dataRef.current.find(i => i.id === next.inventoryId);
-        if (invItem && invItem.deviceStatus !== 'ready') saveItem(uid, 'inventory', { ...invItem, deviceStatus: 'ready' });
+        const restored = invItem ? restoredDeviceStatus(invItem, next, repairsRef.current) : null;
+        if (invItem && restored && restored !== invItem.deviceStatus) {
+          saveItem(uid, 'inventory', { ...invItem, deviceStatus: restored });
+        }
       }
       if (stored.status !== next.status) logActivity(`${next.repairNumber} → ${next.status.replace(/_/g, ' ')}`);
       for (const e of techUpdateAuditPlan(stored, next)) audit(e.action, 'repair', e.entityId, e.before, e.after);
@@ -1808,7 +1853,15 @@ const App: React.FC = () => {
   const handleDeleteRepair = (id: string) => {
     if (!uid || appUser?.role !== 'owner') return;
     const t = repairsRef.current.find(r => r.id === id);
-    if (t) cleanupOrphanedAutoInventory(t);
+    if (t) {
+      // Deleting an open ticket must not leave its device stuck out of stock:
+      // restore the status that ticket captured right now, instead of waiting
+      // for the orphaned-flag filter to catch it later. Folded into the cleanup
+      // write so the two never overwrite each other.
+      const invItem = t.inventoryId ? dataRef.current.find(i => i.id === t.inventoryId) : undefined;
+      const restored = invItem ? restoredDeviceStatus(invItem, t, repairsRef.current) : null;
+      cleanupOrphanedAutoInventory(t, restored && restored !== invItem!.deviceStatus ? { deviceStatus: restored } : undefined);
+    }
     audit('repair.delete', 'repair', id, t);
     deleteItem(uid, 'repairs', id);
   };

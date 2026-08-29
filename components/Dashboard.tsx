@@ -7,6 +7,7 @@ import { isReversed } from '../domain/pos';
 import { todayISO } from '../domain/dates';
 import { kindOf } from '../domain/inventory';
 import { isInProgress } from '../domain/repairs';
+import { pendingRepairIssues, PENDING_REPAIR_STALE_DAYS } from '../domain/alerts';
 import { printSalesReceipt } from '../services/salesReceipt';
 import { getStoreProfile } from './SettingsModal';
 import {
@@ -60,6 +61,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, salesTransactions, a
     () => (cashReconciliations ? unreconciledDays(cashReconciliations, todayISO()) : []),
     [cashReconciliations],
   );
+  // Devices stuck flagged in-repair: a ticket left open for weeks, or a flag
+  // whose ticket no longer exists. Both mean stock silently out of the sellable
+  // pool with nobody looking at it — same informational nudge treatment as the
+  // unreconciled-cash flag below, never a blocking modal.
+  const repairFlags = useMemo(() => pendingRepairIssues(data, repairs, Date.now()), [data, repairs]);
 
   const rep = useMemo(() => {
     const todayStr = ymd(new Date());
@@ -198,6 +204,27 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, salesTransactions, a
           </button>
         )}
       </div>
+
+      {/* Devices left flagged in repair — a long-open ticket, or none at all. */}
+      {repairFlags.length > 0 && (
+        <button
+          onClick={onViewRepairs}
+          disabled={!onViewRepairs}
+          className={`w-full flex items-center gap-3 text-left rounded-xl border border-orange-200 dark:border-orange-900/50 bg-orange-50 dark:bg-orange-900/20 px-4 py-3 ${onViewRepairs ? 'hover:border-orange-400 cursor-pointer' : 'cursor-default'}`}
+        >
+          <Wrench className="w-5 h-5 text-orange-600 dark:text-orange-400 shrink-0" />
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-semibold text-orange-800 dark:text-orange-200">
+              {repairFlags.length === 1 ? '1 device is stuck in repair' : `${repairFlags.length} devices are stuck in repair`}
+            </span>
+            <span className="block text-xs text-orange-700/80 dark:text-orange-300/80 truncate">
+              {repairFlags.slice(0, 3).map(f => `${f.item.sku || f.item.item || 'Device'} — ${f.kind === 'orphaned' ? 'no open ticket' : `${f.repair!.repairNumber} open ${f.days}d`}`).join(', ')}
+              {repairFlags.length > 3 ? ` +${repairFlags.length - 3} more` : ''} · flagged after {PENDING_REPAIR_STALE_DAYS} days
+            </span>
+          </span>
+          {onViewRepairs && <ArrowRight className="w-4 h-4 text-orange-600 dark:text-orange-400 shrink-0" />}
+        </button>
+      )}
 
       {/* Days whose drawer was started but never counted. Real cash movement
           nobody reconciled, otherwise invisible once the date rolls over. */}
