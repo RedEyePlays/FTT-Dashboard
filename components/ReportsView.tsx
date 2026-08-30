@@ -140,7 +140,7 @@ export const ReportsView: React.FC<Props> = ({
         <DailyHistoryTab
           salesTransactions={salesTransactions} cashReconciliations={cashReconciliations}
           repairs={repairs} inventory={inventory} customers={customers} auditLogs={auditLogs} activity={activity}
-          timeEntries={timeEntries} users={users}
+          timeEntries={timeEntries} users={users} settlements={settlements}
         />
       )}
       {tab === 'cash' && tabAllowed('cash', perms) && <CashReconTab salesTransactions={salesTransactions} cashReconciliations={cashReconciliations} onSave={onSaveReconciliation} />}
@@ -181,7 +181,10 @@ const DailyHistoryTab: React.FC<{
   activity: ActivityEntry[];
   timeEntries: TimeEntry[];
   users: AppUser[];
-}> = ({ salesTransactions, cashReconciliations, repairs, inventory, customers, auditLogs, activity, timeEntries, users }) => {
+  // Device-buyer settlements — fee income only (see domain/analytics.ts), so a
+  // day's history reconciles with the P&L tab for the same date.
+  settlements: Settlement[];
+}> = ({ salesTransactions, cashReconciliations, repairs, inventory, customers, auditLogs, activity, timeEntries, users, settlements }) => {
   const [date, setDate] = useState(todayISO());
   const now = Date.now();
 
@@ -189,8 +192,8 @@ const DailyHistoryTab: React.FC<{
   // both use — a single-day custom range around the picked date.
   const range = useMemo(() => presetRange('custom', now, { start: date, end: date }), [date, now]);
   const a = useMemo(
-    () => computeAnalytics(range, { salesTransactions, repairs, inventory, customers, auditLogs, activity }, now),
-    [range, salesTransactions, repairs, inventory, customers, auditLogs, activity, now],
+    () => computeAnalytics(range, { salesTransactions, repairs, inventory, customers, auditLogs, activity, settlements }, now),
+    [range, salesTransactions, repairs, inventory, customers, auditLogs, activity, settlements, now],
   );
   const eod = a.eod;
 

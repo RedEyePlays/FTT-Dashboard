@@ -376,6 +376,39 @@ export function isLegacySettlement(s: Pick<Settlement, 'model'>): boolean {
 export const LEGACY_SETTLEMENT_NOTE =
   'Recorded under the prior model (store reimbursed the device buyer) — shown exactly as originally recorded.';
 
+/**
+ * The store's income from a set of settlements: the SERVICE FEES ONLY.
+ *
+ * This is the single derivation of "what part of a settlement is profit", and
+ * it exists as one shared function precisely so the P&L report
+ * (domain/reports.ts's profitAndLoss) and the owner-facing profit figures
+ * (domain/analytics.ts — Dashboard tiles, Close Out, Daily History) can never
+ * drift apart. They previously could: the P&L counted fee income and the
+ * analytics path had no notion of settlements at all, so settling a buyer
+ * moved the P&L and left the day's profit tiles unchanged.
+ *
+ * WHAT IS DELIBERATELY EXCLUDED, and why it must stay excluded: the principal
+ * (`principalStoreFunded` / `principalPersonalFunded` / `principalOwed`) is
+ * the purchase money the store advanced coming back — a RECEIVABLE being
+ * settled, not revenue. Counting it would overstate profit by the entire
+ * device price ($120 instead of $20 on a $100 device with a $20 fee). The
+ * same goes for `amountOwed` and `storeCashIn`, which bundle principal in and
+ * are cash-movement figures, not income.
+ *
+ * Legacy (pre-financing-rework) settlements are included on the same terms:
+ * `totalFees` means the same thing on both record shapes, and excluding them
+ * would silently drop real historical fee income from the totals.
+ *
+ * The caller supplies the date filter, since the P&L works in YYYY-MM-DD
+ * strings and analytics works in epoch-ms ranges — the money rule is what's
+ * shared here, not the calendar convention.
+ */
+export function settlementFeeIncome(
+  settlements: Pick<Settlement, 'totalFees'>[],
+): number {
+  return settlements.reduce((sum, s) => sum + (s.totalFees || 0), 0);
+}
+
 /* ---------------- Legacy field normalization ---------------- */
 
 /**

@@ -37,6 +37,44 @@ export interface StoredRepair {
   [key: string]: unknown;
 }
 
+const round2 = (n: number): number => Math.round((n || 0) * 100) / 100;
+
+/**
+ * The ticket's parts COST. Mirrors domain/repairs.ts's repairPartsCost /
+ * partsTotal — an independent copy for the same reason the constants above are
+ * (functions/ can't import the client tree); if that changes, change this too.
+ */
+function partsCostOf(stored: StoredRepair): number {
+  const parts = stored.parts;
+  if (Array.isArray(parts) && parts.length) {
+    return round2(parts.reduce((sum: number, p: unknown) => {
+      const part = (p || {}) as { unitCost?: unknown; quantity?: unknown };
+      const unit = typeof part.unitCost === "number" ? part.unitCost : 0;
+      const qty = typeof part.quantity === "number" ? part.quantity : 0;
+      return sum + unit * qty;
+    }, 0));
+  }
+  return round2(typeof stored.partsCost === "number" ? stored.partsCost : 0);
+}
+
+/**
+ * What this ticket should currently contribute to its linked inventory item's
+ * `repairCost`. Mirrors domain/repairCostWriteback.ts's
+ * targetRepairCostContribution — see that file for the full reasoning.
+ *
+ * Derived ENTIRELY from `stored` (the ticket's real parts) plus the resulting
+ * status, never from `draft`: a technician can set the status but cannot edit
+ * `parts`/`partsCost` (they're not in TECH_EDITABLE_FIELDS), so there is no
+ * path by which a technician could influence the AMOUNT written here — only
+ * whether the ticket is terminal, which is exactly the decision they're
+ * allowed to make.
+ */
+export function techRepairCostApplied(stored: StoredRepair, nextStatus: string | undefined): number {
+  const linked = typeof stored.inventoryId === "string" && !!stored.inventoryId;
+  if (!linked || !nextStatus || !TERMINAL_TECH_STATUSES.has(nextStatus)) return 0;
+  return partsCostOf(stored);
+}
+
 /**
  * Build the Firestore update a technician's edit is allowed to write.
  *
@@ -73,6 +111,17 @@ export function buildTechRepairUpdate(
     update.completedAt = now;
     update.completedBy = uid;
     update.warrantyUntil = computeWarrantyUntil(completedDate, stored.warrantyDays as number | undefined);
+  }
+
+  // The receipt for the repair-cost write-back (domain/repairCostWriteback.ts).
+  // Derived server-side from the ticket's own parts for the same reason
+  // completedAt is: it's a money figure, so it must never be taken from the
+  // client's draft. Written on every tech edit, not only on the transition, so
+  // a technician REOPENING or cancelling a finished ticket also drops it back
+  // to 0 — which is what tells the client to reverse the device's repairCost.
+  const applied = techRepairCostApplied(stored, nextStatus);
+  if (applied !== round2((stored.inventoryRepairCostApplied as number) || 0)) {
+    update.inventoryRepairCostApplied = applied;
   }
 
   return update;

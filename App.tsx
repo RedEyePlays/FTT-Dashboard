@@ -39,6 +39,7 @@ const CloseOutView = lazy(() => import('./components/CloseOutView').then(m => ({
 import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, DeviceBuyer, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission, Repair, RepairBatch, TimeEntry, PayPeriodPaid, PayPeriodApproval, BreakReason, SalesTransaction, CashReconciliation, StaffNote, BalancePayment, Expense, RecurringExpense } from './types';
 import { skuPrefix, nextSku } from './services/sku';
 import { REPAIR_PREFIX, BATCH_PREFIX, applyTechEdit, techUpdateAuditPlan, repairSalePrefill, completeRepair, completeRepairSale, dateToEpochMs, isRepairOpen, flagDeviceForRepair, restoredDeviceStatus } from './domain/repairs';
+import { repairCostWriteback, applyRepairCostDelta } from './domain/repairCostWriteback';
 import { MergePlan, resolveCustomerForDraft, CustomerDraft } from './domain/customers';
 import { can, canPrintDropOffLabel } from './services/rbac';
 import { downloadJson, toCSV, triggerDownload } from './services/backup';
@@ -1792,6 +1793,27 @@ const App: React.FC = () => {
       next = { ...next, ...cleanup.repair };
       if (cleanup.wroteItem) itemPatch = undefined;
     }
+    // Write this ticket's COST back onto the device it was performed on.
+    // Without this the linked item kept the `repairCost: 0` it was created
+    // with, so selling a refurbished device reported the whole cost of the
+    // refurb as profit. The delta is additive and reversible (see
+    // domain/repairCostWriteback.ts): a second repair adds to the running
+    // total, and cancelling or reopening one subtracts exactly what it put in.
+    //
+    // Folded into the SAME `itemPatch` the status restore above builds, so the
+    // two never race to write the same document — the existing pattern here.
+    if (linkedItem) {
+      const wb = repairCostWriteback(next);
+      if (wb.changed) {
+        itemPatch = { ...(itemPatch || {}), repairCost: applyRepairCostDelta(linkedItem, wb.delta) };
+        audit('repair.cost_to_inventory', 'inventory', linkedItem.id,
+          { repairCost: linkedItem.repairCost || 0 },
+          { repairCost: applyRepairCostDelta(linkedItem, wb.delta), fromRepair: next.repairNumber });
+      }
+      // Stamp the receipt even when the delta rounds to nothing, so the
+      // ticket's record of what it contributed can't drift from reality.
+      next = { ...next, inventoryRepairCostApplied: wb.applied };
+    }
     if (itemPatch && linkedItem) saveItem(uid, 'inventory', { ...linkedItem, ...itemPatch });
 
     saveItem(uid, 'repairs', next);
@@ -1841,13 +1863,31 @@ const App: React.FC = () => {
     techUpdateRepair(stored.id, draft).then(() => {
       // The linked device goes back to what it was before the ticket once that
       // ticket is done (same rule/helper as handleSaveRepair above).
-      if (!isRepairOpen(next) && isRepairOpen(stored) && next.inventoryId) {
-        const invItem = dataRef.current.find(i => i.id === next.inventoryId);
-        const restored = invItem ? restoredDeviceStatus(invItem, next, repairsRef.current) : null;
-        if (invItem && restored && restored !== invItem.deviceStatus) {
-          saveItem(uid, 'inventory', { ...invItem, deviceStatus: restored });
+      const invItem = next.inventoryId ? dataRef.current.find(i => i.id === next.inventoryId) : undefined;
+      let techItemPatch: Partial<InventoryItem> | undefined;
+      if (!isRepairOpen(next) && isRepairOpen(stored) && invItem) {
+        const restored = restoredDeviceStatus(invItem, next, repairsRef.current);
+        if (restored && restored !== invItem.deviceStatus) techItemPatch = { deviceStatus: restored };
+      }
+      // A technician can move a ticket to picked_up or cancelled — both
+      // terminal — so this path has to write the repair cost back too, or a
+      // tech-completed refurb would keep reporting `repairCost: 0` and
+      // overstate profit when the device sells. The callable derives the
+      // receipt (`inventoryRepairCostApplied`) server-side from the ticket's
+      // own parts, which a technician can't edit; the delta against it is
+      // applied here, using the same helper the owner/manager path uses.
+      if (invItem) {
+        const wb = repairCostWriteback({ ...next, inventoryRepairCostApplied: stored.inventoryRepairCostApplied });
+        if (wb.changed) {
+          techItemPatch = { ...(techItemPatch || {}), repairCost: applyRepairCostDelta(invItem, wb.delta) };
+          audit('repair.cost_to_inventory', 'inventory', invItem.id,
+            { repairCost: invItem.repairCost || 0 },
+            { repairCost: applyRepairCostDelta(invItem, wb.delta), fromRepair: next.repairNumber });
         }
       }
+      // One write, so the status restore and the cost write-back can't clobber
+      // each other — the same rule handleSaveRepair follows.
+      if (invItem && techItemPatch) saveItem(uid, 'inventory', { ...invItem, ...techItemPatch });
       if (stored.status !== next.status) logActivity(`${next.repairNumber} → ${next.status.replace(/_/g, ' ')}`);
       for (const e of techUpdateAuditPlan(stored, next)) audit(e.action, 'repair', e.entityId, e.before, e.after);
     }).catch(e => {
@@ -2162,7 +2202,7 @@ const App: React.FC = () => {
           )}
           {view === 'analytics' && (
             (appUser.role === 'owner' || appUser.role === 'manager') && allow('reports.profit.detailed')
-              ? <OwnerAnalytics salesTransactions={salesTransactions} repairs={repairs} inventory={data} customers={customers} auditLogs={auditLogs} activity={activityLog} darkMode={darkMode} />
+              ? <OwnerAnalytics salesTransactions={salesTransactions} repairs={repairs} inventory={data} customers={customers} auditLogs={auditLogs} activity={activityLog} settlements={settlements} darkMode={darkMode} />
               : <div className="text-center text-slate-400 py-20">Owner analytics are restricted to owners (and managers granted financial access).</div>
           )}
           {view === 'reports' && (
@@ -2392,6 +2432,7 @@ const App: React.FC = () => {
               salesTransactions={salesTransactions}
               repairs={repairs}
               inventory={data}
+              settlements={settlements}
               customers={customers}
               auditLogs={auditLogs}
               activity={activityLog}

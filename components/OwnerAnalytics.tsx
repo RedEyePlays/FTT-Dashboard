@@ -7,7 +7,7 @@ import {
   BarChart3, DollarSign, TrendingUp, Percent, ShoppingCart, Wrench, Smartphone, CheckCircle2,
   CreditCard, Package, Clock, Users as UsersIcon, Download, FileText, Activity, AlertTriangle,
 } from 'lucide-react';
-import { SalesTransaction, Repair, InventoryItem, Customer, AuditEntry, ActivityEntry } from '../types';
+import { SalesTransaction, Repair, InventoryItem, Customer, AuditEntry, ActivityEntry, Settlement } from '../types';
 import { jsPDF } from 'jspdf';
 import {
   computeAnalytics, presetRange, RangePreset, eodRows, eodCsv, AnalyticsInput,
@@ -21,6 +21,8 @@ interface Props {
   customers: Customer[];
   auditLogs: AuditEntry[];
   activity: ActivityEntry[];
+  // Device-buyer settlements — fee income only (see domain/analytics.ts).
+  settlements: Settlement[];
   darkMode: boolean;
 }
 
@@ -34,13 +36,13 @@ const PRESETS: { id: RangePreset; label: string }[] = [
 
 const card = 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl';
 
-export const OwnerAnalytics: React.FC<Props> = ({ salesTransactions, repairs, inventory, customers, auditLogs, activity, darkMode }) => {
+export const OwnerAnalytics: React.FC<Props> = ({ salesTransactions, repairs, inventory, customers, auditLogs, activity, settlements, darkMode }) => {
   const [preset, setPreset] = useState<RangePreset>('today');
   const [custom, setCustom] = useState({ start: '', end: '' });
 
   const range = useMemo(() => presetRange(preset, Date.now(), custom), [preset, custom]);
-  const input: AnalyticsInput = { salesTransactions, repairs, inventory, customers, auditLogs, activity };
-  const a = useMemo(() => computeAnalytics(range, input), [range, salesTransactions, repairs, inventory, customers, auditLogs, activity]);
+  const input: AnalyticsInput = { salesTransactions, repairs, inventory, customers, auditLogs, activity, settlements };
+  const a = useMemo(() => computeAnalytics(range, input), [range, salesTransactions, repairs, inventory, customers, auditLogs, activity, settlements]);
 
   const axis = darkMode ? '#94a3b8' : '#64748b';
   const grid = darkMode ? '#1e293b' : '#e2e8f0';
