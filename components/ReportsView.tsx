@@ -11,6 +11,7 @@ import {
   profitAndLoss, profitLossCsvRows, settlementHistory, yearEndSummary, yearEndCsvRows, ProfitLossInput, ReconciliationInput,
   cashSalesAfterClose,
   cashDrawerSummary,
+  drawerCarryOver,
 } from '../domain/reports';
 import { computeAnalytics, presetRange } from '../domain/analytics';
 import { entriesOnDate, workedHours } from '../domain/timeclock';
@@ -201,7 +202,12 @@ const DailyHistoryTab: React.FC<{
   // read for a day — the saved record (if any) plus that day's cash sales.
   const cashSales = useMemo(() => expectedCashForDate(salesTransactions, date), [salesTransactions, date]);
   const recon = cashReconciliations.find(r => r.date === date);
-  const drawer = useMemo(() => cashDrawerSummary(recon, cashSales), [recon, cashSales]);
+  // Same carry-over the POS/Close Out read: a day with no record of its
+  // own inherits the previous day's till, and stays open if that day was
+  // never closed. Without this, viewing a day the shop simply hadn't
+  // opened yet showed a $0 drawer that had never been counted.
+  const carry = useMemo(() => drawerCarryOver(cashReconciliations, date), [cashReconciliations, date]);
+  const drawer = useMemo(() => cashDrawerSummary(recon, cashSales, carry), [recon, cashSales, carry]);
   const reconciled = !!recon?.reconciledAt;
   const variance = recon?.variance || 0;
   const varianceOk = Math.abs(variance) < 0.005;
