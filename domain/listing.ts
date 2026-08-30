@@ -23,42 +23,30 @@ export const listingPlatformLabel = (p: ListingPlatform): string => LABEL_OF.get
 export const listingPlatformsLabel = (platforms?: ListingPlatform[]): string =>
   (platforms || []).map(listingPlatformLabel).join(', ');
 
-// Short forms for the ONE place a platform name has to fit a narrow fixed
-// column (the inventory table's Item cell) rather than a free-flowing
-// sentence. Only 'facebook' actually differs — "Facebook Marketplace" is the
-// single label wide enough to blow out that column on its own. Every other
-// platform reuses its normal label, so there is no second naming scheme to
-// keep in sync: this map is a fallback, not a parallel set of names.
-const SHORT_LABEL_OF: Partial<Record<ListingPlatform, string>> = { facebook: 'Facebook' };
-
-export const listingPlatformShortLabel = (p: ListingPlatform): string =>
-  SHORT_LABEL_OF[p] || listingPlatformLabel(p);
+// NOTE: the in-table indicator carries NO text at all any more — it's a
+// tiny icon, and the platform name lives in its hover/accessible label
+// (listedElsewhereTitle below). The short-label map and badge-text helper
+// that used to size a name into that cell went with it rather than being
+// left behind as unused exports.
 
 /**
- * The most compact honest rendering of a device's listings, for an indicator
- * that shares a narrow cell with editable content: the (short) platform name
- * when there's exactly one, otherwise a count. The count form is deliberate —
- * with 2+ platforms even short names ("Best Buy, eBay") push past the column,
- * and the exact list is always one hover away in listedElsewhereTitle below.
- */
-export function listingBadgeText(platforms?: ListingPlatform[]): string {
-  const ps = platforms || [];
-  if (ps.length === 0) return '';
-  return ps.length === 1 ? listingPlatformShortLabel(ps[0]) : `${ps.length} sites`;
-}
-
-/**
- * The hover text on a listed-elsewhere indicator. Leads with the same sentence
- * the mobile item card's badge carries (so the two views explain the flag
- * identically), then names every platform — which is what makes the compact
- * "N sites" badge above safe to show in a narrow cell.
+ * The hover text on a listed-elsewhere indicator.
+ *
+ * Leads with the PLATFORM NAMES — "Best Buy", "Best Buy, eBay" — because
+ * the indicator is now icon-only: pointing at it must answer "which site
+ * is this on?" immediately, not after a sentence of explanation. The
+ * explanation follows, so the flag still says what it means to anyone
+ * seeing it for the first time.
+ *
+ * This is also the accessible name of the icon (aria-label), so a
+ * screen reader announces the site rather than "image".
  */
 export const LISTED_ELSEWHERE_HINT =
   'Also listed elsewhere — Quick Sale will warn before selling this in-store';
 
 export function listedElsewhereTitle(platforms?: ListingPlatform[]): string {
   const label = listingPlatformsLabel(platforms);
-  return label ? `${LISTED_ELSEWHERE_HINT}. Listed on: ${label}` : LISTED_ELSEWHERE_HINT;
+  return label ? `${label} — ${LISTED_ELSEWHERE_HINT}` : LISTED_ELSEWHERE_HINT;
 }
 
 /** Any row in the set flagged as listed elsewhere — gates the Quick Sale warning. */
