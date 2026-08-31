@@ -18,7 +18,7 @@ import { useIsMobile } from '../hooks/useMediaQuery';
 import { ResponsiveDialog, EmptyState } from './responsive';
 import { InvSection, INV_SECTIONS } from '../domain/inventoryNav';
 import { getDeviceDisplayName, priceFieldFor, isCostRevealingColumn } from '../domain/inventory';
-import { listingPlatformsLabel, listingBadgeText, listedElsewhereTitle } from '../domain/listing';
+import { listedElsewhereTitle } from '../domain/listing';
 import { clampWidth, fitWidths } from '../domain/columnLayout';
 import { usePersistedFilter } from '../hooks/usePersistedFilter';
 import { todayISO } from '../domain/dates';
@@ -165,7 +165,13 @@ const repairSkuTitle = (r: Repair): string => `In repair — ${r.repairNumber} �
 // REPAIR_SKU_CELL's orange above, since a device can be BOTH in repair and
 // listed elsewhere at once and the two flags must stay tellable apart. They
 // also live on different cells (SKU vs Item), so they never compete for width.
-const LISTED_CELL = 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300';
+// The listed-elsewhere treatment: BLUE, and the same blue for every
+// listing platform (Best Buy, Kijiji, Facebook, eBay, Other) — one
+// state, one colour, whichever site the device is posted on. Kept
+// distinct from REPAIR_SKU_CELL's orange above, since a device can be
+// both in repair AND listed at once and the two flags must stay
+// tellable apart.
+const LISTED_CELL = 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300';
 
 // Short labels for the compact in-table status pill (values are unchanged).
 const STATUS_SHORT: Record<DeviceStatus, string> = {
@@ -1108,10 +1114,15 @@ const Sheet: React.FC<{
                               placeholder={c.compute!(i) === '—' ? 'Item name' : c.compute!(i)}
                               onChange={e => onUpdate(i.id, 'item', e.target.value)}
                               className={`${cellBase} flex-1 min-w-0 ${emph(c)}`} />
+                            {/* ICON ONLY — no text at all. The platform name
+                                lives in the hover title instead, which is
+                                what the owner asked for: the flag should
+                                take almost no width in the column, and
+                                say "Best Buy" when you point at it. */}
                             <span title={listedElsewhereTitle(i.listedPlatforms)}
-                              className={`shrink-0 inline-flex items-center gap-0.5 text-[10px] font-semibold px-1 py-0.5 rounded ${LISTED_CELL}`}>
+                              aria-label={listedElsewhereTitle(i.listedPlatforms)}
+                              className={`shrink-0 inline-flex items-center p-0.5 rounded ${LISTED_CELL}`}>
                               <Tag className="w-3 h-3 shrink-0" />
-                              {listingBadgeText(i.listedPlatforms)}
                             </span>
                           </div>
                         ) : (
@@ -1291,9 +1302,14 @@ const InvCard: React.FC<{
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-semibold text-slate-800 dark:text-slate-100 truncate">{nameOf(i)}</span>
             {i.listed && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">Listed</span>}
+            {/* Same tiny blue icon as the desktop table's Item cell —
+                one state, one colour, one shape in both views. The
+                site name is in the hover/accessible label. */}
             {(i.listedPlatforms?.length || 0) > 0 && (
-              <span title="Also listed elsewhere — Quick Sale will warn before selling this in-store" className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
-                {listingPlatformsLabel(i.listedPlatforms)}
+              <span title={listedElsewhereTitle(i.listedPlatforms)}
+                aria-label={listedElsewhereTitle(i.listedPlatforms)}
+                className={`shrink-0 inline-flex items-center p-0.5 rounded ${LISTED_CELL}`}>
+                <Tag className="w-3 h-3 shrink-0" />
               </span>
             )}
             {/* Devices no longer show a status badge here (status removed from the

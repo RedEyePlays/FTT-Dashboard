@@ -73,7 +73,7 @@ import { newId, mkActivity } from './domain/ids';
 import { collectionFor, stockChange, applyDirectSale } from './domain/inventory';
 import { canVoidSale, canReturnSale, returnRefund, saleAccessoryRestock, saleDeviceListedPlatforms, collectedOnSale, cashCollectedOnSale, saleRefundDrawerEffect } from './domain/pos';
 import { applyBalancePayment, cashPortionOfPayment } from './domain/layaway';
-import { expectedCashForDate, expectedEndingCash, sumDrawerEntries, cashDrawerSummary, openDrawerPatch, ReconciliationInput } from './domain/reports';
+import { expectedCashForDate, expectedEndingCash, sumDrawerEntries, cashDrawerSummary, drawerCarryOver, openDrawerPatch, ReconciliationInput } from './domain/reports';
 import { duePeriodsFor, buildRecurringExpense, canMutateExpense } from './domain/expenses';
 import { isEligibleForReviewRequest, ReviewEligibility, reviewRequestsSentOn, underDailyReviewRequestCap } from './domain/reviews';
 const RequestReviewModal = lazy(() => import('./components/RequestReviewModal').then(m => ({ default: m.RequestReviewModal })));
@@ -923,11 +923,26 @@ const App: React.FC = () => {
   const commitDrawerRecord = (date: string, patch: Partial<CashReconciliation>): CashReconciliation | null => {
     if (!uid || !appUser) return null;
     const existing = cashReconciliations.find(r => r.date === date);
+    // Seed a brand-new day's record with whatever the till was left
+    // holding (drawerCarryOver) rather than 0. Without this the first
+    // write of the day — a cash-out, a close — would silently reset the
+    // opening float to zero and report the whole carried till as a
+    // shortage. Only ever applied when the day has NO record yet; once
+    // it does, its own stored float is the truth.
+    const carry = drawerCarryOver(cashReconciliations, date);
     const merged: CashReconciliation = {
-      id: date, date, openingFloat: 0, expectedCash: 0, variance: 0,
+      id: date, date, openingFloat: carry?.float || 0, expectedCash: 0, variance: 0,
       recordedBy: appUser.id, recordedByEmail: appUser.email, recordedAt: Date.now(),
       ...existing, ...patch,
     };
+    // A drawer carried forward from a day nobody closed is still open —
+    // stamp that on the new day's record so it reads as open rather than
+    // as "never opened today".
+    if (!existing && !merged.openedAt && carry?.stillOpen) {
+      merged.openedAt = Date.now();
+      merged.openedBy = appUser.id;
+      merged.openedByEmail = appUser.email;
+    }
     const cashSales = expectedCashForDate(salesTransactions, date);
     merged.cashSales = cashSales;
     merged.expectedCash = expectedEndingCash({
@@ -1168,10 +1183,22 @@ const App: React.FC = () => {
 
   // Today's live drawer (shared math) — drives the POS running total and the
   // quick-log modal's before/after figures.
+  // The previous day's leftovers: the cash physically still in the till,
+  // and whether that day was ever actually closed. See
+  // domain/reports.ts's drawerCarryOver — a drawer nobody closed stays
+  // open across midnight, and its cash carries into today's float.
+  const todayCarryOver = useMemo(
+    () => drawerCarryOver(cashReconciliations, todayISO()),
+    [cashReconciliations],
+  );
   const todayDrawer = useMemo(() => {
     const date = todayISO();
-    return cashDrawerSummary(cashReconciliations.find(r => r.date === date), expectedCashForDate(salesTransactions, date));
-  }, [cashReconciliations, salesTransactions]);
+    return cashDrawerSummary(
+      cashReconciliations.find(r => r.date === date),
+      expectedCashForDate(salesTransactions, date),
+      todayCarryOver,
+    );
+  }, [cashReconciliations, salesTransactions, todayCarryOver]);
   const todayRecon = cashReconciliations.find(r => r.date === todayISO());
 
   const handleBulkImport = (items: InventoryItem[]) => {
@@ -2519,7 +2546,12 @@ const App: React.FC = () => {
       {showOpenDrawer && allow('cash.log') && (
         <Suspense fallback={null}>
           <OpenDrawerModal onClose={() => setShowOpenDrawer(false)} onOpen={handleOpenDrawer}
-            defaultFloat={settings.operations.openingFloatDefault}
+            /* Pre-fill with what the till was actually left holding, not the
+               shop's nominal float — the cash didn't go anywhere overnight.
+               Falls back to the configured default when there's nothing to
+               carry (a first-ever day, or after a withdrawal to zero). */
+            defaultFloat={todayCarryOver?.float || settings.operations.openingFloatDefault}
+            carriedFrom={todayCarryOver && todayCarryOver.float > 0 ? todayCarryOver.fromDate : undefined}
             alreadyOpen={!!todayRecon?.openedAt} currentFloat={todayRecon?.openingFloat} />
         </Suspense>
       )}

@@ -6,7 +6,11 @@ import { selectOnFocus } from '../hooks/selectOnFocus';
 interface Props {
   onClose: () => void;
   onOpen: (openingFloat: number) => void;
-  defaultFloat?: number;   // pre-fills the input (shop's usual starting float)
+  defaultFloat?: number;   // pre-fills the input (carried-over till, else the shop's usual float)
+  // The date `defaultFloat` was carried from, when it's the previous
+  // day's leftover cash rather than the configured default — named in the
+  // UI so the number isn't a mystery.
+  carriedFrom?: string;
   alreadyOpen?: boolean;   // drawer was already opened today
   currentFloat?: number;   // the float it was opened with (when alreadyOpen)
 }
@@ -17,7 +21,7 @@ interface Props {
 const input = 'w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500';
 const money = (n: number) => `$${(n || 0).toFixed(2)}`;
 
-export const OpenDrawerModal: React.FC<Props> = ({ onClose, onOpen, defaultFloat = 0, alreadyOpen, currentFloat }) => {
+export const OpenDrawerModal: React.FC<Props> = ({ onClose, onOpen, defaultFloat = 0, carriedFrom, alreadyOpen, currentFloat }) => {
   const [amount, setAmount] = useState(alreadyOpen ? String(currentFloat ?? '') : (defaultFloat ? String(defaultFloat) : ''));
   const amountNum = parseFloat(amount) || 0;
   const submit = () => { onOpen(Math.round(amountNum * 100) / 100); onClose(); };
@@ -34,7 +38,9 @@ export const OpenDrawerModal: React.FC<Props> = ({ onClose, onOpen, defaultFloat
           <p className="text-xs text-slate-400">
             {alreadyOpen
               ? `The drawer was already opened today with ${money(currentFloat || 0)}. Change the starting float if it was recorded wrong.`
-              : 'Count the cash in the drawer at the start of the day and enter it here. This is the float everything else is measured against at close.'}
+              : carriedFrom
+                ? `Carried over from ${carriedFrom} — the drawer was left with ${money(defaultFloat)}. Count the till and correct this if it doesn't match.`
+                : 'Count the cash in the drawer at the start of the day and enter it here. This is the float everything else is measured against at close.'}
           </p>
           <div>
             <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Starting float ($)</label>

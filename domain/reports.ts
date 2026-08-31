@@ -189,13 +189,83 @@ export interface ReconciliationInput {
   note?: string;
 }
 
-export const cashDrawerSummary = (recon: CashReconciliation | undefined, cashSales: number): CashDrawerSummary => {
-  const openingFloat = round2(recon?.openingFloat || 0);
+/**
+ * What the previous day leaves behind for this one.
+ *
+ * Two real-world facts the drawer used to ignore, both reported as bugs:
+ *
+ *  1. THE DRAWER DOESN'T CLOSE AT MIDNIGHT. A day's record is keyed by date,
+ *     so at 00:00 today had no record and the drawer silently read as
+ *     "never opened" — it closed itself, and staff had to re-open it every
+ *     morning even though nobody had counted or closed anything. A drawer
+ *     that was opened and never reconciled is STILL OPEN, however many
+ *     dates have rolled past. Only an explicit close (reconciledAt) closes it.
+ *
+ *  2. THE CASH IS STILL PHYSICALLY IN THE TILL. Whatever the drawer ended
+ *     yesterday with is what's in it this morning — it does not reset to
+ *     zero. So yesterday's ending cash is today's opening float.
+ *
+ * `float` is the COUNTED cash when the day was actually counted (what's
+ * really in the till beats what was expected), otherwise that day's
+ * expected ending. `stillOpen` is true when the carried day was opened
+ * and never reconciled.
+ *
+ * Looks at the most recent PRIOR day with a record, not merely yesterday —
+ * a shop closed Sunday and Monday still carries Saturday's till forward.
+ */
+export interface DrawerCarryOver {
+  float: number;
+  /** The date the float came from (YYYY-MM-DD), for the UI to name. */
+  fromDate: string;
+  /** The carried day was opened and never explicitly closed. */
+  stillOpen: boolean;
+}
+
+export const drawerCarryOver = (
+  reconciliations: CashReconciliation[],
+  todayISO: string,
+): DrawerCarryOver | null => {
+  const prior = reconciliations
+    .filter(r => r.date < todayISO)
+    .sort((a, b) => b.date.localeCompare(a.date))[0];
+  // Only a day that was actually STARTED carries anything: a bare record
+  // (written by some other path, never opened, no movement) has no till
+  // behind it to carry.
+  if (!prior || (!prior.openedAt && !prior.countedCash && !(prior.openingFloat || 0))) return null;
+  const float = prior.countedCash != null ? round2(prior.countedCash) : round2(prior.expectedCash || 0);
+  return {
+    float: Math.max(0, float),
+    fromDate: prior.date,
+    stillOpen: !!prior.openedAt && !prior.reconciledAt,
+  };
+};
+
+/**
+ * The live drawer for a day. `carry` is the previous day's leftovers
+ * (drawerCarryOver) and is used ONLY while today has no record of its own —
+ * once the day is opened, logged against or counted, its own stored
+ * numbers are the truth and the carry-over is not consulted again.
+ *
+ * This is what makes the till continuous across midnight: with a carry-over
+ * in hand, today starts with yesterday's cash already in the drawer and
+ * stays open if yesterday was never closed.
+ */
+export const cashDrawerSummary = (
+  recon: CashReconciliation | undefined,
+  cashSales: number,
+  carry?: DrawerCarryOver | null,
+): CashDrawerSummary => {
+  const hasOwnRecord = !!recon?.openedAt || recon?.countedCash != null;
+  const openingFloat = round2(
+    hasOwnRecord || recon?.openingFloat ? (recon?.openingFloat || 0) : (carry?.float || 0),
+  );
   const cashIn = sumDrawerEntries(recon?.cashIn);
   const cashOut = sumDrawerEntries(recon?.cashOut);
   const withdrawals = sumDrawerEntries(recon?.withdrawals);
   return {
-    opened: !!recon?.openedAt,
+    // Open if opened today, OR carried forward from a day that was opened
+    // and never closed — the drawer nobody ever closed is still open.
+    opened: !!recon?.openedAt || (!recon?.reconciledAt && !!carry?.stillOpen),
     openingFloat, cashSales: round2(cashSales), cashIn, cashOut, withdrawals,
     expected: expectedEndingCash({ openingFloat, cashSales, cashIn, cashOut, withdrawals }),
   };

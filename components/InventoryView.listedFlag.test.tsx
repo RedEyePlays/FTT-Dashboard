@@ -11,9 +11,9 @@ import { InventoryItem, Repair } from '../types';
 // an unlisted one. This file guards the desktop indicator:
 //  1. It lives on the existing Item cell (no new column — the owner's device
 //     table has no Status column and must not gain a "Listed" one either).
-//  2. It stays compact with several platforms set, so it can't blow out the
-//     column: one platform shows its (short) name, 2+ collapse to a count,
-//     with the full list always in the hover title.
+//  2. It is a TINY BLUE ICON with no text at all, so it takes almost no
+//     column width however many platforms are set — the site names are
+//     in the hover title (and aria-label), which leads with them.
 //  3. It coexists with the in-repair SKU highlight — a device can be both.
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -45,20 +45,24 @@ const view = (props: Partial<React.ComponentProps<typeof InventoryView>> = {}) =
   />
 );
 
-// The desktop indicator is the <span> whose title carries the shared hint.
+// The desktop indicator is the <span> whose title carries the shared
+// hint. The title now LEADS with the platform names (the badge is
+// icon-only), so match on the hint anywhere in it, not at the start.
 const listedBadge = (host: HTMLElement) =>
-  Array.from(host.querySelectorAll('span')).find(s => s.title?.startsWith('Also listed elsewhere'));
+  Array.from(host.querySelectorAll('span')).find(s => s.title?.includes('Also listed elsewhere'));
 const skuCell = (host: HTMLElement) =>
   Array.from(host.querySelectorAll('button')).find(b => b.title?.startsWith('In repair'));
 
 describe('InventoryView desktop listed-elsewhere indicator', () => {
-  it('flags a listed device on the Item cell, in the same amber the mobile badge uses', () => {
+  it('flags a listed device on the Item cell, as a tiny BLUE icon with no text', () => {
     const { host, unmount } = mount(view({ inventory: [device({ listedPlatforms: ['bestbuy'] })] }));
 
     const badge = listedBadge(host);
     expect(badge).toBeTruthy();
-    expect(badge!.textContent).toContain('Best Buy');
-    expect(badge!.className).toContain('bg-amber-100');
+    // Icon only — the platform name is in the hover label, not the cell.
+    expect(badge!.textContent).toBe('');
+    expect(badge!.className).toContain('bg-blue-100');
+    expect(badge!.className).not.toContain('bg-amber-100');
     expect(badge!.querySelector('svg')).toBeTruthy(); // tag icon
 
     // It really is in the Item cell: the same <td> holds the `item` text input.
@@ -67,11 +71,15 @@ describe('InventoryView desktop listed-elsewhere indicator', () => {
     unmount();
   });
 
-  it('carries the same explanation the mobile badge does, plus the full platform list', () => {
-    const { host, unmount } = mount(view({ inventory: [device({ listedPlatforms: ['bestbuy', 'ebay'] })] }));
-    const title = listedBadge(host)!.title;
-    expect(title).toContain('Also listed elsewhere — Quick Sale will warn before selling this in-store');
-    expect(title).toContain('Best Buy, eBay'); // the full list, even though the badge is compact
+  it('says WHICH SITE on hover — the platform names lead the label', () => {
+    const { host, unmount } = mount(view({ inventory: [device({ listedPlatforms: ['bestbuy'] })] }));
+    const badge = listedBadge(host)!;
+    // Hovering must answer "which site?" at once, since nothing is
+    // written in the cell itself.
+    expect(badge.title.startsWith('Best Buy')).toBe(true);
+    expect(badge.title).toContain('Also listed elsewhere — Quick Sale will warn before selling this in-store');
+    // Screen readers get the same answer rather than a bare icon.
+    expect(badge.getAttribute('aria-label')).toBe(badge.title);
     unmount();
   });
 
@@ -87,15 +95,16 @@ describe('InventoryView desktop listed-elsewhere indicator', () => {
     unmount();
   });
 
-  it('stays compact with several platforms — a count, not a run-on list that overflows the column', () => {
+  it('stays the same tiny size however many platforms are set', () => {
     const { host, unmount } = mount(view({
       inventory: [device({ listedPlatforms: ['bestbuy', 'kijiji', 'facebook', 'ebay'] })],
     }));
     const badge = listedBadge(host)!;
-    expect(badge.textContent).toContain('4 sites');
-    // The long-form list is NOT rendered into the cell (that's what overflows).
-    expect(badge.textContent).not.toContain('Facebook Marketplace');
-    expect(badge.textContent!.trim().length).toBeLessThan(12);
+    // Nothing is written in the cell at all, so four platforms take
+    // exactly as much column width as one.
+    expect(badge.textContent).toBe('');
+    // ...and every one of them is named on hover.
+    expect(badge.title).toContain('Best Buy, Kijiji, Facebook Marketplace, eBay');
     // It yields width rather than taking it: the badge never shrinks, the
     // editable name input beside it does.
     expect(badge.className).toContain('shrink-0');
@@ -117,7 +126,7 @@ describe('InventoryView desktop listed-elsewhere indicator', () => {
     // Different cells, so neither can truncate or overlap the other...
     expect(badge!.closest('td')).not.toBe(sku!.closest('td'));
     // ...and different colours, so the two states stay tellable apart.
-    expect(badge!.className).toContain('bg-amber-100');
+    expect(badge!.className).toContain('bg-blue-100');
     expect(sku!.className).toContain('bg-orange-100');
     expect(sku!.textContent).toContain('PHN-000001'); // SKU still readable
     unmount();
