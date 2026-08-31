@@ -204,7 +204,10 @@ export function computeAnalytics(range: DateRange, input: AnalyticsInput, now: n
     if (kindOf(i) !== 'device' || !i.soldDate || txnInvIds.has(i.id)) continue;
     if (!inRange(ymdMs(i.soldDate), range)) continue;
     const rev = i.salePrice || 0;
-    const profit = rev - (i.purchaseCost || 0) - (i.repairCost || 0) - (i.platformFees || 0);
+    // Shipping is a selling cost like the platform fee — it was already on
+    // InventoryItem but no analytics path subtracted it, so a shipped
+    // standalone sale reported its postage as profit.
+    const profit = rev - (i.purchaseCost || 0) - (i.repairCost || 0) - (i.platformFees || 0) - (i.shippingCost || 0);
     revenue += rev; grossProfit += profit; salesCount += 1; devicesSold += 1;
     deviceRev += rev; deviceProfit += profit;
     bumpCat(DEVICE_CATEGORY(i.deviceType), rev, profit, 1);
@@ -382,7 +385,7 @@ function buildDailySeries(
   txns.forEach(t => add(t.date, t.subtotal || 0, t.netProfit || 0));
   inventory.forEach(i => {
     if (kindOf(i) === 'device' && i.soldDate && !txnInvIds.has(i.id) && buckets.has(i.soldDate)) {
-      add(i.soldDate, i.salePrice || 0, (i.salePrice || 0) - (i.purchaseCost || 0) - (i.repairCost || 0) - (i.platformFees || 0));
+      add(i.soldDate, i.salePrice || 0, (i.salePrice || 0) - (i.purchaseCost || 0) - (i.repairCost || 0) - (i.platformFees || 0) - (i.shippingCost || 0));
     }
   });
   // Settlement fee income, on the day it settled — profit only, never revenue

@@ -351,3 +351,120 @@ describe('useCheckout cart persistence (survive navigating away and back)', () =
     h2.unmount();
   });
 });
+
+// --- Shipping cost -----------------------------------------------------------
+// Online sales carry two distinct costs: the marketplace's commission and
+// shipping. Shipping is a COST, never a price reduction — absorbing it by
+// discounting the sale price would misstate revenue and sales tax, which is
+// exactly what this field exists to avoid.
+
+const device2: InventoryItem = {
+  ...device, id: 'dev-2', sku: 'FTT-0002', item: 'Pixel 8',
+  purchaseCost: 100, targetSalePrice: 100,
+};
+
+describe('useCheckout shipping cost', () => {
+  it('reduces profit by EXACTLY the shipping amount, leaving subtotal/tax/total alone', () => {
+    const onComplete = vi.fn();
+    const h = mount({ onComplete });
+    act(() => { h.cx.addDevice(device); });
+    act(() => { h.cx.updateLine(h.cx.cart[0].key, { unitPrice: 500 }); });
+
+    const before = {
+      subtotal: h.cx.subtotal, tax: h.cx.tax, totalPaid: h.cx.totalPaid, netProfit: h.cx.netProfit,
+    };
+
+    act(() => { h.cx.setShippingCost('20'); });
+
+    // The three customer-facing figures are untouched...
+    expect(h.cx.subtotal).toBe(before.subtotal);
+    expect(h.cx.tax).toBe(before.tax);
+    expect(h.cx.totalPaid).toBe(before.totalPaid);
+    // ...and profit is down by exactly 20.
+    expect(before.netProfit - h.cx.netProfit).toBe(20);
+    expect(h.cx.shippingAmount).toBe(20);
+    h.unmount();
+  });
+
+  it('an in-store sale with no shipping behaves exactly as before', () => {
+    const onComplete = vi.fn();
+    const h = mount({ onComplete });
+    act(() => { h.cx.addDevice(device); });
+    act(() => { h.cx.updateLine(h.cx.cart[0].key, { unitPrice: 500 }); });
+
+    expect(h.cx.shippingAmount).toBe(0);
+    expect(h.cx.netProfit).toBe(500 - 100);   // subtotal − cost, nothing else
+    h.unmount();
+  });
+
+  it('stores it on the transaction and gives the WHOLE amount to a single-device sale', async () => {
+    const onComplete = vi.fn();
+    const h = mount({ onComplete });
+    act(() => { h.cx.addDevice(device); });
+    act(() => { h.cx.updateLine(h.cx.cart[0].key, { unitPrice: 500 }); });
+    act(() => { h.cx.setShippingCost('20'); });
+    await act(async () => { await h.cx.handleCheckout(); });
+
+    const { transaction, soldRows } = onComplete.mock.calls[0][0];
+    expect(transaction.shippingCost).toBe(20);
+    expect(transaction.subtotal).toBe(500);        // recorded sale price unchanged
+    expect(transaction.netProfit).toBe(500 - 100 - 20);
+    // Per-device margin reflects it: the one device carries all of it.
+    expect(soldRows[0].shippingCost).toBe(20);
+    h.unmount();
+  });
+
+  it('apportions across a multi-line cart the SAME way the platform fee is', async () => {
+    const onComplete = vi.fn();
+    const h = mount({ onComplete, inventory: [device, device2] });
+    act(() => { h.cx.addDevice(device); h.cx.addDevice(device2); });
+    // A $1000 cart: 750 + 250.
+    act(() => {
+      h.cx.updateLine(h.cx.cart[0].key, { unitPrice: 750 });
+      h.cx.updateLine(h.cx.cart[1].key, { unitPrice: 250 });
+    });
+    act(() => { h.cx.setPlatformFeePercent('10'); h.cx.setShippingCost('20'); });
+    await act(async () => { await h.cx.handleCheckout(); });
+
+    const { soldRows } = onComplete.mock.calls[0][0];
+    const byId = Object.fromEntries(soldRows.map((r: InventoryItem) => [r.id, r]));
+    // 75/25 split, identical for both costs.
+    expect(byId['dev-1'].shippingCost).toBeCloseTo(15, 6);
+    expect(byId['dev-2'].shippingCost).toBeCloseTo(5, 6);
+    expect(byId['dev-1'].platformFees).toBeCloseTo(75, 6);
+    expect(byId['dev-2'].platformFees).toBeCloseTo(25, 6);
+    // The same ratio drove both — one apportionment, not two schemes.
+    expect(byId['dev-1'].shippingCost / 20).toBeCloseTo(byId['dev-1'].platformFees / 100, 10);
+    // Nothing is lost in the split.
+    expect(byId['dev-1'].shippingCost + byId['dev-2'].shippingCost).toBeCloseTo(20, 6);
+    h.unmount();
+  });
+
+  it('omits shippingCost entirely from an in-store transaction', async () => {
+    const onComplete = vi.fn();
+    const h = mount({ onComplete });
+    act(() => { h.cx.addDevice(device); });
+    act(() => { h.cx.updateLine(h.cx.cart[0].key, { unitPrice: 500 }); });
+    await act(async () => { await h.cx.handleCheckout(); });
+
+    const { transaction } = onComplete.mock.calls[0][0];
+    expect(transaction.shippingCost).toBeUndefined();
+    expect(transaction.netProfit).toBe(400);
+    h.unmount();
+  });
+
+  it('ignores a negative or junk entry rather than inflating profit', () => {
+    const onComplete = vi.fn();
+    const h = mount({ onComplete });
+    act(() => { h.cx.addDevice(device); });
+    act(() => { h.cx.updateLine(h.cx.cart[0].key, { unitPrice: 500 }); });
+
+    act(() => { h.cx.setShippingCost('-50'); });
+    expect(h.cx.shippingAmount).toBe(0);     // a negative "cost" is not income
+    expect(h.cx.netProfit).toBe(400);
+
+    act(() => { h.cx.setShippingCost('abc'); });
+    expect(h.cx.shippingAmount).toBe(0);
+    h.unmount();
+  });
+});

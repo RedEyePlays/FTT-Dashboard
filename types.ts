@@ -561,6 +561,23 @@ export interface SalesTransaction {
   subtotal: number;
   tax: number;
   platformFee: number;
+  // What it cost to SHIP this sale to the buyer — postage, packaging, a
+  // courier label. A flat dollar amount, not a percentage: shipping is
+  // not proportional to price.
+  //
+  // Deliberately SEPARATE from platformFee. They are two different costs
+  // on an online sale (the marketplace's commission, and getting the box
+  // to the customer), and cramming shipping into the fee percentage
+  // inflates it into a number that means nothing.
+  //
+  // A COST, never a price reduction: `subtotal`, `tax` and `totalPaid`
+  // are all untouched by it — only `netProfit` is reduced. Lowering the
+  // sale price to "absorb" shipping would misstate both revenue and
+  // sales tax, which is exactly what this field exists to avoid.
+  //
+  // Absent on in-store sales (the overwhelming majority), so every
+  // historical transaction reads as 0 with no migration.
+  shippingCost?: number;
   purchaseCost: number;
   repairCost: number;
   totalCost: number;

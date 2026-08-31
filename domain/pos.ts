@@ -25,6 +25,36 @@ export const platformFeeAmount = (subtotal: number, percent: number): number =>
   Math.max(0, subtotal) * (Math.max(0, percent) / 100);
 
 /**
+ * One line's share of a whole-sale cost (the platform fee, or shipping),
+ * apportioned by that line's share of the subtotal.
+ *
+ * Extracted as ONE function rather than left inline so shipping is split
+ * across a multi-line cart by exactly the mechanism the platform fee
+ * already uses — a second, parallel apportionment scheme is how two
+ * costs on the same sale end up disagreeing about which line they belong
+ * to. hooks/useCheckout.ts's checkout loop calls it for both.
+ *
+ * A zero subtotal (a fully discounted or free sale) apportions nothing
+ * rather than dividing by zero.
+ */
+export const costShareForLine = (total: number, lineSubtotal: number, subtotal: number): number =>
+  subtotal > 0 ? total * (lineSubtotal / subtotal) : 0;
+
+/** The PLATFORMS entry that means "not an online sale". */
+export const IN_STORE_PLATFORM = 'None / In-Store';
+
+/**
+ * Is this sale going out through an online channel?
+ *
+ * Gates the shipping-cost field, so the overwhelmingly common in-store
+ * sale never sees it and the checkout screen doesn't gain a box that
+ * is empty on almost every transaction. Same reasoning the Fee % field
+ * already follows — it only means anything once a platform is chosen.
+ */
+export const isOnlineSale = (platformName?: string): boolean =>
+  !!platformName && platformName !== IN_STORE_PLATFORM;
+
+/**
  * Whether tax applies to a sale, given its payment method and each payment
  * method's own "was tax charged" choice (see CartSaleView/MobileCheckout's
  * Cash Sale Tax Status / E-Transfer Sale Tax Status controls). Only cash and

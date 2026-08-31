@@ -3,7 +3,7 @@ import { InventoryItem, ItemKind, DeviceType, SalesTransaction, Customer, Repair
 import { getPOSSettings, getStoreProfile } from '../components/SettingsModal';
 import { newId } from '../domain/ids';
 import { kindOf, getDeviceDisplayName } from '../domain/inventory';
-import { isZeroPricedDevice as isZeroPricedLine, cartHasZeroPricedDevice, searchCheckoutInventory, salesBalanceOwing, mixedPaymentMismatch as computeMixedPaymentMismatch, taxAppliesForSale } from '../domain/pos';
+import { isZeroPricedDevice as isZeroPricedLine, cartHasZeroPricedDevice, searchCheckoutInventory, salesBalanceOwing, mixedPaymentMismatch as computeMixedPaymentMismatch, taxAppliesForSale, costShareForLine } from '../domain/pos';
 import { hasListedElsewhere } from '../domain/listing';
 import { RepairSalePrefill, repairSalePrefill, isRepairOpen, matchesRepair, openRepairFor } from '../domain/repairs';
 import { printSalesReceipt, PAYMENT_METHOD_LABEL } from '../services/salesReceipt';
@@ -113,6 +113,10 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
 
   const [platformName, setPlatformName] = useState('None / In-Store');
   const [platformFeePercent, setPlatformFeePercent] = useState('0');
+  // What it cost to ship this sale (postage/packaging/label). A flat
+  // dollar amount, not a percent — see SalesTransaction.shippingCost.
+  // Empty by default: most sales are in-store and never touch it.
+  const [shippingCost, setShippingCost] = useState('');
   const [soldDate, setSoldDate] = useState(todayISO());
 
   const [customerName, setCustomerName] = useState('');
@@ -246,6 +250,7 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
     setDeposit(saved.deposit);
     setPlatformName(saved.platformName);
     setPlatformFeePercent(saved.platformFeePercent);
+    setShippingCost(saved.shippingCost || '');
     // soldDate is deliberately NOT restored — it stays today's date (its
     // useState initializer above), never a previously chosen/backdated value.
     if (droppedNames.length > 0) setRestoreNotice(describeDroppedLines(droppedNames));
@@ -278,7 +283,7 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
         customerName, customerPhone, customerEmail, customerNotes, selectedCustomerId, linkedRepairId,
         paymentMethod, cashTaxStatus, etransferTaxStatus, paymentNotes,
         cashAmount, cardAmount, etransferAmount, taxCollected, deposit,
-        platformName, platformFeePercent,
+        platformName, platformFeePercent, shippingCost,
       };
       saveCheckoutState(persistKey, state);
     }, 400);
@@ -288,7 +293,7 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
     persistKey, confirmed, cart, customerName, customerPhone, customerEmail, customerNotes, selectedCustomerId, linkedRepairId,
     paymentMethod, cashTaxStatus, etransferTaxStatus, paymentNotes,
     cashAmount, cardAmount, etransferAmount, taxCollected, deposit,
-    platformName, platformFeePercent,
+    platformName, platformFeePercent, shippingCost,
   ]);
 
   // Re-entrancy guard for handleCheckout (see below) — a ref because state
@@ -360,8 +365,14 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
     ? (parseFloat(taxCollected) || 0)
     : (taxApplies ? taxableBase * taxRate / 100 : 0);
   const platformFee = subtotal * feePercent / 100;
+  // Shipping is a COST, exactly like the platform fee: it comes out of
+  // profit and NOTHING else. `totalPaid` below is deliberately
+  // `subtotal + tax` still — untouched by shipping — so the recorded
+  // sale price and the tax charged are unaffected. Absorbing shipping by
+  // discounting the price instead would understate both.
+  const shippingAmount = Math.max(0, parseFloat(shippingCost) || 0);
   const totalPaid = subtotal + tax;
-  const netProfit = subtotal - totalCost - platformFee;
+  const netProfit = subtotal - totalCost - platformFee - shippingAmount;
 
   // ---- deposit / layaway ----
   // If the customer leaves a deposit that's less than the grand total, the sale
@@ -554,7 +565,11 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
 
     for (const l of cart) {
       const saleShare = lineSubtotal(l);
-      const feeShare = subtotal > 0 ? platformFee * (saleShare / subtotal) : 0;
+      // Both whole-sale costs are split across lines by the SAME
+      // function (domain/pos.ts's costShareForLine), so a multi-line
+      // cart can never apportion shipping differently from the fee.
+      const feeShare = costShareForLine(platformFee, saleShare, subtotal);
+      const shippingShare = costShareForLine(shippingAmount, saleShare, subtotal);
       const taxShare = l.taxable && taxableBase > 0 ? tax * (saleShare / taxableBase) : 0;
       const common = {
         transactionId, soldDate, soldTo: effectiveName,
@@ -564,6 +579,9 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
         etransferTaxStatus: paymentMethod === 'etransfer' ? etransferTaxStatus : undefined,
         paymentNotes: paymentNotes || undefined,
         platformName, platformFeePercent: feePercent, platformFees: feeShare,
+        // Per-device margin has to reflect it: this line's share lands on
+        // the inventory row, alongside its share of the platform fee.
+        shippingCost: shippingShare,
       };
 
       if (l.isCustom) {
@@ -629,7 +647,9 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
       cardAmount: paymentMethod === 'mixed' ? (parseFloat(cardAmount) || 0) : undefined,
       etransferAmount: paymentMethod === 'mixed' ? (parseFloat(etransferAmount) || 0) : undefined,
       platformName,
-      subtotal, tax, platformFee, purchaseCost: purchaseCostTotal, repairCost: repairCostTotal,
+      subtotal, tax, platformFee,
+      shippingCost: shippingAmount || undefined,
+      purchaseCost: purchaseCostTotal, repairCost: repairCostTotal,
       totalCost, totalPaid, netProfit,
       deposit: isLayaway ? depositAmount : undefined,
       balanceOwing: isLayaway ? balanceOwing : undefined,
@@ -752,6 +772,7 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
           <div class="row"><span>Subtotal</span><span>${money(lastTx.subtotal)}</span></div>
           <div class="row"><span>Tax</span><span>${money(lastTx.tax)}</span></div>
           ${lastTx.platformFee ? `<div class="row"><span>Platform fee</span><span>-${money(lastTx.platformFee)}</span></div>` : ''}
+          ${lastTx.shippingCost ? `<div class="row"><span>Shipping</span><span>-${money(lastTx.shippingCost)}</span></div>` : ''}
           <div class="row grand"><span>Total</span><span>${money(lastTx.totalPaid)}</span></div>
           ${lastTx.balanceOwing ? `<div class="row"><span>Deposit paid</span><span>${money(lastTx.deposit || 0)}</span></div><div class="row owe"><span>Balance owing</span><span>${money(lastTx.balanceOwing)}</span></div>` : ''}
         </div>
@@ -792,7 +813,9 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
   return {
     customers,
     cart, setCart, picker, setPicker, search, setSearch, confirmed, setConfirmed,
-    platformName, setPlatformName, platformFeePercent, setPlatformFeePercent, soldDate, setSoldDate,
+    platformName, setPlatformName, platformFeePercent, setPlatformFeePercent,
+    shippingCost, setShippingCost,
+    soldDate, setSoldDate,
     customerName, setCustomerName, customerPhone, setCustomerPhone, customerEmail, setCustomerEmail,
     customerNotes, setCustomerNotes, selectedCustomerId, setSelectedCustomerId,
     paymentMethod, setPaymentMethod, cashTaxStatus, setCashTaxStatus, etransferTaxStatus, setEtransferTaxStatus, paymentNotes, setPaymentNotes,
@@ -803,7 +826,7 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
     scan, setScan, scanMsg, setScanMsg, scanRef, lastTx, showTx, setShowTx, labelItem, setLabelItem,
     emptyCustom, showCustom, setShowCustom, custom, setCustom,
     taxRate, feePercent, previousPurchases, availableDevices, availableAccessories,
-    lineSubtotal, subtotal, discountTotal, purchaseCostTotal, repairCostTotal, totalCost, taxableBase, taxApplies, tax, platformFee, totalPaid, netProfit,
+    lineSubtotal, subtotal, discountTotal, purchaseCostTotal, repairCostTotal, totalCost, taxableBase, taxApplies, tax, platformFee, shippingAmount, totalPaid, netProfit,
     isZeroPricedDevice, hasZeroPricedDevice, allowZeroPrice, setAllowZeroPrice, blockedByZeroPrice,
     hasListedElsewhereDevice, allowListedElsewhereSale, setAllowListedElsewhereSale, blockedByListedElsewhere, delistReminders,
     hasOpenRepairDevice, openRepairLines, allowOpenRepairSale, setAllowOpenRepairSale, blockedByOpenRepair,

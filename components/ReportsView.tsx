@@ -706,6 +706,11 @@ const ProfitLossTab: React.FC<{ plInput: ProfitLossInput; showExpenseCategories:
                 <PLRow key={c.category} label={`Expense: ${c.label}${c.excludedFromPL ? ' (informational)' : ''}`} value={c.total} negative={!c.excludedFromPL} />
               ))
             : <PLRow label="Expenses" value={pl.expenses} negative />}
+          {/* The two online-selling costs, each on its OWN line — shipping
+              is never rolled into the platform fee, which is what makes
+              "what does selling on Best Buy actually cost" answerable. */}
+          <PLRow label="Platform fees" value={pl.platformFees} negative />
+          <PLRow label="Shipping" value={pl.shipping} negative />
           <PLRow label="Device buyer service fees (income)" value={pl.deviceBuyerFeeIncome} income />
           <PLRow label="Net profit" value={pl.netProfit} total />
         </div>
@@ -825,6 +830,8 @@ const YearEndTab: React.FC<{ plInput: ProfitLossInput; showExpenseCategories: bo
     ...(showExpenseCategories
       ? summary.expensesByCategory.map(c => ({ label: `Expense: ${c.label}${c.excludedFromPL ? ' (informational)' : ''}`, value: c.total }))
       : [{ label: 'Expenses', value: summary.expenses }]),
+    { label: 'Platform fees', value: summary.platformFees },
+    { label: 'Shipping', value: summary.shipping },
     { label: 'Device buyer service fees (income)', value: summary.deviceBuyerFeeIncome },
     { label: 'Net profit', value: summary.netProfit, strong: true },
     { label: 'Sales tax collected', value: summary.salesTaxCollected },

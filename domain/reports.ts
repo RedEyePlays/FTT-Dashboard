@@ -523,7 +523,24 @@ export interface ProfitLoss {
   // buyer repays is deliberately absent: it is a receivable being settled, not
   // revenue, and counting it would overstate profit by the whole device price.
   deviceBuyerFeeIncome: number;
-  // grossProfit − payroll − expenses + deviceBuyerFeeIncome
+  // The two SELLING costs of an online sale, each on its own line and
+  // deliberately NOT merged with the other:
+  //
+  //  • platformFees — the marketplace's commission (eBay, Best Buy, …).
+  //  • shipping     — postage/packaging to get the box to the buyer.
+  //
+  // They are different costs with different drivers (one is a % of price,
+  // one is a flat per-parcel amount), so rolling shipping into the fee is
+  // exactly the distortion this reports separately to avoid. Both reduce
+  // net profit; neither touches revenue, since neither is a discount.
+  //
+  // NOTE: online selling costs previously reached NO report at all — the
+  // P&L computed gross profit from revenue − cost of goods and stopped.
+  // Adding both here means a shop selling on Best Buy finally sees what
+  // that channel actually costs.
+  platformFees: number;
+  shipping: number;
+  // grossProfit − payroll − expenses − platformFees − shipping + deviceBuyerFeeIncome
   netProfit: number;
 }
 
@@ -536,11 +553,16 @@ export const profitAndLoss = (input: ProfitLossInput, start: string, end: string
   const txnInvIds = new Set<string>();
   transactions.forEach(t => t.lines?.forEach(l => l.inventoryId && txnInvIds.add(l.inventoryId)));
 
-  let revenue = 0, costOfGoods = 0;
+  let revenue = 0, costOfGoods = 0, platformFees = 0, shipping = 0;
   for (const t of transactions) {
     if (!inDateRange(t.date, lo, hi) || !isRecognizedSale(t)) continue;
     revenue = round2(revenue + (t.subtotal || 0));
     costOfGoods = round2(costOfGoods + (t.purchaseCost || 0) + (t.repairCost || 0));
+    // Selling costs, kept OUT of cost of goods (they're not what the
+    // stock cost) and out of revenue (they're not a discount) — each
+    // reported on its own line below.
+    platformFees = round2(platformFees + (t.platformFee || 0));
+    shipping = round2(shipping + (t.shippingCost || 0));
   }
   // Standalone sold devices not tied to a transaction. Voided/returned devices
   // have their soldDate cleared, so they're naturally excluded.
@@ -549,6 +571,8 @@ export const profitAndLoss = (input: ProfitLossInput, start: string, end: string
     if (!inDateRange(i.soldDate, lo, hi)) continue;
     revenue = round2(revenue + (i.salePrice || 0));
     costOfGoods = round2(costOfGoods + (i.purchaseCost || 0) + (i.repairCost || 0));
+    platformFees = round2(platformFees + (i.platformFees || 0));
+    shipping = round2(shipping + (i.shippingCost || 0));
   }
 
   const payroll = round2(payPeriods
@@ -570,11 +594,12 @@ export const profitAndLoss = (input: ProfitLossInput, start: string, end: string
   ));
 
   const grossProfit = round2(revenue - costOfGoods);
-  const netProfit = round2(grossProfit - payroll - expensesTotal + deviceBuyerFeeIncome);
+  const netProfit = round2(grossProfit - payroll - expensesTotal - platformFees - shipping + deviceBuyerFeeIncome);
   return {
     start: lo, end: hi, revenue, costOfGoods, grossProfit, payroll,
     expenses: expensesTotal, expensesByCategory,
     deviceBuyerFeeIncome,
+    platformFees, shipping,
     netProfit,
   };
 };
@@ -598,6 +623,8 @@ export const profitLossCsvRows = (pl: ProfitLoss, withCategories = true): Record
         Amount: (-c.total).toFixed(2),
       }))
     : [{ Line: 'Expenses', Amount: (-pl.expenses).toFixed(2) }]),
+  { Line: 'Platform fees', Amount: (-pl.platformFees).toFixed(2) },
+  { Line: 'Shipping', Amount: (-pl.shipping).toFixed(2) },
   { Line: 'Device buyer service fees (income)', Amount: pl.deviceBuyerFeeIncome.toFixed(2) },
   { Line: 'Net profit', Amount: pl.netProfit.toFixed(2) },
 ];
@@ -614,6 +641,10 @@ export interface YearEndSummary {
   expensesByCategory: CategoryTotal[];
   // Store service fees on drop-off settlements — always income, see ProfitLoss.
   deviceBuyerFeeIncome: number;
+  // Online-selling costs, separately — see ProfitLoss for why they are two
+  // lines and not one.
+  platformFees: number;
+  shipping: number;
   netProfit: number;
   salesTaxCollected: number;
 }
@@ -632,6 +663,8 @@ export const yearEndSummary = (input: ProfitLossInput, year: number): YearEndSum
     expenses: pl.expenses,
     expensesByCategory: pl.expensesByCategory,
     deviceBuyerFeeIncome: pl.deviceBuyerFeeIncome,
+    platformFees: pl.platformFees,
+    shipping: pl.shipping,
     netProfit: pl.netProfit,
     salesTaxCollected: tax.totalTaxCollected,
   };
@@ -647,6 +680,8 @@ export const yearEndCsvRows = (s: YearEndSummary, withCategories = true): Record
   ...(withCategories
     ? s.expensesByCategory.map(c => ({ Metric: `Expense: ${c.label}${c.excludedFromPL ? ' (informational)' : ''}`, Value: c.total.toFixed(2) }))
     : [{ Metric: 'Expenses', Value: s.expenses.toFixed(2) }]),
+  { Metric: 'Platform fees', Value: (-s.platformFees).toFixed(2) },
+  { Metric: 'Shipping', Value: (-s.shipping).toFixed(2) },
   { Metric: 'Device buyer service fees (income)', Value: s.deviceBuyerFeeIncome.toFixed(2) },
   { Metric: 'Net profit', Value: s.netProfit.toFixed(2) },
   { Metric: 'Sales tax collected', Value: s.salesTaxCollected.toFixed(2) },
