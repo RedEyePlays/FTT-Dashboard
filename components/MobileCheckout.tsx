@@ -13,6 +13,7 @@ import { RepairSalePrefill } from '../domain/repairs';
 import { getDeviceDisplayName, suggestedSalePrice, PriceSuggestion } from '../domain/inventory';
 import { formatPhoneInput } from '../domain/phone';
 import { listingPlatformsLabel } from '../domain/listing';
+import { PLATFORMS, isOnlineSale } from '../domain/pos';
 import { useCheckout, CartCheckout, CustomCategory, CUSTOM_DEVICE_TYPES } from '../hooks/useCheckout';
 import { PAYMENT_METHOD_LABEL } from '../services/salesReceipt';
 import { CustomerSearchInput } from './CustomerSearchInput';
@@ -92,6 +93,15 @@ export const MobileCheckout: React.FC<Props> = (props) => {
           <div className="flex justify-between"><span className="text-slate-400">Customer</span><span className="text-slate-700 dark:text-slate-200">{t.customerName || 'Walk-in'}</span></div>
           <div className="flex justify-between"><span className="text-slate-400">Payment</span><span className="text-slate-700 dark:text-slate-200">{PAYMENT_METHOD_LABEL[t.paymentMethod || ''] || t.paymentMethod}</span></div>
           <div className="flex justify-between text-base font-bold pt-1"><span>{t.balanceOwing ? 'Total due' : 'Total paid'}</span><span>{money(t.totalPaid)}</span></div>
+          {/* The true cost breakdown of a past sale: what came off the top
+              after the customer paid. Below the total, since neither
+              reduced what was charged. */}
+          {!!t.platformFee && (
+            <div className="flex justify-between"><span className="text-slate-400">Platform fee</span><span className="text-slate-600 dark:text-slate-300">−{money(t.platformFee)}</span></div>
+          )}
+          {!!t.shippingCost && (
+            <div className="flex justify-between"><span className="text-slate-400">Shipping</span><span className="text-slate-600 dark:text-slate-300">−{money(t.shippingCost)}</span></div>
+          )}
           {t.balanceOwing ? (
             <>
               <div className="flex justify-between"><span className="text-slate-400">Deposit paid</span><span className="text-slate-700 dark:text-slate-200">{money(t.deposit || 0)}</span></div>
@@ -312,6 +322,41 @@ export const MobileCheckout: React.FC<Props> = (props) => {
           <label className="block text-sm text-slate-500 dark:text-slate-400">Sale Date
             <input type="date" max={todayISO()} value={cx.soldDate} onChange={e => cx.setSoldDate(e.target.value)} className={input} />
           </label>
+          {/* Sales channel. Mobile had NO platform control at all, so an
+              online sale rung up here could record neither its commission
+              nor its shipping — the two costs this screen now has to be
+              able to capture. Defaults to in-store, so the ordinary
+              counter sale sees one unchanged dropdown and nothing more. */}
+          <label className="block text-sm text-slate-500 dark:text-slate-400">Platform
+            <select value={cx.platformName} className={input}
+              onChange={e => {
+                const p = PLATFORMS.find(x => x.name === e.target.value);
+                cx.setPlatformName(e.target.value);
+                if (p) cx.setPlatformFeePercent(String(p.fee));
+              }}>
+              {PLATFORMS.map(p => <option key={p.name} value={p.name}>{p.name}{p.fee > 0 ? ` (${p.fee}%)` : ''}</option>)}
+            </select>
+          </label>
+          {isOnlineSale(cx.platformName) && (
+            <div className="grid grid-cols-2 gap-2">
+              <label className="block text-sm text-slate-500 dark:text-slate-400">Fee %
+                <input type="number" step="0.01" inputMode="decimal" value={cx.platformFeePercent}
+                  onChange={e => cx.setPlatformFeePercent(e.target.value)} onFocus={selectOnFocus} className={input} />
+              </label>
+              <label className="block text-sm text-slate-500 dark:text-slate-400">Shipping ($)
+                <input type="number" step="0.01" min="0" inputMode="decimal" placeholder="0.00"
+                  value={cx.shippingCost} onChange={e => cx.setShippingCost(e.target.value)}
+                  onFocus={selectOnFocus} className={input} />
+              </label>
+            </div>
+          )}
+          {isOnlineSale(cx.platformName) && (
+            <p className="text-[11px] leading-snug text-slate-400 -mt-1">
+              Shipping comes off profit only — it does not change the sale price or the tax.
+              Enter it here <span className="font-semibold">instead of</span> a separate Shipping
+              expense, so the same shipment isn't counted twice.
+            </p>
+          )}
           <div className="grid grid-cols-2 gap-2">
             <PayBig active={cx.paymentMethod === 'cash'} onClick={() => cx.setPaymentMethod('cash')} icon={<Banknote className="w-6 h-6" />} label="Cash" />
             <PayBig active={cx.paymentMethod === 'card'} onClick={() => cx.setPaymentMethod('card')} icon={<CreditCard className="w-6 h-6" />} label="Card" />
@@ -392,6 +437,14 @@ export const MobileCheckout: React.FC<Props> = (props) => {
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-4 space-y-1.5 text-sm">
             <div className="flex justify-between"><span className="text-slate-500 dark:text-slate-400">Subtotal</span><span className="text-slate-800 dark:text-slate-100">{money(cx.subtotal)}</span></div>
             <div className="flex justify-between"><span className="text-slate-500 dark:text-slate-400">Tax</span><span className="text-slate-600 dark:text-slate-300">{money(cx.tax)}</span></div>
+            {/* Costs, listed for visibility — deliberately BELOW and outside
+                the Total, which stays subtotal + tax. */}
+            {cx.platformFee > 0 && (
+              <div className="flex justify-between"><span className="text-slate-500 dark:text-slate-400">Platform fee</span><span className="text-slate-600 dark:text-slate-300">−{money(cx.platformFee)}</span></div>
+            )}
+            {cx.shippingAmount > 0 && (
+              <div className="flex justify-between"><span className="text-slate-500 dark:text-slate-400">Shipping</span><span className="text-slate-600 dark:text-slate-300">−{money(cx.shippingAmount)}</span></div>
+            )}
             <div className="flex justify-between text-base font-bold border-t border-slate-100 dark:border-slate-800 pt-1.5"><span>{cx.isLayaway ? 'Total Due' : 'Total'}</span><span>{money(cx.totalPaid)}</span></div>
             {cx.isLayaway && (
               <>

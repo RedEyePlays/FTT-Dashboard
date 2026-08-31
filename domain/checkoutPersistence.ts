@@ -39,6 +39,9 @@ export interface PersistedCheckoutState {
   deposit: string;
   platformName: string;
   platformFeePercent: string;
+  // Optional so a blob saved before shipping existed still restores
+  // cleanly (the restore reads `saved.shippingCost || ''`).
+  shippingCost?: string;
 }
 
 // How long a saved cart stays eligible for restore. A fixed rolling window

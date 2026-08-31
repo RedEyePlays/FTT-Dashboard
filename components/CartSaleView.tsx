@@ -10,7 +10,7 @@ import { getDeviceDisplayName, suggestedSalePrice, PriceSuggestion } from '../do
 // Lazy: the label modal pulls in jsPDF (~390 kB). Load it only when a label is
 // actually printed, not on every Quick Sale.
 const LabelModal = lazy(() => import('./LabelModal').then(m => ({ default: m.LabelModal })));
-import { PLATFORMS } from '../domain/pos';
+import { PLATFORMS, isOnlineSale } from '../domain/pos';
 import { listingPlatformsLabel } from '../domain/listing';
 import { formatPhoneInput } from '../domain/phone';
 import { CustomerSearchInput } from './CustomerSearchInput';
@@ -53,7 +53,8 @@ export const CartSaleView: React.FC<Props> = (props) => {
   React.useEffect(() => { onDirtyChange?.(cx.cart.length > 0); }, [cx.cart.length, onDirtyChange]);
   const {
     customers, cart, picker, setPicker, search, setSearch, confirmed,
-    platformName, setPlatformName, platformFeePercent, setPlatformFeePercent, soldDate, setSoldDate,
+    platformName, setPlatformName, platformFeePercent, setPlatformFeePercent,
+    shippingCost, setShippingCost, soldDate, setSoldDate,
     customerName, setCustomerName, customerPhone, setCustomerPhone, customerEmail, setCustomerEmail,
     customerNotes, setCustomerNotes, setSelectedCustomerId,
     paymentMethod, setPaymentMethod, cashTaxStatus, setCashTaxStatus, etransferTaxStatus, setEtransferTaxStatus, paymentNotes, setPaymentNotes,
@@ -63,7 +64,7 @@ export const CartSaleView: React.FC<Props> = (props) => {
     scan, setScan, scanMsg, scanRef, lastTx, showTx, setShowTx, labelItem, setLabelItem,
     emptyCustom, showCustom, setShowCustom, custom, setCustom,
     taxRate, feePercent, previousPurchases, availableDevices, availableAccessories,
-    lineSubtotal, subtotal, purchaseCostTotal, repairCostTotal, totalCost, taxApplies, tax, platformFee, totalPaid, netProfit,
+    lineSubtotal, subtotal, purchaseCostTotal, repairCostTotal, totalCost, taxApplies, tax, platformFee, shippingAmount, totalPaid, netProfit,
     isZeroPricedDevice, hasZeroPricedDevice, allowZeroPrice, setAllowZeroPrice, blockedByZeroPrice,
     hasListedElsewhereDevice, allowListedElsewhereSale, setAllowListedElsewhereSale, blockedByListedElsewhere, delistReminders,
     hasOpenRepairDevice, openRepairLines, allowOpenRepairSale, setAllowOpenRepairSale, blockedByOpenRepair,
@@ -159,6 +160,7 @@ export const CartSaleView: React.FC<Props> = (props) => {
                   <Row label="Subtotal" value={lastTx.subtotal} />
                   <Row label="Tax" value={lastTx.tax} muted />
                   <Row label="Platform fee" value={-lastTx.platformFee} muted />
+                  {!!lastTx.shippingCost && <Row label="Shipping" value={-lastTx.shippingCost} muted />}
                   <Row label={lastTx.balanceOwing ? 'Total Due' : 'Total Paid'} value={lastTx.totalPaid} bold />
                   {lastTx.balanceOwing ? <><Row label="Deposit" value={lastTx.deposit || 0} muted /><Row label="Balance Owing" value={lastTx.balanceOwing} /></> : null}
                   {canViewProfit && <Row label="Net Profit" value={lastTx.netProfit} />}
@@ -305,6 +307,9 @@ export const CartSaleView: React.FC<Props> = (props) => {
           <Row label="Subtotal" value={subtotal} />
           <Row label={`Tax${taxApplies ? ` (${taxRate}%)` : ' (none)'}`} value={tax} muted />
           <Row label={`Platform fee${feePercent ? ` (${feePercent}%)` : ''}`} value={-platformFee} muted />
+          {/* A COST, shown next to the fee — never subtracted from the
+              subtotal or the tax above it. */}
+          {shippingAmount > 0 && <Row label="Shipping" value={-shippingAmount} muted />}
           <div className="border-t border-slate-100 dark:border-slate-800 my-1" />
           <Row label={isLayaway ? 'Total Due' : 'Total Paid'} value={totalPaid} bold />
           {isLayaway && (
@@ -426,6 +431,22 @@ export const CartSaleView: React.FC<Props> = (props) => {
             <div><label className={labelCls}>Fee %</label><input type="number" className={inputCls} value={platformFeePercent} onChange={e => setPlatformFeePercent(e.target.value)} /></div>
             <div><label className={labelCls}>Sale Date</label><input type="date" max={todayISO()} className={inputCls} value={soldDate} onChange={e => setSoldDate(e.target.value)} /></div>
           </div>
+          {/* Shipping appears ONLY for an online sale — the same rule Fee %
+              follows in spirit, so an in-store checkout (nearly all of them)
+              never sees a box it would leave empty. */}
+          {isOnlineSale(platformName) && (
+            <div>
+              <label className={labelCls}>Shipping cost ($)</label>
+              <input type="number" step="0.01" min="0" inputMode="decimal" placeholder="0.00"
+                className={inputCls} value={shippingCost}
+                onChange={e => setShippingCost(e.target.value)} onFocus={selectOnFocus} />
+              <p className="mt-1 text-[11px] leading-snug text-slate-400">
+                Postage/packaging for this sale. Comes off profit only — it does not change the
+                sale price or the tax. Enter it here <span className="font-semibold">instead of</span> logging
+                a separate Shipping expense, so the same shipment isn't counted twice.
+              </p>
+            </div>
+          )}
         </div>
 
         {hasZeroPricedDevice && (
