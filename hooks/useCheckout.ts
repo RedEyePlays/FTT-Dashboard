@@ -3,7 +3,7 @@ import { InventoryItem, ItemKind, DeviceType, SalesTransaction, Customer, Repair
 import { getPOSSettings, getStoreProfile } from '../components/SettingsModal';
 import { newId } from '../domain/ids';
 import { kindOf, getDeviceDisplayName } from '../domain/inventory';
-import { isZeroPricedDevice as isZeroPricedLine, cartHasZeroPricedDevice, searchCheckoutInventory, salesBalanceOwing, mixedPaymentMismatch as computeMixedPaymentMismatch, taxAppliesForSale, costShareForLine } from '../domain/pos';
+import { isZeroPricedDevice as isZeroPricedLine, cartHasZeroPricedDevice, searchCheckoutInventory, salesBalanceOwing, mixedPaymentMismatch as computeMixedPaymentMismatch, taxAppliesForSale, costShareForLine, mixedSaleTax } from '../domain/pos';
 import { hasListedElsewhere } from '../domain/listing';
 import { RepairSalePrefill, repairSalePrefill, isRepairOpen, matchesRepair, openRepairFor } from '../domain/repairs';
 import { printSalesReceipt, PAYMENT_METHOD_LABEL } from '../services/salesReceipt';
@@ -361,8 +361,23 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
   const totalCost = purchaseCostTotal + repairCostTotal;
   const taxableBase = cart.filter(l => l.taxable).reduce((s, l) => s + lineSubtotal(l), 0);
   const taxApplies = taxAppliesForSale(paymentMethod, cashTaxStatus, etransferTaxStatus);
+  // MIXED SALES. The tax is now DERIVED like every other payment method
+  // (domain/pos.ts's mixedSaleTax) instead of being a number the cashier
+  // had to work out by hand: with "no tax on cash" selected, the cash is
+  // treated as a tax-free payment toward the goods and whatever it
+  // doesn't cover is taxed.
+  //
+  // The "Tax collected" box stays as an EXPLICIT OVERRIDE for a split
+  // the model doesn't describe — but only when something is actually
+  // typed in it. Blank no longer silently means "$0 tax on a mixed
+  // sale", which is what it used to mean and is almost never what the
+  // shop intends.
+  const mixedTaxOverride = taxCollected.trim() !== '';
+  const derivedMixedTax = mixedSaleTax({
+    taxableBase, cashAmount: parseFloat(cashAmount) || 0, taxRate, cashTaxed: cashTaxStatus !== 'none',
+  });
   const tax = paymentMethod === 'mixed'
-    ? (parseFloat(taxCollected) || 0)
+    ? (mixedTaxOverride ? (parseFloat(taxCollected) || 0) : derivedMixedTax)
     : (taxApplies ? taxableBase * taxRate / 100 : 0);
   const platformFee = subtotal * feePercent / 100;
   // Shipping is a COST, exactly like the platform fee: it comes out of
@@ -575,7 +590,10 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
         transactionId, soldDate, soldTo: effectiveName,
         customerName: effectiveName, customerPhone, customerEmail, customerNotes,
         paymentMethod, taxCollected: taxShare,
-        cashTaxStatus: paymentMethod === 'cash' ? cashTaxStatus : undefined,
+        // Also stored for a MIXED sale now — "the cash half was taken
+        // untaxed" is a real fact about the sale, and dropping it left
+        // the record unable to explain its own tax figure.
+        cashTaxStatus: (paymentMethod === 'cash' || paymentMethod === 'mixed') ? cashTaxStatus : undefined,
         etransferTaxStatus: paymentMethod === 'etransfer' ? etransferTaxStatus : undefined,
         paymentNotes: paymentNotes || undefined,
         platformName, platformFeePercent: feePercent, platformFees: feeShare,
@@ -821,7 +839,7 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
     paymentMethod, setPaymentMethod, cashTaxStatus, setCashTaxStatus, etransferTaxStatus, setEtransferTaxStatus, paymentNotes, setPaymentNotes,
     cashAmount, setCashAmount, cardAmount, setCardAmount, etransferAmount, setEtransferAmount, taxCollected, setTaxCollected,
     deposit, setDeposit, depositAmount, balanceOwing, isLayaway, effectiveName,
-    mixedPaymentTotal, mixedPaymentMismatch,
+    mixedPaymentTotal, mixedPaymentMismatch, derivedMixedTax, mixedTaxOverride,
     restoreNotice, setRestoreNotice,
     scan, setScan, scanMsg, setScanMsg, scanRef, lastTx, showTx, setShowTx, labelItem, setLabelItem,
     emptyCustom, showCustom, setShowCustom, custom, setCustom,

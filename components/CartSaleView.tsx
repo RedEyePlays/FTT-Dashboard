@@ -59,6 +59,7 @@ export const CartSaleView: React.FC<Props> = (props) => {
     customerNotes, setCustomerNotes, setSelectedCustomerId,
     paymentMethod, setPaymentMethod, cashTaxStatus, setCashTaxStatus, etransferTaxStatus, setEtransferTaxStatus, paymentNotes, setPaymentNotes,
     cashAmount, setCashAmount, cardAmount, setCardAmount, etransferAmount, setEtransferAmount, taxCollected, setTaxCollected,
+    mixedTaxOverride,
     deposit, setDeposit, balanceOwing, isLayaway, mixedPaymentTotal, mixedPaymentMismatch,
     restoreNotice, setRestoreNotice,
     scan, setScan, scanMsg, scanRef, lastTx, showTx, setShowTx, labelItem, setLabelItem,
@@ -305,7 +306,24 @@ export const CartSaleView: React.FC<Props> = (props) => {
       <div className="w-full lg:w-96 shrink-0 flex flex-col gap-4">
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl p-5 space-y-2 text-sm">
           <Row label="Subtotal" value={subtotal} />
-          <Row label={`Tax${taxApplies ? ` (${taxRate}%)` : ' (none)'}`} value={tax} muted />
+          {/* The rate is only an honest label when it was actually applied
+              to the whole subtotal. On a mixed sale with the cash taken
+              untaxed it is 13% of PART of the sale, and this row used to
+              read "Tax (13%) $65.00" against a $1000 subtotal — a figure
+              that plainly isn't 13% of it. Say what the number is. */}
+          <Row
+            label={
+              paymentMethod === 'mixed'
+                ? (mixedTaxOverride
+                    ? 'Tax (entered)'
+                    : cashTaxStatus === 'none'
+                      ? `Tax (${taxRate}% on the non-cash portion)`
+                      : `Tax (${taxRate}%)`)
+                : `Tax${taxApplies ? ` (${taxRate}%)` : ' (none)'}`
+            }
+            value={tax}
+            muted
+          />
           <Row label={`Platform fee${feePercent ? ` (${feePercent}%)` : ''}`} value={-platformFee} muted />
           {/* A COST, shown next to the fee — never subtracted from the
               subtotal or the tax above it. */}
@@ -383,12 +401,33 @@ export const CartSaleView: React.FC<Props> = (props) => {
             </div>
           )}
           {paymentMethod === 'mixed' && (
-            <div className="grid grid-cols-2 gap-2">
-              <div><label className={labelCls}>Cash Amount</label><input type="number" step="0.01" className={inputCls} value={cashAmount} onChange={e => setCashAmount(e.target.value)} onFocus={selectOnFocus} placeholder="0.00" /></div>
-              <div><label className={labelCls}>Card Amount</label><input type="number" step="0.01" className={inputCls} value={cardAmount} onChange={e => setCardAmount(e.target.value)} onFocus={selectOnFocus} placeholder="0.00" /></div>
-              <div><label className={labelCls}>E-transfer</label><input type="number" step="0.01" className={inputCls} value={etransferAmount} onChange={e => setEtransferAmount(e.target.value)} onFocus={selectOnFocus} placeholder="0.00" /></div>
-              <div><label className={labelCls}>Tax Collected</label><input type="number" step="0.01" className={inputCls} value={taxCollected} onChange={e => setTaxCollected(e.target.value)} onFocus={selectOnFocus} placeholder="0.00" /></div>
-            </div>
+            <>
+              <div>
+                <label className={labelCls}>Tax on the cash portion</label>
+                <select className={inputCls} value={cashTaxStatus === 'none' ? 'none' : 'separate'} onChange={e => setCashTaxStatus(e.target.value as any)}>
+                  <option value="none">No tax on cash — tax the rest</option>
+                  <option value="separate">Charge tax on the whole sale</option>
+                </select>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div><label className={labelCls}>Cash Amount</label><input type="number" step="0.01" className={inputCls} value={cashAmount} onChange={e => setCashAmount(e.target.value)} onFocus={selectOnFocus} placeholder="0.00" /></div>
+                <div><label className={labelCls}>Card Amount</label><input type="number" step="0.01" className={inputCls} value={cardAmount} onChange={e => setCardAmount(e.target.value)} onFocus={selectOnFocus} placeholder="0.00" /></div>
+                <div><label className={labelCls}>E-transfer</label><input type="number" step="0.01" className={inputCls} value={etransferAmount} onChange={e => setEtransferAmount(e.target.value)} onFocus={selectOnFocus} placeholder="0.00" /></div>
+                <div>
+                  <label className={labelCls}>Tax Collected</label>
+                  <input type="number" step="0.01" className={inputCls} value={taxCollected}
+                    onChange={e => setTaxCollected(e.target.value)} onFocus={selectOnFocus}
+                    placeholder={money(cx.derivedMixedTax).replace('$', '')} />
+                </div>
+              </div>
+              <p className="text-[11px] leading-snug text-slate-400">
+                {mixedTaxOverride
+                  ? <>Using the tax you typed. Clear the box to go back to the calculated {money(cx.derivedMixedTax)}.</>
+                  : cashTaxStatus === 'none'
+                    ? <>Cash is taken as a tax-free payment toward the goods; the remaining {money(Math.max(0, cx.taxableBase - (parseFloat(cashAmount) || 0)))} is taxed at {taxRate}% = <span className="font-semibold">{money(cx.derivedMixedTax)}</span>. Type a Tax Collected amount only to override this.</>
+                    : <>Tax is {taxRate}% of the whole {money(cx.taxableBase)} taxable total = <span className="font-semibold">{money(cx.derivedMixedTax)}</span>.</>}
+              </p>
+            </>
           )}
           {mixedPaymentMismatch && (
             <p className="flex items-center gap-1.5 text-xs font-medium text-amber-600 dark:text-amber-400">

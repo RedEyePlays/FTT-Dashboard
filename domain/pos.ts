@@ -70,6 +70,45 @@ export const taxAppliesForSale = (
   (paymentMethod === 'cash' && cashTaxStatus === 'none') ||
   (paymentMethod === 'etransfer' && etransferTaxStatus === 'none')
 );
+// NOTE: a MIXED sale stays `true` here even when its cash half is taken
+// untaxed, and that is correct — tax genuinely does apply to the
+// non-cash part of the sale. "How much" is mixedSaleTax's job below;
+// this predicate only answers "is this sale taxed at all".
+
+/**
+ * Tax on a MIXED sale where the cash half is taken untaxed.
+ *
+ * The real-world case this exists for: the customer pays part cash and
+ * part card, the shop charges tax on the card portion and not on the
+ * cash. Until now there was no way to say that — the mixed branch just
+ * read a hand-typed "Tax Collected" box, so the cashier had to work the
+ * figure out themselves, and the totals row still labelled the result
+ * "Tax (13%)" even though it was 13% of only part of the sale.
+ *
+ * The model, matching how the till actually works: CASH IS A PAYMENT
+ * TOWARD THE GOODS, tax-free. Whatever goods value the cash doesn't
+ * cover is taxed at the normal rate.
+ *
+ *   $1000 of goods, $500 cash → $500 still taxable → $65 at 13%,
+ *   so the card side collects $565 and the sale totals $1065.
+ *
+ * `cashTaxed` true means the shop IS charging tax on the cash too, so
+ * the whole taxable base is taxed and the cash portion is irrelevant —
+ * the ordinary calculation.
+ *
+ * Clamped at 0: cash exceeding the taxable base (a cash-heavy split, or
+ * a cart of non-taxable lines) leaves nothing to tax, never a negative.
+ */
+export function mixedSaleTax(input: {
+  taxableBase: number;
+  cashAmount: number;
+  taxRate: number;
+  cashTaxed: boolean;
+}): number {
+  const base = Math.max(0, input.taxableBase || 0);
+  const taxedGoods = input.cashTaxed ? base : Math.max(0, base - Math.max(0, input.cashAmount || 0));
+  return taxedGoods * (Math.max(0, input.taxRate || 0) / 100);
+}
 
 // --- $0 device safeguard ---------------------------------------------------
 // A device with no sale price set (targetSalePrice missing/0) can be added to
