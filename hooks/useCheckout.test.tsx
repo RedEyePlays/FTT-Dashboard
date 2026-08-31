@@ -468,3 +468,121 @@ describe('useCheckout shipping cost', () => {
     h.unmount();
   });
 });
+
+// --- Mixed sale: tax on the card portion, not on the cash ---------------------
+// The reported bug. The shop takes part cash (untaxed) and part card (taxed);
+// there was no way to say that, so the tax had to be hand-computed into a
+// "Tax Collected" box — and a blank box silently meant $0 tax on the sale.
+
+describe('useCheckout mixed sale tax', () => {
+  const setup = () => {
+    const onComplete = vi.fn();
+    const h = mount({ onComplete });
+    act(() => { h.cx.addDevice(device); });
+    act(() => { h.cx.updateLine(h.cx.cart[0].key, { unitPrice: 1000 }); });
+    act(() => { h.cx.setPaymentMethod('mixed'); });
+    return { onComplete, h };
+  };
+
+  it('derives the tax from the NON-CASH portion — no hand arithmetic', () => {
+    const { h } = setup();
+    act(() => { h.cx.setCashAmount('500'); });
+    // Default is "no tax on cash": $500 of goods left → 13% → $65.
+    expect(h.cx.cashTaxStatus).toBe('none');
+    expect(h.cx.derivedMixedTax).toBe(65);
+    expect(h.cx.tax).toBe(65);
+    expect(h.cx.totalPaid).toBe(1065);
+    h.unmount();
+  });
+
+  it('the card side balances the sale, so checkout is not blocked', () => {
+    const { h } = setup();
+    act(() => { h.cx.setCashAmount('500'); });
+    act(() => { h.cx.setCardAmount('565'); });
+    // $500 cash + $565 card = the $1065 total. No mismatch warning.
+    expect(h.cx.mixedPaymentTotal).toBe(1065);
+    expect(h.cx.mixedPaymentMismatch).toBe(false);
+    h.unmount();
+  });
+
+  it('taxes the whole sale when the shop DOES charge tax on cash', () => {
+    const { h } = setup();
+    act(() => { h.cx.setCashAmount('500'); });
+    act(() => { h.cx.setCashTaxStatus('separate'); });
+    expect(h.cx.tax).toBe(130);          // 13% of the full 1000
+    expect(h.cx.totalPaid).toBe(1130);
+    h.unmount();
+  });
+
+  it('a blank Tax Collected box no longer silently means $0 tax', () => {
+    const { h } = setup();
+    act(() => { h.cx.setCashAmount('500'); });
+    expect(h.cx.taxCollected).toBe('');   // untouched
+    expect(h.cx.mixedTaxOverride).toBe(false);
+    expect(h.cx.tax).toBe(65);            // was 0 before the fix
+    h.unmount();
+  });
+
+  it('a typed Tax Collected amount still wins, as an explicit override', () => {
+    const { h } = setup();
+    act(() => { h.cx.setCashAmount('500'); });
+    act(() => { h.cx.setTaxCollected('40') ; });
+    expect(h.cx.mixedTaxOverride).toBe(true);
+    expect(h.cx.tax).toBe(40);
+    expect(h.cx.totalPaid).toBe(1040);
+    // Clearing it returns to the derived figure.
+    act(() => { h.cx.setTaxCollected(''); });
+    expect(h.cx.mixedTaxOverride).toBe(false);
+    expect(h.cx.tax).toBe(65);
+    h.unmount();
+  });
+
+  it('an explicit 0 override is honoured — it is not treated as blank', () => {
+    const { h } = setup();
+    act(() => { h.cx.setCashAmount('500'); });
+    act(() => { h.cx.setTaxCollected('0'); });
+    expect(h.cx.mixedTaxOverride).toBe(true);
+    expect(h.cx.tax).toBe(0);
+    h.unmount();
+  });
+
+  it('cash covering the whole sale leaves no tax to charge', () => {
+    const { h } = setup();
+    act(() => { h.cx.setCashAmount('1000'); });
+    expect(h.cx.tax).toBe(0);
+    expect(h.cx.totalPaid).toBe(1000);
+    h.unmount();
+  });
+
+  it('records the cash-tax choice on the sale, so it can explain its own tax', async () => {
+    const { onComplete, h } = setup();
+    act(() => { h.cx.setCashAmount('500'); });
+    act(() => { h.cx.setCardAmount('565'); });
+    await act(async () => { await h.cx.handleCheckout(); });
+
+    const { transaction, soldRows } = onComplete.mock.calls[0][0];
+    expect(transaction.tax).toBe(65);
+    expect(transaction.totalPaid).toBe(1065);
+    expect(transaction.cashAmount).toBe(500);
+    expect(transaction.cardAmount).toBe(565);
+    // Previously dropped for mixed sales, leaving the record unable to say
+    // why its tax was 65 rather than 130.
+    expect(soldRows[0].cashTaxStatus).toBe('none');
+    h.unmount();
+  });
+
+  it('leaves single-method sales completely unaffected', () => {
+    const onComplete = vi.fn();
+    const h = mount({ onComplete });
+    act(() => { h.cx.addDevice(device); });
+    act(() => { h.cx.updateLine(h.cx.cart[0].key, { unitPrice: 1000 }); });
+
+    act(() => { h.cx.setPaymentMethod('card'); });
+    expect(h.cx.tax).toBe(130);
+    act(() => { h.cx.setPaymentMethod('cash'); });
+    expect(h.cx.tax).toBe(0);            // cashTaxStatus defaults to 'none'
+    act(() => { h.cx.setCashTaxStatus('separate'); });
+    expect(h.cx.tax).toBe(130);
+    h.unmount();
+  });
+});

@@ -380,12 +380,29 @@ export const MobileCheckout: React.FC<Props> = (props) => {
             </label>
           )}
           {cx.paymentMethod === 'mixed' && (
-            <div className="grid grid-cols-2 gap-2">
-              <label className="text-xs text-slate-400">Cash<input type="number" inputMode="decimal" value={cx.cashAmount} onChange={e => cx.setCashAmount(e.target.value)} onFocus={selectOnFocus} className={input} placeholder="0.00" /></label>
-              <label className="text-xs text-slate-400">Card<input type="number" inputMode="decimal" value={cx.cardAmount} onChange={e => cx.setCardAmount(e.target.value)} onFocus={selectOnFocus} className={input} placeholder="0.00" /></label>
-              <label className="text-xs text-slate-400">E-Transfer<input type="number" inputMode="decimal" value={cx.etransferAmount} onChange={e => cx.setEtransferAmount(e.target.value)} onFocus={selectOnFocus} className={input} placeholder="0.00" /></label>
-              <label className="text-xs text-slate-400">Tax collected<input type="number" inputMode="decimal" value={cx.taxCollected} onChange={e => cx.setTaxCollected(e.target.value)} onFocus={selectOnFocus} className={input} placeholder="0.00" /></label>
-            </div>
+            <>
+              {/* Same choice the desktop offers: the cash half can be taken
+                  untaxed, with the tax derived from what's left, instead of
+                  the cashier working the figure out by hand. */}
+              <label className="block text-sm text-slate-500 dark:text-slate-400">Tax on the cash portion
+                <select value={cx.cashTaxStatus === 'none' ? 'none' : 'separate'}
+                  onChange={e => cx.setCashTaxStatus(e.target.value as any)} className={input}>
+                  <option value="none">No tax on cash — tax the rest</option>
+                  <option value="separate">Charge tax on the whole sale</option>
+                </select>
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                <label className="text-xs text-slate-400">Cash<input type="number" inputMode="decimal" value={cx.cashAmount} onChange={e => cx.setCashAmount(e.target.value)} onFocus={selectOnFocus} className={input} placeholder="0.00" /></label>
+                <label className="text-xs text-slate-400">Card<input type="number" inputMode="decimal" value={cx.cardAmount} onChange={e => cx.setCardAmount(e.target.value)} onFocus={selectOnFocus} className={input} placeholder="0.00" /></label>
+                <label className="text-xs text-slate-400">E-Transfer<input type="number" inputMode="decimal" value={cx.etransferAmount} onChange={e => cx.setEtransferAmount(e.target.value)} onFocus={selectOnFocus} className={input} placeholder="0.00" /></label>
+                <label className="text-xs text-slate-400">Tax collected<input type="number" inputMode="decimal" value={cx.taxCollected} onChange={e => cx.setTaxCollected(e.target.value)} onFocus={selectOnFocus} className={input} placeholder={money(cx.derivedMixedTax).replace('$', '')} /></label>
+              </div>
+              <p className="text-[11px] leading-snug text-slate-400">
+                {cx.mixedTaxOverride
+                  ? <>Using the tax you typed — clear it to use the calculated {money(cx.derivedMixedTax)}.</>
+                  : <>Calculated tax: <span className="font-semibold">{money(cx.derivedMixedTax)}</span>. Type a Tax collected amount only to override it.</>}
+              </p>
+            </>
           )}
           {cx.mixedPaymentMismatch && (
             <p className="flex items-center gap-1.5 text-xs font-medium text-amber-600 dark:text-amber-400">
