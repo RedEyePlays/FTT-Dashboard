@@ -889,6 +889,14 @@ export interface Repair {
   // without a migration. Never edited by hand; only ever set to the value the
   // write-back just applied.
   inventoryRepairCostApplied?: number;
+  // When the linked device SOLD while this ticket was still open (epoch ms).
+  //
+  // A sold device with an open ticket is a real inconsistency — unfinished
+  // work attached to something that has left the shop. The sale deliberately
+  // does NOT close the ticket (that would silently discard the work), so it
+  // stamps this instead and the Repairs list surfaces it, to be finished or
+  // cancelled on purpose. Absent on every normal ticket.
+  deviceSoldAt?: number;
   testingResults?: string;   // testing results / notes
   testChecks?: string[];     // testing checklist selections
 

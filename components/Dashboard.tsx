@@ -7,6 +7,7 @@ import { isReversed } from '../domain/pos';
 import { todayISO } from '../domain/dates';
 import { kindOf } from '../domain/inventory';
 import { isInProgress } from '../domain/repairs';
+import { isSoldDevice } from '../domain/repairVisibility';
 import { pendingRepairIssues, PENDING_REPAIR_STALE_DAYS } from '../domain/alerts';
 import { printSalesReceipt } from '../services/salesReceipt';
 import { getStoreProfile } from './SettingsModal';
@@ -132,7 +133,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, salesTransactions, a
     const invValue = held.reduce((a, i) => a + deviceValue(i), 0)
       + accessories.reduce((a, i) => a + accValue(i), 0);
 
-    const pendingRepairsList = devices.filter(i => i.deviceStatus === 'pending_repair');
+    // "Devices in repair" counts only devices still in the shop. A sold device
+    // is never on the bench, whatever its status field or its ticket says —
+    // the same rule the Inventory SKU highlight uses (domain/repairVisibility).
+    const pendingRepairsList = devices.filter(i => i.deviceStatus === 'pending_repair' && !isSoldDevice(i));
     const oldestRepair = pendingRepairsList.reduce<string>((min, i) => (i.date && (!min || i.date < min) ? i.date : min), '');
     const lowStockList = accessories.filter(i => (i.quantity ?? 0) <= (i.lowStockThreshold ?? 0))
       .sort((a, b) => (a.quantity ?? 0) - (b.quantity ?? 0));
