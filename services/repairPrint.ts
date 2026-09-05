@@ -89,23 +89,33 @@ const cosmeticBlock = (r: Repair) => {
 };
 
 // --- Retail receipts ---
-export const printRetailReceipt = (r: Repair, kind: 'intake' | 'repair' | 'pickup', opts: { storeName?: string } = {}) => {
-  const title = kind === 'intake' ? 'Repair Intake' : kind === 'repair' ? 'Repair Receipt' : 'Pickup Receipt';
+// `internal` = an internal refurb (a private/personal-batch device, or a
+// standalone internal ticket): the shop working on its own stock. There is no
+// customer, so this prints a WORK ORDER — the parts cost the shop actually
+// bore, which is the number that flows to the device's repairCost — instead of
+// a customer receipt with a price, a deposit and a balance due. Printing a
+// "Balance Owing" to yourself is meaningless at best and, handed to a buyer
+// with the device, actively misleading.
+export const printRetailReceipt = (r: Repair, kind: 'intake' | 'repair' | 'pickup', opts: { storeName?: string; internal?: boolean } = {}) => {
+  const internal = !!opts.internal;
+  const title = internal ? 'Internal Work Order' : kind === 'intake' ? 'Repair Intake' : kind === 'repair' ? 'Repair Receipt' : 'Pickup Receipt';
   const bal = balanceOwing(r);
-  const money$ = `<h3>Charges</h3>${row('Repair Price', money(r.repairPrice))}${r.deposit ? row('Deposit', money(r.deposit)) : ''}<div class="row b tot"><span>Balance Owing</span><span>${money(bal)}</span></div>`;
+  const money$ = internal
+    ? `<h3>Cost</h3>${(r.parts || []).map(p => row(partName(p), money((p.unitCost || 0) * (p.quantity || 1)))).join('')}<div class="row b tot"><span>Total Parts Cost</span><span>${money(repairPartsCost(r))}</span></div>`
+    : `<h3>Charges</h3>${row('Repair Price', money(r.repairPrice))}${r.deposit ? row('Deposit', money(r.deposit)) : ''}<div class="row b tot"><span>Balance Owing</span><span>${money(bal)}</span></div>`;
   const warranty = kind === 'pickup' && r.warrantyUntil ? `<h3>Warranty</h3>${row('Covered until', r.warrantyUntil)}${r.warrantyDays ? row('Period', `${r.warrantyDays} days`) : ''}` : '';
   const body = `
     <h2>${shopName(opts.storeName)}</h2><div class="sub">${title}<br/>${esc(r.repairNumber)} · ${esc(r.date)}</div>
-    <h3>Customer</h3>${row('Name', r.customerName)}${row('Phone', r.customerPhone)}${row('Email', r.customerEmail)}
+    ${internal ? '' : `<h3>Customer</h3>${row('Name', r.customerName)}${row('Phone', r.customerPhone)}${row('Email', r.customerEmail)}`}
     ${deviceBlock(r)}
     <h3>Issue</h3><div class="row"><span>${esc(r.issue) || '—'}</span></div>
     ${cosmeticBlock(r)}
     ${row('Status', REPAIR_STATUS_LABEL[r.status])}${row('Est. Completion', r.estimatedCompletion)}
     ${money$}
     ${warranty}
-    ${kind !== 'pickup' ? `<h3>Track Your Repair</h3><div class="row"><span class="k">Check status online anytime — no account needed:</span></div><div class="row b"><span>${esc(trackUrl())}</span></div><div class="row"><span class="k">Ticket ${esc(r.repairNumber)} + the name/phone on this ticket.</span></div>` : ''}
-    ${kind === 'intake' ? '<p class="disc">The shop is not responsible for data loss. Devices not collected within 90 days may be sold to recover costs. Diagnostic fees may apply if repair is declined.</p>' : ''}
-    <p class="foot">Thank you!</p>`;
+    ${!internal && kind !== 'pickup' ? `<h3>Track Your Repair</h3><div class="row"><span class="k">Check status online anytime — no account needed:</span></div><div class="row b"><span>${esc(trackUrl())}</span></div><div class="row"><span class="k">Ticket ${esc(r.repairNumber)} + the name/phone on this ticket.</span></div>` : ''}
+    ${!internal && kind === 'intake' ? '<p class="disc">The shop is not responsible for data loss. Devices not collected within 90 days may be sold to recover costs. Diagnostic fees may apply if repair is declined.</p>' : ''}
+    <p class="foot">${internal ? esc(r.repairNumber) : 'Thank you!'}</p>`;
   openThermalPrint(`${title} ${r.repairNumber}`, body);
 };
 
@@ -177,38 +187,48 @@ export const printBatchInvoice = (batch: RepairBatch, devices: Repair[], opts: {
 
 // --- Per-device repair sheet (retail ticket or wholesale device) ---
 // Clean, printable on normal paper; compact enough to fold as a device label.
-export const printDeviceSheet = (r: Repair, ctx?: { companyName?: string; batchNumber?: string; storeName?: string }) => {
-  const isRetail = r.type === 'retail';
-  const who = isRetail ? (r.customerName || 'Walk-in') : (ctx?.companyName || 'Wholesale');
+// `ctx.internal` — same rule as printRetailReceipt: an internal refurb sheet
+// shows what the work cost the shop, never a price or a balance owing.
+export const printDeviceSheet = (r: Repair, ctx?: { companyName?: string; batchNumber?: string; storeName?: string; internal?: boolean }) => {
+  const internal = !!ctx?.internal;
+  const isRetail = r.type === 'retail' && !internal;
+  const who = internal ? 'Store device (internal refurb)' : isRetail ? (r.customerName || 'Walk-in') : (ctx?.companyName || 'Wholesale');
   const num = isRetail ? r.repairNumber : (ctx?.batchNumber ? `${ctx.batchNumber} · ${r.repairNumber}` : r.repairNumber);
   const cosmetic = r.cosmetic?.checks?.length ? r.cosmetic.checks.join(', ') : '';
-  const money$ = isRetail
-    ? `${row('Repair Price', money(r.repairPrice))}${r.deposit ? row('Deposit', money(r.deposit)) : ''}<div class="row b"><span>Balance Owing</span><span>${money(balanceOwing(r))}</span></div>`
-    : row('Repair Price', money(r.repairPrice));
+  const money$ = internal
+    ? row('Parts Cost', money(repairPartsCost(r)))
+    : isRetail
+      ? `${row('Repair Price', money(r.repairPrice))}${r.deposit ? row('Deposit', money(r.deposit)) : ''}<div class="row b"><span>Balance Owing</span><span>${money(balanceOwing(r))}</span></div>`
+      : row('Repair Price', money(r.repairPrice));
   const body = `
     <h2>${shopName(ctx?.storeName)}</h2><div class="sub">Repair Device Sheet</div>
     <div class="row b" style="font-size:15px;margin-top:4px"><span>${esc(num)}</span><span>${esc(REPAIR_STATUS_LABEL[r.status])}</span></div>
-    <div class="row"><span class="k">${isRetail ? 'Customer' : 'Company / Store'}</span><span>${esc(who)}</span></div>
+    <div class="row"><span class="k">${internal ? 'For' : isRetail ? 'Customer' : 'Company / Store'}</span><span>${esc(who)}</span></div>
     ${isRetail && r.customerPhone ? row('Phone', r.customerPhone) : ''}
     ${row('Date Received', r.date)}
     <h3>Device</h3>
     ${row('Type', r.deviceType)}${row('Brand / Model', [r.brand, r.model].filter(Boolean).join(' '))}${row('IMEI / Serial', r.imei)}
     <h3>Issue</h3><div class="row"><span>${esc(r.issue) || '—'}</span></div>
     ${cosmetic || r.cosmetic?.notes ? `<h3>Cosmetic Condition</h3>${cosmetic ? `<div class="row"><span>${esc(cosmetic)}</span></div>` : ''}${r.cosmetic?.notes ? `<div class="row"><span class="k">${esc(r.cosmetic.notes)}</span></div>` : ''}` : ''}
-    <h3>Charges</h3>${money$}
+    <h3>${internal ? 'Cost' : 'Charges'}</h3>${money$}
     ${r.customerNotes ? `<h3>Customer Notes</h3><div class="row"><span>${esc(r.customerNotes)}</span></div>` : ''}
     ${r.internalNotes ? `<h3>Internal Notes</h3><div class="row"><span class="k">${esc(r.internalNotes)}</span></div>` : ''}
     <p class="foot">${esc(num)}</p>`;
   openPrint(`Device Sheet ${r.repairNumber}`, 300, body);
 };
 
-export const printBatchSummary = (batch: RepairBatch, devices: Repair[], opts: { storeName?: string } = {}) => {
-  const rows = devices.map((r, i) => `<tr><td>${i + 1}</td><td>${esc([r.brand, r.model].filter(Boolean).join(' ') || r.deviceType || '')}</td><td>${esc(r.imei)}</td><td>${esc(REPAIR_STATUS_LABEL[r.status])}</td><td class="r">${money(r.repairPrice)}</td></tr>`).join('');
+// `internal` — a private/personal batch is the shop's own stock, so the money
+// column is what the parts cost, not a price billed to a customer, and there
+// is no "business" to address the summary to.
+export const printBatchSummary = (batch: RepairBatch, devices: Repair[], opts: { storeName?: string; internal?: boolean } = {}) => {
+  const internal = !!opts.internal;
+  const amount = (r: Repair) => money(internal ? repairPartsCost(r) : r.repairPrice);
+  const rows = devices.map((r, i) => `<tr><td>${i + 1}</td><td>${esc([r.brand, r.model].filter(Boolean).join(' ') || r.deviceType || '')}</td><td>${esc(r.imei)}</td><td>${esc(REPAIR_STATUS_LABEL[r.status])}</td><td class="r">${amount(r)}</td></tr>`).join('');
   const body = `
-    <h2>${shopName(opts.storeName)}</h2><div class="sub">Completed Repair Summary<br/>${esc(batch.batchNumber)}</div>
-    <h3>Business</h3>${row('Company', batch.companyName)}${row('Contact', batch.contactPerson)}
+    <h2>${shopName(opts.storeName)}</h2><div class="sub">${internal ? 'Internal Refurb Summary' : 'Completed Repair Summary'}<br/>${esc(batch.batchNumber)}</div>
+    ${internal ? '' : `<h3>Business</h3>${row('Company', batch.companyName)}${row('Contact', batch.contactPerson)}`}
     <h3>Devices (${devices.length})</h3>
-    <table><thead><tr><th>#</th><th>Device</th><th>IMEI/Serial</th><th>Status</th><th class="r">Price</th></tr></thead><tbody>${rows}</tbody></table>
+    <table><thead><tr><th>#</th><th>Device</th><th>IMEI/Serial</th><th>Status</th><th class="r">${internal ? 'Parts Cost' : 'Price'}</th></tr></thead><tbody>${rows}</tbody></table>
     <p class="foot">${shopName(opts.storeName)}</p>`;
   openPrint(`Batch Summary ${batch.batchNumber}`, 640, body);
 };

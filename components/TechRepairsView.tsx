@@ -7,6 +7,7 @@ import {
 } from '../domain/repairs';
 import { RepairLabelModal } from './RepairLabelModal';
 import { isPrivateBatch } from '../domain/autoInventory';
+import { showsCustomerPayment } from '../domain/repairVisibility';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 import { useConnectionStatus } from '../hooks/useConnectionStatus';
 
@@ -239,9 +240,15 @@ const TechRepairDrawer: React.FC<{
 
           <section className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4 grid grid-cols-2 gap-3">
             <div className="col-span-2 text-[11px] font-semibold text-slate-400 uppercase tracking-wide">Approved repair details</div>
-            <Field label="Repair price" value={money(r.repairPrice || 0)} />
-            <Field label="Deposit" value={money(r.deposit || 0)} />
-            <Field label="Balance owing" value={money(balanceOwing(r))} />
+            {/* An internal refurb (private-batch device or internal ticket) is
+                the shop's own stock — there is no customer to charge, so the
+                price/deposit/balance are meaningless here. Display only; the
+                stored fields are untouched. */}
+            {showsCustomerPayment(r, batch) && <>
+              <Field label="Repair price" value={money(r.repairPrice || 0)} />
+              <Field label="Deposit" value={money(r.deposit || 0)} />
+              <Field label="Balance owing" value={money(balanceOwing(r))} />
+            </>}
             <Field label="Est. completion" value={r.estimatedCompletion || '—'} />
             {r.warrantyDays ? <Field label="Warranty" value={`${r.warrantyDays} days`} /> : null}
             {r.cosmetic?.checks?.length ? <div className="col-span-2"><Field label="Cosmetic" value={r.cosmetic.checks.join(', ')} /></div> : null}

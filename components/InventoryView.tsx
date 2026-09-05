@@ -7,7 +7,8 @@ import {
 } from 'lucide-react';
 import { InventoryItem, DeviceBuyer, ItemKind, DeviceType, DeviceStatus, ActivityEntry, AuditEntry, Repair, Note, Role, Customer } from '../types';
 import { CustomerDraft } from '../domain/customers';
-import { linkedRepairFor, openRepairFor, REPAIR_STATUS_LABEL } from '../domain/repairs';
+import { linkedRepairFor, REPAIR_STATUS_LABEL } from '../domain/repairs';
+import { inRepairTicketFor } from '../domain/repairVisibility';
 import { isStalePendingRepair, isOrphanedPendingRepair, PENDING_REPAIR_STALE_DAYS } from '../domain/alerts';
 import { printShelfTag, printShelfTagsBatch } from '../services/shelfTag';
 import { getStoreProfile } from './SettingsModal';
@@ -306,7 +307,14 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
   const linkedRepairOf = (id: string): Repair | undefined => linkedRepairFor(id, repairs);
   // Only a STILL-OPEN ticket flags the device as in repair; a completed/picked
   // up/cancelled one leaves the SKU cell exactly as it was.
-  const openRepairOf = (id: string): Repair | undefined => openRepairFor(id, repairs);
+  // What makes a device DISPLAY as in-repair. Resolved through the item,
+  // not just its id, so a SOLD device never shows the orange in-repair SKU
+  // however its tickets stand — the device has left the shop, whatever the
+  // paperwork still says. See domain/repairVisibility.ts.
+  const openRepairOf = (id: string): Repair | undefined => {
+    const item = inventory.find(i => i.id === id);
+    return item ? inRepairTicketFor(item, repairs) : undefined;
+  };
   const isMobile = useIsMobile();
   const [selectMode, setSelectMode] = useState(false); // mobile multi-select
   const [mobileFilter, setMobileFilter] = useState(false);

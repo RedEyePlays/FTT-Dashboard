@@ -40,6 +40,7 @@ import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, DeviceBuyer
 import { skuPrefix, nextSku } from './services/sku';
 import { REPAIR_PREFIX, BATCH_PREFIX, applyTechEdit, techUpdateAuditPlan, repairSalePrefill, completeRepair, completeRepairSale, dateToEpochMs, isRepairOpen, flagDeviceForRepair, restoredDeviceStatus } from './domain/repairs';
 import { repairCostWriteback, applyRepairCostDelta } from './domain/repairCostWriteback';
+import { markTicketDeviceSold } from './domain/repairVisibility';
 import { MergePlan, resolveCustomerForDraft, CustomerDraft } from './domain/customers';
 import { can, canPrintDropOffLabel } from './services/rbac';
 import { downloadJson, toCSV, triggerDownload } from './services/backup';
@@ -580,6 +581,26 @@ const App: React.FC = () => {
     } catch { /* ignore */ }
   };
 
+  // A device that sells while a repair ticket on it is still open. The sale
+  // deliberately does NOT close the ticket — somebody's unfinished work would
+  // be silently discarded — so it stamps `deviceSoldAt` instead. The device
+  // stops displaying as in-repair immediately (that rule reads the device, see
+  // domain/repairVisibility), and the stamp surfaces the ticket in Repairs as
+  // needing attention so it is finished or cancelled deliberately rather than
+  // left orphaned. Idempotent: re-running a sale path can't churn the ticket.
+  const stampSoldDeviceRepairs = (inventoryIds: string[], exceptRepairId?: string) => {
+    if (!uid || !inventoryIds.length) return;
+    const now = Date.now();
+    const ids = new Set(inventoryIds);
+    repairsRef.current.filter(r => r.id !== exceptRepairId && !!r.inventoryId && ids.has(r.inventoryId)).forEach(r => {
+      const stamp = markTicketDeviceSold(r, now);
+      if (!stamp) return;
+      saveItem(uid, 'repairs', { ...r, ...stamp });
+      logActivity(`${r.repairNumber} — device sold while this repair is still open`);
+      audit('repair.device_sold', 'repair', r.id, undefined, stamp);
+    });
+  };
+
   // --- Inventory writes go straight to Firestore; live subs update the UI ---
   const handleSaveItem = (raw: InventoryItem) => {
     // Entering an Actual sale price on the form records a direct sale (stamps
@@ -590,6 +611,7 @@ const App: React.FC = () => {
       if (isNew) { logActivity(`${item.sku || item.item || 'Item'} added`); audit('inventory.add', collectionFor(item), item.id, undefined, item); }
       else audit('inventory.edit', collectionFor(item), item.id);
       saveItem(uid, collectionFor(item), item);
+      if (item.soldDate && !raw.soldDate) stampSoldDeviceRepairs([item.id]);
     }
     goInventory(DEFAULT_INV_SECTION);
     setEditingItem(undefined);
@@ -617,6 +639,7 @@ const App: React.FC = () => {
     // mark sold (like Quick Sale) so it leaves active stock and feeds reporting.
     const next = applyDirectSale({ ...target, [field]: value });
     if (field === 'salePrice' && next.soldDate && !target.soldDate) logActivity(`${label} sold for $${(next.salePrice || 0).toFixed(2)}`);
+    if (next.soldDate && !target.soldDate) stampSoldDeviceRepairs([next.id]);
     return saveItem(uid, collectionFor(target), next);
   };
 
@@ -648,6 +671,7 @@ const App: React.FC = () => {
     else audit('inventory.edit', collectionFor(item), item.id);
     if (item.soldDate && !raw.soldDate) logActivity(`${item.sku || item.item || 'Device'} sold for $${(item.salePrice || 0).toFixed(2)}`);
     saveItem(uid, collectionFor(item), item);
+    if (item.soldDate && !raw.soldDate) stampSoldDeviceRepairs([item.id]);
   };
 
   // Quick Purchase (QuickPurchaseView): the buying-side counterpart to Quick
@@ -722,6 +746,11 @@ const App: React.FC = () => {
         audit('repair.completed', 'repair', done.id, undefined, { salesTransactionId: payload.transaction.id });
       }
     }
+
+    // Devices that just left the shop with a repair ticket still open. Skipped
+    // for a layaway (nothing has actually gone yet) and for the ticket this
+    // sale just checked out (it was closed above, not orphaned).
+    if (!isLayaway) stampSoldDeviceRepairs(payload.soldRows.map(d => d.id), repairId);
 
     // Custom items opted into inventory: fill a real SKU and persist to the right collection
     (payload.newInventoryItems || []).forEach(async item => {

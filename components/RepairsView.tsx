@@ -21,6 +21,7 @@ import { useEscapeKey } from '../hooks/useEscapeKey';
 import { selectOnFocus } from '../hooks/selectOnFocus';
 import { useSubmitGuard } from '../hooks/useSubmitGuard';
 import { AutoInventoryNotice, isPrivateBatch } from '../domain/autoInventory';
+import { isRepairFinished, showsCustomerPayment } from '../domain/repairVisibility';
 // Lazy: the repair label modal pulls in jsPDF (~390 kB); load it on demand.
 const RepairLabelModal = lazy(() => import('./RepairLabelModal').then(m => ({ default: m.RepairLabelModal })));
 import { CustomerSearchInput } from './CustomerSearchInput';
@@ -111,11 +112,21 @@ const SummaryCard: React.FC<{ icon: React.ReactNode; accent: string; label: stri
 
 export const RepairsView: React.FC<Props> = (props) => {
   const { repairs, batches, auditLogs, canDelete, userId, onSaveRepair, onDeleteRepair, onSaveBatch, onDeleteBatch, onRecordPayment, onPrintAudit, onRequestReview } = props;
-  type Filter = 'all' | 'active' | 'overdue' | RepairStatus;
+  // 'finished' is the Completed tab: everything terminal (completed, picked
+  // up, cancelled) in one bucket, so finished work leaves the active list
+  // without leaving the app. It sits alongside the per-status values rather
+  // than replacing them — 'completed' alone still filters to just that status.
+  type Filter = 'all' | 'active' | 'finished' | 'overdue' | RepairStatus;
   const { users = [], canViewPerformance = false } = props;
   const [tab, setTab] = useState<'tickets' | 'batches' | 'performance'>('tickets');
   const [query, setQuery] = useState('');
-  const [statusFilter, setStatusFilter] = usePersistedFilter<Filter>('repairs_status_filter', userId, 'all');
+  // Defaults to Active: the list answers "what is on the bench" on arrival.
+  // Still per-user persisted, so an explicit choice of All/Completed sticks.
+  // The key is versioned (…_v2) on purpose. usePersistedFilter writes the
+  // current value on mount, so every existing user already has the old 'all'
+  // default stored and would never see the new one. A new key applies the
+  // Active default once, then remembers whatever they choose from there.
+  const [statusFilter, setStatusFilter] = usePersistedFilter<Filter>('repairs_status_filter_v2', userId, 'active');
   const [drawer, setDrawer] = useState<{ repair: Repair; isNew: boolean } | null>(null);
   const [openBatchId, setOpenBatchId] = useState<string | null>(null);
   const [batchForm, setBatchForm] = useState<{ batch: RepairBatch; isNew: boolean } | null>(null);
@@ -149,7 +160,11 @@ export const RepairsView: React.FC<Props> = (props) => {
   const isOverdue = (r: Repair) => r.status !== 'completed' && r.status !== 'cancelled' && !!r.estimatedCompletion && r.estimatedCompletion < today();
   const matchFilter = (r: Repair): boolean => {
     if (statusFilter === 'all') return true;
-    if (statusFilter === 'active') return r.status !== 'completed' && r.status !== 'cancelled';
+    // Both sides read isRepairOpen so they can never disagree or drop a
+    // ticket between them. This also fixes 'active' having previously kept
+    // `picked_up` tickets — collected work is finished work.
+    if (statusFilter === 'active') return isRepairOpen(r);
+    if (statusFilter === 'finished') return isRepairFinished(r);
     if (statusFilter === 'overdue') return isOverdue(r);
     return r.status === statusFilter;
   };
@@ -160,8 +175,15 @@ export const RepairsView: React.FC<Props> = (props) => {
   // that has waited longest is at the top and nothing active sits forgotten at
   // the bottom; completed/cancelled tickets sink below (also oldest-first). The
   // status filter and search remain the manual controls.
+  // Completed tickets are MOVED, not hidden: a search reaches them wherever
+  // the Active/Completed split currently sits, so a customer ringing about a
+  // ticket collected last month is still one search away. An explicit
+  // per-status or Overdue filter is a deliberate narrowing and is respected.
+  const searchSpansFinished = (f: Filter) => f === 'active' || f === 'finished' || f === 'all';
   const retail = useMemo(() => repairs.filter(r => r.type !== 'wholesale')
-    .filter(r => matchFilter(r) && (!query || matchesRepair(r, query)))
+    .filter(r => (query
+      ? matchesRepair(r, query) && (searchSpansFinished(statusFilter) || matchFilter(r))
+      : matchFilter(r)))
     .sort((a, b) => {
       const ao = isRepairOpen(a) ? 0 : 1, bo = isRepairOpen(b) ? 0 : 1;
       return ao !== bo ? ao - bo : a.createdAt - b.createdAt;
@@ -172,6 +194,15 @@ export const RepairsView: React.FC<Props> = (props) => {
     .sort((a, b) => b.createdAt - a.createdAt), [batches, repairs, query]);
 
   const openBatch = batches.find(b => b.id === openBatchId) || null;
+
+  // A ticket's parent batch, and whether it is an internal refurb (a private
+  // batch's device, or a standalone internal ticket) — the shop working on its
+  // own stock, with no customer to charge. Gates customer-payment UI and swaps
+  // customer receipts for internal work orders. Display only: nothing here
+  // changes what is stored, so a ticket whose batch is later un-flagged
+  // renders its history exactly as recorded.
+  const batchOf = (r: Repair) => (r.batchId ? batches.find(b => b.id === r.batchId) : undefined);
+  const isInternalTicket = (r: Repair) => !showsCustomerPayment(r, batchOf(r));
 
   // Open the QR label modal, resolving batch context for wholesale devices.
   const openLabel = (r: Repair) => {
@@ -186,8 +217,8 @@ export const RepairsView: React.FC<Props> = (props) => {
 
   // Print a device sheet, resolving the parent batch (for wholesale context).
   const printSheet = (r: Repair) => {
-    const b = r.batchId ? batches.find(x => x.id === r.batchId) : undefined;
-    printDeviceSheet(r, { companyName: b?.companyName, batchNumber: b?.batchNumber, storeName: getStoreProfile().storeName });
+    const b = batchOf(r);
+    printDeviceSheet(r, { companyName: b?.companyName, batchNumber: b?.batchNumber, storeName: getStoreProfile().storeName, internal: isInternalTicket(r) });
     onPrintAudit('repair', r.id, 'device_sheet');
   };
 
@@ -299,7 +330,7 @@ export const RepairsView: React.FC<Props> = (props) => {
           {/* Quick filters (tickets) */}
           {tab === 'tickets' && (
             <div className="flex flex-wrap gap-1.5">
-              {(([['all', 'All'], ['active', 'Active'], ['ready_pickup', 'Ready for Pickup'], ['waiting_approval', 'Waiting Approval'], ['overdue', 'Overdue']]) as [Filter, string][]).map(([v, label]) => (
+              {(([['active', 'Active'], ['finished', 'Completed'], ['all', 'All'], ['ready_pickup', 'Ready for Pickup'], ['waiting_approval', 'Waiting Approval'], ['overdue', 'Overdue']]) as [Filter, string][]).map(([v, label]) => (
                 <button key={v} onClick={() => setStatusFilter(v)} className={`px-2.5 py-1 rounded-full text-xs font-medium border ${statusFilter === v ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:border-indigo-400'}`}>{label}</button>
               ))}
             </div>
@@ -377,7 +408,20 @@ export const RepairsView: React.FC<Props> = (props) => {
                     <p className="text-xs text-slate-400 truncate">{r.type === 'internal' ? 'Internal · refurb' : (r.customerName || 'Walk-in')}{r.customerPhone ? ` · ${r.customerPhone}` : ''}{r.imei ? ` · ${r.imei}` : ''} · {r.date}</p>
                   </div>
                   {isOverdue(r) && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300 shrink-0">Overdue</span>}
-                  <div className="text-right shrink-0 ml-auto sm:ml-0"><p className="text-sm font-semibold text-slate-900 dark:text-slate-100">{money(r.repairPrice)}</p>{balanceOwing(r) > 0 && <p className="text-[11px] text-rose-500">bal {money(balanceOwing(r))}</p>}</div>
+                  {/* The device sold while this ticket was still open — the sale
+                      stamped it rather than closing it, so it can be finished or
+                      cancelled deliberately instead of sitting here orphaned. */}
+                  {!!r.deviceSoldAt && isRepairOpen(r) && <span title="This device has been sold — close or cancel this ticket" className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300 shrink-0">Device sold</span>}
+                  {/* An internal refurb has no customer, so it shows what it
+                      cost the shop instead of a price and a balance owing. */}
+                  <div className="text-right shrink-0 ml-auto sm:ml-0">
+                    {showsCustomerPayment(r, undefined) ? <>
+                      <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">{money(r.repairPrice)}</p>
+                      {balanceOwing(r) > 0 && <p className="text-[11px] text-rose-500">bal {money(balanceOwing(r))}</p>}
+                    </> : (
+                      <p className="text-sm font-semibold text-slate-500 dark:text-slate-400" title="Parts cost — internal refurb, nothing is charged to a customer">{money(repairPartsCost(r))}</p>
+                    )}
+                  </div>
                   <StatusPill value={r.status} onChange={s => onSaveRepair({ ...r, status: s }, r)} />
                   <button onClick={e => { e.stopPropagation(); openLabel(r); }} title="Print QR label" aria-label="Print QR label" className="tap-target flex items-center justify-center text-slate-400 hover:text-indigo-600 shrink-0"><QrCode className="w-4 h-4" /></button>
                   <ChevronRight className="w-4 h-4 text-slate-300 shrink-0" />
@@ -435,7 +479,7 @@ export const RepairsView: React.FC<Props> = (props) => {
             const storeName = getStoreProfile().storeName;
             if (doc === 'intake') printBatchIntake(forPrint, devices, { storeName });
             if (doc === 'invoice') printBatchInvoice(forPrint, devices, { storeName });
-            if (doc === 'summary') printBatchSummary(forPrint, devices, { storeName });
+            if (doc === 'summary') printBatchSummary(forPrint, devices, { storeName, internal: isPrivateBatch(openBatch) });
             onPrintAudit('repairBatch', openBatch.id, doc);
           }} />
       )}
@@ -444,13 +488,13 @@ export const RepairsView: React.FC<Props> = (props) => {
       {drawer && (
         <RepairDrawer key={drawer.repair.id} initial={drawer.repair} isNew={drawer.isNew} canDelete={canDelete}
           auditLogs={auditLogs} customers={props.customers}
-          privateBatch={isPrivateBatch(drawer.repair.batchId ? batches.find(b => b.id === drawer.repair.batchId) : undefined)}
+          batch={batchOf(drawer.repair)}
           notes={props.notes} noteRole={props.noteRole} onOpenNote={props.onOpenNote}
           onClose={() => setDrawer(null)}
           onSave={saveDrawer}
           onCheckoutViaSale={props.onCheckoutViaSale}
           onDelete={() => { onDeleteRepair(drawer.repair.id); setDrawer(null); }}
-          onPrint={(doc) => { printRetailReceipt(drawer.repair, doc, { storeName: getStoreProfile().storeName }); onPrintAudit('repair', drawer.repair.id, doc); }}
+          onPrint={(doc) => { printRetailReceipt(drawer.repair, doc, { storeName: getStoreProfile().storeName, internal: isInternalTicket(drawer.repair) }); onPrintAudit('repair', drawer.repair.id, doc); }}
           onRequestReview={onRequestReview}
           onPrintSheet={() => printSheet(drawer.repair)}
           onPrintLabel={() => openLabel(drawer.repair)}
@@ -486,6 +530,12 @@ const BatchDetail: React.FC<{
 }> = ({ batch, repairs, canDelete, onBack, onAddDevice, onEditDevice, onStatus, onPrintDevice, onPrintLabel, onRemoveDevice, onEditBatch, onDeleteBatch, onRecordPayment, onPrint }) => {
   const devices = repairs.filter(r => r.batchId === batch.id).sort((a, b) => a.createdAt - b.createdAt);
   const t = batchTotals(batch, repairs);
+  // A private/personal batch is the shop's own stock — there is no customer to
+  // invoice, so the money owed to us (repair amount, amount paid, remaining
+  // balance), the Invoice document and Record Payment are all hidden. The
+  // batch's own amountPaid is untouched, so un-flagging it brings them back.
+  const internal = isPrivateBatch(batch);
+  const refurbCost = devices.reduce((n, r) => n + repairPartsCost(r), 0);
   const [pay, setPay] = useState('');
   // Optional: print the invoice right at checkout (recording a payment) rather
   // than only afterward via the standalone Invoice button above.
@@ -508,7 +558,10 @@ const BatchDetail: React.FC<{
 
       {/* Totals */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        {[['Total Devices', String(t.count)], ['Total Repair Amount', money(t.totalCost)], ['Amount Paid', money(t.amountPaid)], ['Remaining Balance', money(t.remaining)]].map(([k, v], i) => (
+        {(internal
+          ? [['Total Devices', String(t.count)], ['Total Parts Cost', money(refurbCost)]]
+          : [['Total Devices', String(t.count)], ['Total Repair Amount', money(t.totalCost)], ['Amount Paid', money(t.amountPaid)], ['Remaining Balance', money(t.remaining)]]
+        ).map(([k, v], i) => (
           <div key={k} className={`rounded-xl p-3 border ${i === 3 ? (t.remaining > 0 ? 'bg-rose-50 dark:bg-rose-900/10 border-rose-200 dark:border-rose-800' : 'bg-emerald-50 dark:bg-emerald-900/10 border-emerald-200 dark:border-emerald-800') : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700'}`}>
             <p className="text-[11px] uppercase tracking-wide text-slate-400">{k}</p>
             <p className={`text-lg font-bold ${i === 3 ? (t.remaining > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400') : 'text-slate-900 dark:text-white'}`}>{v}</p>
@@ -529,22 +582,22 @@ const BatchDetail: React.FC<{
       <div className="flex flex-wrap items-center gap-2">
         <button onClick={onAddDevice} className="flex items-center gap-2 px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium"><Plus className="w-4 h-4" /> Add Device</button>
         <button onClick={() => onPrint('intake')} className="flex items-center gap-2 px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-600 dark:text-slate-300 hover:border-indigo-400"><FileText className="w-4 h-4" /> Intake Sheet</button>
-        <button onClick={() => onPrint('invoice')} className="flex items-center gap-2 px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-600 dark:text-slate-300 hover:border-indigo-400"><Receipt className="w-4 h-4" /> Invoice</button>
+        {!internal && <button onClick={() => onPrint('invoice')} className="flex items-center gap-2 px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-600 dark:text-slate-300 hover:border-indigo-400"><Receipt className="w-4 h-4" /> Invoice</button>}
         <button onClick={() => onPrint('summary')} className="flex items-center gap-2 px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-600 dark:text-slate-300 hover:border-indigo-400"><Printer className="w-4 h-4" /> Summary</button>
-        <div className="flex items-center gap-2 ml-auto">
+        {!internal && <div className="flex items-center gap-2 ml-auto">
           <label className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400 cursor-pointer" title="Also print the invoice when this payment is recorded">
             <input type="checkbox" checked={printOnPay} onChange={e => setPrintOnPay(e.target.checked)} className="rounded" /> Print invoice
           </label>
           <div className="relative"><DollarSign className="w-4 h-4 text-slate-400 absolute left-2 top-1/2 -translate-y-1/2" /><input value={pay} onChange={e => setPay(e.target.value)} onFocus={selectOnFocus} placeholder="0.00" inputMode="decimal" className="w-24 pl-7 pr-2 py-2 text-sm bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg" /></div>
           <button onClick={() => { const a = parseFloat(pay) || 0; if (a > 0) { onRecordPayment(batch, a); setPay(''); if (printOnPay) onPrint('invoice', a); } }} className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium">Record Payment</button>
-        </div>
+        </div>}
       </div>
 
       {/* Devices table */}
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="bg-slate-50 dark:bg-slate-800/50 text-[10px] uppercase tracking-wider text-slate-500 dark:text-slate-400">
-            <tr><th className="text-left px-4 py-2">#</th><th className="text-left px-4 py-2">Device</th><th className="text-left px-4 py-2">IMEI/Serial</th><th className="text-left px-4 py-2">Issue</th><th className="text-left px-4 py-2">Status</th><th className="text-right px-4 py-2">Price</th><th className="text-right px-4 py-2">Actions</th></tr>
+            <tr><th className="text-left px-4 py-2">#</th><th className="text-left px-4 py-2">Device</th><th className="text-left px-4 py-2">IMEI/Serial</th><th className="text-left px-4 py-2">Issue</th><th className="text-left px-4 py-2">Status</th><th className="text-right px-4 py-2">{internal ? 'Parts Cost' : 'Price'}</th><th className="text-right px-4 py-2">Actions</th></tr>
           </thead>
           <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
             {devices.length === 0 && <tr><td colSpan={7} className="text-center text-slate-400 py-8">No devices in this batch yet.</td></tr>}
@@ -555,7 +608,7 @@ const BatchDetail: React.FC<{
                 <td className="px-4 py-2 text-slate-500 dark:text-slate-400 font-mono text-xs">{r.imei || '—'}</td>
                 <td className="px-4 py-2 text-slate-500 dark:text-slate-400 truncate max-w-[200px]">{r.issue || '—'}</td>
                 <td className="px-4 py-2"><StatusPill value={r.status} onChange={s => onStatus(r, s)} /></td>
-                <td className="px-4 py-2 text-right font-medium text-slate-800 dark:text-slate-100">{money(r.repairPrice)}</td>
+                <td className="px-4 py-2 text-right font-medium text-slate-800 dark:text-slate-100">{money(internal ? repairPartsCost(r) : r.repairPrice)}</td>
                 <td className="px-4 py-2">
                   <div className="flex items-center justify-end gap-1">
                     <button onClick={() => onEditDevice(r)} title="Edit" className="p-1 text-slate-400 hover:text-indigo-600"><FileText className="w-4 h-4" /></button>
@@ -576,18 +629,21 @@ const BatchDetail: React.FC<{
 /* ---------------- Repair drawer ---------------- */
 const RepairDrawer: React.FC<{
   initial: Repair; isNew: boolean; canDelete: boolean; auditLogs: AuditEntry[]; customers: Customer[];
-  // Whether this ticket's wholesale batch is flagged private — gates the
-  // per-device "Add this device to inventory" toggle (Repair.wantsAutoInventory),
-  // which in turn gates the Purchase Cost / Paid By fields. See App.tsx's
-  // handleSaveRepair and domain/autoInventory.ts's isPrivateBatch.
-  privateBatch: boolean;
+  // This ticket's parent batch, when it has one. A batch flagged private is
+  // the shop's own stock: it gates the per-device "Add this device to
+  // inventory" toggle (Repair.wantsAutoInventory), which in turn gates the
+  // Purchase Cost / Paid By fields, and it makes this ticket an INTERNAL
+  // REFURB, whose customer-payment fields are meaningless and hidden. See
+  // App.tsx's handleSaveRepair, domain/autoInventory.ts's isPrivateBatch and
+  // domain/repairVisibility.ts's showsCustomerPayment.
+  batch?: RepairBatch;
   notes?: Note[]; noteRole?: Role; onOpenNote?: (noteId: string) => void;
   onClose: () => void; onSave: (r: Repair) => void; onCheckoutViaSale?: (r: Repair) => void; onDelete: () => void; onPrint: (doc: 'intake' | 'repair' | 'pickup') => void; onPrintSheet: () => void; onPrintLabel: () => void; onPrintEstimate: () => void;
   // Only offered when set (owner/manager, reviews.reviewLink configured — see
   // App.tsx). Not offered on a warranty claim or cancelled ticket — those are
   // unhappy paths (domain/reviews.ts).
   onRequestReview?: (r: Repair) => void;
-}> = ({ initial, isNew, canDelete, auditLogs, customers, privateBatch, notes, noteRole, onOpenNote, onClose, onSave, onCheckoutViaSale, onDelete, onPrint, onPrintSheet, onPrintLabel, onPrintEstimate, onRequestReview }) => {
+}> = ({ initial, isNew, canDelete, auditLogs, customers, batch, notes, noteRole, onOpenNote, onClose, onSave, onCheckoutViaSale, onDelete, onPrint, onPrintSheet, onPrintLabel, onPrintEstimate, onRequestReview }) => {
   const [f, setF] = useState<Repair>(initial);
   const [linkCopied, setLinkCopied] = useState(false);
   const [showImeiScanner, setShowImeiScanner] = useState(false);
@@ -602,6 +658,11 @@ const RepairDrawer: React.FC<{
   const isRetail = f.type === 'retail';
   const isInternal = f.type === 'internal';
   const showDeviceDetail = isRetail || isInternal; // full device fields; wholesale keeps the minimal set
+  const privateBatch = isPrivateBatch(batch);
+  // Internal refurb: the shop's own stock, so there is nobody to take a
+  // deposit from and nobody who can owe a balance. Reads `f`, not `initial`,
+  // so switching a ticket's type in the form updates the fields immediately.
+  const showPayment = showsCustomerPayment(f, batch);
   const history = auditLogs.filter(a => a.entityId === f.id).slice(0, 20);
   const num = (v: string) => parseFloat(v) || 0;
   const canSave = canSaveRepair(f);
@@ -714,9 +775,12 @@ const RepairDrawer: React.FC<{
             )}
           </Section>
 
-          <Section title="Payment / Warranty">
+          <Section title={showPayment ? 'Payment / Warranty' : 'Refurb'}>
+            {!showPayment && (
+              <p className="text-xs text-slate-400 mb-3">Store device — nothing is charged to a customer, so there is no price, deposit or balance here. What this refurb costs is logged below under Parts &amp; Labor, and flows to the device's repair cost in inventory.</p>
+            )}
             <div className="grid grid-cols-2 gap-3">
-              <Field label="Repair Price"><input type="number" min="0" step="0.01" className={inputCls} value={f.repairPrice} onChange={e => set({ repairPrice: num(e.target.value) })} onFocus={selectOnFocus} /></Field>
+              {showPayment && <Field label="Repair Price"><input type="number" min="0" step="0.01" className={inputCls} value={f.repairPrice} onChange={e => set({ repairPrice: num(e.target.value) })} onFocus={selectOnFocus} /></Field>}
               {isRetail && <Field label="Deposit"><input type="number" min="0" step="0.01" className={inputCls} value={f.deposit ?? 0} onChange={e => set({ deposit: num(e.target.value) })} onFocus={selectOnFocus} /></Field>}
               {isRetail && <Field label="Balance Owing"><input readOnly className={`${inputCls} opacity-70`} value={money(balanceOwing(f))} /></Field>}
               {isRetail && <Field label="Warranty (days)"><input type="number" min="0" className={inputCls} value={f.warrantyDays ?? 0} onChange={e => set({ warrantyDays: num(e.target.value) })} /></Field>}
