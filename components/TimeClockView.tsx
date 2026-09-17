@@ -3,7 +3,11 @@ import {
   Clock, LogIn, LogOut, Coffee, Play, Check, DollarSign, CalendarDays, Undo2, X, AlertTriangle, Wrench, History,
   ClipboardCheck, Printer, Download, ChevronDown, ChevronRight,
 } from 'lucide-react';
-import { AppUser, TimeEntry, PayPeriodPaid, PayPeriodApproval, BreakReason } from '../types';
+import { AppUser, TimeEntry, PayPeriodPaid, PayPeriodApproval, BreakReason, StaffBonus, BonusPaidFrom } from '../types';
+import {
+  periodPayTotals, bonusesForPeriod, bonusesForUser, canSaveBonus,
+  BONUS_PAID_FROM_LABEL, BONUS_PAID_FROM_OPTIONS,
+} from '../domain/bonuses';
 import {
   BREAK_REASONS, breakReasonLabel, openEntryFor, isOnBreak, workedHours, isClockedIn,
   hoursInRange, dayRange, weekRange, recentPayPeriods, periodPayFor, paidKey,
@@ -36,6 +40,13 @@ interface Props {
   // Owner/manager only (same gate as canManagePayroll): fix a shift someone
   // forgot to clock out of, by setting its actual clock-out time.
   onCorrectClockOut: (entryId: string, newClockOut: number) => void;
+  // Staff bonuses (domain/bonuses.ts) — one-off payments on top of hours.
+  // `staffBonuses` is pre-filtered by the caller to what this viewer may see;
+  // `canAddBonus` is owner-only.
+  staffBonuses?: StaffBonus[];
+  canAddBonus?: boolean;
+  onSaveBonus?: (b: Omit<StaffBonus, 'id' | 'createdBy' | 'createdByEmail' | 'createdAt'>) => void;
+  onDeleteBonus?: (bonusId: string) => void;
 }
 
 const fmtHours = (h: number): string => `${h.toFixed(2)} h`;
@@ -64,9 +75,11 @@ const fmtElapsed = (ms: number): string => {
 export const TimeClockView: React.FC<Props> = ({
   me, users, entries, payPeriods, payPeriodApprovals, payCycle, payAnchorISO, canManagePayroll, canMarkPaid,
   onClockIn, onClockOut, onStartBreak, onEndBreak, onApprovePeriod, onApproveAllPeriod, onMarkPaid, onUnmarkPaid, onCorrectClockOut,
+  staffBonuses = [], canAddBonus = false, onSaveBonus, onDeleteBonus,
 }) => {
   const now = useNow();
   const [showBreakPicker, setShowBreakPicker] = useState(false);
+  const [bonusFor, setBonusFor] = useState<{ user: AppUser; periodStart: string } | null>(null);
 
   const myOpen = openEntryFor(entries, me.id);
   const onBreak = myOpen ? isOnBreak(myOpen) : false;
@@ -157,6 +170,19 @@ export const TimeClockView: React.FC<Props> = ({
           onApproveAllPeriod={onApproveAllPeriod}
           onMarkPaid={onMarkPaid}
           onUnmarkPaid={onUnmarkPaid}
+          staffBonuses={staffBonuses}
+          canAddBonus={canAddBonus}
+          onAddBonus={(u, periodStart) => setBonusFor({ user: u, periodStart })}
+          onDeleteBonus={onDeleteBonus}
+        />
+      )}
+
+      {bonusFor && onSaveBonus && (
+        <AddBonusModal
+          user={bonusFor.user}
+          periodStart={bonusFor.periodStart}
+          onClose={() => setBonusFor(null)}
+          onSave={b => { onSaveBonus(b); setBonusFor(null); }}
         />
       )}
 
@@ -448,7 +474,13 @@ const PayrollSummary: React.FC<{
   onApproveAllPeriod: (period: PayPeriod) => void;
   onMarkPaid: (userId: string, period: PayPeriod) => void;
   onUnmarkPaid: (userId: string, period: PayPeriod) => void;
-}> = ({ users, entries, payPeriods, payPeriodApprovals, payCycle, payAnchorISO, now, canApprove, canMarkPaid, onApprovePeriod, onApproveAllPeriod, onMarkPaid, onUnmarkPaid }) => {
+  // Staff bonuses this viewer may see, plus the owner-only add/remove
+  // actions. Absent actions simply hide the buttons.
+  staffBonuses?: StaffBonus[];
+  canAddBonus?: boolean;
+  onAddBonus?: (user: AppUser, periodStart: string) => void;
+  onDeleteBonus?: (bonusId: string) => void;
+}> = ({ users, entries, payPeriods, payPeriodApprovals, payCycle, payAnchorISO, now, canApprove, canMarkPaid, onApprovePeriod, onApproveAllPeriod, onMarkPaid, onUnmarkPaid, staffBonuses = [], canAddBonus = false, onAddBonus, onDeleteBonus }) => {
   const days = PAY_CYCLE_DAYS[payCycle];
   const periods = useMemo(() => recentPayPeriods(now, 6, days, payAnchorISO), [now, days, payAnchorISO]);
   const [periodIdx, setPeriodIdx] = useState(0);
@@ -481,6 +513,8 @@ const PayrollSummary: React.FC<{
   });
   const totalHours = rows.reduce((s, r) => s + r.pay.hours, 0);
   const totalGross = rows.reduce((s, r) => s + r.pay.gross, 0);
+  const periodStartISO = toISODate(period.start);
+  const totalBonus = rows.reduce((s, r) => s + periodPayTotals(r.pay.gross, staffBonuses, r.user.id, periodStartISO).bonus, 0);
 
   const flags = useMemo(() => payrollFlagsFor(entries, users, period, now), [entries, users, period, now]);
 
@@ -491,7 +525,7 @@ const PayrollSummary: React.FC<{
 
   const handlePrintSummary = () => {
     printPayrollSummary(
-      rows.map(r => ({ name: nameOf(r.user), hours: r.pay.hours, rate: r.pay.rate, gross: r.pay.gross })),
+      rows.map(r => ({ name: nameOf(r.user), hours: r.pay.hours, rate: r.pay.rate, gross: r.pay.gross, bonus: periodPayTotals(r.pay.gross, staffBonuses, r.user.id, periodStartISO).bonus })),
       { label: periodLabel(period) },
       { storeName: getStoreProfile().storeName },
     );
@@ -503,11 +537,13 @@ const PayrollSummary: React.FC<{
       .filter(e => e.userId === userId && e.clockIn >= period.start && e.clockIn < period.end)
       .sort((a, b) => a.clockIn - b.clockIn)
       .map(e => ({ date: toISODate(e.clockIn), in: fmtTime(e.clockIn), out: e.clockOut ? fmtTime(e.clockOut) : '—', hours: workedHours(e, now).toFixed(2) }));
-    printPayStub(nameOf(r.user), { name: nameOf(r.user), hours: r.pay.hours, rate: r.pay.rate, gross: r.pay.gross }, { label: periodLabel(period) }, shifts, { storeName: getStoreProfile().storeName });
+    printPayStub(nameOf(r.user), { name: nameOf(r.user), hours: r.pay.hours, rate: r.pay.rate, gross: r.pay.gross, bonus: periodPayTotals(r.pay.gross, staffBonuses, r.user.id, periodStartISO).bonus }, { label: periodLabel(period) }, shifts, { storeName: getStoreProfile().storeName });
   };
   const handleExportCsv = () => {
     const csvRows = rows.map(r => ({
       employee: nameOf(r.user), hours: r.pay.hours.toFixed(2), rate: r.pay.rate.toFixed(2), gross: r.pay.gross.toFixed(2),
+      bonus: periodPayTotals(r.pay.gross, staffBonuses, r.user.id, periodStartISO).bonus.toFixed(2),
+      total: periodPayTotals(r.pay.gross, staffBonuses, r.user.id, periodStartISO).total.toFixed(2),
       approved: r.approved ? 'yes' : 'no', paid: r.paid ? 'yes' : 'no',
       periodStart: toISODate(period.start), periodEnd: toISODate(period.end - 1),
     }));
@@ -569,13 +605,21 @@ const PayrollSummary: React.FC<{
               <th className="py-2 pr-3 font-medium">Employee</th>
               <th className="py-2 px-2 font-medium text-right">Hours</th>
               <th className="py-2 px-2 font-medium text-right">Rate</th>
-              <th className="py-2 px-2 font-medium text-right">Gross</th>
+              <th className="py-2 px-2 font-medium text-right">Hours pay</th>
+              <th className="py-2 px-2 font-medium text-right">Bonus</th>
+              <th className="py-2 px-2 font-medium text-right">Total</th>
               <th className="py-2 pl-2 font-medium text-right">Status</th>
             </tr>
           </thead>
           <tbody>
             {rows.map(({ user, pay, paid, approved }) => {
               const isOpen = expanded === user.id;
+              // "Hours pay + Bonus = Total". Only bonuses ATTACHED to this
+              // period count here — a standalone one was paid on the side and
+              // folding it in would misstate the period (domain/bonuses.ts).
+              const totals = periodPayTotals(pay.gross, staffBonuses, user.id, periodStartISO);
+              const periodBonuses = bonusesForPeriod(staffBonuses, user.id, periodStartISO);
+              const otherBonuses = bonusesForUser(staffBonuses, user.id).filter(b => b.payPeriodStart !== periodStartISO);
               const shifts = entries
                 .filter(e => e.userId === user.id && e.clockIn >= period.start && e.clockIn < period.end)
                 .sort((a, b) => a.clockIn - b.clockIn);
@@ -593,9 +637,17 @@ const PayrollSummary: React.FC<{
                     </td>
                     <td className="py-2.5 px-2 text-right tabular-nums">{pay.hours.toFixed(2)}</td>
                     <td className="py-2.5 px-2 text-right tabular-nums text-slate-500">{fmtMoney(pay.rate)}</td>
-                    <td className="py-2.5 px-2 text-right tabular-nums font-semibold text-slate-800 dark:text-slate-100">{fmtMoney(pay.gross)}</td>
+                    <td className="py-2.5 px-2 text-right tabular-nums text-slate-600 dark:text-slate-300">{fmtMoney(totals.hoursPay)}</td>
+                    <td className="py-2.5 px-2 text-right tabular-nums text-slate-600 dark:text-slate-300">{totals.bonus > 0 ? fmtMoney(totals.bonus) : <span className="text-slate-400">—</span>}</td>
+                    <td className="py-2.5 px-2 text-right tabular-nums font-semibold text-slate-800 dark:text-slate-100">{fmtMoney(totals.total)}</td>
                     <td className="py-2.5 pl-2 text-right">
                       <span className="inline-flex items-center gap-2 justify-end flex-wrap">
+                        {canAddBonus && (
+                          <button onClick={() => onAddBonus?.(user, periodStartISO)} title="Add a bonus for this employee"
+                            className="px-2 py-1 rounded-lg text-[11px] font-medium bg-amber-50 text-amber-700 hover:bg-amber-100 dark:bg-amber-900/30 dark:text-amber-300">
+                            + Bonus
+                          </button>
+                        )}
                         {pay.hours > 0 && (
                           <button onClick={() => handlePrintStub(user.id)} title="Print pay stub" className="text-slate-400 hover:text-indigo-600"><Printer className="w-3.5 h-3.5" /></button>
                         )}
@@ -636,7 +688,39 @@ const PayrollSummary: React.FC<{
                   </tr>
                   {isOpen && (
                     <tr>
-                      <td colSpan={6} className="py-2 px-4 bg-slate-50 dark:bg-slate-800/40">
+                      <td colSpan={8} className="py-2 px-4 bg-slate-50 dark:bg-slate-800/40">
+                        {/* Bonuses for this employee. Period-attached ones
+                            first (they make up the Bonus column above), then
+                            any standalone "on the side" ones, which are shown
+                            for completeness but are deliberately NOT in this
+                            period's total. */}
+                        {(periodBonuses.length > 0 || otherBonuses.length > 0) && (
+                          <div className="mb-3">
+                            <p className="text-[10px] uppercase tracking-wider text-slate-400 mb-1">Bonuses</p>
+                            <ul className="space-y-1">
+                              {periodBonuses.map(b => (
+                                <li key={b.id} className="flex items-center gap-2 text-xs">
+                                  <span className="tabular-nums font-semibold text-slate-700 dark:text-slate-200">{fmtMoney(b.amount)}</span>
+                                  <span className="text-slate-500 dark:text-slate-400 truncate">{b.date} · {b.reason} · {BONUS_PAID_FROM_LABEL[b.paidFrom]}</span>
+                                  {canAddBonus && onDeleteBonus && (
+                                    <button onClick={() => { if (window.confirm(`Remove this ${fmtMoney(b.amount)} bonus? Any cash already paid out of the drawer is NOT credited back — log that separately if the money was returned.`)) onDeleteBonus(b.id); }}
+                                      title="Remove bonus" className="ml-auto text-slate-400 hover:text-rose-500"><X className="w-3 h-3" /></button>
+                                  )}
+                                </li>
+                              ))}
+                              {otherBonuses.map(b => (
+                                <li key={b.id} className="flex items-center gap-2 text-xs opacity-70">
+                                  <span className="tabular-nums text-slate-600 dark:text-slate-300">{fmtMoney(b.amount)}</span>
+                                  <span className="text-slate-400 truncate">{b.date} · {b.reason} · on the side (not in this period)</span>
+                                  {canAddBonus && onDeleteBonus && (
+                                    <button onClick={() => { if (window.confirm(`Remove this ${fmtMoney(b.amount)} bonus? Any cash already paid out of the drawer is NOT credited back — log that separately if the money was returned.`)) onDeleteBonus(b.id); }}
+                                      title="Remove bonus" className="ml-auto text-slate-400 hover:text-rose-500"><X className="w-3 h-3" /></button>
+                                  )}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
                         {shifts.length === 0 ? (
                           <p className="text-xs text-slate-400 py-2">No shifts in this period.</p>
                         ) : (
@@ -664,7 +748,7 @@ const PayrollSummary: React.FC<{
               );
             })}
             {rows.length === 0 && (
-              <tr><td colSpan={6} className="py-6 text-center text-slate-400">No staff to show.</td></tr>
+              <tr><td colSpan={8} className="py-6 text-center text-slate-400">No staff to show.</td></tr>
             )}
           </tbody>
           {rows.length > 0 && (
@@ -675,11 +759,97 @@ const PayrollSummary: React.FC<{
                 <td className="py-2.5 px-2 text-right tabular-nums">{totalHours.toFixed(2)}</td>
                 <td className="py-2.5 px-2" />
                 <td className="py-2.5 px-2 text-right tabular-nums">{fmtMoney(totalGross)}</td>
+                <td className="py-2.5 px-2 text-right tabular-nums">{totalBonus > 0 ? fmtMoney(totalBonus) : '—'}</td>
+                <td className="py-2.5 px-2 text-right tabular-nums">{fmtMoney(totalGross + totalBonus)}</td>
                 <td className="py-2.5 pl-2" />
               </tr>
             </tfoot>
           )}
         </table>
+      </div>
+    </div>
+  );
+};
+
+/* ---------------- Add bonus (owner only) ---------------- */
+//
+// A bonus can be attached to the pay period it was earned in, or stand alone
+// ("on the side") — which is how these are usually paid. Forcing one into a
+// period it wasn't part of would misstate that period's payout, so the choice
+// is explicit rather than implied by where the button was clicked.
+const AddBonusModal: React.FC<{
+  user: AppUser;
+  periodStart: string;
+  onClose: () => void;
+  onSave: (b: Omit<StaffBonus, 'id' | 'createdBy' | 'createdByEmail' | 'createdAt'>) => void;
+}> = ({ user, periodStart, onClose, onSave }) => {
+  const [amount, setAmount] = useState('');
+  const [reason, setReason] = useState('');
+  const [date, setDate] = useState(() => toISODate(Date.now()));
+  const [paidFrom, setPaidFrom] = useState<BonusPaidFrom>('store_cash');
+  const [attach, setAttach] = useState(true);
+  useEscapeKey(onClose);
+
+  const draft = {
+    userId: user.id, userEmail: user.email,
+    amount: parseFloat(amount) || 0, date, reason: reason.trim(), paidFrom,
+    payPeriodStart: attach ? periodStart : undefined,
+  };
+  const valid = canSaveBonus(draft);
+
+  const field = 'w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-800 dark:text-slate-100';
+  const label = 'block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1';
+
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4" onClick={onClose}>
+      <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-700" onClick={e => e.stopPropagation()}>
+        <div className="px-5 py-3.5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
+          <h2 className="text-sm font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
+            <DollarSign className="w-4 h-4 text-amber-500" /> Bonus for {user.email.split('@')[0]}
+          </h2>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X className="w-4 h-4" /></button>
+        </div>
+        <div className="p-5 space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className={label}>Amount ($)</label>
+              <input type="number" min="0" step="0.01" value={amount} onChange={e => setAmount(e.target.value)} autoFocus className={field} />
+            </div>
+            <div>
+              <label className={label}>Date paid</label>
+              <input type="date" value={date} onChange={e => setDate(e.target.value)} className={field} />
+            </div>
+          </div>
+          <div>
+            <label className={label}>Reason</label>
+            <input value={reason} onChange={e => setReason(e.target.value)} placeholder="e.g. busy Saturday, hit the repair target" className={field} />
+          </div>
+          <div>
+            <label className={label}>Paid from</label>
+            <select value={paidFrom} onChange={e => setPaidFrom(e.target.value as BonusPaidFrom)} className={field}>
+              {BONUS_PAID_FROM_OPTIONS.map(v => <option key={v} value={v}>{BONUS_PAID_FROM_LABEL[v]}</option>)}
+            </select>
+            <p className="text-[11px] text-slate-400 mt-1">
+              {paidFrom === 'store_cash'
+                ? `Logs a cash-out against the drawer for ${date}.`
+                : "Doesn't touch the cash drawer."}
+            </p>
+          </div>
+          <label className="flex items-start gap-2 text-xs text-slate-600 dark:text-slate-300">
+            <input type="checkbox" className="mt-0.5" checked={attach} onChange={e => setAttach(e.target.checked)} />
+            <span>Count this in the pay period starting {periodStart}. Untick for a bonus paid on the side — it still counts in profit, just not in this period's total.</span>
+          </label>
+          <p className="text-[11px] text-slate-400">
+            Recorded as a bonus, not a Wages expense — the Wages category is informational and never reduces net profit. This does.
+          </p>
+          <div className="flex justify-end gap-2 pt-1">
+            <button onClick={onClose} className="px-3 py-2 rounded-lg text-sm text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">Cancel</button>
+            <button onClick={() => valid && onSave(draft)} disabled={!valid}
+              className="px-4 py-2 rounded-lg text-sm font-semibold bg-amber-500 hover:bg-amber-600 disabled:opacity-40 text-white">
+              Add bonus
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );

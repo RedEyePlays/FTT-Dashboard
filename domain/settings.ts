@@ -142,6 +142,19 @@ export interface AppSettings {
     agingInventoryDays: number;        // unsold-device age (days) that triggers the aging-inventory alert
     staleLayawayDays: number;          // open-layaway age (days) that flags it as stale/needing follow-up
     autoLockMinutes: number;           // idle minutes before the auto-lock screen appears; 0 = never (must be chosen explicitly)
+    // The day the shop's books start (YYYY-MM-DD). Reports, profit, expense
+    // totals and alerts ignore anything dated before it — the partial data
+    // from before the system was in full use would otherwise make every
+    // total look wrong.
+    //
+    // NOTHING IS DELETED, and nothing is hidden: inventory, customers,
+    // repairs and each individual sale/expense record stay fully visible and
+    // searchable. This clamps TOTALS only (domain/dates.ts's
+    // clampToBooksStart).
+    //
+    // UNSET (the default) means no clamp at all — every existing workspace
+    // behaves exactly as it does today until an owner sets this.
+    booksStartDate?: string;
   };
   // Owner-configurable pay-period schedule (domain/timeclock.ts's payPeriodFor/
   // recentPayPeriods read these instead of the old hardcoded constants).
@@ -194,7 +207,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   dashboard: { widgets: Object.fromEntries(DASHBOARD_WIDGETS.map(w => [w, true])), landingView: 'dashboard', analyticsRange: 'today' },
   appearance: { theme: 'system' },
   backups: { enabled: false, frequency: 'daily', retention: 14 },
-  operations: { openingFloatDefault: 0, voidWindowDays: 0, returnRestockingFeePercent: 0, agingInventoryDays: 30, staleLayawayDays: 60, autoLockMinutes: 4 },
+  operations: { openingFloatDefault: 0, voidWindowDays: 0, returnRestockingFeePercent: 0, agingInventoryDays: 30, staleLayawayDays: 60, autoLockMinutes: 4, booksStartDate: '' },
   payroll: { cycle: 'biweekly', anchorISO: PAY_PERIOD_ANCHOR },
   expenses: { categories: DEFAULT_EXPENSE_CATEGORIES },
   reviews: {

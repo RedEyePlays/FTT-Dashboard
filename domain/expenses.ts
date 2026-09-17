@@ -1,5 +1,5 @@
 import { Expense, RecurringExpense, RecurringFrequency, RecurringAmountMode } from '../types';
-import { toISODate, shiftISODate } from './dates';
+import { toISODate, shiftISODate, clampToBooksStart } from './dates';
 
 const round2 = (n: number): number => Math.round((n + Number.EPSILON) * 100) / 100;
 
@@ -40,8 +40,12 @@ export const DEFAULT_EXPENSE_CATEGORIES: ExpenseCategory[] = [
 const order = (a: string, b: string): [string, string] => a <= b ? [a, b] : [b, a];
 const inRange = (dateISO: string, lo: string, hi: string): boolean => !!dateISO && dateISO >= lo && dateISO <= hi;
 
-export const expensesInRange = (expenses: Expense[], start: string, end: string): Expense[] => {
-  const [lo, hi] = order(start, end);
+// `booksStartDate` clamps the range START (domain/dates.ts's
+// clampToBooksStart) so a total never includes the partial, pre-system
+// history the owner has excluded. The individual expense RECORDS are
+// untouched and stay fully visible in the ledger — this is a totals rule.
+export const expensesInRange = (expenses: Expense[], start: string, end: string, booksStartDate?: string): Expense[] => {
+  const [lo, hi] = order(clampToBooksStart(start, booksStartDate), end);
   return expenses.filter(e => inRange(e.date, lo, hi));
 };
 
@@ -55,9 +59,9 @@ export const excludedFromPLKeys = (categories: ExpenseCategory[]): Set<string> =
  * total domain/reports.ts's profitAndLoss subtracts, so a category can only
  * double-count against payroll by explicitly being un-flagged, never by
  * accident. */
-export const plExpenseTotal = (expenses: Expense[], categories: ExpenseCategory[], start: string, end: string): number => {
+export const plExpenseTotal = (expenses: Expense[], categories: ExpenseCategory[], start: string, end: string, booksStartDate?: string): number => {
   const excluded = excludedFromPLKeys(categories);
-  return round2(expensesInRange(expenses, start, end)
+  return round2(expensesInRange(expenses, start, end, booksStartDate)
     .filter(e => !excluded.has(e.category))
     .reduce((s, e) => s + (e.amount || 0), 0));
 };
@@ -67,10 +71,10 @@ export interface CategoryTotal { category: string; label: string; total: number;
 /** Every category's total in range, informational (includes excludeFromPL
  * categories like Wages) — this is what the report screen displays; only
  * plExpenseTotal decides what feeds net profit. */
-export const expenseTotalsByCategory = (expenses: Expense[], categories: ExpenseCategory[], start: string, end: string): CategoryTotal[] => {
+export const expenseTotalsByCategory = (expenses: Expense[], categories: ExpenseCategory[], start: string, end: string, booksStartDate?: string): CategoryTotal[] => {
   const byKey = new Map(categories.map(c => [c.key, c]));
   const totals = new Map<string, number>();
-  for (const e of expensesInRange(expenses, start, end)) {
+  for (const e of expensesInRange(expenses, start, end, booksStartDate)) {
     totals.set(e.category, round2((totals.get(e.category) || 0) + (e.amount || 0)));
   }
   return [...totals.entries()]
@@ -112,13 +116,18 @@ const MAX_PERIODS = 500; // guards a runaway loop; ~40 years of weekly periods
 /** Every period from startDate through now that hasn't already been
  * generated or explicitly skipped — the "generate once per period, and it's
  * skippable" contract. Ordered oldest first. */
-export const duePeriodsFor = (r: RecurringExpense, now: number): DuePeriod[] => {
+export const duePeriodsFor = (r: RecurringExpense, now: number, booksStartDate?: string): DuePeriod[] => {
   if (!r.active || !r.startDate) return [];
   const nowISO = toISODate(now);
   if (r.startDate > nowISO) return [];
   const done = new Set([...(r.generatedPeriods || []), ...(r.skippedPeriods || [])]);
   const out: DuePeriod[] = [];
-  let cursor = r.startDate;
+  // Start walking from the books start date when one is set, not from the
+  // template's own startDate. A rent template created in January would
+  // otherwise offer every missed month back to January the moment the owner
+  // opens the screen — a pile of bills from before the books begin, which
+  // would then post real expenses into a period that is meant to be excluded.
+  let cursor = clampToBooksStart(r.startDate, booksStartDate);
   let guard = 0;
   while (cursor <= nowISO && guard++ < MAX_PERIODS) {
     const key = periodKeyFor(cursor, r.frequency);

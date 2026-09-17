@@ -1,15 +1,15 @@
 import {
-  collection, doc, onSnapshot, setDoc, deleteDoc, getDoc, getDocs, writeBatch, query, where, orderBy, limit, runTransaction, increment,
+  collection, doc, onSnapshot, setDoc, deleteDoc, getDoc, getDocs, writeBatch, query, where, orderBy, limit, runTransaction, increment, arrayUnion, deleteField,
 } from 'firebase/firestore';
 import { db } from './firebase';
 import {
   InventoryItem, DeviceBuyer, DropOff, Settlement, Customer, SalesTransaction, ActivityEntry, Note, Task,
   AppUser, WorkspaceInvite, AuditEntry, TimeEntry, PayPeriodPaid, PayPeriodApproval, CashReconciliation, StaffNote, ListingPlatform, Repair,
-  Expense, RecurringExpense, RefundPaidFrom, RefundSplit,
+  Expense, RecurringExpense, RefundPaidFrom, RefundSplit, StaffBonus,
 } from '../types';
 import { collectionFor } from '../domain/inventory';
 import {
-  mergeDrawerRecord, drawerStateChange, DrawerAppends, DrawerCarryOver, DrawerStateChange,
+  mergeDrawerRecord, drawerStateChange, buildDrawerMergeWrite, DrawerAppends, DrawerCarryOver, DrawerStateChange,
 } from '../domain/reports';
 import { AppSettings } from '../domain/settings';
 import { allocateSkuInTxn } from './sku';
@@ -31,7 +31,7 @@ import { allocateSkuInTxn } from './sku';
 export const COLLECTIONS = [
   'inventory', 'accessories', 'salesTransactions', 'customers',
   'dropOffs', 'runners', 'settlements', 'activityLog', 'auditLogs',
-  'repairs', 'repairBatches', 'timeEntries', 'payPeriods', 'payPeriodApprovals', 'cashReconciliations', 'staffNotes',
+  'repairs', 'repairBatches', 'timeEntries', 'payPeriods', 'payPeriodApprovals', 'staffBonuses', 'cashReconciliations', 'staffNotes',
   'expenses', 'recurringExpenses',
 ] as const;
 export type CollName = typeof COLLECTIONS[number];
@@ -323,6 +323,10 @@ export const saveTimeEntry = (uid: string, e: TimeEntry) => saveItem(uid, 'timeE
 export const deleteTimeEntry = (uid: string, id: string) => deleteItem(uid, 'timeEntries', id);
 export const savePayPeriodPaid = (uid: string, p: PayPeriodPaid) => saveItem(uid, 'payPeriods', p);
 export const savePayPeriodApproval = (uid: string, a: PayPeriodApproval) => saveItem(uid, 'payPeriodApprovals', a);
+// Staff bonuses (domain/bonuses.ts). Owner-only write, payroll-tier-or-your-own
+// read — enforced in firestore.rules' staffBonuses block, not just in the UI.
+export const saveStaffBonus = (uid: string, b: StaffBonus) => saveItem(uid, 'staffBonuses', b);
+export const deleteStaffBonus = (uid: string, id: string) => deleteItem(uid, 'staffBonuses', id);
 export const deletePayPeriodApproval = (uid: string, id: string) => deleteItem(uid, 'payPeriodApprovals', id);
 /**
  * The ONE write path for a day's cash drawer, run as a Firestore transaction.
@@ -363,8 +367,89 @@ export async function commitCashReconciliation(uid: string, input: {
   cashSales: number;
   carry: DrawerCarryOver | null;
   actor: { id: string; email: string };
-}): Promise<{ record: CashReconciliation; change: DrawerStateChange; existed: boolean }> {
+}): Promise<DrawerWriteResult> {
   const ref = docRef(uid, 'cashReconciliations', input.date);
+
+  // Offline is known up front — don't start a transaction that is certain to
+  // reject, just queue the merge write the offline cache can actually hold.
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    return queueDrawerMergeWrite(ref, input, 'offline');
+  }
+
+  try {
+    return await runDrawerTransaction(ref, input);
+  } catch (e) {
+    // A transaction that failed because the connection went away mid-flight
+    // gets the same treatment as being offline from the start. Anything else
+    // (permissions, a rules rejection, a genuine bug) is a real failure and
+    // must reach the caller so the user is told.
+    if (!isConnectivityError(e)) throw e;
+    return queueDrawerMergeWrite(ref, input, 'reconnect-pending');
+  }
+}
+
+/** Firestore error codes that mean "no server right now", not "no". */
+const isConnectivityError = (e: unknown): boolean => {
+  const code = (e as { code?: string } | undefined)?.code || '';
+  return code === 'unavailable' || code === 'failed-precondition' || code === 'deadline-exceeded';
+};
+
+export interface DrawerWriteResult {
+  record: CashReconciliation;
+  change: DrawerStateChange;
+  existed: boolean;
+  /**
+   * 'committed' — written and confirmed by the server.
+   * 'queued'    — accepted by the offline cache; it will sync on reconnect.
+   *
+   * Callers use this to say "saved" vs "saved — will sync when you're back
+   * online", and never to claim a write landed when it only queued.
+   */
+  outcome: 'committed' | 'queued';
+}
+
+/**
+ * The offline path: a FIELD MERGE the persistent cache will queue, built by
+ * the pure domain/reports.ts's buildDrawerMergeWrite.
+ *
+ * The returned `record` is this client's best local merge — it is what the
+ * document will look like once the queued write lands, not something the
+ * server has confirmed. `outcome: 'queued'` says so.
+ *
+ * NOTE the deliberate asymmetry with the transaction: this write does not
+ * store expectedCash/variance, because it cannot see the merged result. Reads
+ * derive those (recomputedExpectedCash) and the next online transaction
+ * rewrites them.
+ */
+async function queueDrawerMergeWrite(
+  ref: ReturnType<typeof docRef>,
+  input: Parameters<typeof commitCashReconciliation>[1],
+  reason: 'offline' | 'reconnect-pending',
+): Promise<DrawerWriteResult> {
+  const write = buildDrawerMergeWrite(input);
+  const payload: Record<string, unknown> = { ...clean(write.set) };
+  for (const key of write.clear) payload[key] = deleteField();
+  for (const [key, entries] of Object.entries(write.union)) {
+    if (entries?.length) payload[key] = arrayUnion(...entries.map(clean));
+  }
+  // Not awaited for completion — while offline this promise only settles on
+  // reconnect, and the cache has already accepted the write. Awaiting it
+  // would hang the caller for the length of the outage.
+  setDoc(ref, payload, { merge: true })
+    .catch(e => console.error('[drawer] queued merge write failed on sync', input.date, e));
+  console.warn('[drawer] queued a merge write instead of a transaction', { date: input.date, reason });
+  return {
+    record: mergeDrawerRecord({ ...input, existing: undefined }),
+    change: { openedSet: false, openedCleared: false, reconciledSet: false, reconciledCleared: false, losesOpenedAt: false },
+    existed: false,
+    outcome: 'queued',
+  };
+}
+
+function runDrawerTransaction(
+  ref: ReturnType<typeof docRef>,
+  input: Parameters<typeof commitCashReconciliation>[1],
+): Promise<DrawerWriteResult> {
   return runTransaction(db, async tx => {
     const snap = await tx.get(ref);
     const existing = snap.exists()
@@ -383,7 +468,7 @@ export async function commitCashReconciliation(uid: string, input: {
       });
     }
     tx.set(ref, clean(record));
-    return { record, change, existed: !!existing };
+    return { record, change, existed: !!existing, outcome: 'committed' as const };
   });
 }
 export const deletePayPeriodPaid = (uid: string, id: string) => deleteItem(uid, 'payPeriods', id);

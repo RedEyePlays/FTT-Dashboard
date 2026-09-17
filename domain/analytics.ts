@@ -5,7 +5,7 @@ import { customerStats } from './customers';
 import { isReversed } from './pos';
 import { settlementFeeIncome } from './dropoffs';
 import { repairCostMovedToInventory } from './repairCostWriteback';
-import { toISODate } from './dates';
+import { toISODate, clampToBooksStartMs } from './dates';
 
 // Owner analytics — every figure is DERIVED from existing sales, repairs,
 // inventory and customer documents. Nothing is duplicated or stored.
@@ -99,6 +99,10 @@ export interface AnalyticsInput {
   // deviceBuyerFeeIncome below). Optional so existing callers/tests that pass
   // no settlements keep their exact previous numbers.
   settlements?: Settlement[];
+  // The shop's books start date (settings.operations.booksStartDate). Clamps
+  // the window start so no figure here reaches back into the partial
+  // pre-system history. Optional — unset means no clamp, exactly as before.
+  booksStartDate?: string;
 }
 
 const DEVICE_CATEGORY = (t?: DeviceType): string => {
@@ -111,8 +115,13 @@ const DEVICE_CATEGORY = (t?: DeviceType): string => {
   }
 };
 
+// `input.booksStartDate` clamps the window start (domain/dates.ts's
+// clampToBooksStartMs): every figure this computes — the Dashboard tiles,
+// Close Out, Daily History totals — then starts at the books start date
+// instead of dragging in the partial pre-system history. Unset = no clamp.
 export function computeAnalytics(range: DateRange, input: AnalyticsInput, now: number = Date.now()): Analytics {
   const { salesTransactions, repairs, inventory, customers, auditLogs, activity, settlements } = input;
+  range = { ...range, start: clampToBooksStartMs(range.start, input.booksStartDate) };
   const invById = new Map(inventory.map(i => [i.id, i]));
   const invBySku = new Map(inventory.filter(i => i.sku).map(i => [i.sku!, i]));
   const lineCost = (l: { inventoryId?: string; sku?: string }) => {

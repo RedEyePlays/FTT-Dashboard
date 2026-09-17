@@ -23,7 +23,7 @@ const COLLECTIONS = [
   "inventory", "accessories", "salesTransactions", "customers",
   "dropOffs", "runners", "settlements", "activityLog", "auditLogs",
   "repairs", "repairBatches", "timeEntries", "payPeriods", "payPeriodApprovals",
-  "cashReconciliations", "staffNotes", "expenses", "recurringExpenses",
+  "staffBonuses", "cashReconciliations", "staffNotes", "expenses", "recurringExpenses",
 ] as const;
 
 const HOUR_MS = 3_600_000;

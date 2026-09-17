@@ -29,6 +29,8 @@ interface Props {
   settlements: Settlement[];
   todayDrawer: CashDrawerSummary;
   todayRecon?: CashReconciliation;
+  // settings.operations.booksStartDate — clamps the day's figures and alerts.
+  booksStartDate?: string;
   onNavigate: (v: ViewState) => void;
 }
 
@@ -41,7 +43,7 @@ const Card: React.FC<{ children: React.ReactNode; className?: string }> = ({ chi
 
 export const CloseOutView: React.FC<Props> = ({
   salesTransactions, repairs, inventory, customers, auditLogs, activity, timeEntries, users,
-  alerts, settlements, todayDrawer, todayRecon, onNavigate,
+  alerts, settlements, todayDrawer, todayRecon, booksStartDate, onNavigate,
 }) => {
   const now = Date.now();
 
@@ -49,8 +51,8 @@ export const CloseOutView: React.FC<Props> = ({
   // figures Owner Analytics computes, not a second calculation of them.
   const range = useMemo(() => presetRange('today', now), [now]);
   const a = useMemo(
-    () => computeAnalytics(range, { salesTransactions, repairs, inventory, customers, auditLogs, activity, settlements }, now),
-    [range, salesTransactions, repairs, inventory, customers, auditLogs, activity, settlements, now],
+    () => computeAnalytics(range, { salesTransactions, repairs, inventory, customers, auditLogs, activity, settlements, booksStartDate }, now),
+    [range, salesTransactions, repairs, inventory, customers, auditLogs, activity, settlements, booksStartDate, now],
   );
   const eod = a.eod;
 
@@ -58,7 +60,13 @@ export const CloseOutView: React.FC<Props> = ({
   const nameById = useMemo(() => new Map(users.map(u => [u.id, nameOf(u)])), [users]);
 
   const reconciled = !!todayRecon?.reconciledAt;
-  const variance = todayRecon?.variance || 0;
+  // Derived against the LIVE expected figure (todayDrawer, itself computed
+  // from the record's own float/entries + today's cash sales) rather than the
+  // record's stored variance — an offline merge write cannot recompute the
+  // stored one, so it lags until the next online write.
+  const variance = todayRecon?.countedCash != null
+    ? Math.round((todayRecon.countedCash - todayDrawer.expected) * 100) / 100
+    : 0;
   const varianceOk = Math.abs(variance) < 0.005;
 
   // Every open-loop item worth a glance before locking up: the standing alert

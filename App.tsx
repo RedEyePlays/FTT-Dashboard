@@ -36,10 +36,11 @@ const UsersView = lazy(() => import('./components/UsersView').then(m => ({ defau
 const AuditLogView = lazy(() => import('./components/AuditLogView').then(m => ({ default: m.AuditLogView })));
 const TimeClockView = lazy(() => import('./components/TimeClockView').then(m => ({ default: m.TimeClockView })));
 const CloseOutView = lazy(() => import('./components/CloseOutView').then(m => ({ default: m.CloseOutView })));
-import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, DeviceBuyer, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission, Repair, RepairBatch, TimeEntry, PayPeriodPaid, PayPeriodApproval, BreakReason, SalesTransaction, CashReconciliation, StaffNote, BalancePayment, Expense, RecurringExpense, RefundSplit } from './types';
+import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, DeviceBuyer, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission, Repair, RepairBatch, TimeEntry, PayPeriodPaid, PayPeriodApproval, BreakReason, SalesTransaction, CashReconciliation, StaffNote, BalancePayment, Expense, RecurringExpense, RefundSplit, StaffBonus } from './types';
 import { skuPrefix, nextSku } from './services/sku';
 import { REPAIR_PREFIX, BATCH_PREFIX, applyTechEdit, techUpdateAuditPlan, repairSalePrefill, completeRepair, completeRepairSale, dateToEpochMs, isRepairOpen, flagDeviceForRepair, restoredDeviceStatus } from './domain/repairs';
 import { repairCostWriteback, applyRepairCostDelta } from './domain/repairCostWriteback';
+import { bonusDrawerEffect, canSaveBonus, visibleBonuses } from './domain/bonuses';
 import { markTicketDeviceSold } from './domain/repairVisibility';
 import { MergePlan, resolveCustomerForDraft, CustomerDraft } from './domain/customers';
 import { can, canPrintDropOffLabel } from './services/rbac';
@@ -58,6 +59,7 @@ import {
   logAudit, exportWorkspaceData, recordBackup, saveSettings,
   saveTimeEntry, savePayPeriodPaid, deletePayPeriodPaid, savePayPeriodApproval, deletePayPeriodApproval,
   saveStaffNote, deleteStaffNote, commitAutoInventory, settleDeviceBuyer,
+  saveStaffBonus, deleteStaffBonus,
   saveExpense, deleteExpense, saveRecurringExpense, deleteRecurringExpense,
 } from './services/firestoreDb';
 import { decideAutoInventory, autoInventoryPurchaseDrawerEffect, AutoInventoryNotice } from './domain/autoInventory';
@@ -74,7 +76,7 @@ import { newId, mkActivity } from './domain/ids';
 import { collectionFor, stockChange, applyDirectSale } from './domain/inventory';
 import { canVoidSale, canReturnSale, returnRefund, saleAccessoryRestock, saleDeviceListedPlatforms, collectedOnSale, refundDrawerEffect, refundSplitsValid, singleRefundSource } from './domain/pos';
 import { applyBalancePayment, cashPortionOfPayment } from './domain/layaway';
-import { expectedCashForDate, cashDrawerSummary, drawerCarryOver, openDrawerPatch, ReconciliationInput, mergeDrawerRecord, drawerStateChange, changesDrawerState, DrawerAppends } from './domain/reports';
+import { expectedCashForDate, cashDrawerSummary, drawerCarryOver, openDrawerPatch, ReconciliationInput, drawerStateChange, changesDrawerState, recomputedExpectedCash, recomputedVariance, DrawerAppends } from './domain/reports';
 import { useToday } from './hooks/useToday';
 import { duePeriodsFor, buildRecurringExpense, canMutateExpense } from './domain/expenses';
 import { isEligibleForReviewRequest, ReviewEligibility, reviewRequestsSentOn, underDailyReviewRequestCap } from './domain/reviews';
@@ -130,7 +132,7 @@ const App: React.FC = () => {
     appUser, roleLoading, workspaceId, workspaceUsers, invites, auditLogs, loadMoreAuditLogs, auditHasMore,
     data, notes, setNotes, tasks, setTasks,
     deviceBuyers, dropOffs, settlements, salesTransactions, customers, repairs, repairBatches,
-    timeEntries, payPeriods, payPeriodApprovals, cashReconciliations, staffNotes, expenses, recurringExpenses,
+    timeEntries, payPeriods, payPeriodApprovals, staffBonuses, cashReconciliations, staffNotes, expenses, recurringExpenses,
     skuCounters, setSkuCounters, activityLog, lastBackup, settings,
     dbLoading, dbError, reconnect, enableExtendedData, enableCashData,
     deviceBuyersRef, dropOffsRef, settlementsRef, customersRef, salesTransactionsRef,
@@ -987,46 +989,65 @@ const App: React.FC = () => {
   // `patch.cashOut = [...local, entry]`: that re-asserts the whole list from a
   // snapshot and drops whatever another terminal appended in between.
   //
-  // Returns the optimistic merge for callers that want to log a figure right
-  // away; the authoritative record comes back from the transaction and is
-  // what gets audited.
-  const commitDrawerRecord = (
+  // RESOLVES ONLY ONCE THE WRITE IS SAFE. It used to fire the transaction and
+  // return an optimistic merge synchronously, console.error-ing on failure —
+  // so callers logged "Drawer closed" whether or not anything had been saved,
+  // and a failed write was invisible. Now the promise carries the outcome
+  // ('committed' online, 'queued' offline) and rejects on a genuine failure,
+  // and every caller waits for it before it claims anything happened.
+  const commitDrawerRecord = async (
     date: string,
     patch: Partial<CashReconciliation>,
     appends?: DrawerAppends,
     auditCtx?: { path: string; [k: string]: unknown },
-  ): CashReconciliation | null => {
+  ): Promise<{ record: CashReconciliation; queued: boolean } | null> => {
     if (!uid || !appUser) return null;
     const actor = { id: appUser.id, email: appUser.email };
     const args = {
       date, patch, appends,
       cashSales: expectedCashForDate(salesTransactions, date),
-      carry: drawerCarryOver(cashReconciliations, date),
+      carry: drawerCarryOver(cashReconciliations, date, d => expectedCashForDate(salesTransactions, d)),
       actor,
     };
-    commitCashReconciliation(uid, args)
-      .then(({ record, change }) => {
-        // A visible trail for every write that opens or closes a day. Without
-        // this, a drawer that closed "by itself" left nothing to look at: who,
-        // which terminal's user, when, and through which code path are all
-        // now on the audit entry.
-        if (changesDrawerState(change)) {
-          audit('cash.drawer_state', 'cashReconciliation', date, undefined, {
-            path: auditCtx?.path || 'unknown',
-            openedSet: change.openedSet || undefined,
-            openedCleared: change.openedCleared || undefined,
-            reconciledSet: change.reconciledSet || undefined,
-            reconciledCleared: change.reconciledCleared || undefined,
-            openedAt: record.openedAt, reconciledAt: record.reconciledAt,
-            ...auditCtx,
-          });
-        }
-      })
-      .catch(e => console.error('Cash drawer save failed', e));
-    // The same merge the transaction will perform, against what this client
-    // currently knows — returned for the caller's own logging only.
-    return mergeDrawerRecord({ ...args, existing: cashReconciliations.find(r => r.date === date) });
+    try {
+      const { record, change, outcome } = await commitCashReconciliation(uid, args);
+      // A visible trail for every write that opens or closes a day. Without
+      // this, a drawer that closed "by itself" left nothing to look at: who,
+      // which terminal's user, when, and through which code path are all
+      // now on the audit entry.
+      if (changesDrawerState(change)) {
+        audit('cash.drawer_state', 'cashReconciliation', date, undefined, {
+          path: auditCtx?.path || 'unknown',
+          openedSet: change.openedSet || undefined,
+          openedCleared: change.openedCleared || undefined,
+          reconciledSet: change.reconciledSet || undefined,
+          reconciledCleared: change.reconciledCleared || undefined,
+          openedAt: record.openedAt, reconciledAt: record.reconciledAt,
+          ...auditCtx,
+        });
+      }
+      // Offline, `record` is this client's local merge, so expected/variance
+      // come from what it can see. Recompute against the record the app
+      // actually holds so the figure logged matches what the screens show.
+      return { record, queued: outcome === 'queued' };
+    } catch (e) {
+      // A REAL failure — not a lost connection, which is queued above.
+      // Cash is the one thing that must never fail silently.
+      console.error('Cash drawer save failed', e);
+      captureError(e, { where: 'commitDrawerRecord', date, path: auditCtx?.path });
+      window.alert(
+        `The cash drawer change for ${date} could NOT be saved.\n\n`
+        + 'Nothing was recorded — the till figures on screen do not reflect this change. '
+        + 'Check your connection and try again; if it keeps failing, write the amount down and tell the owner.',
+      );
+      return null;
+    }
   };
+
+  // "…and it will sync when you're back online" — appended to the activity
+  // line for a write the offline cache took but the server has not seen yet,
+  // so nobody reads a queued close as a confirmed one.
+  const queuedSuffix = (queued: boolean) => (queued ? ' (offline — will sync when reconnected)' : '');
 
   // Reconcile (count + close) a day — any staff who runs the register
   // (cash.reconcile, held by owner/manager/employee). Recomputes expected /
@@ -1035,20 +1056,23 @@ const App: React.FC = () => {
   // manager exactly as before (the unreconciled-days flag and cash history
   // read the same fields) — who may CLOSE the drawer changed, not who may
   // review it.
-  const handleSaveReconciliation = (r: ReconciliationInput) => {
+  const handleSaveReconciliation = async (r: ReconciliationInput) => {
     if (!uid || !appUser || !allow('cash.reconcile')) return;
     // NO COUNT = NO CLOSE. Saving corrections to a float, a cash entry or the
     // variance note must not stamp reconciledAt — that is how editing a note
     // on today silently closed the live drawer. Only an actual count closes a
     // day, and the screen asks before it does that on an open today.
     const closing = r.countedCash != null;
-    const saved = commitDrawerRecord(r.date, {
+    const saved = await commitDrawerRecord(r.date, {
       openingFloat: r.openingFloat, cashIn: r.cashIn, cashOut: r.cashOut, withdrawals: r.withdrawals,
       note: r.note,
       ...(closing ? { countedCash: r.countedCash, ...stampReconcile(appUser, Date.now()) } : {}),
     }, undefined, { path: closing ? 'reportsReconcile' : 'reportsEditNoCount' });
-    if (saved && closing) audit('cash.reconcile', 'cashReconciliation', r.date, undefined, { expected: saved.expectedCash, counted: saved.countedCash, variance: saved.variance });
-    else if (saved) audit('cash.log', 'cashReconciliation', r.date, undefined, { kind: 'edit', expected: saved.expectedCash });
+    // Nothing is claimed unless the write actually landed (or queued offline).
+    if (!saved) return;
+    const expected = recomputedExpectedCash(saved.record, expectedCashForDate(salesTransactions, r.date));
+    if (closing) audit('cash.reconcile', 'cashReconciliation', r.date, undefined, { expected, counted: r.countedCash, variance: recomputedVariance(saved.record, expectedCashForDate(salesTransactions, r.date)), queued: saved.queued || undefined });
+    else audit('cash.log', 'cashReconciliation', r.date, undefined, { kind: 'edit', expected, queued: saved.queued || undefined });
   };
 
   // Quick close-out right at the register (the actual "closing up" moment) —
@@ -1058,18 +1082,22 @@ const App: React.FC = () => {
   // entries carry through unchanged; this only adds the count + note and stamps
   // the reconciled-by/at markers. Anyone with cash.reconcile (owner/manager/
   // employee) — closing up is the employee's own end-of-shift action.
-  const handleCloseDrawer = (countedCash: number, note?: string) => {
+  const handleCloseDrawer = async (countedCash: number, note?: string) => {
     if (!uid || !appUser || !allow('cash.reconcile')) return;
     const date = todayISO();
-    const saved = commitDrawerRecord(date, {
+    const saved = await commitDrawerRecord(date, {
       countedCash, note,
       ...stampReconcile(appUser, Date.now()),
     }, undefined, { path: 'closeDrawerModal' });
-    if (saved) {
-      const variance = saved.variance;
-      logActivity(`Drawer closed — counted $${countedCash.toFixed(2)}${Math.abs(variance) >= 0.005 ? ` (${variance > 0 ? 'over' : 'short'} $${Math.abs(variance).toFixed(2)})` : ''}`);
-      audit('cash.reconcile', 'cashReconciliation', date, undefined, { expected: saved.expectedCash, counted: saved.countedCash, variance: saved.variance });
-    }
+    // "Drawer closed" is only written once the close is actually safe. It
+    // used to be logged unconditionally, so a failed write still told the
+    // shop the till had been closed and counted.
+    if (!saved) return;
+    const cashSales = expectedCashForDate(salesTransactions, date);
+    const expected = recomputedExpectedCash(saved.record, cashSales);
+    const variance = recomputedVariance(saved.record, cashSales);
+    logActivity(`Drawer closed — counted $${countedCash.toFixed(2)}${Math.abs(variance) >= 0.005 ? ` (${variance > 0 ? 'over' : 'short'} $${Math.abs(variance).toFixed(2)})` : ''}${queuedSuffix(saved.queued)}`);
+    audit('cash.reconcile', 'cashReconciliation', date, undefined, { expected, counted: countedCash, variance, queued: saved.queued || undefined });
   };
 
   // Open the drawer for the day — record the actual starting float explicitly
@@ -1078,28 +1106,30 @@ const App: React.FC = () => {
   // openDrawerPatch) — including clearing a prior close/reconcile for today, so
   // a day that was already closed once can actually be resumed instead of
   // staying stuck showing "Closed today" with no way back.
-  const handleOpenDrawer = (openingFloat: number) => {
+  const handleOpenDrawer = async (openingFloat: number) => {
     if (!uid || !appUser || !allow('cash.log')) return;
     const date = todayISO();
     const existing = cashReconciliations.find(r => r.date === date);
-    commitDrawerRecord(date, openDrawerPatch(openingFloat, { id: appUser.id, email: appUser.email }, existing), undefined, { path: 'openDrawer' });
-    logActivity(`Drawer opened with $${openingFloat.toFixed(2)}`);
-    audit('cash.log', 'cashReconciliation', date, undefined, { kind: 'open', openingFloat });
+    const saved = await commitDrawerRecord(date, openDrawerPatch(openingFloat, { id: appUser.id, email: appUser.email }, existing), undefined, { path: 'openDrawer' });
+    if (!saved) return;
+    logActivity(`Drawer opened with $${openingFloat.toFixed(2)}${queuedSuffix(saved.queued)}`);
+    audit('cash.log', 'cashReconciliation', date, undefined, { kind: 'open', openingFloat, queued: saved.queued || undefined });
   };
 
   // Log a single cash movement (cash-in / cash-out / withdrawal) against today's
   // drawer — available to anyone who handles the register (cash.log). Appends the
   // entry and recomputes the expected baseline; the count + close stay separate,
   // so a movement never masquerades as a completed reconciliation.
-  const handleLogCashMovement = ({ kind, amount, note }: { kind: CashMovementKind; amount: number; note?: string }) => {
+  const handleLogCashMovement = async ({ kind, amount, note }: { kind: CashMovementKind; amount: number; note?: string }) => {
     if (!uid || !appUser || !allow('cash.log') || !(amount > 0)) return;
     const date = todayISO();
     const existing = cashReconciliations.find(r => r.date === date);
     const listKey: 'cashIn' | 'cashOut' | 'withdrawals' = kind === 'cashIn' ? 'cashIn' : kind === 'cashOut' ? 'cashOut' : 'withdrawals';
-    commitDrawerRecord(date, {}, { [listKey]: [{ id: newId(), amount, note }] }, { path: 'logCashMovement', kind });
+    const saved = await commitDrawerRecord(date, {}, { [listKey]: [{ id: newId(), amount, note }] }, { path: 'logCashMovement', kind });
+    if (!saved) return;
     const label = kind === 'cashIn' ? 'in' : kind === 'cashOut' ? 'paid out' : 'withdrawal';
-    logActivity(`Cash ${label} $${amount.toFixed(2)}${note ? ` — ${note}` : ''}`);
-    audit('cash.log', 'cashReconciliation', date, undefined, { kind, amount });
+    logActivity(`Cash ${label} $${amount.toFixed(2)}${note ? ` — ${note}` : ''}${queuedSuffix(saved.queued)}`);
+    audit('cash.log', 'cashReconciliation', date, undefined, { kind, amount, queued: saved.queued || undefined });
 
     // "Cash out" is a general same-till payout (rent, supplies, paying a
     // device buyer COD, misc) — the same concept as the expense ledger, so it
@@ -1274,8 +1304,11 @@ const App: React.FC = () => {
   // these recompute at midnight.
   const today = useToday();
   const todayCarryOver = useMemo(
-    () => drawerCarryOver(cashReconciliations, today),
-    [cashReconciliations, today],
+    // The cash-sales lookup makes the carried float RECOMPUTED rather than
+    // read off the previous day's stored expectedCash, which an offline
+    // merge write can leave stale (see domain/reports.ts).
+    () => drawerCarryOver(cashReconciliations, today, d => expectedCashForDate(salesTransactions, d)),
+    [cashReconciliations, salesTransactions, today],
   );
   const todayDrawer = useMemo(() => cashDrawerSummary(
     cashReconciliations.find(r => r.date === today),
@@ -1735,6 +1768,54 @@ const App: React.FC = () => {
       await deletePayPeriodPaid(uid, id).catch(() => {});
       audit('timeclock.unmark_paid', 'payPeriod', id);
     });
+  };
+
+  // --- Staff bonuses (owner only) ---
+  //
+  // A bonus is its own record, not a "Wages" expense: that category is
+  // excludeFromPL (it exists for visibility, and is excluded so hourly
+  // payroll isn't counted twice), so a bonus logged there never reduced net
+  // profit at all. See domain/bonuses.ts.
+  const handleSaveBonus = async (input: Omit<StaffBonus, 'id' | 'createdBy' | 'createdByEmail' | 'createdAt'>) => {
+    if (!uid || !appUser || appUser.role !== 'owner' || !canSaveBonus(input)) return;
+    const bonus: StaffBonus = {
+      ...input,
+      amount: Math.round(input.amount * 100) / 100,
+      id: newId(),
+      // Stamped from the AUTHENTICATED user, never client-supplied — the same
+      // discipline every other money record in this file follows.
+      createdBy: appUser.id, createdByEmail: appUser.email, createdAt: Date.now(),
+    };
+    await saveStaffBonus(uid, bonus).catch(e => console.error('Bonus save failed', e));
+    logActivity(`Bonus $${bonus.amount.toFixed(2)} for ${bonus.userEmail.split('@')[0]}${bonus.reason ? ` — ${bonus.reason}` : ''}`);
+    audit('payroll.bonus_add', 'staffBonus', bonus.id, undefined, {
+      userId: bonus.userId, amount: bonus.amount, date: bonus.date,
+      paidFrom: bonus.paidFrom, payPeriodStart: bonus.payPeriodStart, reason: bonus.reason,
+    });
+
+    // Only store cash leaves the till — same rule as a refund
+    // (domain/pos.ts's refundDrawerEffect) and a store-funded drop-off.
+    // Paying out of the owner's own pocket deliberately leaves no trace on
+    // the store's books.
+    const effect = bonusDrawerEffect(bonus);
+    if (effect) {
+      const entry = { id: newId(), amount: effect.amount, note: `Staff bonus — ${bonus.userEmail.split('@')[0]}` };
+      commitDrawerRecord(bonus.date, {}, { cashOut: [entry] }, { path: 'staffBonus', bonusId: bonus.id });
+    }
+  };
+
+  const handleDeleteBonus = async (bonusId: string) => {
+    if (!uid || !appUser || appUser.role !== 'owner') return;
+    const target = staffBonuses.find(b => b.id === bonusId);
+    if (!target) return;
+    await deleteStaffBonus(uid, bonusId).catch(e => console.error('Bonus delete failed', e));
+    audit('payroll.bonus_delete', 'staffBonus', bonusId, target, undefined);
+    // The drawer entry is deliberately NOT reversed here. It recorded cash
+    // that physically left the till on a day that may already be counted and
+    // closed; silently crediting it back would rewrite a reconciled day — the
+    // same rule every other money path in this file follows. Log the cash
+    // back in explicitly if it was actually returned.
+    logActivity(`Bonus removed — $${(target.amount || 0).toFixed(2)} for ${target.userEmail.split('@')[0]}`);
   };
 
   // --- Backups (Owner only) ---
@@ -2296,7 +2377,7 @@ const App: React.FC = () => {
           <Suspense fallback={<ViewLoader />}>
           {view === 'dashboard' && (
             allow('reports.view')
-              ? <Dashboard data={data} salesTransactions={salesTransactions} activity={activityLog} repairs={repairs} repairBatches={repairBatches} canViewProfit={allow('reports.profit.summary')} onViewAnalytics={() => navigate('analytics')} onViewRepairs={allow('repairs.manage') ? () => navigate('repairs') : undefined}
+              ? <Dashboard data={data} salesTransactions={salesTransactions} activity={activityLog} repairs={repairs} repairBatches={repairBatches} canViewProfit={allow('reports.profit.summary')} onViewAnalytics={() => navigate('analytics')} onViewRepairs={allow('repairs.manage') ? () => navigate('repairs') : undefined} booksStartDate={settings.operations.booksStartDate}
                   cashReconciliations={allow('cash.reconcile') ? cashReconciliations : undefined}
                   onViewCash={allow('cash.reconcile') ? () => navigate('reports') : undefined}
                   onViewLayaways={allow('cash.reconcile') ? () => navigate('layaways') : undefined}
@@ -2316,7 +2397,7 @@ const App: React.FC = () => {
           )}
           {view === 'analytics' && (
             (appUser.role === 'owner' || appUser.role === 'manager') && allow('reports.profit.detailed')
-              ? <OwnerAnalytics salesTransactions={salesTransactions} repairs={repairs} inventory={data} customers={customers} auditLogs={auditLogs} activity={activityLog} settlements={settlements} darkMode={darkMode} />
+              ? <OwnerAnalytics salesTransactions={salesTransactions} repairs={repairs} inventory={data} customers={customers} auditLogs={auditLogs} activity={activityLog} settlements={settlements} booksStartDate={settings.operations.booksStartDate} darkMode={darkMode} />
               : <div className="text-center text-slate-400 py-20">Owner analytics are restricted to owners (and managers granted financial access).</div>
           )}
           {view === 'reports' && (
@@ -2328,7 +2409,7 @@ const App: React.FC = () => {
             // Reconciliation (and, if granted, Expenses) tab — never a coarse
             // permission standing in as a proxy for profit visibility.
             (allow('cash.reconcile') || allow('reports.profit.summary'))
-              ? <ReportsView salesTransactions={salesTransactions} cashReconciliations={cashReconciliations} inventory={data} payPeriods={payPeriods} settlements={settlements} deviceBuyers={deviceBuyers} onSaveReconciliation={handleSaveReconciliation} defaultOpeningFloat={settings.operations.openingFloatDefault}
+              ? <ReportsView salesTransactions={salesTransactions} cashReconciliations={cashReconciliations} inventory={data} payPeriods={payPeriods} staffBonuses={visibleBonuses(staffBonuses, { id: appUser?.id || '', canViewPayroll: allow('payroll.manage') })} settlements={settlements} deviceBuyers={deviceBuyers} onSaveReconciliation={handleSaveReconciliation} booksStartDate={settings.operations.booksStartDate} defaultOpeningFloat={settings.operations.openingFloatDefault}
                   repairs={repairs} customers={customers} auditLogs={auditLogs} activity={activityLog} timeEntries={timeEntries} users={workspaceUsers}
                   expenses={expenses} expenseCategories={settings.expenses.categories}
                   canAddExpense={allow('expenses.add')} canViewAllExpenses={allow('expenses.viewAll')}
@@ -2375,6 +2456,7 @@ const App: React.FC = () => {
               auditLogs={auditLogs}
               canDelete={appUser.role === 'owner'}
               userId={appUser.id}
+              booksStartDate={settings.operations.booksStartDate}
               initialCustomer={prefillCustomer}
               initialRepairId={focusRepairId}
               initialNewRepair={prefillRepair}
@@ -2540,6 +2622,10 @@ const App: React.FC = () => {
               onMarkPaid={handleMarkPaid}
               onUnmarkPaid={handleUnmarkPaid}
               onCorrectClockOut={handleCorrectClockOut}
+              staffBonuses={visibleBonuses(staffBonuses, { id: appUser.id, canViewPayroll: allow('payroll.manage') })}
+              canAddBonus={appUser.role === 'owner'}
+              onSaveBonus={appUser.role === 'owner' ? handleSaveBonus : undefined}
+              onDeleteBonus={appUser.role === 'owner' ? handleDeleteBonus : undefined}
             />
           )}
           {view === 'closeout' && allow('closeout.view') && (
@@ -2556,6 +2642,7 @@ const App: React.FC = () => {
               alerts={alerts}
               todayDrawer={todayDrawer}
               todayRecon={todayRecon}
+              booksStartDate={settings.operations.booksStartDate}
               onNavigate={navigate}
             />
           )}

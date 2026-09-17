@@ -34,6 +34,10 @@ export interface PayrollPrintRow {
   hours: number;
   rate: number;
   gross: number;
+  // Bonuses attached to this pay period (domain/bonuses.ts). Optional, so a
+  // period with none prints exactly as it always did — no empty column, no
+  // $0.00 line implying a bonus was considered and declined.
+  bonus?: number;
 }
 
 // Summary sheet — every employee, hours, rate, gross, period dates, totals.
@@ -44,14 +48,19 @@ export const printPayrollSummary = (
 ) => {
   const totalHours = rows.reduce((s, r) => s + r.hours, 0);
   const totalGross = rows.reduce((s, r) => s + r.gross, 0);
+  const totalBonus = rows.reduce((s, r) => s + (r.bonus || 0), 0);
+  // The bonus columns appear only when there is a bonus in the period, so an
+  // ordinary payroll sheet is unchanged.
+  const anyBonus = totalBonus > 0.005;
   const body = `
     <h2>${shopName(opts.storeName)}</h2><div class="sub">Payroll Summary<br/>${esc(period.label)}</div>
-    <table><thead><tr><th>Employee</th><th class="r">Hours</th><th class="r">Rate</th><th class="r">Gross</th></tr></thead><tbody>
-      ${rows.map(r => `<tr><td>${esc(r.name)}</td><td class="r">${r.hours.toFixed(2)}</td><td class="r">${money(r.rate)}</td><td class="r">${money(r.gross)}</td></tr>`).join('')}
+    <table><thead><tr><th>Employee</th><th class="r">Hours</th><th class="r">Rate</th><th class="r">Hours pay</th>${anyBonus ? '<th class="r">Bonus</th><th class="r">Total</th>' : ''}</tr></thead><tbody>
+      ${rows.map(r => `<tr><td>${esc(r.name)}</td><td class="r">${r.hours.toFixed(2)}</td><td class="r">${money(r.rate)}</td><td class="r">${money(r.gross)}</td>${anyBonus ? `<td class="r">${r.bonus ? money(r.bonus) : '—'}</td><td class="r">${money(r.gross + (r.bonus || 0))}</td>` : ''}</tr>`).join('')}
     </tbody></table>
     <div class="tot"></div>
     <div class="row b"><span>Total Hours</span><span>${totalHours.toFixed(2)}</span></div>
-    <div class="row b"><span>Total Gross</span><span>${money(totalGross)}</span></div>
+    <div class="row b"><span>Total Hours Pay</span><span>${money(totalGross)}</span></div>
+    ${anyBonus ? `<div class="row b"><span>Total Bonuses</span><span>${money(totalBonus)}</span></div><div class="row b"><span>Total Payout</span><span>${money(totalGross + totalBonus)}</span></div>` : ''}
     <p class="foot">${shopName(opts.storeName)} — for internal payroll records only.</p>`;
   openPrint(`Payroll Summary ${period.label}`, 640, body);
 };
@@ -73,7 +82,8 @@ export const printPayStub = (
     <div class="tot"></div>
     <div class="row"><span class="k">Total Hours</span><span>${row.hours.toFixed(2)}</span></div>
     <div class="row"><span class="k">Rate</span><span>${money(row.rate)}</span></div>
-    <div class="row b"><span>Gross Pay</span><span>${money(row.gross)}</span></div>
+    <div class="row${row.bonus ? '' : ' b'}"><span${row.bonus ? ' class="k"' : ''}>${row.bonus ? 'Hours Pay' : 'Gross Pay'}</span><span>${money(row.gross)}</span></div>
+    ${row.bonus ? `<div class="row"><span class="k">Bonus</span><span>${money(row.bonus)}</span></div><div class="row b"><span>Total Pay</span><span>${money(row.gross + row.bonus)}</span></div>` : ''}
     <p class="foot">${shopName(opts.storeName)} — for internal payroll records only.</p>`;
   openPrint(`Pay Stub ${esc(employeeName)} ${period.label}`, 380, body);
 };

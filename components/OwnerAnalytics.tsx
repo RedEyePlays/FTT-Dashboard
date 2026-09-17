@@ -24,6 +24,8 @@ interface Props {
   // Device-buyer settlements — fee income only (see domain/analytics.ts).
   settlements: Settlement[];
   darkMode: boolean;
+  // settings.operations.booksStartDate — clamps every figure's window start.
+  booksStartDate?: string;
 }
 
 const money = (n: number) => `$${(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -36,13 +38,13 @@ const PRESETS: { id: RangePreset; label: string }[] = [
 
 const card = 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl';
 
-export const OwnerAnalytics: React.FC<Props> = ({ salesTransactions, repairs, inventory, customers, auditLogs, activity, settlements, darkMode }) => {
+export const OwnerAnalytics: React.FC<Props> = ({ salesTransactions, repairs, inventory, customers, auditLogs, activity, settlements, booksStartDate, darkMode }) => {
   const [preset, setPreset] = useState<RangePreset>('today');
   const [custom, setCustom] = useState({ start: '', end: '' });
 
   const range = useMemo(() => presetRange(preset, Date.now(), custom), [preset, custom]);
   const input: AnalyticsInput = { salesTransactions, repairs, inventory, customers, auditLogs, activity, settlements };
-  const a = useMemo(() => computeAnalytics(range, input), [range, salesTransactions, repairs, inventory, customers, auditLogs, activity, settlements]);
+  const a = useMemo(() => computeAnalytics(range, { ...input, booksStartDate }), [range, salesTransactions, repairs, inventory, customers, auditLogs, activity, settlements, booksStartDate]);
 
   const axis = darkMode ? '#94a3b8' : '#64748b';
   const grid = darkMode ? '#1e293b' : '#e2e8f0';
