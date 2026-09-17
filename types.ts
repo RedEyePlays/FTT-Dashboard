@@ -146,6 +146,33 @@ export interface InventoryItem {
 // services/settlementInvoice.ts, all of which render it as "Buyer-funded".
 export type PaidBy = 'runner' | 'store' | 'personal';
 
+// Where the money for a REFUND actually came from, when a sale is voided or
+// returned.
+//
+// Before this existed the refund source was never asked: the app assumed the
+// money went back exactly the way it came in — the cash portion of the sale
+// always logged as a cash-out on today's drawer, card/e-transfer never
+// touching it. That is usually right, but there was no way to record the two
+// cases that happen in a real shop: refunding out of the owner's own pocket
+// because the till is short, and refunding a card sale in cash from the till.
+// Both left the drawer's expected cash wrong.
+//
+// Same vocabulary and shape as PaidBy / RepairPurchasePaidBy above, so
+// "store cash vs the owner's own cash" means one thing across the app. Only
+// 'store_cash' ever moves the drawer (domain/pos.ts's refundDrawerEffect) —
+// 'personal' deliberately does not, exactly like PaidBy 'personal'.
+export type RefundPaidFrom = 'store_cash' | 'personal' | 'card' | 'etransfer' | 'other';
+
+// One source a refund was paid from, and how much of the refund came from it.
+// A single-source refund is one entry; a mixed-payment sale can be refunded
+// across several, and the amounts must add up to the refund total (see
+// domain/pos.ts's refundSplitsValid, which mirrors the checkout's own
+// mixed-payment validation).
+export interface RefundSplit {
+  paidFrom: RefundPaidFrom;
+  amount: number;
+}
+
 // THE BUSINESS MODEL (confirmed by the owner, and the reason for the drop-off
 // financing rework): the device buyer sources devices FOR HIMSELF. The store
 // never acquires them. The store's role is financing plus a service fee, so at
@@ -224,7 +251,13 @@ export interface Settlement {
   // See DropOff.buyerId — same legacy `runnerId` fallback, same normalization
   // boundary, no migration.
   buyerId: string;
-  date: string;              // YYYY-MM-DD settled
+  date: string;              // YYYY-MM-DD settled — the day the settlement was actually done (backdatable)
+  // The Saturday that closes the settlement WEEK this run covers, YYYY-MM-DD.
+  // Distinct from `date`: a week that was missed is settled on some later day,
+  // and both facts matter — "settled Tuesday, for the week ending Saturday the
+  // 12th". Optional, so every settlement recorded before weeks were tracked
+  // still reads exactly as it did; nothing is migrated or inferred.
+  periodEnd?: string;
   dropOffIds: string[];       // devices actually included in this settlement — a device reviewed but excluded is simply left out (still 'accepted'/'paidout', eligible for a later settlement)
   // --- Corrected financing model (records written from the rework onward) ---
   // `model: 'financing'` is the presence check that separates a new record
@@ -609,6 +642,17 @@ export interface SalesTransaction {
   returnedByEmail?: string;
   restockingFee?: number;      // fee withheld from the refund (0 / absent = full refund)
   refundAmount?: number;       // actual amount refunded to the customer
+  // WHERE the refund money came from, recorded on void and on return alike.
+  // `refundSplits` is the itemized truth (one entry per source); `refundPaidFrom`
+  // is the single-source shorthand, set only when the whole refund came from one
+  // place, so the common case reads without unpacking an array.
+  //
+  // BOTH OPTIONAL BY DESIGN. Every sale voided or returned before this existed
+  // has neither, and is still read exactly as it always was: the refund is
+  // assumed to have gone back the way the sale was paid (domain/pos.ts's
+  // impliedRefundSplits). Nothing stored is migrated or reinterpreted.
+  refundPaidFrom?: RefundPaidFrom;
+  refundSplits?: RefundSplit[];
   // Layaway completion (domain/layaway.ts): every payment collected AFTER the
   // original checkout, against `balanceOwing`. Each one is independently
   // receiptable. `deposit` (above) always reflects the running total collected

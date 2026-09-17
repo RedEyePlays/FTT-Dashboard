@@ -36,7 +36,7 @@ const UsersView = lazy(() => import('./components/UsersView').then(m => ({ defau
 const AuditLogView = lazy(() => import('./components/AuditLogView').then(m => ({ default: m.AuditLogView })));
 const TimeClockView = lazy(() => import('./components/TimeClockView').then(m => ({ default: m.TimeClockView })));
 const CloseOutView = lazy(() => import('./components/CloseOutView').then(m => ({ default: m.CloseOutView })));
-import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, DeviceBuyer, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission, Repair, RepairBatch, TimeEntry, PayPeriodPaid, PayPeriodApproval, BreakReason, SalesTransaction, CashReconciliation, StaffNote, BalancePayment, Expense, RecurringExpense } from './types';
+import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, DeviceBuyer, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission, Repair, RepairBatch, TimeEntry, PayPeriodPaid, PayPeriodApproval, BreakReason, SalesTransaction, CashReconciliation, StaffNote, BalancePayment, Expense, RecurringExpense, RefundSplit } from './types';
 import { skuPrefix, nextSku } from './services/sku';
 import { REPAIR_PREFIX, BATCH_PREFIX, applyTechEdit, techUpdateAuditPlan, repairSalePrefill, completeRepair, completeRepairSale, dateToEpochMs, isRepairOpen, flagDeviceForRepair, restoredDeviceStatus } from './domain/repairs';
 import { repairCostWriteback, applyRepairCostDelta } from './domain/repairCostWriteback';
@@ -53,7 +53,7 @@ import { useAppLock } from './hooks/useAppLock';
 import { hashPin, verifyPin, canAssignPin, isValidPinFormat, autoLockAppliesToRole } from './domain/pin';
 import {
   saveMeta, saveItem, deleteItem, syncArray, allocateSku,
-  logActivityDoc, commitSale, voidSale, returnSale, collectLayawayBalance, saveCashReconciliation, seedSampleData,
+  logActivityDoc, commitSale, voidSale, returnSale, collectLayawayBalance, commitCashReconciliation, seedSampleData,
   updateUserDoc, setInvite, deleteInvite,
   logAudit, exportWorkspaceData, recordBackup, saveSettings,
   saveTimeEntry, savePayPeriodPaid, deletePayPeriodPaid, savePayPeriodApproval, deletePayPeriodApproval,
@@ -72,9 +72,10 @@ import { stampVoid, stampReturn, stampReconcile, stampSettlement, stampDropOffAc
 import { useWorkspaceData } from './hooks/useWorkspaceData';
 import { newId, mkActivity } from './domain/ids';
 import { collectionFor, stockChange, applyDirectSale } from './domain/inventory';
-import { canVoidSale, canReturnSale, returnRefund, saleAccessoryRestock, saleDeviceListedPlatforms, collectedOnSale, cashCollectedOnSale, saleRefundDrawerEffect } from './domain/pos';
+import { canVoidSale, canReturnSale, returnRefund, saleAccessoryRestock, saleDeviceListedPlatforms, collectedOnSale, refundDrawerEffect, refundSplitsValid, singleRefundSource } from './domain/pos';
 import { applyBalancePayment, cashPortionOfPayment } from './domain/layaway';
-import { expectedCashForDate, expectedEndingCash, sumDrawerEntries, cashDrawerSummary, drawerCarryOver, openDrawerPatch, ReconciliationInput } from './domain/reports';
+import { expectedCashForDate, cashDrawerSummary, drawerCarryOver, openDrawerPatch, ReconciliationInput, mergeDrawerRecord, drawerStateChange, changesDrawerState, DrawerAppends } from './domain/reports';
+import { useToday } from './hooks/useToday';
 import { duePeriodsFor, buildRecurringExpense, canMutateExpense } from './domain/expenses';
 import { isEligibleForReviewRequest, ReviewEligibility, reviewRequestsSentOn, underDailyReviewRequestCap } from './domain/reviews';
 const RequestReviewModal = lazy(() => import('./components/RequestReviewModal').then(m => ({ default: m.RequestReviewModal })));
@@ -693,7 +694,7 @@ const App: React.FC = () => {
       const existing = cashReconciliations.find(rec => rec.date === date);
       const listKey: 'cashIn' | 'cashOut' = purchaseEffect.kind;
       const entry = { id: newId(), amount: purchaseEffect.amount, note: `Quick Purchase — ${item.item}` };
-      commitDrawerRecord(date, { [listKey]: [...(existing?.[listKey] || []), entry] });
+      commitDrawerRecord(date, {}, { [listKey]: [entry] }, { path: 'quickPurchase' });
       logActivity(`Cash paid out $${purchaseEffect.amount.toFixed(2)} — quick purchase (${item.item})`);
     }
   };
@@ -839,7 +840,7 @@ const App: React.FC = () => {
       const date = todayISO();
       const existing = cashReconciliations.find(r => r.date === date);
       const entry = { id: newId(), amount: cashPortion, note: `Layaway balance collected — ${tx.id.slice(0, 8)} (${tx.customerName || 'customer'})` };
-      commitDrawerRecord(date, { cashIn: [...(existing?.cashIn || []), entry] });
+      commitDrawerRecord(date, {}, { cashIn: [entry] }, { path: 'collectBalance' });
     }
 
     return transaction;
@@ -849,9 +850,17 @@ const App: React.FC = () => {
   // — inside the same-day window). Returns sold
   // devices to stock, restocks accessories atomically, and flags the transaction
   // voided (kept for audit). Does NOT touch custom lines (no inventoryId).
-  const handleVoidSale = (tx: SalesTransaction) => {
+  const handleVoidSale = (tx: SalesTransaction, opts: { refundSplits: RefundSplit[] }) => {
     if (!uid || !appUser || !allow('sales.void')) return;
     if (!canVoidSale(tx, todayISO(), settings.operations.voidWindowDays)) return;
+    // Where the money went back from, as chosen in the dialog. Rejected here
+    // too, not only in the UI: an unbalanced split would feed a wrong figure
+    // straight into the drawer's expected cash.
+    const refundSplits = opts.refundSplits || [];
+    if (!refundSplitsValid(refundSplits, collectedOnSale(tx)).valid) {
+      console.error('Void rejected — refund sources do not add up to the refund.');
+      return;
+    }
 
     // Device lines are the actual sold inventory rows (still carrying this txn id).
     // Restore each device's listedPlatforms snapshot (SalesLine.listedPlatforms,
@@ -868,28 +877,36 @@ const App: React.FC = () => {
     const isLayawayTx = (tx.balanceOwing || 0) > 0.005;
     const activity: ActivityEntry[] = [mkActivity(
       isLayawayTx
-        ? `Layaway ${tx.id.slice(0, 8)} cancelled — $${cashCollectedOnSale(tx).toFixed(2)} deposit refunded (${tx.customerName || 'customer'})`
+        ? `Layaway ${tx.id.slice(0, 8)} cancelled — $${collectedOnSale(tx).toFixed(2)} deposit refunded (${tx.customerName || 'customer'})`
         : `Sale ${tx.id.slice(0, 8)} voided (${tx.customerName || 'customer'})`
     )];
     voidSale(uid, {
       transactionId: tx.id, devices, accessoryUpdates,
-      voided: stampVoid(appUser, Date.now()),
+      voided: {
+        ...stampVoid(appUser, Date.now()),
+        refundSplits, refundPaidFrom: singleRefundSource(refundSplits),
+      },
       activity,
     }).catch(e => console.error('Void failed', e));
-    audit('sale.void', 'sale', tx.id, { totalPaid: tx.totalPaid }, { devices: devices.length, accessories: accessoryUpdates.length });
+    audit('sale.void', 'sale', tx.id, { totalPaid: tx.totalPaid }, {
+      devices: devices.length, accessories: accessoryUpdates.length,
+      refundPaidFrom: singleRefundSource(refundSplits), refundSplits,
+    });
 
     // Cash actually leaves the till right now (the day the void is processed),
     // never retroactively against the original sale's date (already reconciled
-    // in virtually every real case) — see domain/pos.ts's saleRefundDrawerEffect.
-    // A layaway only ever collected its deposit (cashCollectedOnSale), so a
-    // voided layaway never refunds more cash than actually came in; a card/
-    // e-transfer sale never touches the drawer at all.
-    const voidCashEffect = saleRefundDrawerEffect(cashCollectedOnSale(tx));
+    // in virtually every real case).
+    //
+    // ONLY the store-cash portion of the refund moves the drawer — see
+    // domain/pos.ts's refundDrawerEffect. Refunding out of the owner's own
+    // pocket, or back to a card, correctly leaves the till alone; refunding a
+    // CARD sale in cash from the till now correctly takes it out, which the
+    // old assumed rule could not express at all.
+    const voidCashEffect = refundDrawerEffect(refundSplits);
     if (voidCashEffect) {
       const date = todayISO();
-      const existing = cashReconciliations.find(r => r.date === date);
       const entry = { id: newId(), amount: voidCashEffect.amount, note: `Sale ${tx.id.slice(0, 8)} voided — refund` };
-      commitDrawerRecord(date, { cashOut: [...(existing?.cashOut || []), entry] });
+      commitDrawerRecord(date, {}, { cashOut: [entry] }, { path: 'voidSale', transactionId: tx.id });
     }
   };
 
@@ -898,7 +915,7 @@ const App: React.FC = () => {
   // set each returned device to its chosen disposition (resellable or defective),
   // and flag the transaction 'returned' (kept for audit). Custom lines (no
   // inventoryId) are not touched, same as Void.
-  const handleReturnSale = (tx: SalesTransaction, opts: { restockingFee?: number; disposition: 'resell' | 'defective' }) => {
+  const handleReturnSale = (tx: SalesTransaction, opts: { restockingFee?: number; disposition: 'resell' | 'defective'; refundSplits: RefundSplit[] }) => {
     if (!uid || !appUser || !allow('sales.return')) return;
     if (!canReturnSale(tx, todayISO(), settings.operations.voidWindowDays)) return;
 
@@ -916,6 +933,13 @@ const App: React.FC = () => {
     // layaway only ever took its deposit, so refunding tx.totalPaid would hand
     // back money that was never paid in (see domain/pos.ts's collectedOnSale).
     const refundAmount = returnRefund(collectedOnSale(tx), restockingFee);
+    // Same guard as Void: the chosen sources must add up to what is actually
+    // being handed back, or the drawer figure derived from them is wrong.
+    const refundSplits = opts.refundSplits || [];
+    if (!refundSplitsValid(refundSplits, refundAmount).valid) {
+      console.error('Return rejected — refund sources do not add up to the refund.');
+      return;
+    }
 
     const isLayawayReturn = (tx.balanceOwing || 0) > 0.005;
     const activity: ActivityEntry[] = [mkActivity(
@@ -925,21 +949,23 @@ const App: React.FC = () => {
     )];
     returnSale(uid, {
       transactionId: tx.id, resellDevices, defectiveDevices, accessoryUpdates,
-      returned: { ...stampReturn(appUser, Date.now()), restockingFee, refundAmount },
+      returned: {
+        ...stampReturn(appUser, Date.now()), restockingFee, refundAmount,
+        refundSplits, refundPaidFrom: singleRefundSource(refundSplits),
+      },
       activity,
     }).catch(e => console.error('Return failed', e));
     audit('sale.return', 'sale', tx.id, { totalPaid: tx.totalPaid },
-      { refundAmount, restockingFee: restockingFee || 0, disposition: opts.disposition, devices: devices.length, accessories: accessoryUpdates.length });
+      { refundAmount, restockingFee: restockingFee || 0, disposition: opts.disposition, devices: devices.length, accessories: accessoryUpdates.length,
+        refundPaidFrom: singleRefundSource(refundSplits), refundSplits });
 
-    // Same today's-date cash-out rule as Void (see handleVoidSale) — the
-    // restocking fee comes out of the cash portion first (returnRefund's usual
-    // fee-clamping), so a card/e-transfer sale still never touches the drawer.
-    const returnCashEffect = saleRefundDrawerEffect(returnRefund(cashCollectedOnSale(tx), restockingFee));
+    // Same today's-date cash-out rule as Void, and the same source rule: only
+    // the store-cash part of the refund leaves the till.
+    const returnCashEffect = refundDrawerEffect(refundSplits);
     if (returnCashEffect) {
       const date = todayISO();
-      const existing = cashReconciliations.find(r => r.date === date);
       const entry = { id: newId(), amount: returnCashEffect.amount, note: `Sale ${tx.id.slice(0, 8)} returned — refund` };
-      commitDrawerRecord(date, { cashOut: [...(existing?.cashOut || []), entry] });
+      commitDrawerRecord(date, {}, { cashOut: [entry] }, { path: 'returnSale', transactionId: tx.id });
     }
   };
 
@@ -949,39 +975,57 @@ const App: React.FC = () => {
   // baseline (and variance, once counted) from the shared domain math — the
   // single write path for opening the drawer, logging a movement and
   // reconciling, so the three can never diverge. Returns the saved record.
-  const commitDrawerRecord = (date: string, patch: Partial<CashReconciliation>): CashReconciliation | null => {
+  // Every drawer write goes through here, and every one of them is a
+  // TRANSACTION: services/firestoreDb.ts's commitCashReconciliation re-reads
+  // the day's document on the server and merges onto that
+  // (domain/reports.ts's mergeDrawerRecord), rather than overwriting it with
+  // a document assembled from this component's possibly-stale React state.
+  // See that function for the lost-update this closes — it is the likeliest
+  // cause of the reported "drawer randomly closing".
+  //
+  // `appends` is how movement entries are added. Callers must NOT pass
+  // `patch.cashOut = [...local, entry]`: that re-asserts the whole list from a
+  // snapshot and drops whatever another terminal appended in between.
+  //
+  // Returns the optimistic merge for callers that want to log a figure right
+  // away; the authoritative record comes back from the transaction and is
+  // what gets audited.
+  const commitDrawerRecord = (
+    date: string,
+    patch: Partial<CashReconciliation>,
+    appends?: DrawerAppends,
+    auditCtx?: { path: string; [k: string]: unknown },
+  ): CashReconciliation | null => {
     if (!uid || !appUser) return null;
-    const existing = cashReconciliations.find(r => r.date === date);
-    // Seed a brand-new day's record with whatever the till was left
-    // holding (drawerCarryOver) rather than 0. Without this the first
-    // write of the day — a cash-out, a close — would silently reset the
-    // opening float to zero and report the whole carried till as a
-    // shortage. Only ever applied when the day has NO record yet; once
-    // it does, its own stored float is the truth.
-    const carry = drawerCarryOver(cashReconciliations, date);
-    const merged: CashReconciliation = {
-      id: date, date, openingFloat: carry?.float || 0, expectedCash: 0, variance: 0,
-      recordedBy: appUser.id, recordedByEmail: appUser.email, recordedAt: Date.now(),
-      ...existing, ...patch,
+    const actor = { id: appUser.id, email: appUser.email };
+    const args = {
+      date, patch, appends,
+      cashSales: expectedCashForDate(salesTransactions, date),
+      carry: drawerCarryOver(cashReconciliations, date),
+      actor,
     };
-    // A drawer carried forward from a day nobody closed is still open —
-    // stamp that on the new day's record so it reads as open rather than
-    // as "never opened today".
-    if (!existing && !merged.openedAt && carry?.stillOpen) {
-      merged.openedAt = Date.now();
-      merged.openedBy = appUser.id;
-      merged.openedByEmail = appUser.email;
-    }
-    const cashSales = expectedCashForDate(salesTransactions, date);
-    merged.cashSales = cashSales;
-    merged.expectedCash = expectedEndingCash({
-      openingFloat: merged.openingFloat, cashSales,
-      cashIn: sumDrawerEntries(merged.cashIn), cashOut: sumDrawerEntries(merged.cashOut), withdrawals: sumDrawerEntries(merged.withdrawals),
-    });
-    merged.variance = merged.countedCash != null ? Math.round((merged.countedCash - merged.expectedCash) * 100) / 100 : 0;
-    merged.recordedBy = appUser.id; merged.recordedByEmail = appUser.email; merged.recordedAt = Date.now();
-    saveCashReconciliation(uid, merged).catch(e => console.error('Cash drawer save failed', e));
-    return merged;
+    commitCashReconciliation(uid, args)
+      .then(({ record, change }) => {
+        // A visible trail for every write that opens or closes a day. Without
+        // this, a drawer that closed "by itself" left nothing to look at: who,
+        // which terminal's user, when, and through which code path are all
+        // now on the audit entry.
+        if (changesDrawerState(change)) {
+          audit('cash.drawer_state', 'cashReconciliation', date, undefined, {
+            path: auditCtx?.path || 'unknown',
+            openedSet: change.openedSet || undefined,
+            openedCleared: change.openedCleared || undefined,
+            reconciledSet: change.reconciledSet || undefined,
+            reconciledCleared: change.reconciledCleared || undefined,
+            openedAt: record.openedAt, reconciledAt: record.reconciledAt,
+            ...auditCtx,
+          });
+        }
+      })
+      .catch(e => console.error('Cash drawer save failed', e));
+    // The same merge the transaction will perform, against what this client
+    // currently knows — returned for the caller's own logging only.
+    return mergeDrawerRecord({ ...args, existing: cashReconciliations.find(r => r.date === date) });
   };
 
   // Reconcile (count + close) a day — any staff who runs the register
@@ -993,12 +1037,18 @@ const App: React.FC = () => {
   // review it.
   const handleSaveReconciliation = (r: ReconciliationInput) => {
     if (!uid || !appUser || !allow('cash.reconcile')) return;
+    // NO COUNT = NO CLOSE. Saving corrections to a float, a cash entry or the
+    // variance note must not stamp reconciledAt — that is how editing a note
+    // on today silently closed the live drawer. Only an actual count closes a
+    // day, and the screen asks before it does that on an open today.
+    const closing = r.countedCash != null;
     const saved = commitDrawerRecord(r.date, {
       openingFloat: r.openingFloat, cashIn: r.cashIn, cashOut: r.cashOut, withdrawals: r.withdrawals,
-      countedCash: r.countedCash, note: r.note,
-      ...stampReconcile(appUser, Date.now()),
-    });
-    if (saved) audit('cash.reconcile', 'cashReconciliation', r.date, undefined, { expected: saved.expectedCash, counted: saved.countedCash, variance: saved.variance });
+      note: r.note,
+      ...(closing ? { countedCash: r.countedCash, ...stampReconcile(appUser, Date.now()) } : {}),
+    }, undefined, { path: closing ? 'reportsReconcile' : 'reportsEditNoCount' });
+    if (saved && closing) audit('cash.reconcile', 'cashReconciliation', r.date, undefined, { expected: saved.expectedCash, counted: saved.countedCash, variance: saved.variance });
+    else if (saved) audit('cash.log', 'cashReconciliation', r.date, undefined, { kind: 'edit', expected: saved.expectedCash });
   };
 
   // Quick close-out right at the register (the actual "closing up" moment) —
@@ -1014,7 +1064,7 @@ const App: React.FC = () => {
     const saved = commitDrawerRecord(date, {
       countedCash, note,
       ...stampReconcile(appUser, Date.now()),
-    });
+    }, undefined, { path: 'closeDrawerModal' });
     if (saved) {
       const variance = saved.variance;
       logActivity(`Drawer closed — counted $${countedCash.toFixed(2)}${Math.abs(variance) >= 0.005 ? ` (${variance > 0 ? 'over' : 'short'} $${Math.abs(variance).toFixed(2)})` : ''}`);
@@ -1032,7 +1082,7 @@ const App: React.FC = () => {
     if (!uid || !appUser || !allow('cash.log')) return;
     const date = todayISO();
     const existing = cashReconciliations.find(r => r.date === date);
-    commitDrawerRecord(date, openDrawerPatch(openingFloat, { id: appUser.id, email: appUser.email }, existing));
+    commitDrawerRecord(date, openDrawerPatch(openingFloat, { id: appUser.id, email: appUser.email }, existing), undefined, { path: 'openDrawer' });
     logActivity(`Drawer opened with $${openingFloat.toFixed(2)}`);
     audit('cash.log', 'cashReconciliation', date, undefined, { kind: 'open', openingFloat });
   };
@@ -1046,8 +1096,7 @@ const App: React.FC = () => {
     const date = todayISO();
     const existing = cashReconciliations.find(r => r.date === date);
     const listKey: 'cashIn' | 'cashOut' | 'withdrawals' = kind === 'cashIn' ? 'cashIn' : kind === 'cashOut' ? 'cashOut' : 'withdrawals';
-    const list = [...(existing?.[listKey] || []), { id: newId(), amount, note }];
-    commitDrawerRecord(date, { [listKey]: list });
+    commitDrawerRecord(date, {}, { [listKey]: [{ id: newId(), amount, note }] }, { path: 'logCashMovement', kind });
     const label = kind === 'cashIn' ? 'in' : kind === 'cashOut' ? 'paid out' : 'withdrawal';
     logActivity(`Cash ${label} $${amount.toFixed(2)}${note ? ` — ${note}` : ''}`);
     audit('cash.log', 'cashReconciliation', date, undefined, { kind, amount });
@@ -1099,7 +1148,7 @@ const App: React.FC = () => {
     if (isNew && next.paymentMethod === 'cash') {
       const existing = cashReconciliations.find(r => r.date === next.date);
       const entry = { id: newId(), amount: next.amount, note: `${next.category} — ${next.payee || next.note || 'expense'}` };
-      commitDrawerRecord(next.date, { cashOut: [...(existing?.cashOut || []), entry] });
+      commitDrawerRecord(next.date, {}, { cashOut: [entry] }, { path: 'expenseCashOut' });
       next.cashDrawerLinked = true;
     }
     saveExpense(uid, next).catch(e => console.error('Expense save failed', e));
@@ -1158,7 +1207,7 @@ const App: React.FC = () => {
     if (expense.paymentMethod === 'cash') {
       const existing = cashReconciliations.find(rec => rec.date === expense.date);
       const entry = { id: newId(), amount: expense.amount, note: `${expense.category} — ${expense.payee || 'recurring expense'}` };
-      commitDrawerRecord(expense.date, { cashOut: [...(existing?.cashOut || []), entry] });
+      commitDrawerRecord(expense.date, {}, { cashOut: [entry] }, { path: 'expenseDeleteReversal' });
       expense.cashDrawerLinked = true;
     }
     saveExpense(uid, expense).catch(e => console.error('Expense save failed', e));
@@ -1216,19 +1265,24 @@ const App: React.FC = () => {
   // and whether that day was ever actually closed. See
   // domain/reports.ts's drawerCarryOver — a drawer nobody closed stays
   // open across midnight, and its cash carries into today's float.
+  // `today` is STATE (hooks/useToday), not a call to todayISO() inside the
+  // memo. It used to be the latter, with only the data in the dependency
+  // array — so a terminal left running overnight kept serving yesterday's
+  // carry-over and summary while everything else in the same render had
+  // already rolled over to today. The drawer could then read as never-opened
+  // or as closed. Depending on a value that actually changes is what makes
+  // these recompute at midnight.
+  const today = useToday();
   const todayCarryOver = useMemo(
-    () => drawerCarryOver(cashReconciliations, todayISO()),
-    [cashReconciliations],
+    () => drawerCarryOver(cashReconciliations, today),
+    [cashReconciliations, today],
   );
-  const todayDrawer = useMemo(() => {
-    const date = todayISO();
-    return cashDrawerSummary(
-      cashReconciliations.find(r => r.date === date),
-      expectedCashForDate(salesTransactions, date),
-      todayCarryOver,
-    );
-  }, [cashReconciliations, salesTransactions, todayCarryOver]);
-  const todayRecon = cashReconciliations.find(r => r.date === todayISO());
+  const todayDrawer = useMemo(() => cashDrawerSummary(
+    cashReconciliations.find(r => r.date === today),
+    expectedCashForDate(salesTransactions, today),
+    todayCarryOver,
+  ), [cashReconciliations, salesTransactions, todayCarryOver, today]);
+  const todayRecon = cashReconciliations.find(r => r.date === today);
 
   const handleBulkImport = (items: InventoryItem[]) => {
     if (uid) items.forEach(it => saveItem(uid, collectionFor(it), it));
@@ -1349,10 +1403,9 @@ const App: React.FC = () => {
       if (before?.status === 'accepted' || d.status !== 'accepted') return d; // not a fresh accept
       const effect = dropOffAcceptDrawerEffect(d);
       if (effect) {
-        const existing = cashReconciliations.find(r => r.date === date);
         const listKey: 'cashIn' | 'cashOut' = effect.kind;
         const entry = { id: newId(), amount: effect.amount, note: `Drop-off accepted — ${d.item || d.id}` };
-        commitDrawerRecord(date, { [listKey]: [...(existing?.[listKey] || []), entry] });
+        commitDrawerRecord(date, {}, { [listKey]: [entry] }, { path: 'dropOffAccept', dropOffId: d.id });
         logActivity(`Cash advanced $${effect.amount.toFixed(2)} — drop-off accepted, owed back by the device buyer (${d.item || d.id})`);
       }
       return stampDropOffAccept(d, appUser, now);
@@ -1367,7 +1420,13 @@ const App: React.FC = () => {
   // counts STORE-funded principal as till money). Writes through the same
   // commitDrawerRecord path as every other drawer movement, so the register's
   // live total and the reconciliation screen can't drift.
-  const handleSettleDeviceBuyer = (settlement: Settlement) => {
+  // `cashDate` is the day the CASH was actually collected, which is not
+  // necessarily the day the settlement is being entered — a missed Saturday
+  // gets settled later, and the money may have changed hands on the day
+  // itself. It defaults to today. Backdating it posts the drawer entry to
+  // THAT day's record, which can change an already-reconciled day's expected
+  // cash — the settlement screen warns and asks before it lets that happen.
+  const handleSettleDeviceBuyer = (settlement: Settlement, opts?: { cashDate?: string }) => {
     if (!uid || !appUser || !allow('dropoffs.manage')) return;
     // Stamp the acting user onto the settlement record itself (not only the
     // audit entry) — employees can settle a device buyer now, and a payout is
@@ -1393,15 +1452,15 @@ const App: React.FC = () => {
     audit('dropoff.settle', 'settlement', settlement.id, undefined, {
       buyerId: settlement.buyerId, amountOwed: settlement.amountOwed, storeCashIn: settlement.storeCashIn,
       principalOwed: settlement.principalOwed, totalFees: settlement.totalFees, paymentMethod: settlement.paymentMethod,
+      periodEnd: settlement.periodEnd, cashDate: opts?.cashDate,
       lineAdjustments: settlement.lineAdjustments, adjustmentAmount: settlement.adjustmentAmount, adjustmentNote: settlement.adjustmentNote,
     });
     const effect = settlementDrawerEffect(settlement);
     if (effect) {
-      const date = todayISO();
-      const existing = cashReconciliations.find(r => r.date === date);
+      const date = opts?.cashDate || todayISO();
       const listKey: 'cashIn' | 'cashOut' = effect.kind;
-      const entry = { id: newId(), amount: effect.amount, note: `Device buyer settlement collected — ${settlement.id}` };
-      commitDrawerRecord(date, { [listKey]: [...(existing?.[listKey] || []), entry] });
+      const entry = { id: newId(), amount: effect.amount, note: `Device buyer settlement collected — ${settlement.id}${settlement.periodEnd ? ` (week ending ${settlement.periodEnd})` : ''}` };
+      commitDrawerRecord(date, {}, { [listKey]: [entry] }, { path: 'settleDeviceBuyer', settlementId: settlement.id });
     }
   };
 
@@ -1785,10 +1844,9 @@ const App: React.FC = () => {
           const purchaseEffect = autoInventoryPurchaseDrawerEffect(next);
           if (purchaseEffect) {
             const date = todayISO();
-            const existing = cashReconciliations.find(rec => rec.date === date);
             const listKey: 'cashIn' | 'cashOut' = purchaseEffect.kind;
             const entry = { id: newId(), amount: purchaseEffect.amount, note: `Device purchase — ${next.repairNumber || candidate.item}` };
-            commitDrawerRecord(date, { [listKey]: [...(existing?.[listKey] || []), entry] });
+            commitDrawerRecord(date, {}, { [listKey]: [entry] }, { path: 'autoInventoryPurchase' });
             logActivity(`Cash paid out $${purchaseEffect.amount.toFixed(2)} — device purchase (${candidate.item})`);
           }
         } else {
@@ -2410,6 +2468,7 @@ const App: React.FC = () => {
               onDeviceBuyersChange={saveDeviceBuyers}
               onDropOffsChange={saveDropOffs}
               onSettle={handleSettleDeviceBuyer}
+              cashReconciliations={cashReconciliations}
               canPrintLabels={canPrintDropOffLabel(appUser?.role)}
             />
           )}

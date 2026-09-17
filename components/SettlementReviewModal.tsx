@@ -15,7 +15,8 @@ interface Props {
   buyer: DeviceBuyer;
   dropOffs: DropOff[]; // the settleable set for this buyer (settleableDropOffs)
   settlementId: string;
-  date: string;
+  date: string;      // the day this is being settled
+  periodEnd?: string; // the Saturday whose week it covers (absent = no week chosen)
   paymentMethod: SettlementPaymentMethod;
   notes: string;
   storeName: string;
@@ -35,7 +36,7 @@ interface Props {
 // writes to Firestore — this is pure review state until "Confirm Settlement"
 // is pressed, which hands the reviewed lines back up to SettlementTab.
 export const SettlementReviewModal: React.FC<Props> = ({
-  buyer, dropOffs, settlementId, date, paymentMethod, notes, storeName, isSubmitting, onClose, onConfirm,
+  buyer, dropOffs, settlementId, date, periodEnd, paymentMethod, notes, storeName, isSubmitting, onClose, onConfirm,
 }) => {
   const [lines, setLines] = useState<SettlementReviewLine[]>(() => initSettlementReview(dropOffs));
   const [adjustmentAmount, setAdjustmentAmount] = useState('');
@@ -57,7 +58,7 @@ export const SettlementReviewModal: React.FC<Props> = ({
   };
 
   const draftSettlement = () => buildSettlementFromReview(
-    { id: settlementId, buyerId: buyer.id, date, paymentMethod, notes },
+    { id: settlementId, buyerId: buyer.id, date, periodEnd, paymentMethod, notes },
     dropOffs, lines, adjAmount, adjustmentNote,
   );
 

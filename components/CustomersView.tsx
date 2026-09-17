@@ -5,7 +5,7 @@ import {
   Copy, PlusCircle, Printer, FileText, Merge, Hash, Check, Ban, RotateCcw, Star,
   Filter, PackagePlus,
 } from 'lucide-react';
-import { Customer, SalesTransaction, Repair, RepairBatch, InventoryItem, AuditEntry, Note, Role } from '../types';
+import { Customer, SalesTransaction, Repair, RepairBatch, InventoryItem, AuditEntry, Note, Role, RefundPaidFrom, RefundSplit } from '../types';
 import { LinkedNotes } from './LinkedNotes';
 import { CollectBalanceModal } from './CollectBalanceModal';
 import {
@@ -14,7 +14,10 @@ import {
   CustomerSort, CustomerFilter, CustomerData, CustomerStats, MergePlan,
 } from '../domain/customers';
 import { REPAIR_STATUS_CELL, REPAIR_STATUS_LABEL, partName } from '../domain/repairs';
-import { isReversed, collectedOnSale } from '../domain/pos';
+import {
+  isReversed, collectedOnSale, defaultRefundSplits, refundSplitsValid, refundSourceLabel,
+  impliedRefundSplits, REFUND_PAID_FROM_LABEL, REFUND_PAID_FROM_OPTIONS,
+} from '../domain/pos';
 import { statusPageUrl } from '../domain/statusLink';
 import { formatPhoneInput } from '../domain/phone';
 import { PRINT_PREVIEW_BAR_STYLE, PRINT_PREVIEW_BAR_HTML } from '../services/printPreview';
@@ -41,9 +44,9 @@ interface Props {
   onMergeCustomers?: (plan: MergePlan) => void;
   onStartSale?: (c: Customer) => void;
   onCreateRepair?: (c: Customer) => void;
-  onVoidSale?: (tx: SalesTransaction) => void;         // owner/manager: reverse a same-day sale
+  onVoidSale?: (tx: SalesTransaction, opts: { refundSplits: RefundSplit[] }) => void; // owner/manager: reverse a same-day sale (with where the refund came from)
   canVoidSale?: (tx: SalesTransaction) => boolean;     // within-window + permission check
-  onReturnSale?: (tx: SalesTransaction, opts: { restockingFee?: number; disposition: 'resell' | 'defective' }) => void; // owner/manager: process a return
+  onReturnSale?: (tx: SalesTransaction, opts: { restockingFee?: number; disposition: 'resell' | 'defective'; refundSplits: RefundSplit[] }) => void; // owner/manager: process a return
   canReturnSale?: (tx: SalesTransaction) => boolean;   // after-void-window + permission check
   // Collect a payment against an open layaway's balance (item 1 of the
   // layaway-completion batch). Omitted hides the action for anyone who can't
@@ -546,7 +549,7 @@ const CustomerProfile: React.FC<Props & { customer: Customer; data: CustomerData
 
       {editing && <EditModal customer={customer} onClose={() => setEditing(false)} onSave={c => { onSaveCustomer(c, customer); setEditing(false); }} />}
       {invoice && <InvoiceModal tx={invoice} customer={customer} canViewProfit={canViewProfit} onClose={() => setInvoice(null)}
-        onVoid={onVoidSale && canVoidSale && canVoidSale(invoice) ? () => { onVoidSale(invoice); setInvoice(null); } : undefined}
+        onVoid={onVoidSale && canVoidSale && canVoidSale(invoice) ? (opts) => { onVoidSale(invoice, opts); setInvoice(null); } : undefined}
         onReturn={onReturnSale && canReturnSale && canReturnSale(invoice) ? (opts) => { onReturnSale(invoice, opts); setInvoice(null); } : undefined}
         onCollectBalance={onCollectBalance && !isReversed(invoice) && (invoice.balanceOwing || 0) > 0.005 ? () => { setCollectingBalance(invoice); setInvoice(null); } : undefined}
         onRequestReview={onRequestReview && !isReversed(invoice) && (invoice.balanceOwing || 0) <= 0.005 ? () => { onRequestReview(customer); setInvoice(null); } : undefined}
@@ -583,7 +586,7 @@ const Row: React.FC<{ label: string; value: string }> = ({ label, value }) => (
 const Empty: React.FC<{ text: string }> = ({ text }) => <p className="text-sm text-slate-400 py-6 text-center">{text}</p>;
 
 /* ---------------- Invoice modal ---------------- */
-const InvoiceModal: React.FC<{ tx: SalesTransaction; customer: Customer; canViewProfit: boolean; onClose: () => void; onVoid?: () => void; onReturn?: (opts: { restockingFee?: number; disposition: ReturnDisposition }) => void; onCollectBalance?: () => void; onRequestReview?: () => void; defaultRestockingFeePercent?: number }> = ({ tx, customer, canViewProfit, onClose, onVoid, onReturn, onCollectBalance, onRequestReview, defaultRestockingFeePercent }) => {
+const InvoiceModal: React.FC<{ tx: SalesTransaction; customer: Customer; canViewProfit: boolean; onClose: () => void; onVoid?: (opts: { refundSplits: RefundSplit[] }) => void; onReturn?: (opts: { restockingFee?: number; disposition: ReturnDisposition; refundSplits: RefundSplit[] }) => void; onCollectBalance?: () => void; onRequestReview?: () => void; defaultRestockingFeePercent?: number }> = ({ tx, customer, canViewProfit, onClose, onVoid, onReturn, onCollectBalance, onRequestReview, defaultRestockingFeePercent }) => {
   // Still an OPEN layaway (not one that later got paid off) — that's the
   // case where voiding/returning must be clearly labeled as a layaway
   // cancellation and must refund only what was actually collected so far,
@@ -592,14 +595,20 @@ const InvoiceModal: React.FC<{ tx: SalesTransaction; customer: Customer; canView
   return (
   <Modal title={`Invoice ${tx.id.slice(0, 8)}`} onClose={onClose} onPrint={() => printInvoice(tx, customer)}>
     <div className="space-y-2 text-sm">
+      {/* Where the refund money came from. A reversal recorded before this was
+          tracked has no stored source and is shown under the rule that was in
+          force when it was written (domain/pos.ts's impliedRefundSplits) —
+          never as "unknown", and nothing stored is reinterpreted. */}
       {tx.status === 'voided' && (
         <div className="flex items-center gap-2 text-xs font-semibold text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-900/20 border border-rose-200 dark:border-rose-900/40 rounded-lg px-3 py-2">
           VOIDED{tx.voidedAt ? ` · ${new Date(tx.voidedAt).toLocaleString()}` : ''} — stock and devices were reversed; the record is kept for history.
+          {collectedOnSale(tx) >= 0.005 && ` Refunded from ${refundSourceLabel(impliedRefundSplits(tx))}.`}
         </div>
       )}
       {tx.status === 'returned' && (
         <div className="text-xs font-semibold text-amber-800 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-900/40 rounded-lg px-3 py-2">
-          RETURNED{tx.returnedAt ? ` · ${new Date(tx.returnedAt).toLocaleString()}` : ''} — refunded {money(tx.refundAmount || 0)}{tx.restockingFee ? ` (restocking fee ${money(tx.restockingFee)})` : ''}. Kept for history.
+          RETURNED{tx.returnedAt ? ` · ${new Date(tx.returnedAt).toLocaleString()}` : ''} — refunded {money(tx.refundAmount || 0)}{tx.restockingFee ? ` (restocking fee ${money(tx.restockingFee)})` : ''}
+          {(tx.refundAmount || 0) >= 0.005 ? ` from ${refundSourceLabel(impliedRefundSplits(tx))}` : ''}. Kept for history.
         </div>
       )}
       <Row label="Date" value={tx.date} />
@@ -642,25 +651,130 @@ const InvoiceModal: React.FC<{ tx: SalesTransaction; customer: Customer; canView
           <Star className="w-4 h-4" /> Request Review
         </button>
       )}
-      {onVoid && (
-        <div className="pt-2 mt-1 border-t border-slate-100 dark:border-slate-800">
-          <button
-            onClick={() => { if (window.confirm(isLayawayTx ? `Cancel this layaway? The reserved device(s) return to sellable stock and the ${money(collectedOnSale(tx))} deposit already collected is refunded — never the full ${money(tx.totalPaid)} sale price, since the rest was never paid. Kept for history, labeled as a layaway cancellation.` : 'Void this sale? Sold devices return to stock, accessory quantities are restored, and the sale is flagged voided (kept for history).')) onVoid(); }}
-            className="w-full flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium bg-rose-50 dark:bg-rose-900/20 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-900/40 hover:bg-rose-100 dark:hover:bg-rose-900/30">
-            <Ban className="w-4 h-4" /> {isLayawayTx ? 'Cancel Layaway' : 'Void Sale'}
-          </button>
-        </div>
-      )}
-      {onReturn && <ReturnSection total={collectedOnSale(tx)} isLayaway={isLayawayTx} fullTotal={tx.totalPaid} onReturn={onReturn} defaultFeePercent={defaultRestockingFeePercent} />}
+      {onVoid && <VoidSection tx={tx} isLayaway={isLayawayTx} onVoid={onVoid} />}
+      {onReturn && <ReturnSection tx={tx} total={collectedOnSale(tx)} isLayaway={isLayawayTx} fullTotal={tx.totalPaid} onReturn={onReturn} defaultFeePercent={defaultRestockingFeePercent} />}
     </div>
   </Modal>
+  );
+};
+
+/* ---------------- Refund source ---------------- */
+//
+// "Refunded from" — where the money actually went back from. Before this
+// existed the app just assumed the refund reversed the sale's own payment,
+// so there was no way to record refunding out of the owner's own pocket, or
+// refunding a card sale in cash from the till. Both left the drawer wrong.
+//
+// Single-source by default (pre-selected from how the sale was paid). A
+// mixed-payment sale can be split across sources, and the amounts must add up
+// to the refund — validated with the same rule as the checkout's own mixed
+// payment (domain/pos.ts's refundSplitsValid).
+const RefundSourcePicker: React.FC<{
+  total: number;
+  splits: RefundSplit[];
+  onChange: (next: RefundSplit[]) => void;
+  allowSplit: boolean;
+}> = ({ total, splits, onChange, allowSplit }) => {
+  const isSplit = splits.length > 1;
+  const validation = refundSplitsValid(splits, total);
+  const money2 = (n: number) => (Math.round(n * 100) / 100).toFixed(2);
+
+  // Collapsing back to one source hands the whole refund to the first one, so
+  // the single-source case is always balanced by construction.
+  const setSingle = (paidFrom: RefundPaidFrom) => onChange([{ paidFrom, amount: total }]);
+  const setRow = (i: number, patch: Partial<RefundSplit>) =>
+    onChange(splits.map((s, n) => (n === i ? { ...s, ...patch } : s)));
+
+  if (total < 0.005) return null;
+
+  return (
+    <div className="space-y-1.5">
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Refunded from</p>
+      {!isSplit ? (
+        <select value={splits[0]?.paidFrom || 'store_cash'} onChange={e => setSingle(e.target.value as RefundPaidFrom)}
+          className="w-full px-2 py-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md text-sm text-slate-700 dark:text-slate-200">
+          {REFUND_PAID_FROM_OPTIONS.map(v => <option key={v} value={v}>{REFUND_PAID_FROM_LABEL[v]}</option>)}
+        </select>
+      ) : (
+        <div className="space-y-1.5">
+          {splits.map((s, i) => (
+            <div key={i} className="flex items-center gap-2">
+              <select value={s.paidFrom} onChange={e => setRow(i, { paidFrom: e.target.value as RefundPaidFrom })}
+                className="flex-1 px-2 py-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md text-sm text-slate-700 dark:text-slate-200">
+                {REFUND_PAID_FROM_OPTIONS.map(v => <option key={v} value={v}>{REFUND_PAID_FROM_LABEL[v]}</option>)}
+              </select>
+              <span className="flex items-center gap-1 text-sm">$<input type="number" min="0" step="0.01" value={s.amount}
+                onChange={e => setRow(i, { amount: parseFloat(e.target.value) || 0 })} onFocus={selectOnFocus}
+                className="w-24 px-2 py-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md text-right text-sm" /></span>
+              {splits.length > 1 && (
+                <button onClick={() => onChange(splits.filter((_, n) => n !== i))} title="Remove this source"
+                  className="p-1 text-slate-400 hover:text-rose-500"><X className="w-3.5 h-3.5" /></button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="flex items-center justify-between">
+        {allowSplit && (
+          <button
+            onClick={() => (isSplit
+              ? setSingle(splits[0]?.paidFrom || 'store_cash')
+              : onChange([{ paidFrom: splits[0]?.paidFrom || 'store_cash', amount: total }, { paidFrom: 'card', amount: 0 }]))}
+            className="text-[11px] font-medium text-indigo-600 dark:text-indigo-400 hover:underline">
+            {isSplit ? 'Use a single source' : 'Split across sources'}
+          </button>
+        )}
+        {isSplit && (
+          <button onClick={() => onChange([...splits, { paidFrom: 'other', amount: 0 }])}
+            className="text-[11px] font-medium text-indigo-600 dark:text-indigo-400 hover:underline ml-auto">+ Add source</button>
+        )}
+      </div>
+      {!validation.valid && <p className="text-[11px] text-rose-600 dark:text-rose-400">{validation.error}</p>}
+      {isSplit && validation.valid && (
+        <p className="text-[11px] text-slate-400">Adds up to ${money2(validation.total)} — the full refund.</p>
+      )}
+      {splits.some(s => s.paidFrom === 'store_cash') && (
+        <p className="text-[11px] text-slate-400">
+          ${money2(splits.filter(s => s.paidFrom === 'store_cash').reduce((n, s) => n + Math.max(0, s.amount || 0), 0))} comes out of today's cash drawer. Other sources don't touch it.
+        </p>
+      )}
+    </div>
+  );
+};
+
+// Void, with its refund source. Void used to be a bare button behind a
+// window.confirm; it needs a panel now because the source has to be chosen
+// before the money moves.
+const VoidSection: React.FC<{
+  tx: SalesTransaction; isLayaway: boolean; onVoid: (opts: { refundSplits: RefundSplit[] }) => void;
+}> = ({ tx, isLayaway, onVoid }) => {
+  const total = collectedOnSale(tx);
+  const [splits, setSplits] = useState<RefundSplit[]>(() => defaultRefundSplits(tx, total));
+  const validation = refundSplitsValid(splits, total);
+  const submit = () => {
+    if (!validation.valid) return;
+    const where = total >= 0.005 ? ` Refunded from ${refundSourceLabel(splits)}.` : '';
+    const msg = isLayaway
+      ? `Cancel this layaway? The reserved device(s) return to sellable stock and the ${money(total)} deposit already collected is refunded — never the full ${money(tx.totalPaid)} sale price, since the rest was never paid.${where} Kept for history, labeled as a layaway cancellation.`
+      : `Void this sale? Sold devices return to stock, accessory quantities are restored, and the sale is flagged voided (kept for history).${where}`;
+    if (!window.confirm(msg)) return;
+    onVoid({ refundSplits: splits });
+  };
+  return (
+    <div className="pt-3 mt-1 border-t border-slate-100 dark:border-slate-800 space-y-2">
+      <RefundSourcePicker total={total} splits={splits} onChange={setSplits} allowSplit />
+      <button onClick={submit} disabled={!validation.valid}
+        className="w-full flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium bg-rose-50 dark:bg-rose-900/20 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-900/40 hover:bg-rose-100 dark:hover:bg-rose-900/30 disabled:opacity-40">
+        <Ban className="w-4 h-4" /> {isLayaway ? 'Cancel Layaway' : 'Void Sale'}
+      </button>
+    </div>
   );
 };
 
 /* ---------------- Return processing ---------------- */
 // Restocking fee (optional) + device disposition, then confirm. Refund is the
 // sale total minus the fee; the fee is clamped so the refund never goes negative.
-const ReturnSection: React.FC<{ total: number; isLayaway?: boolean; fullTotal?: number; onReturn: (opts: { restockingFee?: number; disposition: ReturnDisposition }) => void; defaultFeePercent?: number }> = ({ total, isLayaway, fullTotal, onReturn, defaultFeePercent }) => {
+const ReturnSection: React.FC<{ tx: SalesTransaction; total: number; isLayaway?: boolean; fullTotal?: number; onReturn: (opts: { restockingFee?: number; disposition: ReturnDisposition; refundSplits: RefundSplit[] }) => void; defaultFeePercent?: number }> = ({ tx, total, isLayaway, fullTotal, onReturn, defaultFeePercent }) => {
   // Pre-fill the configured default restocking fee (a % of the sale total), still
   // fully editable per return. `total` is what was actually COLLECTED (the
   // deposit + any balance payments for an open layaway, domain/pos.ts's
@@ -671,12 +785,26 @@ const ReturnSection: React.FC<{ total: number; isLayaway?: boolean; fullTotal?: 
   const [disposition, setDisposition] = useState<ReturnDisposition>('resell');
   const feeNum = Math.min(Math.max(parseFloat(fee) || 0, 0), Math.max(0, total));
   const refund = Math.max(0, Math.round((total - feeNum) * 100) / 100);
+  // The refund source follows the refund amount: editing the restocking fee
+  // changes what is being handed back, so a single-source choice is re-sized
+  // to match rather than silently going out of balance. A user-built SPLIT is
+  // left alone — re-apportioning someone's own split would be worse than
+  // showing them it no longer adds up.
+  const [splits, setSplits] = useState<RefundSplit[]>(() => defaultRefundSplits(tx, refund));
+  const [sizedFor, setSizedFor] = useState(refund);
+  if (sizedFor !== refund) {
+    setSizedFor(refund);
+    if (splits.length <= 1) setSplits([{ paidFrom: splits[0]?.paidFrom || 'store_cash', amount: refund }]);
+  }
+  const validation = refundSplitsValid(splits, refund);
   const submit = () => {
+    if (!validation.valid) return;
     const msg = isLayaway
       ? `Cancel this layaway? Refund ${money(refund)}${feeNum > 0 ? ` (after a ${money(feeNum)} restocking fee)` : ''} — the deposit collected so far, never the full ${money(fullTotal || total)} sale price. ${disposition === 'resell' ? 'The reserved device returns to sellable stock' : 'The device is marked not-for-resale'}; accessory stock is restored. Labeled as a layaway cancellation, kept for history.`
       : `Process this return? Refund ${money(refund)}${feeNum > 0 ? ` (after a ${money(feeNum)} restocking fee)` : ''}. ${disposition === 'resell' ? 'Device(s) return to sellable stock' : 'Device(s) are marked not-for-resale'}; accessory stock is restored. The sale is flagged returned (kept for history).`;
-    if (!window.confirm(msg)) return;
-    onReturn({ restockingFee: feeNum > 0 ? feeNum : undefined, disposition });
+    const where = refund >= 0.005 ? ` Refunded from ${refundSourceLabel(splits)}.` : '';
+    if (!window.confirm(msg + where)) return;
+    onReturn({ restockingFee: feeNum > 0 ? feeNum : undefined, disposition, refundSplits: splits });
   };
   return (
     <div className="pt-3 mt-1 border-t border-slate-100 dark:border-slate-800 space-y-2">
@@ -687,6 +815,7 @@ const ReturnSection: React.FC<{ total: number; isLayaway?: boolean; fullTotal?: 
           className="w-24 px-2 py-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md text-right text-sm focus:outline-none focus:ring-2 focus:ring-amber-500" /></span>
       </label>
       <div className="flex items-center justify-between text-sm"><span className="text-slate-400">Refund amount</span><span className="font-bold text-slate-800 dark:text-slate-100">{money(refund)}</span></div>
+      <RefundSourcePicker total={refund} splits={splits} onChange={setSplits} allowSplit />
       <div className="grid grid-cols-2 gap-2 pt-1">
         {([['resell', 'Return to stock'], ['defective', 'Not for resale']] as [ReturnDisposition, string][]).map(([val, label]) => (
           <button key={val} onClick={() => setDisposition(val)}
@@ -695,8 +824,8 @@ const ReturnSection: React.FC<{ total: number; isLayaway?: boolean; fullTotal?: 
           </button>
         ))}
       </div>
-      <button onClick={submit}
-        className="w-full flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium bg-amber-500 hover:bg-amber-600 text-white">
+      <button onClick={submit} disabled={!validation.valid}
+        className="w-full flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium bg-amber-500 hover:bg-amber-600 disabled:opacity-40 text-white">
         <RotateCcw className="w-4 h-4" /> Process Return · refund {money(refund)}
       </button>
     </div>

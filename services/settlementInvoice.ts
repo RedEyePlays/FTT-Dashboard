@@ -115,6 +115,7 @@ export function settlementInvoiceHtml(
       <div class="sub">Device Buyer Settlement Invoice — ${esc(settlement.id)}</div>
       <div class="row"><span class="k">Device buyer</span><span class="b">${esc(buyer?.name || 'Unknown')}</span></div>
       <div class="row"><span class="k">Settlement date</span><span>${esc(settlement.date)}</span></div>
+      ${settlement.periodEnd ? `<div class="row"><span class="k">Week ending</span><span>${esc(settlement.periodEnd)}</span></div>` : ''}
       <div class="row"><span class="k">Settlement ID</span><span>${esc(settlement.id)}</span></div>
       <div class="row"><span class="k">Payment method</span><span>${esc(PAYMENT_LABEL[method])}</span></div>
       <h3>Devices (${devices.length})</h3>

@@ -1,4 +1,5 @@
 import { DropOff, PaidBy, Settlement, SettlementLineAdjustment, SettlementPaymentMethod } from '../types';
+import { weekEndingSaturday } from './dates';
 
 const round2 = (n: number): number => Math.round((n || 0) * 100) / 100;
 const money2 = (n: number): string => `$${n.toFixed(2)}`;
@@ -152,6 +153,61 @@ export function settleableDropOffs(buyerId: string, dropOffs: DropOff[]): DropOf
   return dropOffs.filter(d =>
     d.buyerId === buyerId && (d.status === 'accepted' || d.status === 'paidout')
   );
+}
+
+// One settlement week's worth of a buyer's pending drop-offs.
+export interface SettlementWeek {
+  weekEnding: string;    // the Saturday that closes this week, YYYY-MM-DD
+  dropOffs: DropOff[];   // pending drop-offs dropped in that week, oldest first
+  totals: SettlementTotals;
+}
+
+/**
+ * A buyer's pending drop-offs grouped into the settlement weeks they were
+ * dropped in (week ending Saturday, on `dateDropped`).
+ *
+ * THE PROBLEM THIS SOLVES: `settleableDropOffs` returns every unsettled
+ * drop-off for a buyer with no notion of when it arrived, so a Saturday that
+ * got missed simply piled onto the next one. There was no way to settle last
+ * week now and this week on Saturday, or even to see that two weeks were
+ * tangled together in the one "pending" list.
+ *
+ * Weeks are returned OLDEST FIRST, because the missed week is the one that
+ * needs settling and it should be the one at the top. Drop-offs within a week
+ * keep the same oldest-first order.
+ *
+ * A drop-off with no `dateDropped` is not silently dropped — it is grouped
+ * under the empty-string key and sorts ahead of every dated week, so it stays
+ * visible and settleable rather than disappearing from the list entirely.
+ */
+export function groupSettleableByWeek(dropOffs: DropOff[]): SettlementWeek[] {
+  const byWeek = new Map<string, DropOff[]>();
+  for (const d of dropOffs) {
+    const key = d.dateDropped ? weekEndingSaturday(d.dateDropped) : '';
+    const list = byWeek.get(key);
+    if (list) list.push(d); else byWeek.set(key, [d]);
+  }
+  return [...byWeek.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([weekEnding, list]) => {
+      const sorted = [...list].sort((a, b) => (a.dateDropped || '').localeCompare(b.dateDropped || ''));
+      return { weekEnding, dropOffs: sorted, totals: settlementTotals(sorted) };
+    });
+}
+
+/**
+ * The week the "Settlement for week ending" picker starts on: the MOST RECENT
+ * Saturday that has pending devices — the week you are normally settling.
+ * Older weeks are still right there above it in the list, each with its own
+ * "Settle this week" action, so a missed one is one click away rather than
+ * being the default.
+ *
+ * Empty string when nothing is pending, or when the only pending drop-offs
+ * carry no date (the '' bucket) — there is no Saturday to name for those.
+ */
+export function defaultSettlementWeek(weeks: SettlementWeek[]): string {
+  const dated = weeks.filter(w => !!w.weekEnding);
+  return dated.length ? dated[dated.length - 1].weekEnding : '';
 }
 
 /* ---------------- Pre-settlement review (editable) ---------------- */
@@ -439,7 +495,7 @@ export function withResolvedBuyerId<T extends { buyerId: string }>(raw: any): T 
 // corrected-model record from a pre-rework one. The legacy
 // totalPurchaseFronted/amountPaid fields are deliberately NOT written.
 export function buildSettlementFromReview(
-  base: { id: string; buyerId: string; date: string; paymentMethod: SettlementPaymentMethod; notes: string },
+  base: { id: string; buyerId: string; date: string; periodEnd?: string; paymentMethod: SettlementPaymentMethod; notes: string },
   dropOffs: DropOff[],
   lines: SettlementReviewLine[],
   adjustmentAmount: number,
@@ -450,6 +506,9 @@ export function buildSettlementFromReview(
   const trimmedNote = (adjustmentNote || '').trim();
   return {
     ...base,
+    // Only stored when a week was actually chosen — an absent periodEnd reads
+    // the same as every pre-weeks settlement rather than claiming a week.
+    periodEnd: base.periodEnd || undefined,
     model: 'financing',
     dropOffIds: lines.filter(l => l.included).map(l => l.dropOffId),
     principalStoreFunded: totals.principalStoreFunded,

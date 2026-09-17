@@ -3,8 +3,8 @@ import {
   Truck, Users, CalendarCheck, Plus, X, Trash2, Phone, User, Package,
   CheckCircle, XCircle, Wallet, ClipboardList, FileText, QrCode, Pencil,
 } from 'lucide-react';
-import { DeviceBuyer, DropOff, DropOffStatus, PaidBy, Settlement, SettlementPaymentMethod } from '../types';
-import { deviceBuyerOutstanding, settleableDropOffs, settlementTotals, SettlementReviewLine, buildSettlementFromReview, settlementOwedLabel, isLegacySettlement, LEGACY_SETTLEMENT_NOTE, dropOffOwed, PAID_BY_LABEL } from '../domain/dropoffs';
+import { CashReconciliation, DeviceBuyer, DropOff, DropOffStatus, PaidBy, Settlement, SettlementPaymentMethod } from '../types';
+import { deviceBuyerOutstanding, settleableDropOffs, settlementTotals, SettlementReviewLine, buildSettlementFromReview, settlementOwedLabel, isLegacySettlement, LEGACY_SETTLEMENT_NOTE, dropOffOwed, PAID_BY_LABEL, groupSettleableByWeek, defaultSettlementWeek, SettlementWeek } from '../domain/dropoffs';
 import { formatPhoneInput } from '../domain/phone';
 import { printSettlementInvoice } from '../services/settlementInvoice';
 import { dropOffLabelContent, printDropOffLabels } from '../services/dropOffLabel';
@@ -12,7 +12,7 @@ import { selectedLabelMedia } from '../services/labelLayout';
 import { getStoreProfile, getLabelSizes, getLabelSpacing } from './SettingsModal';
 import { SettlementReviewModal } from './SettlementReviewModal';
 import { useEscapeKey } from '../hooks/useEscapeKey';
-import { todayISO } from '../domain/dates';
+import { todayISO, weekEndingSaturday } from '../domain/dates';
 import { useSubmitGuard, useKeyedSubmitGuard } from '../hooks/useSubmitGuard';
 
 interface Props {
@@ -23,7 +23,10 @@ interface Props {
   onDropOffsChange: (d: DropOff[]) => void;
   // Records one completed settlement (writes the record, marks its drop-offs
   // settled, and — for a cash payment only — logs the cash-drawer effect).
-  onSettle: (settlement: Settlement) => void;
+  onSettle: (settlement: Settlement, opts?: { cashDate?: string }) => void;
+  // Read-only: used to warn before a BACKDATED settlement's cash entry lands
+  // on a day that has already been counted and closed.
+  cashReconciliations?: CashReconciliation[];
   // Whether this user may print drop-off device labels. Those labels carry the
   // purchase price and the service fee, so printing is gated to the same
   // permission that already exposes drop-off financials (services/
@@ -73,7 +76,7 @@ const STATUS_META: Record<DropOffStatus, { label: string; cls: string }> = {
 
 export const DropOffView: React.FC<Props> = ({
   deviceBuyers, dropOffs, settlements, onDeviceBuyersChange, onDropOffsChange, onSettle,
-  canPrintLabels = false,
+  cashReconciliations, canPrintLabels = false,
 }) => {
   const [tab, setTab] = useState<'entries' | 'deviceBuyers' | 'settlement'>('entries');
 
@@ -112,7 +115,7 @@ export const DropOffView: React.FC<Props> = ({
         <DeviceBuyersTab deviceBuyers={deviceBuyers} dropOffs={dropOffs} onDeviceBuyersChange={onDeviceBuyersChange} canPrintLabels={canPrintLabels} />
       )}
       {tab === 'settlement' && (
-        <SettlementTab deviceBuyers={deviceBuyers} dropOffs={dropOffs} settlements={settlements} onSettle={onSettle} />
+        <SettlementTab deviceBuyers={deviceBuyers} dropOffs={dropOffs} settlements={settlements} onSettle={onSettle} cashReconciliations={cashReconciliations} />
       )}
     </div>
   );
@@ -461,11 +464,22 @@ const PAYMENT_METHODS: { value: SettlementPaymentMethod; label: string }[] = [
 
 const SettlementTab: React.FC<{
   deviceBuyers: DeviceBuyer[]; dropOffs: DropOff[]; settlements: Settlement[];
-  onSettle: (settlement: Settlement) => void;
-}> = ({ deviceBuyers, dropOffs, settlements, onSettle }) => {
+  onSettle: (settlement: Settlement, opts?: { cashDate?: string }) => void;
+  cashReconciliations?: CashReconciliation[];
+}> = ({ deviceBuyers, dropOffs, settlements, onSettle, cashReconciliations }) => {
   const [buyerId, setBuyerId] = useState(deviceBuyers[0]?.id || '');
   const [notes, setNotes] = useState('');
   const [paymentMethod, setPaymentMethod] = useState<SettlementPaymentMethod>('cash');
+  // Which weeks this run covers. Empty = every pending week (the old
+  // behaviour, now an explicit choice rather than the only option).
+  const [weekFilter, setWeekFilter] = useState<string>('');
+  // The week this settlement is FOR, and the day it is actually being done —
+  // two different facts once a Saturday has been missed.
+  const [periodEnd, setPeriodEnd] = useState('');
+  const [settledOn, setSettledOn] = useState(today());
+  // The day the cash physically changed hands, which drives which drawer
+  // record the cash-in lands on.
+  const [cashDate, setCashDate] = useState(today());
   // A double-tap on "Confirm Settlement" (in the review modal) before
   // `dropOffs` reflects the first settlement (async — the live subscription
   // hasn't refreshed yet) would otherwise settle — and pay — the same device buyer
@@ -482,9 +496,34 @@ const SettlementTab: React.FC<{
   const [reviewSettlementId, setReviewSettlementId] = useState('');
   const storeName = getStoreProfile().storeName;
 
-  // Settle everything accepted/paid-out & not yet settled/rejected for this device buyer
-  const pending = settleableDropOffs(buyerId, dropOffs);
+  // Everything accepted/paid-out & not yet settled/rejected for this buyer,
+  // grouped into the settlement weeks it was dropped in. Before this the
+  // pending list lumped every date together, so a missed Saturday simply
+  // piled onto the next one with no way to see it or settle it separately.
+  const allPending = settleableDropOffs(buyerId, dropOffs);
+  const weeks = groupSettleableByWeek(allPending);
+  // What this run actually covers: one chosen week, or all of them.
+  const pending = weekFilter
+    ? (weeks.find(w => w.weekEnding === weekFilter)?.dropOffs || [])
+    : allPending;
   const totals = settlementTotals(pending);
+
+  // Reset the week/date fields whenever the buyer changes — another buyer's
+  // weeks have nothing to do with this one's.
+  const [loadedBuyer, setLoadedBuyer] = useState<string | null>(null);
+  if (loadedBuyer !== buyerId) {
+    setLoadedBuyer(buyerId);
+    setWeekFilter('');
+    setPeriodEnd(defaultSettlementWeek(groupSettleableByWeek(settleableDropOffs(buyerId, dropOffs))));
+    setSettledOn(today());
+    setCashDate(today());
+  }
+
+  // Backdating the cash to a day that was already counted and closed changes
+  // that day's expected cash after the fact. Allowed — sometimes it is simply
+  // what happened — but never silently.
+  const cashDayClosed = !!cashReconciliations?.find(r => r.date === cashDate)?.reconciledAt;
+  const touchesDrawer = paymentMethod === 'cash' && Math.abs(totals.storeCashIn) >= 0.005;
 
   const openReview = () => {
     if (pending.length === 0) return;
@@ -492,10 +531,23 @@ const SettlementTab: React.FC<{
     setReviewing(true);
   };
 
+  // Settle one week straight from its section: scope the run to that week and
+  // pre-fill the week-ending field with it, then open the usual review screen
+  // so nothing skips the check-and-confirm step.
+  const settleWeek = (w: SettlementWeek) => {
+    setWeekFilter(w.weekEnding);
+    if (w.weekEnding) setPeriodEnd(w.weekEnding);
+    setReviewSettlementId(uid());
+    setReviewing(true);
+  };
+
   const confirmSettlement = (lines: SettlementReviewLine[], adjustmentAmount: number, adjustmentNote: string) => {
+    if (touchesDrawer && cashDayClosed && !window.confirm(
+      `${cashDate} has already been counted and closed.\n\nLogging this settlement's cash against it will CHANGE that closed day's expected cash, and the day will no longer match the count that was signed off on it.\n\nContinue?`,
+    )) return;
     run(() => {
       const settlement = buildSettlementFromReview(
-        { id: reviewSettlementId, buyerId, date: today(), paymentMethod, notes },
+        { id: reviewSettlementId, buyerId, date: settledOn, periodEnd: periodEnd || undefined, paymentMethod, notes },
         pending, lines, adjustmentAmount, adjustmentNote,
       );
       // onSettle (App.tsx's handleSettleDeviceBuyer → services/firestoreDb.ts's
@@ -507,9 +559,12 @@ const SettlementTab: React.FC<{
       // simply never in dropOffIds, so it's untouched by this batch and stays
       // eligible for a later settlement. The live subscription refreshes
       // `dropOffs` once the batch commits, same as every other write in this app.
-      onSettle(settlement);
+      onSettle(settlement, { cashDate });
       setNotes('');
       setReviewing(false);
+      // Back to "all weeks" so the next run starts from whatever is still
+      // pending — which, after settling a missed week, is this week.
+      setWeekFilter('');
     });
   };
 
@@ -537,15 +592,50 @@ const SettlementTab: React.FC<{
           </select>
         </div>
 
-        <div className="border border-slate-100 dark:border-slate-800 rounded-xl divide-y divide-slate-100 dark:divide-slate-800 max-h-56 overflow-y-auto">
-          {pending.length === 0 && <p className="text-slate-400 text-sm text-center py-6">Nothing pending to settle.</p>}
-          {pending.map(d => (
-            <div key={d.id} className="flex items-center justify-between px-3 py-2 text-sm">
-              <div className="min-w-0">
-                <p className="text-slate-700 dark:text-slate-200 truncate">{d.item}</p>
-                <p className="text-[11px] text-slate-400">{PAID_BY_LABEL[d.paidBy] || 'Store-funded'} · service fee {money(d.dropOffFee)}</p>
+        {/* Pending devices, one section per settlement week (oldest first, so
+            a missed Saturday is at the top rather than buried under this
+            week's). Each week can be settled on its own; "All weeks" is the
+            old all-at-once behaviour, now an explicit choice. */}
+        {weeks.length > 1 && (
+          <div className="flex flex-wrap gap-1.5">
+            <button onClick={() => setWeekFilter('')}
+              className={`px-2.5 py-1 rounded-full text-xs font-medium border ${!weekFilter ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700'}`}>
+              All weeks ({allPending.length})
+            </button>
+            {weeks.map(w => (
+              <button key={w.weekEnding || 'undated'} onClick={() => { setWeekFilter(w.weekEnding); if (w.weekEnding) setPeriodEnd(w.weekEnding); }}
+                className={`px-2.5 py-1 rounded-full text-xs font-medium border ${weekFilter === w.weekEnding ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700'}`}>
+                {w.weekEnding ? `Week ending ${w.weekEnding}` : 'No date'} ({w.dropOffs.length})
+              </button>
+            ))}
+          </div>
+        )}
+
+        <div className="border border-slate-100 dark:border-slate-800 rounded-xl divide-y divide-slate-100 dark:divide-slate-800 max-h-72 overflow-y-auto">
+          {allPending.length === 0 && <p className="text-slate-400 text-sm text-center py-6">Nothing pending to settle.</p>}
+          {weeks.filter(w => !weekFilter || w.weekEnding === weekFilter).map(w => (
+            <div key={w.weekEnding || 'undated'}>
+              <div className="flex items-center justify-between gap-2 px-3 py-1.5 bg-slate-50 dark:bg-slate-800/60 sticky top-0">
+                <div className="min-w-0">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400 truncate">
+                    {w.weekEnding ? `Week ending ${w.weekEnding}` : 'No drop-off date recorded'}
+                  </p>
+                  <p className="text-[11px] text-slate-400">{w.dropOffs.length} device{w.dropOffs.length !== 1 ? 's' : ''} · {money(w.totals.totalOwed)} owed</p>
+                </div>
+                <button onClick={() => settleWeek(w)} disabled={isSubmitting}
+                  className="shrink-0 px-2 py-1 rounded-md text-[11px] font-semibold border border-indigo-200 dark:border-indigo-800 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 disabled:opacity-40">
+                  Settle this week
+                </button>
               </div>
-              <span className="text-slate-500 dark:text-slate-400">{money(d.purchasePrice)}</span>
+              {w.dropOffs.map(d => (
+                <div key={d.id} className="flex items-center justify-between px-3 py-2 text-sm">
+                  <div className="min-w-0">
+                    <p className="text-slate-700 dark:text-slate-200 truncate">{d.item}</p>
+                    <p className="text-[11px] text-slate-400">{d.dateDropped || 'no date'} · {PAID_BY_LABEL[d.paidBy] || 'Store-funded'} · service fee {money(d.dropOffFee)}</p>
+                  </div>
+                  <span className="text-slate-500 dark:text-slate-400">{money(d.purchasePrice)}</span>
+                </div>
+              ))}
             </div>
           ))}
         </div>
@@ -575,8 +665,37 @@ const SettlementTab: React.FC<{
             ))}
           </div>
           {paymentMethod === 'cash'
-            ? <p className="text-[11px] text-slate-400 mt-1">Adds {money(totals.storeCashIn)} to today's expected cash drawer total (collected from the buyer).</p>
+            ? <p className="text-[11px] text-slate-400 mt-1">Adds {money(totals.storeCashIn)} to the expected cash drawer total for {cashDate === today() ? 'today' : cashDate} (collected from the buyer).</p>
             : <p className="text-[11px] text-slate-400 mt-1">Does not touch the cash drawer.</p>}
+        </div>
+
+        {/* Three dates, because a missed Saturday makes them genuinely
+            different: which week this covers, when it was settled, and when
+            the money actually changed hands. */}
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Settlement for week ending</label>
+            <input type="date" value={periodEnd} onChange={e => setPeriodEnd(e.target.value ? weekEndingSaturday(e.target.value) : '')}
+              className="w-full p-2 bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-md text-sm" />
+            <p className="text-[11px] text-slate-400 mt-0.5">Any day in the week works — it snaps to that week's Saturday.</p>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Date settled</label>
+            <input type="date" value={settledOn} max={today()} onChange={e => setSettledOn(e.target.value)}
+              className="w-full p-2 bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-md text-sm" />
+          </div>
+          {paymentMethod === 'cash' && (
+            <div className="col-span-2">
+              <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Cash collected on</label>
+              <input type="date" value={cashDate} max={today()} onChange={e => setCashDate(e.target.value)}
+                className="w-full p-2 bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-md text-sm" />
+              {touchesDrawer && cashDayClosed && (
+                <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-1">
+                  {cashDate} has already been counted and closed. Logging this cash against it will change that closed day's expected cash — you'll be asked to confirm.
+                </p>
+              )}
+            </div>
+          )}
         </div>
 
         <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={2} placeholder="Settlement notes…"
@@ -596,7 +715,7 @@ const SettlementTab: React.FC<{
           {history.map(s => (
             <div key={s.id} className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-4">
               <div className="flex items-center justify-between">
-                <p className="text-sm font-medium text-slate-700 dark:text-slate-200">{s.date}</p>
+                <p className="text-sm font-medium text-slate-700 dark:text-slate-200">{s.date}{s.periodEnd ? <span className="text-xs font-normal text-slate-400"> · week ending {s.periodEnd}</span> : null}</p>
                 <span className="font-bold text-emerald-600">{money(isLegacySettlement(s) ? (s.amountPaid || 0) : (s.amountOwed || 0))}</span>
               </div>
               {/* Pre-rework settlements are displayed exactly as they were
@@ -635,7 +754,8 @@ const SettlementTab: React.FC<{
           buyer={reviewBuyer}
           dropOffs={pending}
           settlementId={reviewSettlementId}
-          date={today()}
+          date={settledOn}
+          periodEnd={periodEnd}
           paymentMethod={paymentMethod}
           notes={notes}
           storeName={storeName}

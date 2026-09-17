@@ -144,3 +144,72 @@ describe('cashDrawerSummary — the till is continuous across midnight', () => {
     expect(d.opened).toBe(true);       // still open — nobody closed it
   });
 });
+
+/* ---------------- A bare record must not hide the real drawer ---------------- */
+//
+// Investigated as part of the "drawer randomly closing" report, and real.
+//
+// The carry-over used to look at the single most recent PRIOR record and
+// bail if that record was bare. But bare records get written by paths that
+// touch a date without anyone running a till: a void/return refund cash-out,
+// a device-buyer settlement's cash-in. So a drawer opened Friday and never
+// closed, followed by a bare Saturday record, made Monday read as "never
+// opened" with a $0 float — the till's cash AND its open state both vanished.
+describe('a bare record cannot hide an older open drawer behind it', () => {
+  // Never opened, never counted, no float — written by some other cash path.
+  const bareDay = (date: string, cashOut?: number) =>
+    recon({ date, expectedCash: -(cashOut || 0), cashOut: cashOut ? [{ id: 'x', amount: cashOut }] : undefined });
+
+  it('looks PAST a bare day to the open drawer behind it', () => {
+    const carry = drawerCarryOver([openDay('2026-03-13', 940), bareDay('2026-03-14', 50)], '2026-03-16');
+    expect(carry).not.toBeNull();
+    expect(carry!.fromDate).toBe('2026-03-13');
+    expect(carry!.float).toBe(940);
+    expect(carry!.stillOpen).toBe(true);
+  });
+
+  it('the day after a bare record therefore still reads as OPEN, not closed', () => {
+    // This is the symptom: without the skip, `opened` came back false and the
+    // register looked shut mid-shift.
+    const recs = [openDay('2026-03-13', 940), bareDay('2026-03-14', 50)];
+    const summary = cashDrawerSummary(undefined, 0, drawerCarryOver(recs, '2026-03-16'));
+    expect(summary.opened).toBe(true);
+    expect(summary.openingFloat).toBe(940);
+  });
+
+  it('skips SEVERAL bare days in a row', () => {
+    const carry = drawerCarryOver(
+      [openDay('2026-03-13', 940), bareDay('2026-03-14'), bareDay('2026-03-15')],
+      '2026-03-16',
+    );
+    expect(carry!.fromDate).toBe('2026-03-13');
+    expect(carry!.float).toBe(940);
+  });
+
+  it('still returns null when every prior day is bare — there is genuinely no till', () => {
+    expect(drawerCarryOver([bareDay('2026-03-14'), bareDay('2026-03-15')], '2026-03-16')).toBeNull();
+  });
+
+  it('a real CLOSED day behind a bare one correctly reads as closed, not open', () => {
+    // The skip must not turn every carried day into an open one — it looks
+    // for the real drawer and then reports that drawer honestly.
+    const carry = drawerCarryOver([closedDay('2026-03-13', 500), bareDay('2026-03-14')], '2026-03-16');
+    expect(carry!.fromDate).toBe('2026-03-13');
+    expect(carry!.float).toBe(500);
+    expect(carry!.stillOpen).toBe(false);
+  });
+
+  it('a nearer REAL day still wins over an older one — only bare days are skipped', () => {
+    const carry = drawerCarryOver([openDay('2026-03-12', 940), closedDay('2026-03-14', 300)], '2026-03-16');
+    expect(carry!.fromDate).toBe('2026-03-14');
+    expect(carry!.float).toBe(300);
+  });
+
+  it('a day counted at exactly $0 is a real count, and stops the search there', () => {
+    const emptied = recon({ date: '2026-03-14', openedAt: 1, countedCash: 0, expectedCash: 0, reconciledAt: 2 });
+    const carry = drawerCarryOver([openDay('2026-03-13', 940), emptied], '2026-03-16');
+    expect(carry!.fromDate).toBe('2026-03-14');
+    expect(carry!.float).toBe(0);
+    expect(carry!.stillOpen).toBe(false);
+  });
+});

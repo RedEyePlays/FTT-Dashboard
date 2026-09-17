@@ -55,6 +55,25 @@ export function isoDateToMs(ymd: string): number {
   return Number.isNaN(t) ? 0 : t;
 }
 
+/**
+ * The SATURDAY that ends the settlement week a local date falls in.
+ *
+ * The shop settles with its device buyers on Saturdays, so a week runs Sunday
+ * → Saturday and every drop-off belongs to exactly one of them. A date that
+ * IS a Saturday is its own week end, never pushed to the next one.
+ *
+ * Built on isoDateToMs (local midnight) rather than Date parsing or
+ * toISOString, for the reason this whole module exists: a UTC round-trip
+ * shifts an evening date to the next day and would file that drop-off under
+ * the wrong week — which, at the week boundary, is a whole extra settlement.
+ */
+export function weekEndingSaturday(ymd: string): string {
+  const ms = isoDateToMs(ymd);
+  if (!ms) return ymd;
+  const d = new Date(ms);
+  return shiftISODate(ymd, (6 - d.getDay() + 7) % 7);
+}
+
 /** `n` days before/after a local date, as 'YYYY-MM-DD'. */
 export function shiftISODate(ymd: string, days: number): string {
   const ms = isoDateToMs(ymd);

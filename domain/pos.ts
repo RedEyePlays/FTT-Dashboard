@@ -1,4 +1,4 @@
-import { InventoryItem, SalesTransaction, ListingPlatform } from '../types';
+import { InventoryItem, SalesTransaction, ListingPlatform, RefundPaidFrom, RefundSplit } from '../types';
 import { kindOf } from './inventory';
 import { DrawerEffect } from './dropoffs';
 
@@ -332,17 +332,166 @@ export const cashCollectedOnSale = (
   return Math.round((atCheckout + fromPayments) * 100) / 100;
 };
 
+/* ---------------- Refund source (void / return) ---------------- */
+//
+// A refund used to have no recorded source. The app simply assumed the money
+// went back the way it came in — the sale's cash portion always logged as a
+// cash-out on today's drawer, card/e-transfer never touching it. Two real
+// cases had nowhere to go: refunding out of the owner's own pocket, and
+// refunding a card sale in cash from the till. Both silently left the
+// drawer's expected cash wrong.
+//
+// Everything below is pure so each rule is testable without a component, and
+// every one of them is about WHERE THE MONEY CAME FROM ONLY. A refund reduces
+// sales, tax and revenue in exactly the same way no matter which source paid
+// it — see domain/reports.ts, which keys off `status`, never these fields.
+
+/** How each refund source is worded, everywhere it is shown. */
+export const REFUND_PAID_FROM_LABEL: Record<RefundPaidFrom, string> = {
+  store_cash: 'Store cash',
+  personal: "Owner's personal cash",
+  card: 'Card',
+  etransfer: 'E-Transfer',
+  other: 'Other',
+};
+
+/** The order the sources are offered in — till first, since it is the default. */
+export const REFUND_PAID_FROM_OPTIONS: RefundPaidFrom[] =
+  ['store_cash', 'personal', 'card', 'etransfer', 'other'];
+
+const roundSplit = (n: number): number => Math.round((n || 0) * 100) / 100;
+
+/**
+ * How a refund would go back if nobody chose: the same way the sale was paid.
+ * Cash → store cash, card → card, e-transfer → e-transfer. A MIXED sale is
+ * split the way it was taken — its cash portion (capped at the refund) from
+ * the till, the remainder back to the card.
+ *
+ * This is both the default the dialogs pre-select AND, via
+ * impliedRefundSplits below, how every pre-existing voided/returned record
+ * keeps reading. The rule is written once so the two can't diverge.
+ */
+export const defaultRefundSplits = (
+  tx: Pick<SalesTransaction, 'totalPaid' | 'deposit' | 'balanceOwing' | 'paymentMethod' | 'cashAmount' | 'balancePayments'>,
+  refundAmount: number,
+): RefundSplit[] => {
+  const total = roundSplit(Math.max(0, refundAmount));
+  if (total < 0.005) return [];
+  const method = tx.paymentMethod;
+  if (method === 'card') return [{ paidFrom: 'card', amount: total }];
+  if (method === 'etransfer') return [{ paidFrom: 'etransfer', amount: total }];
+  if (method === 'mixed') {
+    // The restocking fee (if any) comes out of the cash side first, matching
+    // how the drawer effect has always been computed.
+    const cash = roundSplit(Math.min(cashCollectedOnSale(tx), total));
+    const rest = roundSplit(total - cash);
+    const out: RefundSplit[] = [];
+    if (cash >= 0.005) out.push({ paidFrom: 'store_cash', amount: cash });
+    if (rest >= 0.005) out.push({ paidFrom: 'card', amount: rest });
+    return out.length ? out : [{ paidFrom: 'store_cash', amount: total }];
+  }
+  // 'cash' and legacy/unset both mean the money came out of the till.
+  return [{ paidFrom: 'store_cash', amount: total }];
+};
+
+/**
+ * The refund sources to DISPLAY for an already-voided/returned sale.
+ *
+ * A record written since this feature carries its own `refundSplits` (or the
+ * single-source `refundPaidFrom`) and is shown exactly as recorded. An older
+ * record has neither — it is shown under the rule that was actually in force
+ * when it was written, never as "unknown" and never migrated.
+ */
+export const impliedRefundSplits = (
+  tx: Pick<SalesTransaction, 'status' | 'totalPaid' | 'deposit' | 'balanceOwing' | 'paymentMethod' | 'cashAmount' | 'balancePayments' | 'refundAmount' | 'refundPaidFrom' | 'refundSplits'>,
+): RefundSplit[] => {
+  if (tx.refundSplits?.length) return tx.refundSplits;
+  const refunded = tx.status === 'returned'
+    ? (tx.refundAmount ?? collectedOnSale(tx))
+    : collectedOnSale(tx);
+  if (tx.refundPaidFrom) {
+    const amount = roundSplit(Math.max(0, refunded));
+    return amount < 0.005 ? [] : [{ paidFrom: tx.refundPaidFrom, amount }];
+  }
+  return defaultRefundSplits(tx, refunded);
+};
+
+/** One-line wording for a set of refund sources, for the invoice/history view. */
+export const refundSourceLabel = (splits: RefundSplit[]): string => {
+  const real = splits.filter(s => roundSplit(s.amount) >= 0.005);
+  if (!real.length) return '—';
+  if (real.length === 1) return REFUND_PAID_FROM_LABEL[real[0].paidFrom];
+  return real.map(s => `${REFUND_PAID_FROM_LABEL[s.paidFrom]} $${roundSplit(s.amount).toFixed(2)}`).join(' + ');
+};
+
+export interface RefundSplitValidation {
+  valid: boolean;
+  total: number;        // Σ of the entered amounts
+  remaining: number;    // refund total − entered total (0 when it balances)
+  error?: string;
+}
+
+/**
+ * Do these splits actually add up to the refund?
+ *
+ * Deliberately the same rule as the checkout's own mixed-payment validation
+ * (mixedPaymentMismatch above): amounts clamped non-negative so a stray "-"
+ * can't cancel out a mismatch, and the sum compared to the target IN WHOLE
+ * CENTS rather than by float equality. An unbalanced split would corrupt the
+ * drawer the same way an unbalanced mixed payment does — it feeds straight
+ * into the expected-cash figure.
+ */
+export const refundSplitsValid = (splits: RefundSplit[], refundTotal: number): RefundSplitValidation => {
+  const target = roundSplit(Math.max(0, refundTotal));
+  const total = roundSplit(splits.reduce((s, r) => s + Math.max(0, r.amount || 0), 0));
+  const remaining = roundSplit(target - total);
+  if (splits.some(s => (s.amount || 0) < -0.005)) {
+    return { valid: false, total, remaining, error: 'A refund source cannot be negative.' };
+  }
+  if (target < 0.005) {
+    // Nothing to refund (a fully-restocking-fee'd return, or a sale that
+    // never collected anything) — no source is needed, and none is wrong.
+    return { valid: true, total, remaining: 0 };
+  }
+  if (!splits.length) return { valid: false, total, remaining, error: 'Choose where the refund was paid from.' };
+  if (Math.round(total * 100) !== Math.round(target * 100)) {
+    return {
+      valid: false, total, remaining,
+      error: remaining > 0
+        ? `$${remaining.toFixed(2)} of the refund is still unassigned.`
+        : `$${Math.abs(remaining).toFixed(2)} more than the refund has been assigned.`,
+    };
+  }
+  return { valid: true, total, remaining: 0 };
+};
+
 /**
  * A void/return's effect on today's cash drawer — the ONE place that decides
- * whether reversing a sale touches the till. Always logged against the day
- * the reversal is actually processed (today), never retroactively against the
- * original (likely already-reconciled) sale date — see App.tsx's
- * handleVoidSale/handleReturnSale, which pass cashCollectedOnSale (void) or
- * returnRefund(cashCollectedOnSale(tx), restockingFee) (return) in here.
- * A zero/near-zero cash amount (a card/e-transfer sale) produces no entry.
+ * whether reversing a sale touches the till.
+ *
+ * ONLY the `store_cash` portion moves the drawer. 'personal' never does (the
+ * owner's own money leaves no trace on the store's books, exactly as with
+ * PaidBy 'personal' and domain/dropoffs.ts's dropOffAcceptDrawerEffect), and
+ * card/e-transfer/other never did.
+ *
+ * This replaces the old saleRefundDrawerEffect, which took a bare cash amount
+ * and so could only ever express the assumed rule. Always logged against the
+ * day the reversal is processed (today), never retroactively against the
+ * original — and likely already-reconciled — sale date.
  */
-export const saleRefundDrawerEffect = (cashAmount: number): DrawerEffect | null => {
-  const amount = Math.round((cashAmount || 0) * 100) / 100;
+export const refundDrawerEffect = (splits: RefundSplit[]): DrawerEffect | null => {
+  const amount = roundSplit(splits
+    .filter(s => s.paidFrom === 'store_cash')
+    .reduce((s, r) => s + Math.max(0, r.amount || 0), 0));
   if (amount < 0.005) return null;
   return { kind: 'cashOut', amount };
+};
+
+/**
+ * The single-source shorthand to store alongside `refundSplits`, or undefined
+ * when the refund genuinely came from more than one place.
+ */
+export const singleRefundSource = (splits: RefundSplit[]): RefundPaidFrom | undefined => {
+  const real = splits.filter(s => roundSplit(s.amount) >= 0.005);
+  return real.length === 1 ? real[0].paidFrom : undefined;
 };

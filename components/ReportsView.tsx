@@ -408,18 +408,31 @@ const CashReconTab: React.FC<{
   // A discrepancy (over/short) must be explained before it can be saved.
   const needsNote = hasCount && direction !== 'balanced' && !note.trim();
   const canSave = hasCount && !needsNote;
+  // Is this about to CLOSE a drawer that is currently open for today?
+  // Counting a past day, or re-counting an already-closed one, is routine —
+  // this is only the case that ends the live shift.
+  const closesLiveDrawer = hasCount && date === todayISO() && !!saved?.openedAt && !saved?.reconciledAt;
 
   const cleanEntries = (list: CashDrawerEntry[]) => list.filter(e => (e.amount || 0) > 0).map(e => ({ id: e.id, amount: e.amount, note: e.note?.trim() || undefined }));
 
+  const base = () => ({
+    date,
+    openingFloat: openingNum,
+    cashIn: cleanEntries(cashIn), cashOut: cleanEntries(cashOut), withdrawals: cleanEntries(withdrawals),
+    note: note.trim() || undefined,
+  });
+
+  // Save corrections WITHOUT counting — so fixing a float, a cash entry or the
+  // variance note on today never closes the live drawer. Omitting countedCash
+  // is what tells App.tsx not to stamp reconciledAt.
+  const saveEdits = () => onSave(base());
+
   const save = () => {
     if (!canSave) return;
-    onSave({
-      date,
-      openingFloat: openingNum,
-      cashIn: cleanEntries(cashIn), cashOut: cleanEntries(cashOut), withdrawals: cleanEntries(withdrawals),
-      countedCash: countedNum,
-      note: note.trim() || undefined,
-    });
+    if (closesLiveDrawer && !window.confirm(
+      `This will CLOSE today's drawer.\n\nSaving a count reconciles the day: the register stops reading as open and the till is recorded as counted at ${money(countedNum)}. Only do this at the end of the shift.\n\nTo just save a correction to the float, an entry or the note, use "Save changes" instead — it leaves the drawer open.`,
+    )) return;
+    onSave({ ...base(), countedCash: countedNum });
   };
 
   return (
@@ -499,9 +512,18 @@ const CashReconTab: React.FC<{
                 ? 'Open — cash movements logged, not yet reconciled.'
                 : 'Not yet reconciled for this day.'}
           </p>
-          <button onClick={save} disabled={!canSave} title={needsNote ? 'Add a note explaining the variance first' : undefined} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white">
-            <Save className="w-4 h-4" /> {saved?.reconciledAt ? 'Update' : 'Save'} reconciliation
-          </button>
+          <div className="flex items-center gap-2">
+            {/* Saving an edit is separate from counting, on purpose: the two
+                used to be the same button, so correcting a note on today also
+                closed the live drawer. */}
+            <button onClick={saveEdits} title="Save the float, entries and note without counting — leaves the drawer open"
+              className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-indigo-400">
+              <Save className="w-4 h-4" /> Save changes
+            </button>
+            <button onClick={save} disabled={!canSave} title={needsNote ? 'Add a note explaining the variance first' : !hasCount ? 'Enter the counted cash to close this day' : undefined} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white">
+              <Save className="w-4 h-4" /> {saved?.reconciledAt ? 'Update' : closesLiveDrawer ? 'Count & close drawer' : 'Save'} reconciliation
+            </button>
+          </div>
         </div>
       </div>
 
