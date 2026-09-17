@@ -5,9 +5,12 @@ import { db } from './firebase';
 import {
   InventoryItem, DeviceBuyer, DropOff, Settlement, Customer, SalesTransaction, ActivityEntry, Note, Task,
   AppUser, WorkspaceInvite, AuditEntry, TimeEntry, PayPeriodPaid, PayPeriodApproval, CashReconciliation, StaffNote, ListingPlatform, Repair,
-  Expense, RecurringExpense,
+  Expense, RecurringExpense, RefundPaidFrom, RefundSplit,
 } from '../types';
 import { collectionFor } from '../domain/inventory';
+import {
+  mergeDrawerRecord, drawerStateChange, DrawerAppends, DrawerCarryOver, DrawerStateChange,
+} from '../domain/reports';
 import { AppSettings } from '../domain/settings';
 import { allocateSkuInTxn } from './sku';
 
@@ -204,7 +207,10 @@ export async function voidSale(uid: string, payload: {
   // listed elsewhere when it sold.
   devices: { id: string; listedPlatforms?: ListingPlatform[] }[];
   accessoryUpdates: { id: string; delta: number }[]; // positive deltas to restock
-  voided: { voidedAt: number; voidedBy: string; voidedByEmail?: string };
+  // Plus where the refund money came from (domain/pos.ts's refund sources).
+  // Optional on the type so nothing forces a source onto a reversal that has
+  // none to record — a $0 refund needs no source.
+  voided: { voidedAt: number; voidedBy: string; voidedByEmail?: string; refundPaidFrom?: RefundPaidFrom; refundSplits?: RefundSplit[] };
   activity: ActivityEntry[];
 }) {
   const batch = writeBatch(db);
@@ -231,7 +237,7 @@ export async function returnSale(uid: string, payload: {
   resellDevices: { id: string; listedPlatforms?: ListingPlatform[] }[];
   defectiveDevices: { id: string; listedPlatforms?: ListingPlatform[] }[];
   accessoryUpdates: { id: string; delta: number }[]; // positive deltas to restock
-  returned: { returnedAt: number; returnedBy: string; returnedByEmail?: string; restockingFee?: number; refundAmount: number };
+  returned: { returnedAt: number; returnedBy: string; returnedByEmail?: string; restockingFee?: number; refundAmount: number; refundPaidFrom?: RefundPaidFrom; refundSplits?: RefundSplit[] };
   activity: ActivityEntry[];
 }) {
   const batch = writeBatch(db);
@@ -318,7 +324,68 @@ export const deleteTimeEntry = (uid: string, id: string) => deleteItem(uid, 'tim
 export const savePayPeriodPaid = (uid: string, p: PayPeriodPaid) => saveItem(uid, 'payPeriods', p);
 export const savePayPeriodApproval = (uid: string, a: PayPeriodApproval) => saveItem(uid, 'payPeriodApprovals', a);
 export const deletePayPeriodApproval = (uid: string, id: string) => deleteItem(uid, 'payPeriodApprovals', id);
-export const saveCashReconciliation = (uid: string, r: CashReconciliation) => saveItem(uid, 'cashReconciliations', r);
+/**
+ * The ONE write path for a day's cash drawer, run as a Firestore transaction.
+ *
+ * WHAT THIS REPLACES, AND WHY. The drawer was written with `saveItem` →
+ * `setDoc` with NO merge, from a whole document that App.tsx assembled out of
+ * its local `cashReconciliations` React state. Every write was therefore a
+ * full-document overwrite from a possibly-stale snapshot. Two terminals (the
+ * POS tablet and the back-office desktop), or a single one flushing writes it
+ * had queued while offline, would each rebuild the document from a snapshot
+ * taken before the other's change — and the later write simply won. The
+ * other's cash entries, count and `openedAt` were gone, which is what a
+ * drawer "randomly closing" looks like from the counter.
+ *
+ * Reading the current document INSIDE the transaction and merging onto that
+ * (domain/reports.ts's mergeDrawerRecord) makes the write a merge in fact and
+ * not just in name. On contention Firestore re-runs this whole callback
+ * against the newer document, so the merge is recomputed rather than replayed.
+ *
+ * `appends` carries movement entries to ADD; they are appended to the
+ * SERVER's arrays. Passing `patch.cashOut = [...localCopy, entry]` would
+ * re-assert the whole list from a snapshot and silently drop whatever another
+ * terminal appended in between — the same lost update, one level down.
+ *
+ * The write is still a full `set` (not a field merge) so that explicitly
+ * clearing a field — openDrawerPatch setting reconciledAt/countedCash to
+ * undefined to reopen a day — keeps working. It is safe here precisely
+ * because the document being written was just built from the server's own
+ * current copy.
+ *
+ * Returns the stored record plus what the write did to the day's open/closed
+ * state, so the caller can audit it (see domain/reports.ts's drawerStateChange).
+ */
+export async function commitCashReconciliation(uid: string, input: {
+  date: string;
+  patch?: Partial<CashReconciliation>;
+  appends?: DrawerAppends;
+  cashSales: number;
+  carry: DrawerCarryOver | null;
+  actor: { id: string; email: string };
+}): Promise<{ record: CashReconciliation; change: DrawerStateChange; existed: boolean }> {
+  const ref = docRef(uid, 'cashReconciliations', input.date);
+  return runTransaction(db, async tx => {
+    const snap = await tx.get(ref);
+    const existing = snap.exists()
+      ? ({ ...(snap.data() as any), id: snap.id } as CashReconciliation)
+      : undefined;
+    const record = mergeDrawerRecord({ ...input, existing });
+    const change = drawerStateChange(existing, record);
+    // Loud, and on purpose: this is the exact shape of the bug above. If a
+    // write ever removes an `openedAt` that was there, the console says which
+    // day and what was sent, so the next "the drawer closed by itself" report
+    // can be traced instead of guessed at.
+    if (change.losesOpenedAt) {
+      console.warn('[drawer] write removes openedAt', {
+        date: input.date, hadOpenedAt: existing?.openedAt,
+        patchKeys: Object.keys(input.patch || {}), by: input.actor.email,
+      });
+    }
+    tx.set(ref, clean(record));
+    return { record, change, existed: !!existing };
+  });
+}
 export const deletePayPeriodPaid = (uid: string, id: string) => deleteItem(uid, 'payPeriods', id);
 
 /* ------------------------- Users / roles (top-level) ------------------------- */

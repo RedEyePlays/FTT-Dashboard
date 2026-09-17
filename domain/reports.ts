@@ -185,7 +185,17 @@ export interface ReconciliationInput {
   cashIn: CashDrawerEntry[];
   cashOut: CashDrawerEntry[];
   withdrawals: CashDrawerEntry[];
-  countedCash: number;
+  /**
+   * The counted till. ABSENT means "save my corrections, don't close the day"
+   * — editing a float, a cash entry or the note without counting.
+   *
+   * This distinction is the fix for an accidental close. The screen used to
+   * require a count before it would save anything at all, and saving always
+   * stamped reconciledAt. So there was no way to fix a typo in today's
+   * cash-out note without also closing the live drawer — which is one of the
+   * ways a drawer "randomly closed" mid-shift.
+   */
+  countedCash?: number;
   note?: string;
 }
 
@@ -221,17 +231,38 @@ export interface DrawerCarryOver {
   stillOpen: boolean;
 }
 
+/**
+ * A day's record with NOTHING behind it: never opened, never counted, no
+ * float, and no movement logged. Such a record gets written by paths that
+ * touch a date without running a till — a void/return refund, a device-buyer
+ * settlement's cash entry against a back-dated day. It represents no drawer,
+ * so it carries nothing.
+ */
+// Movements alone do NOT make a day a till: a refund cash-out or a settlement
+// cash-in writes entries against a date without anyone opening a drawer that
+// day. Only an open, a count, or a float means a drawer was actually run.
+const isBareDrawerRecord = (r: CashReconciliation): boolean =>
+  !r.openedAt && r.countedCash == null && !(r.openingFloat || 0);
+
 export const drawerCarryOver = (
   reconciliations: CashReconciliation[],
   todayISO: string,
 ): DrawerCarryOver | null => {
+  // SKIP bare records and keep looking further back, rather than stopping at
+  // the single most recent prior date.
+  //
+  // The bug this fixes: the carry-over used to read only the latest prior
+  // record and bail if it was bare. So a drawer opened Friday and never
+  // closed, followed by a bare Saturday record (written by, say, a refund
+  // cash-out or a settlement), made MONDAY read as "never opened" with a $0
+  // float — the till's cash and its open state both vanished, and the day
+  // looked closed when it wasn't. A record with no drawer behind it must not
+  // be able to hide the real one behind IT.
   const prior = reconciliations
     .filter(r => r.date < todayISO)
-    .sort((a, b) => b.date.localeCompare(a.date))[0];
-  // Only a day that was actually STARTED carries anything: a bare record
-  // (written by some other path, never opened, no movement) has no till
-  // behind it to carry.
-  if (!prior || (!prior.openedAt && !prior.countedCash && !(prior.openingFloat || 0))) return null;
+    .sort((a, b) => b.date.localeCompare(a.date))
+    .find(r => !isBareDrawerRecord(r));
+  if (!prior) return null;
   const float = prior.countedCash != null ? round2(prior.countedCash) : round2(prior.expectedCash || 0);
   return {
     float: Math.max(0, float),
@@ -300,6 +331,134 @@ export function openDrawerPatch(
     countedCash: undefined,
   };
 }
+
+/* ---------------- The one drawer-write merge ---------------- */
+
+// Appends to a day's movement lists. Kept SEPARATE from `patch` on purpose:
+// an append must be applied to whatever the stored record currently holds, not
+// to a locally-copied array. See mergeDrawerRecord below for why that
+// distinction is the whole point of this shape.
+export interface DrawerAppends {
+  cashIn?: CashDrawerEntry[];
+  cashOut?: CashDrawerEntry[];
+  withdrawals?: CashDrawerEntry[];
+}
+
+export interface DrawerMergeInput {
+  date: string;
+  /** The record as it exists RIGHT NOW on the server (undefined = no record yet). */
+  existing: CashReconciliation | undefined;
+  /** Fields to set outright (float, count, note, open/reconcile stamps). */
+  patch?: Partial<CashReconciliation>;
+  /** Entries to ADD to the existing lists — never a replacement array. */
+  appends?: DrawerAppends;
+  /** That day's cash sales, recomputed by the caller from the sales data. */
+  cashSales: number;
+  /** Seed float for a day with no record yet (the previous till carried over). */
+  carry: DrawerCarryOver | null;
+  actor: { id: string; email: string };
+  now?: number;
+}
+
+/**
+ * Build the record to write for one drawer change — the SINGLE merge rule,
+ * pure so every branch is testable without Firestore.
+ *
+ * WHY THIS EXISTS AS A PURE FUNCTION. The drawer used to be written as a
+ * whole document built from React state and `setDoc`-ed with no merge. Two
+ * terminals (the POS tablet and the back-office desktop), or one of them
+ * flushing a write queued while offline, could each write a full document
+ * built from a snapshot taken before the other's change — and the later write
+ * won wholesale. Whatever the other had done was gone: cash entries, the
+ * count, and — the reported symptom — `openedAt`, which made the drawer read
+ * as closed out of nowhere. Running this inside a Firestore transaction
+ * against the freshly-read `existing` is what makes the write a merge instead
+ * of a replacement.
+ *
+ * `appends` exists for the same reason. Appending by sending
+ * `[...localCopy, entry]` re-asserts the whole list from a snapshot and drops
+ * anything another terminal added in between; appending to `existing` inside
+ * the transaction cannot.
+ *
+ * expected/variance are always recomputed here from the shared math, so the
+ * stored figures can never disagree with what the screens compute.
+ */
+export function mergeDrawerRecord(input: DrawerMergeInput): CashReconciliation {
+  const { date, existing, patch, appends, cashSales, carry, actor } = input;
+  const now = input.now ?? Date.now();
+
+  const merged: CashReconciliation = {
+    // Seed a brand-new day's record with whatever the till was left holding
+    // rather than 0 — without this the day's first write (a cash-out, a
+    // close) would silently reset the opening float to zero and report the
+    // whole carried till as a shortage. Only ever applied when the day has NO
+    // record yet; once it does, its own stored float is the truth.
+    id: date, date, openingFloat: carry?.float || 0, expectedCash: 0, variance: 0,
+    recordedBy: actor.id, recordedByEmail: actor.email, recordedAt: now,
+    ...existing, ...patch,
+  };
+
+  // Appends land on the SERVER's arrays, and skip ids already present so a
+  // transaction retry (Firestore re-runs the whole function on contention)
+  // can't double-post the same entry.
+  const append = (key: 'cashIn' | 'cashOut' | 'withdrawals') => {
+    const add = appends?.[key];
+    if (!add?.length) return;
+    const base = existing?.[key] || [];
+    const seen = new Set(base.map(e => e.id));
+    merged[key] = [...base, ...add.filter(e => !seen.has(e.id))];
+  };
+  append('cashIn'); append('cashOut'); append('withdrawals');
+
+  // A drawer carried forward from a day nobody closed is still open — stamp
+  // that on the new day's record so it reads as open rather than as "never
+  // opened today".
+  if (!existing && !merged.openedAt && carry?.stillOpen) {
+    merged.openedAt = now;
+    merged.openedBy = actor.id;
+    merged.openedByEmail = actor.email;
+  }
+
+  merged.cashSales = cashSales;
+  merged.expectedCash = expectedEndingCash({
+    openingFloat: merged.openingFloat, cashSales,
+    cashIn: sumDrawerEntries(merged.cashIn), cashOut: sumDrawerEntries(merged.cashOut), withdrawals: sumDrawerEntries(merged.withdrawals),
+  });
+  merged.variance = merged.countedCash != null ? round2(merged.countedCash - merged.expectedCash) : 0;
+  merged.recordedBy = actor.id; merged.recordedByEmail = actor.email; merged.recordedAt = now;
+  return merged;
+}
+
+// What a drawer write did to the two fields that decide whether the day reads
+// as open or closed. Every write reports this so the change can be audited and
+// a "random" close can be traced to a person, a terminal and a code path.
+export interface DrawerStateChange {
+  openedSet: boolean;
+  openedCleared: boolean;
+  reconciledSet: boolean;
+  reconciledCleared: boolean;
+  /** True for the specific case worth shouting about: openedAt disappearing. */
+  losesOpenedAt: boolean;
+}
+
+export function drawerStateChange(
+  before: CashReconciliation | undefined,
+  after: CashReconciliation,
+): DrawerStateChange {
+  const hadOpen = !!before?.openedAt, hasOpen = !!after.openedAt;
+  const hadRecon = !!before?.reconciledAt, hasRecon = !!after.reconciledAt;
+  return {
+    openedSet: !hadOpen && hasOpen,
+    openedCleared: hadOpen && !hasOpen,
+    reconciledSet: !hadRecon && hasRecon,
+    reconciledCleared: hadRecon && !hasRecon,
+    losesOpenedAt: hadOpen && !hasOpen,
+  };
+}
+
+/** True when this write changes the day's open/closed state at all. */
+export const changesDrawerState = (c: DrawerStateChange): boolean =>
+  c.openedSet || c.openedCleared || c.reconciledSet || c.reconciledCleared;
 
 // --- Part 2: sales-tax remittance -----------------------------------------
 

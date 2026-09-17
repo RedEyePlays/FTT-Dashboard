@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { platformFeeAmount, isZeroPricedDevice, cartHasZeroPricedDevice, PricedLine, salesBalanceOwing, isLayaway, searchCheckoutInventory, canVoidSale, isVoided, isReturned, isReversed, canReturnSale, returnRefund, saleAccessoryRestock, saleDeviceListedPlatforms, collectedOnSale, cashCollectedOnSale, saleRefundDrawerEffect, mixedPaymentMismatch, taxAppliesForSale } from './pos';
+import { platformFeeAmount, isZeroPricedDevice, cartHasZeroPricedDevice, PricedLine, salesBalanceOwing, isLayaway, searchCheckoutInventory, canVoidSale, isVoided, isReturned, isReversed, canReturnSale, returnRefund, saleAccessoryRestock, saleDeviceListedPlatforms, collectedOnSale, cashCollectedOnSale, refundDrawerEffect, defaultRefundSplits, mixedPaymentMismatch, taxAppliesForSale } from './pos';
 import { InventoryItem, SalesTransaction } from '../types';
 
 const item = (p: Partial<InventoryItem>): InventoryItem => ({
@@ -286,8 +286,11 @@ describe('return refund composition (App.tsx handleReturnSale\'s exact formula)'
   });
 
   it('a card-only return never produces a cash drawer effect', () => {
+    // The refund defaults back to the card it was paid on, and a card refund
+    // does not touch the till.
     const tx = { ...base, paymentMethod: 'card' as const };
-    expect(saleRefundDrawerEffect(returnRefund(cashCollectedOnSale(tx), undefined))).toBeNull();
+    const refund = returnRefund(collectedOnSale(tx), undefined);
+    expect(refundDrawerEffect(defaultRefundSplits(tx, refund))).toBeNull();
   });
 });
 
@@ -313,13 +316,14 @@ describe('mixedPaymentMismatch', () => {
   });
 });
 
-describe('saleRefundDrawerEffect', () => {
-  it('a nonzero cash refund is cash OUT of the drawer', () => {
-    expect(saleRefundDrawerEffect(250)).toEqual({ kind: 'cashOut', amount: 250 });
+describe('refundDrawerEffect', () => {
+  it('a nonzero store-cash refund is cash OUT of the drawer', () => {
+    expect(refundDrawerEffect([{ paidFrom: 'store_cash', amount: 250 }])).toEqual({ kind: 'cashOut', amount: 250 });
   });
-  it('produces no entry for a zero or near-zero amount (a card/e-transfer refund)', () => {
-    expect(saleRefundDrawerEffect(0)).toBeNull();
-    expect(saleRefundDrawerEffect(0.001)).toBeNull();
+  it('produces no entry for a zero or near-zero amount', () => {
+    expect(refundDrawerEffect([{ paidFrom: 'store_cash', amount: 0 }])).toBeNull();
+    expect(refundDrawerEffect([{ paidFrom: 'store_cash', amount: 0.001 }])).toBeNull();
+    expect(refundDrawerEffect([])).toBeNull();
   });
 });
 

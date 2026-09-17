@@ -7,7 +7,7 @@ import {
   profitAndLoss, profitLossCsvRows, settlementHistory, yearEndSummary, ProfitLossInput,
   cashSalesAfterClose, unreconciledDays,
 } from './reports';
-import { saleRefundDrawerEffect, cashCollectedOnSale, returnRefund } from './pos';
+import { refundDrawerEffect, defaultRefundSplits, collectedOnSale, returnRefund } from './pos';
 import { DEFAULT_EXPENSE_CATEGORIES } from './expenses';
 
 const tx = (p: Partial<SalesTransaction>): SalesTransaction => ({
@@ -120,22 +120,22 @@ describe('expectedCashForDate', () => {
 // Reproduces the reported bug end-to-end at the domain level: a voided sale
 // used to be deducted TWICE from the expected drawer — once by
 // cashCollectedOnTx zeroing the reversed transaction, and once by the explicit
-// refund cash-out entry App.tsx writes via saleRefundDrawerEffect. These tests
-// model exactly what App.tsx does (compute the refund with cashCollectedOnSale
-// / returnRefund, push it onto the day's cashOut list, then read the day's
-// expected cash back through expectedEndingCash) so the two mechanisms are
-// exercised together, not in isolation.
+// refund cash-out entry App.tsx writes. These tests model exactly what
+// App.tsx does (work out the refund, resolve where it was paid from with the
+// DEFAULT sources — the same rule that used to be hardcoded — push the
+// store-cash part onto the day's cashOut list, then read the day's expected
+// cash back through expectedEndingCash) so the two mechanisms are exercised
+// together, not in isolation.
 describe('voiding/returning a sale deducts its cash exactly once', () => {
   const OPENING = 200;
 
   // What App.tsx's handleVoidSale/handleReturnSale actually append to today's
   // drawer record — nothing here is a stand-in, it calls the same domain fns.
   const refundEntry = (t: SalesTransaction, restockingFee?: number) => {
-    const effect = saleRefundDrawerEffect(
-      restockingFee === undefined
-        ? cashCollectedOnSale(t)
-        : returnRefund(cashCollectedOnSale(t), restockingFee),
-    );
+    const refund = restockingFee === undefined
+      ? collectedOnSale(t)
+      : returnRefund(collectedOnSale(t), restockingFee);
+    const effect = refundDrawerEffect(defaultRefundSplits(t, refund));
     return effect ? [{ id: 'refund', amount: effect.amount }] : [];
   };
 
