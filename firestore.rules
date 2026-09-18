@@ -386,6 +386,26 @@ service cloud.firestore {
         allow read: if activeMemberOf(ws);
         allow write: if isManagerUp(ws);
       }
+      // Staff bonuses (domain/bonuses.ts) — one-off payments on top of hours.
+      //
+      // WRITE: owner only. A bonus is money out of the business decided by the
+      // owner; a manager may approve a pay period but does not award bonuses.
+      // Matching App.tsx, which gates the button on the owner role.
+      //
+      // READ: the payroll tier (owner + manager), plus the person the bonus
+      // belongs to. A bonus is somebody's pay — an employee must never be able
+      // to read a colleague's, which a blanket `activeMemberOf(ws)` (the rule
+      // payPeriods uses) would have allowed. The per-document userId check is
+      // what makes the UI's visibility rule (domain/bonuses.ts's canSeeBonus)
+      // actually enforced rather than merely respected by the client.
+      //
+      // Written EXPLICITLY rather than left to a catch-all, so the read
+      // restriction is stated where it is enforced.
+      match /staffBonuses/{id} {
+        allow read: if isManagerUp(ws)
+          || (activeMemberOf(ws) && resource.data.userId == request.auth.uid);
+        allow write: if isOwnerOf(ws);
+      }
     }
 
     // ---- Users registry ----

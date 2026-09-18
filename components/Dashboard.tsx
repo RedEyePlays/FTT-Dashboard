@@ -39,6 +39,10 @@ interface DashboardProps {
   // Active-layaways tile (owner/manager tier, same as onViewCash) — omitted
   // hides the tile for anyone who can't reach the list it links to.
   onViewLayaways?: () => void;
+  // settings.operations.booksStartDate — drawer alerts ignore days before it
+  // (the shop wasn't running the till through the app then, so flagging them
+  // is a permanent, unactionable warning).
+  booksStartDate?: string;
 }
 
 // --- date helpers (all comparisons are on local YYYY-MM-DD strings) ---
@@ -56,11 +60,11 @@ const relTime = (ts: number) => {
 };
 const platformLabel = (p?: string) => (p && p !== 'None / In-Store' ? p : 'In-Store');
 
-export const Dashboard: React.FC<DashboardProps> = ({ data, salesTransactions, activity, repairs = [], repairBatches = [], canViewProfit = true, onViewAnalytics, onViewRepairs, cashReconciliations, onViewCash, onViewLayaways, payrollDue, onViewPayroll }) => {
+export const Dashboard: React.FC<DashboardProps> = ({ data, salesTransactions, activity, repairs = [], repairBatches = [], canViewProfit = true, onViewAnalytics, onViewRepairs, cashReconciliations, onViewCash, onViewLayaways, payrollDue, onViewPayroll, booksStartDate }) => {
   const mask = (v: string) => (canViewProfit ? v : '•••');
   const staleCash = useMemo(
-    () => (cashReconciliations ? unreconciledDays(cashReconciliations, todayISO()) : []),
-    [cashReconciliations],
+    () => (cashReconciliations ? unreconciledDays(cashReconciliations, todayISO(), booksStartDate) : []),
+    [cashReconciliations, booksStartDate],
   );
   // Devices stuck flagged in-repair: a ticket left open for weeks, or a flag
   // whose ticket no longer exists. Both mean stock silently out of the sellable

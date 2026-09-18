@@ -4,7 +4,7 @@ import { doc, getDoc } from 'firebase/firestore';
 import {
   InventoryItem, Note, Task, DeviceBuyer, DropOff, Settlement, Customer, SalesTransaction,
   ActivityEntry, AppUser, WorkspaceInvite, AuditEntry, Repair, RepairBatch, TimeEntry, PayPeriodPaid, PayPeriodApproval, CashReconciliation, StaffNote,
-  Expense, RecurringExpense,
+  Expense, RecurringExpense, StaffBonus,
 } from '../types';
 import { decryptData } from '../services/security';
 import { AppSettings, mergeSettings } from '../domain/settings';
@@ -55,6 +55,11 @@ export function useWorkspaceData() {
   const [timeEntries, setTimeEntries] = useState<TimeEntry[]>([]);
   const [payPeriods, setPayPeriods] = useState<PayPeriodPaid[]>([]);
   const [payPeriodApprovals, setPayPeriodApprovals] = useState<PayPeriodApproval[]>([]);
+  // Staff bonuses (domain/bonuses.ts). firestore.rules restricts reads to the
+  // payroll tier plus the person a bonus belongs to, so an employee's
+  // subscription simply returns their own — the visibility rule is enforced
+  // server-side, not only filtered in the view.
+  const [staffBonuses, setStaffBonuses] = useState<StaffBonus[]>([]);
   const [cashReconciliations, setCashReconciliations] = useState<CashReconciliation[]>([]);
   const [staffNotes, setStaffNotes] = useState<StaffNote[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
@@ -226,6 +231,7 @@ export function useWorkspaceData() {
       subscribeCollection<TimeEntry>(workspaceId, 'timeEntries', setTimeEntries, onErr),
       subscribeCollection<PayPeriodPaid>(workspaceId, 'payPeriods', setPayPeriods, onErr),
       subscribeCollection<PayPeriodApproval>(workspaceId, 'payPeriodApprovals', setPayPeriodApprovals, onErr),
+      subscribeCollection<StaffBonus>(workspaceId, 'staffBonuses', setStaffBonuses, onErr),
     ];
     return () => subs.forEach(u => u());
   }, [user, appUser, workspaceId, reconnectKey, extendedEnabled]);
@@ -301,7 +307,7 @@ export function useWorkspaceData() {
     // collections
     devices, accessories, data, notes, setNotes, tasks, setTasks,
     deviceBuyers, dropOffs, settlements, customers, salesTransactions,
-    repairs, repairBatches, timeEntries, payPeriods, payPeriodApprovals, cashReconciliations, staffNotes,
+    repairs, repairBatches, timeEntries, payPeriods, payPeriodApprovals, staffBonuses, cashReconciliations, staffNotes,
     expenses, recurringExpenses,
     skuCounters, setSkuCounters, activityLog, lastBackup, settings,
     // connection status

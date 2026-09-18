@@ -1,5 +1,5 @@
 import { DeviceStatus, InventoryItem, Repair, RepairBatch, RepairStatus, RepairType, RepairPart } from '../types';
-import { toISODate } from './dates';
+import { toISODate, clampToBooksStartMs } from './dates';
 
 // --- Numbering prefixes (reuse the meta.skuCounters mechanism) ---
 export const REPAIR_PREFIX = 'RPR';
@@ -316,10 +316,13 @@ export interface TechPerformance {
  * no `completedBy` (legacy rows) collapse under userId '' so the caller can label
  * or drop them. Sorted by most completed first. Pure/testable.
  */
-export const technicianPerformance = (repairs: Repair[], startMs: number, endMs: number): TechPerformance[] => {
+// `booksStartDate` clamps the window start (domain/dates.ts) so performance
+// figures never include the partial pre-system history.
+export const technicianPerformance = (repairs: Repair[], startMs: number, endMs: number, booksStartDate?: string): TechPerformance[] => {
+  const from = clampToBooksStartMs(startMs, booksStartDate);
   const byUser = new Map<string, { count: number; turnaround: number }>();
   for (const r of repairs) {
-    if (r.status === 'cancelled' || !r.completedAt || r.completedAt < startMs || r.completedAt > endMs) continue;
+    if (r.status === 'cancelled' || !r.completedAt || r.completedAt < from || r.completedAt > endMs) continue;
     const uid = r.completedBy || '';
     const turnaround = Math.max(0, r.completedAt - (r.createdAt || r.completedAt));
     const cur = byUser.get(uid) || { count: 0, turnaround: 0 };

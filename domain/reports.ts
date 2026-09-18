@@ -1,4 +1,6 @@
-import { SalesTransaction, InventoryItem, PayPeriodPaid, CashReconciliation, CashDrawerEntry, Settlement, DeviceBuyer, Expense } from '../types';
+import { SalesTransaction, InventoryItem, PayPeriodPaid, CashReconciliation, CashDrawerEntry, Settlement, DeviceBuyer, Expense, StaffBonus } from '../types';
+import { bonusTotal } from './bonuses';
+import { clampToBooksStart, booksStartClamps } from './dates';
 import { isLegacySettlement, settlementFeeIncome } from './dropoffs';
 import { isReversed } from './pos';
 import { kindOf } from './inventory';
@@ -118,8 +120,14 @@ export const cashSalesAfterClose = (
 export const unreconciledDays = (
   reconciliations: CashReconciliation[],
   todayISO: string,
+  booksStartDate?: string,
 ): CashReconciliation[] =>
   reconciliations
+    // Days before the books start are excluded: the shop wasn't running the
+    // drawer through the app then, so flagging them as "never reconciled"
+    // is a permanent, unactionable alert about history the owner has
+    // deliberately set aside.
+    .filter(r => (!booksStartDate || r.date >= booksStartDate))
     .filter(r => r.date < todayISO && !r.reconciledAt)
     .filter(r => !!r.openedAt
       || (r.cashIn?.length || 0) > 0
@@ -247,6 +255,8 @@ const isBareDrawerRecord = (r: CashReconciliation): boolean =>
 export const drawerCarryOver = (
   reconciliations: CashReconciliation[],
   todayISO: string,
+  /** That day's cash sales, so the carried float is recomputed, not trusted. */
+  cashSalesFor?: (date: string) => number,
 ): DrawerCarryOver | null => {
   // SKIP bare records and keep looking further back, rather than stopping at
   // the single most recent prior date.
@@ -263,13 +273,60 @@ export const drawerCarryOver = (
     .sort((a, b) => b.date.localeCompare(a.date))
     .find(r => !isBareDrawerRecord(r));
   if (!prior) return null;
-  const float = prior.countedCash != null ? round2(prior.countedCash) : round2(prior.expectedCash || 0);
+  // RECOMPUTED, not read off the record. A drawer write made while offline is
+  // a field-merge that cannot know the whole day's state, so it deliberately
+  // does not write expectedCash/variance (see buildDrawerMergeWrite) — the
+  // stored figures can therefore be stale until the next online write. Every
+  // read derives them instead, so the till never carries a wrong number
+  // forward. `cashSalesFor` supplies that day's cash sales; without it this
+  // falls back to the stored figure, which is all a caller without the sales
+  // data can do.
+  const float = prior.countedCash != null
+    ? round2(prior.countedCash)
+    : recomputedExpectedCash(prior, cashSalesFor?.(prior.date));
   return {
     float: Math.max(0, float),
     fromDate: prior.date,
     stillOpen: !!prior.openedAt && !prior.reconciledAt,
   };
 };
+
+/**
+ * A day's expected ending cash, derived from what the record actually holds
+ * rather than from its stored `expectedCash` field.
+ *
+ * The stored field is written only by the online transaction path. An offline
+ * field-merge write appends an entry or sets a float without being able to
+ * recompute the total, so `expectedCash` on the document can lag reality until
+ * the next online write rewrites it. Deriving on read means a queued offline
+ * cash-out still shows up in the expected total immediately, on the terminal
+ * that logged it, with no wrong figure in between.
+ *
+ * `cashSales` is passed in because the record does not own that number — it
+ * comes from the day's sales. When it is omitted the record's own stored
+ * `cashSales` is used, then its stored `expectedCash` as a last resort.
+ */
+export const recomputedExpectedCash = (
+  recon: CashReconciliation | undefined,
+  cashSales?: number,
+): number => {
+  if (!recon) return 0;
+  const sales = cashSales ?? recon.cashSales;
+  if (sales == null) return round2(recon.expectedCash || 0);
+  return expectedEndingCash({
+    openingFloat: recon.openingFloat || 0,
+    cashSales: sales,
+    cashIn: sumDrawerEntries(recon.cashIn),
+    cashOut: sumDrawerEntries(recon.cashOut),
+    withdrawals: sumDrawerEntries(recon.withdrawals),
+  });
+};
+
+/** A day's variance, derived the same way — counted − recomputed expected. */
+export const recomputedVariance = (
+  recon: CashReconciliation | undefined,
+  cashSales?: number,
+): number => (recon?.countedCash == null ? 0 : round2(recon.countedCash - recomputedExpectedCash(recon, cashSales)));
 
 /**
  * The live drawer for a day. `carry` is the previous day's leftovers
@@ -429,6 +486,96 @@ export function mergeDrawerRecord(input: DrawerMergeInput): CashReconciliation {
   return merged;
 }
 
+/* ---------------- The offline fallback write ---------------- */
+
+// Firestore TRANSACTIONS REQUIRE A SERVER. Unlike setDoc, they are not queued
+// by the persistent offline cache — a transaction started with no connection
+// rejects instead of waiting. So moving drawer writes into a transaction (the
+// fix for the lost update) quietly broke the offline case: a cash-in, a
+// cash-out, a refund, an expense, a settlement, an open or a close done while
+// the wifi drops at the counter was thrown away, while the UI still said
+// "Drawer closed".
+//
+// The fallback is a FIELD MERGE (`setDoc(..., { merge: true })`), which the
+// offline cache does queue — and which, crucially, cannot cause the lost
+// update the transaction was introduced to prevent, because it only ever
+// touches the fields it names. Cash entries go on with arrayUnion, so two
+// terminals appending while both offline both survive the reconnect.
+
+export interface DrawerMergeWrite {
+  /** Fields to set outright, merged onto whatever the document holds. */
+  set: Record<string, unknown>;
+  /** Field names to REMOVE (Firestore deleteField()) — e.g. reopening a day. */
+  clear: string[];
+  /** Entries to append with arrayUnion, never a whole replacement array. */
+  union: { cashIn?: CashDrawerEntry[]; cashOut?: CashDrawerEntry[]; withdrawals?: CashDrawerEntry[] };
+}
+
+const MOVEMENT_KEYS = ['cashIn', 'cashOut', 'withdrawals'] as const;
+
+/**
+ * The payload for an offline-safe drawer write. Pure, so the three rules that
+ * matter can be tested without Firestore:
+ *
+ *  1. APPENDS BECOME arrayUnion. Entries already carry unique ids, so a union
+ *     is exactly right: it adds without re-asserting the list, it is
+ *     idempotent if the queued write replays, and two terminals that each
+ *     appended while offline both keep their entry. Sending
+ *     `[...localCopy, entry]` instead would drop the other's — the same lost
+ *     update, one level down.
+ *
+ *  2. UNDEFINED BECOMES deleteField. A field merge ignores a missing key, so
+ *     "clear this" has to be said explicitly. openDrawerPatch reopens a day by
+ *     setting reconciledAt/countedCash to undefined; without the delete those
+ *     would silently persist and the day would stay closed.
+ *
+ *  3. expectedCash AND variance ARE NEVER WRITTEN HERE. This write cannot see
+ *     the merged result, so any total it computed would be a guess. They are
+ *     left alone and derived on read (recomputedExpectedCash), and the next
+ *     online transaction rewrites the stored figures for good.
+ *
+ * A caller that genuinely REPLACES a movement list (the Reports cash tab,
+ * where the user is editing the entries themselves) passes it in `patch` and
+ * it is set as a whole array — that is a deliberate replacement, not an
+ * append, and it is the one case where the last writer legitimately wins.
+ */
+export function buildDrawerMergeWrite(input: {
+  date: string;
+  patch?: Partial<CashReconciliation>;
+  appends?: DrawerAppends;
+  actor: { id: string; email: string };
+  now?: number;
+}): DrawerMergeWrite {
+  const { date, patch, appends, actor } = input;
+  const now = input.now ?? Date.now();
+
+  const set: Record<string, unknown> = {
+    id: date, date,
+    recordedBy: actor.id, recordedByEmail: actor.email, recordedAt: now,
+  };
+  const clear: string[] = [];
+  const union: DrawerMergeWrite['union'] = {};
+
+  for (const [key, value] of Object.entries(patch || {})) {
+    // Never let a stale local total overwrite the stored one — rule 3.
+    if (key === 'expectedCash' || key === 'variance' || key === 'cashSales') continue;
+    if (value === undefined) clear.push(key);
+    else set[key] = value;
+  }
+
+  for (const key of MOVEMENT_KEYS) {
+    const add = appends?.[key];
+    if (!add?.length) continue;
+    // An append and a whole-array replacement of the same list in one write
+    // would contradict each other; the explicit replacement wins and the
+    // append is folded into it by the caller's own array.
+    if (set[key] !== undefined) continue;
+    union[key] = add;
+  }
+
+  return { set, clear, union };
+}
+
 // What a drawer write did to the two fields that decide whether the day reads
 // as open or closed. Every write reports this so the change can be audited and
 // a "random" close can be traced to a person, a terminal and a code path.
@@ -476,6 +623,8 @@ export interface TaxReport {
   start: string;
   end: string;
   grouping: TaxGrouping;
+  /** The range reached back before the books start date and was pulled forward. */
+  clampedToBooksStart: boolean;
   rows: TaxPeriodRow[];
   totalTaxableSales: number;
   totalTaxCollected: number;
@@ -506,8 +655,12 @@ export const taxRemittance = (
   start: string,
   end: string,
   grouping: TaxGrouping = 'month',
+  booksStartDate?: string,
 ): TaxReport => {
-  const [lo, hi] = start <= end ? [start, end] : [end, start];
+  const requested = start <= end ? start : end;
+  const clampedToBooksStart = booksStartClamps(requested, booksStartDate);
+  const lo = clampToBooksStart(requested, booksStartDate);
+  const hi = start <= end ? end : start;
   const byKey = new Map<string, TaxPeriodRow>();
   let totalTaxableSales = 0, totalTaxCollected = 0, totalSalesCount = 0;
 
@@ -526,17 +679,22 @@ export const taxRemittance = (
   }
 
   const rows = [...byKey.values()].sort((a, b) => a.key.localeCompare(b.key));
-  return { start: lo, end: hi, grouping, rows, totalTaxableSales, totalTaxCollected, totalSalesCount };
+  return { start: lo, end: hi, grouping, clampedToBooksStart, rows, totalTaxableSales, totalTaxCollected, totalSalesCount };
 };
 
 /** Flatten a tax report to CSV rows (period breakdown + a Total row) for export. */
 export const taxReportCsvRows = (report: TaxReport): Record<string, string | number>[] => {
-  const rows: Record<string, string | number>[] = report.rows.map(r => ({
+  // Same rule as the year-end export: if the range was pulled forward to the
+  // books start, the file says so on its own first line.
+  const rows: Record<string, string | number>[] = report.clampedToBooksStart
+    ? [{ Period: `Figures start ${report.start} (books start date)`, 'Taxable Sales': '', 'Tax Collected': '', Sales: '' }]
+    : [];
+  rows.push(...report.rows.map(r => ({
     Period: r.label,
     'Taxable Sales': r.taxableSales.toFixed(2),
     'Tax Collected': r.taxCollected.toFixed(2),
     Sales: r.salesCount,
-  }));
+  })));
   rows.push({
     Period: 'Total',
     'Taxable Sales': report.totalTaxableSales.toFixed(2),
@@ -608,8 +766,9 @@ export const settlementHistory = (
   deviceBuyers: DeviceBuyer[],
   start: string,
   end: string,
+  booksStartDate?: string,
 ): SettlementHistory => {
-  const [lo, hi] = order(start, end);
+  const [lo, hi] = order(clampToBooksStart(start, booksStartDate), end);
   const nameOf = new Map(deviceBuyers.map(r => [r.id, r.name]));
   const inRangeSettlements = settlements.filter(s => inDateRange(s.date, lo, hi));
 
@@ -665,6 +824,15 @@ export interface ProfitLossInput {
   // payroll, device buyer fees).
   expenses: Expense[];
   expenseCategories: ExpenseCategory[];
+  // Staff bonuses (domain/bonuses.ts). Kept SEPARATE from payPeriods because
+  // pay-period gross is strictly hours × rate — and separate from `expenses`
+  // because the Wages category is excludeFromPL, so a bonus logged there
+  // never reduced net profit at all. This is the record that closes that hole.
+  bonuses?: StaffBonus[];
+  // The shop's books start date (settings.operations.booksStartDate). Every
+  // figure below starts here instead of at `start` when it is set, so the
+  // partial pre-system history cannot distort a total. Unset = no clamp.
+  booksStartDate?: string;
 }
 
 export interface ProfitLoss {
@@ -673,7 +841,12 @@ export interface ProfitLoss {
   revenue: number;
   costOfGoods: number;       // device purchaseCost + repairCost of goods sold
   grossProfit: number;       // revenue − costOfGoods
-  payroll: number;           // gross pay of pay periods paid in range
+  payroll: number;           // gross pay of pay periods paid in range — hours × rate only, unchanged
+  // One-off staff bonuses paid in range, dated by the day they were paid.
+  // Its own line, never folded into `payroll` (which is the hourly figure the
+  // accountant reconciles against timesheets) and never into `expenses`
+  // (whose Wages category is excluded from the P&L by design).
+  bonuses: number;
   expenses: number;          // expense ledger total in range, any payment method, excl. Wages-flagged categories
   expensesByCategory: CategoryTotal[];
   // The store's drop-off service fees — ALWAYS income. The store finances the
@@ -699,12 +872,20 @@ export interface ProfitLoss {
   // that channel actually costs.
   platformFees: number;
   shipping: number;
-  // grossProfit − payroll − expenses − platformFees − shipping + deviceBuyerFeeIncome
+  // grossProfit − payroll − bonuses − expenses − platformFees − shipping + deviceBuyerFeeIncome
   netProfit: number;
+  // True when the requested range reached back before the books start date
+  // and was pulled forward. `start` above is the date actually used, so the
+  // report can say so rather than quietly returning a smaller number.
+  clampedToBooksStart: boolean;
 }
 
 export const profitAndLoss = (input: ProfitLossInput, start: string, end: string): ProfitLoss => {
-  const [lo, hi] = order(start, end);
+  // Everything downstream reads `lo`, so clamping once here covers revenue,
+  // cost of goods, payroll, bonuses, expenses, selling costs and device-buyer
+  // fee income in one place — no per-figure clamp to forget.
+  const clampedToBooksStart = booksStartClamps(order(start, end)[0], input.booksStartDate);
+  const [lo, hi] = order(clampToBooksStart(start, input.booksStartDate), end);
   const { transactions, inventory, payPeriods, settlements, expenses, expenseCategories } = input;
 
   // Every inventory id referenced by any transaction line, so a device captured
@@ -737,6 +918,9 @@ export const profitAndLoss = (input: ProfitLossInput, start: string, end: string
   const payroll = round2(payPeriods
     .filter(p => inDateRange(p.periodStart, lo, hi))
     .reduce((s, p) => s + (p.gross || 0), 0));
+  // Dated by when the bonus was PAID, not by the period it may be attached
+  // to: a July bonus handed over in August is an August cost.
+  const bonuses = bonusTotal(input.bonuses || [], lo, hi);
 
   const expensesTotal = plExpenseTotal(expenses, expenseCategories, lo, hi);
   const expensesByCategory = expenseTotalsByCategory(expenses, expenseCategories, lo, hi);
@@ -753,13 +937,13 @@ export const profitAndLoss = (input: ProfitLossInput, start: string, end: string
   ));
 
   const grossProfit = round2(revenue - costOfGoods);
-  const netProfit = round2(grossProfit - payroll - expensesTotal - platformFees - shipping + deviceBuyerFeeIncome);
+  const netProfit = round2(grossProfit - payroll - bonuses - expensesTotal - platformFees - shipping + deviceBuyerFeeIncome);
   return {
-    start: lo, end: hi, revenue, costOfGoods, grossProfit, payroll,
+    start: lo, end: hi, revenue, costOfGoods, grossProfit, payroll, bonuses,
     expenses: expensesTotal, expensesByCategory,
     deviceBuyerFeeIncome,
     platformFees, shipping,
-    netProfit,
+    netProfit, clampedToBooksStart,
   };
 };
 
@@ -776,6 +960,7 @@ export const profitLossCsvRows = (pl: ProfitLoss, withCategories = true): Record
   { Line: 'Cost of goods sold', Amount: (-pl.costOfGoods).toFixed(2) },
   { Line: 'Gross profit', Amount: pl.grossProfit.toFixed(2) },
   { Line: 'Payroll', Amount: (-pl.payroll).toFixed(2) },
+  { Line: 'Staff bonuses', Amount: (-pl.bonuses).toFixed(2) },
   ...(withCategories
     ? pl.expensesByCategory.map(c => ({
         Line: `Expense: ${c.label}${c.excludedFromPL ? ' (informational — not in net profit)' : ''}`,
@@ -796,6 +981,7 @@ export interface YearEndSummary {
   costOfGoods: number;
   grossProfit: number;
   payrollPaid: number;
+  bonuses: number;          // staff bonuses paid in the year — its own line, see ProfitLoss
   expenses: number;
   expensesByCategory: CategoryTotal[];
   // Store service fees on drop-off settlements — always income, see ProfitLoss.
@@ -806,24 +992,33 @@ export interface YearEndSummary {
   shipping: number;
   netProfit: number;
   salesTaxCollected: number;
+  /** The year reached back before the books start date — figures start there. */
+  clampedToBooksStart: boolean;
+  /** The first day actually included (the books start, when clamped). */
+  figuresStart: string;
 }
 
 /** One consolidated annual summary for handing to an accountant. */
 export const yearEndSummary = (input: ProfitLossInput, year: number): YearEndSummary => {
   const start = `${year}-01-01`, end = `${year}-12-31`;
+  // Both halves of the export clamp identically, so the accountant's P&L and
+  // their tax figures cover exactly the same days.
   const pl = profitAndLoss(input, start, end);
-  const tax = taxRemittance(input.transactions, start, end, 'month');
+  const tax = taxRemittance(input.transactions, start, end, 'month', input.booksStartDate);
   return {
     year,
     revenue: pl.revenue,
     costOfGoods: pl.costOfGoods,
     grossProfit: pl.grossProfit,
     payrollPaid: pl.payroll,
+    bonuses: pl.bonuses,
     expenses: pl.expenses,
     expensesByCategory: pl.expensesByCategory,
     deviceBuyerFeeIncome: pl.deviceBuyerFeeIncome,
     platformFees: pl.platformFees,
     shipping: pl.shipping,
+    clampedToBooksStart: pl.clampedToBooksStart,
+    figuresStart: pl.start,
     netProfit: pl.netProfit,
     salesTaxCollected: tax.totalTaxCollected,
   };
@@ -832,10 +1027,14 @@ export const yearEndSummary = (input: ProfitLossInput, year: number): YearEndSum
 /** Flatten the year-end summary to labelled CSV rows for the accountant export. */
 export const yearEndCsvRows = (s: YearEndSummary, withCategories = true): Record<string, string | number>[] => [
   { Metric: `Year`, Value: String(s.year) },
+  // Stated in the file itself, not just on screen: an accountant reading the
+  // CSV must not take a clamped year for a full one.
+  ...(s.clampedToBooksStart ? [{ Metric: 'Figures start', Value: `${s.figuresStart} (books start date)` }] : []),
   { Metric: 'Revenue', Value: s.revenue.toFixed(2) },
   { Metric: 'Cost of goods sold', Value: s.costOfGoods.toFixed(2) },
   { Metric: 'Gross profit', Value: s.grossProfit.toFixed(2) },
   { Metric: 'Payroll paid', Value: s.payrollPaid.toFixed(2) },
+  { Metric: 'Staff bonuses paid', Value: s.bonuses.toFixed(2) },
   ...(withCategories
     ? s.expensesByCategory.map(c => ({ Metric: `Expense: ${c.label}${c.excludedFromPL ? ' (informational)' : ''}`, Value: c.total.toFixed(2) }))
     : [{ Metric: 'Expenses', Value: s.expenses.toFixed(2) }]),

@@ -420,6 +420,10 @@ const OperationsSection: React.FC<{ draft: AppSettings; patch: PatchFn }> = ({ d
         hint="An open layaway older than this is flagged on the Layaways list as needing follow-up."
         value={draft.operations.staleLayawayDays}
         onChange={v => patch('operations', { staleLayawayDays: Math.max(1, Math.round(parseFloat(v) || 1)) })} />
+      <SettingsTextField label="Books start date" type="date"
+        hint="Reports, profit, expenses and alerts ignore anything before this date. Nothing is deleted — every sale, repair, customer and inventory record stays fully visible and searchable. Leave blank to include everything."
+        value={draft.operations.booksStartDate || ''}
+        onChange={v => patch('operations', { booksStartDate: v })} />
     </SettingsCard>
   </SettingsSection>
 );

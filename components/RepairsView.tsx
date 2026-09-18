@@ -52,6 +52,9 @@ interface Props {
   // Owner/manager only: per-technician performance tab (gated by repairs.performance).
   users?: AppUser[];
   canViewPerformance?: boolean;
+  // settings.operations.booksStartDate — clamps the performance window so
+  // pre-system repair history can't distort a technician's figures.
+  booksStartDate?: string;
   notes?: Note[];                        // workspace notes, for the linked-notes panel
   noteRole?: Role;                       // viewer's role, gates which linked notes show
   onOpenNote?: (noteId: string) => void; // jump to a linked note in the Notes board
@@ -147,8 +150,8 @@ export const RepairsView: React.FC<Props> = (props) => {
     if (!canViewPerformance) return [];
     const startMs = new Date(`${perfFrom}T00:00:00`).getTime();
     const endMs = new Date(`${perfTo}T23:59:59.999`).getTime();
-    return technicianPerformance(repairs, startMs, endMs);
-  }, [repairs, perfFrom, perfTo, canViewPerformance]);
+    return technicianPerformance(repairs, startMs, endMs, props.booksStartDate);
+  }, [repairs, perfFrom, perfTo, canViewPerformance, props.booksStartDate]);
   const fmtDuration = (ms: number) => {
     if (ms <= 0) return '—';
     const h = ms / 3_600_000;

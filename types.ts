@@ -816,6 +816,45 @@ export interface PayPeriodApproval {
   rate: number;            // hourly rate snapshot at approval time
 }
 
+// Where a bonus was actually paid from. Deliberately the same vocabulary as
+// RefundPaidFrom, minus 'card' (nobody pays staff by taking a card payment) —
+// so "store cash vs the owner's own cash" means one thing across the app, and
+// only 'store_cash' ever moves the till.
+export type BonusPaidFrom = 'store_cash' | 'personal' | 'etransfer' | 'other';
+
+/**
+ * A one-off payment to a staff member on top of their hours.
+ *
+ * WHY THIS IS ITS OWN RECORD AND NOT AN EXPENSE. `PayPeriodPaid`/
+ * `PayPeriodApproval` gross is strictly hours × rate — there is nowhere in
+ * them for a bonus. The obvious workaround, logging it as a "Wages" expense,
+ * silently loses the money: the Wages category is `excludeFromPL: true` (it
+ * exists for visibility, and is excluded to avoid double-counting hourly
+ * payroll, which the P&L already subtracts from the pay-period records). So a
+ * bonus entered that way NEVER reduced net profit. That is a real hole, and
+ * this record is what closes it: bonuses get their own P&L line, counted once,
+ * dated by `date`.
+ *
+ * A bonus may be attached to a pay period (`payPeriodStart`) or stand alone —
+ * "on the side" is how these are usually paid, and forcing one into a period
+ * it wasn't part of would misstate that period.
+ */
+export interface StaffBonus {
+  id: string;
+  userId: string;
+  userEmail: string;        // snapshot, so a deleted/renamed account still reads
+  amount: number;
+  date: string;             // YYYY-MM-DD — the day it was paid; what the P&L dates it by
+  reason: string;
+  paidFrom: BonusPaidFrom;
+  // The pay period this belongs to, when it was attached to one. Absent = a
+  // standalone bonus, not tied to any period.
+  payPeriodStart?: string;  // YYYY-MM-DD
+  createdBy: string;        // owner uid — stamped from the authenticated user
+  createdByEmail?: string;
+  createdAt: number;        // epoch ms
+}
+
 // --- Repairs ---
 // 'internal' = a device the shop owns and is refurbishing before resale (no
 // customer involved); links back to the InventoryItem via `inventoryId`.

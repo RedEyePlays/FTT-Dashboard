@@ -56,6 +56,51 @@ export function isoDateToMs(ymd: string): number {
 }
 
 /**
+ * Move a range's START forward to the books start date, when one is set.
+ *
+ * THE PROBLEM. The shop only began using the system in full in September. The
+ * partial data from before that — half-entered sales, expenses that were
+ * never logged, days nobody reconciled — is real history and must not be
+ * deleted, but folding it into a total produces a figure that is simply
+ * wrong: revenue without its costs, an expense ledger with holes, drawer
+ * alerts for days the drawer was never run.
+ *
+ * So every range-based FIGURE starts here instead. This is deliberately only
+ * about totals: individual sales, expenses, repairs, customers and inventory
+ * stay fully visible and searchable, exactly as they are.
+ *
+ * Unset or empty `start` returns `lo` untouched — a workspace that never sets
+ * one behaves exactly as it always did. A range that already begins on or
+ * after the books start is likewise untouched; only a range reaching further
+ * back is pulled forward.
+ */
+export function clampToBooksStart(lo: string, start?: string): string {
+  if (!start || !lo) return lo;
+  return lo < start ? start : lo;
+}
+
+/**
+ * The epoch-ms twin of clampToBooksStart, for the ranges that work in
+ * timestamps rather than YYYY-MM-DD strings (analytics, technician
+ * performance). Clamps to LOCAL MIDNIGHT of the books start date, matching
+ * how every other date in this app is interpreted.
+ */
+export function clampToBooksStartMs(startMs: number, start?: string): number {
+  if (!start) return startMs;
+  const floor = isoDateToMs(start);
+  return floor && startMs < floor ? floor : startMs;
+}
+
+/**
+ * True when a range was actually clamped — i.e. the report is showing less
+ * than the dates its own controls say. The screens and CSV headers use this
+ * to say so out loud rather than quietly returning a smaller number.
+ */
+export function booksStartClamps(lo: string, start?: string): boolean {
+  return !!start && !!lo && lo < start;
+}
+
+/**
  * The SATURDAY that ends the settlement week a local date falls in.
  *
  * The shop settles with its device buyers on Saturdays, so a week runs Sunday

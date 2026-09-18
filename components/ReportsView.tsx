@@ -1,13 +1,13 @@
 import React, { useMemo, useState } from 'react';
 import { Wallet, Receipt, Download, Save, AlertTriangle, CheckCircle2, Plus, Trash2, Scale, FileArchive, Truck, DoorOpen, History, LockOpen, Banknote, Pencil, Repeat, SkipForward } from 'lucide-react';
-import { SalesTransaction, CashReconciliation, CashDrawerEntry, InventoryItem, PayPeriodPaid, Settlement, DeviceBuyer, Repair, Customer, AuditEntry, ActivityEntry, TimeEntry, AppUser, Expense, RecurringExpense, ExpensePaymentMethod, RecurringFrequency, RecurringAmountMode } from '../types';
+import { SalesTransaction, CashReconciliation, CashDrawerEntry, InventoryItem, PayPeriodPaid, Settlement, DeviceBuyer, Repair, Customer, AuditEntry, ActivityEntry, TimeEntry, AppUser, Expense, RecurringExpense, ExpensePaymentMethod, RecurringFrequency, RecurringAmountMode, StaffBonus } from '../types';
 import {
   ExpenseCategory, duePeriodsFor, DuePeriod, isVariableRecurring, lastAmountsForRecurring,
   visibleExpensesFor, canMutateExpense,
 } from '../domain/expenses';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 import {
-  expectedCashForDate, expectedEndingCash, sumDrawerEntries, reconcileCash, taxRemittance, taxReportCsvRows, TaxGrouping,
+  expectedCashForDate, expectedEndingCash, sumDrawerEntries, reconcileCash, recomputedVariance, taxRemittance, taxReportCsvRows, TaxGrouping,
   profitAndLoss, profitLossCsvRows, settlementHistory, yearEndSummary, yearEndCsvRows, ProfitLossInput, ReconciliationInput,
   cashSalesAfterClose,
   cashDrawerSummary,
@@ -26,6 +26,12 @@ interface Props {
   cashReconciliations: CashReconciliation[];
   inventory: InventoryItem[];
   payPeriods: PayPeriodPaid[];
+  // Staff bonuses — their own P&L line, never folded into payroll. The
+  // parent passes only what this viewer may see (domain/bonuses.ts).
+  staffBonuses?: StaffBonus[];
+  // settings.operations.booksStartDate — every total on every tab starts here
+  // when set, and each tab says so when a chosen range reaches further back.
+  booksStartDate?: string;
   settlements: Settlement[];
   deviceBuyers: DeviceBuyer[];
   expenses: Expense[];
@@ -104,7 +110,7 @@ const tabAllowed = (id: TabId, perms: { canReconcile: boolean; canViewProfit: bo
 };
 
 export const ReportsView: React.FC<Props> = ({
-  salesTransactions, cashReconciliations, inventory, payPeriods, settlements, deviceBuyers, onSaveReconciliation,
+  salesTransactions, cashReconciliations, inventory, payPeriods, staffBonuses = [], booksStartDate, settlements, deviceBuyers, onSaveReconciliation,
   repairs, customers, auditLogs, activity, timeEntries, users, expenses, expenseCategories,
   recurringExpenses, canAddExpense, canViewAllExpenses, currentUserId, canReconcile, canViewProfit,
   onSaveExpense, onDeleteExpense,
@@ -124,7 +130,7 @@ export const ReportsView: React.FC<Props> = ({
   // profit must keep subtracting every workspace expense. The own-entries
   // filter lives exclusively in ExpensesTab (via visibleExpensesFor); it must
   // never be applied to ProfitLossInput.
-  const plInput: ProfitLossInput = { transactions: salesTransactions, inventory, payPeriods, cashReconciliations, settlements, expenses, expenseCategories };
+  const plInput: ProfitLossInput = { transactions: salesTransactions, inventory, payPeriods, cashReconciliations, settlements, expenses, expenseCategories, bonuses: staffBonuses, booksStartDate };
   return (
     <div className="max-w-5xl mx-auto space-y-6">
       <div className="flex flex-wrap items-center gap-2">
@@ -141,11 +147,11 @@ export const ReportsView: React.FC<Props> = ({
         <DailyHistoryTab
           salesTransactions={salesTransactions} cashReconciliations={cashReconciliations}
           repairs={repairs} inventory={inventory} customers={customers} auditLogs={auditLogs} activity={activity}
-          timeEntries={timeEntries} users={users} settlements={settlements}
+          timeEntries={timeEntries} users={users} settlements={settlements} booksStartDate={booksStartDate}
         />
       )}
       {tab === 'cash' && tabAllowed('cash', perms) && <CashReconTab salesTransactions={salesTransactions} cashReconciliations={cashReconciliations} onSave={onSaveReconciliation} />}
-      {tab === 'tax' && tabAllowed('tax', perms) && <TaxReportTab salesTransactions={salesTransactions} />}
+      {tab === 'tax' && tabAllowed('tax', perms) && <TaxReportTab salesTransactions={salesTransactions} booksStartDate={booksStartDate} />}
       {tab === 'pnl' && tabAllowed('pnl', perms) && <ProfitLossTab plInput={plInput} showExpenseCategories={canViewAllExpenses} />}
       {tab === 'expenses' && tabAllowed('expenses', perms) && (
         <ExpensesTab
@@ -154,9 +160,10 @@ export const ReportsView: React.FC<Props> = ({
           onSaveExpense={onSaveExpense} onDeleteExpense={onDeleteExpense}
           onSaveRecurringExpense={onSaveRecurringExpense} onDeleteRecurringExpense={onDeleteRecurringExpense}
           onGenerateRecurringExpense={onGenerateRecurringExpense} onSkipRecurringPeriod={onSkipRecurringPeriod}
+          booksStartDate={booksStartDate}
         />
       )}
-      {tab === 'settlements' && tabAllowed('settlements', perms) && <SettlementsTab settlements={settlements} deviceBuyers={deviceBuyers} />}
+      {tab === 'settlements' && tabAllowed('settlements', perms) && <SettlementsTab settlements={settlements} deviceBuyers={deviceBuyers} booksStartDate={booksStartDate} />}
       {tab === 'yearend' && tabAllowed('yearend', perms) && <YearEndTab plInput={plInput} showExpenseCategories={canViewAllExpenses} />}
     </div>
   );
@@ -185,7 +192,8 @@ const DailyHistoryTab: React.FC<{
   // Device-buyer settlements — fee income only (see domain/analytics.ts), so a
   // day's history reconciles with the P&L tab for the same date.
   settlements: Settlement[];
-}> = ({ salesTransactions, cashReconciliations, repairs, inventory, customers, auditLogs, activity, timeEntries, users, settlements }) => {
+  booksStartDate?: string;
+}> = ({ salesTransactions, cashReconciliations, repairs, inventory, customers, auditLogs, activity, timeEntries, users, settlements, booksStartDate }) => {
   const [date, setDate] = useState(todayISO());
   const now = Date.now();
 
@@ -193,8 +201,8 @@ const DailyHistoryTab: React.FC<{
   // both use — a single-day custom range around the picked date.
   const range = useMemo(() => presetRange('custom', now, { start: date, end: date }), [date, now]);
   const a = useMemo(
-    () => computeAnalytics(range, { salesTransactions, repairs, inventory, customers, auditLogs, activity, settlements }, now),
-    [range, salesTransactions, repairs, inventory, customers, auditLogs, activity, settlements, now],
+    () => computeAnalytics(range, { salesTransactions, repairs, inventory, customers, auditLogs, activity, settlements, booksStartDate }, now),
+    [range, salesTransactions, repairs, inventory, customers, auditLogs, activity, settlements, booksStartDate, now],
   );
   const eod = a.eod;
 
@@ -206,10 +214,13 @@ const DailyHistoryTab: React.FC<{
   // own inherits the previous day's till, and stays open if that day was
   // never closed. Without this, viewing a day the shop simply hadn't
   // opened yet showed a $0 drawer that had never been counted.
-  const carry = useMemo(() => drawerCarryOver(cashReconciliations, date), [cashReconciliations, date]);
+  const carry = useMemo(() => drawerCarryOver(cashReconciliations, date, d => expectedCashForDate(salesTransactions, d)), [cashReconciliations, salesTransactions, date]);
   const drawer = useMemo(() => cashDrawerSummary(recon, cashSales, carry), [recon, cashSales, carry]);
   const reconciled = !!recon?.reconciledAt;
-  const variance = recon?.variance || 0;
+  // Derived, never read off the record: an offline merge write cannot
+  // recompute the day's totals, so the stored variance can lag until the next
+  // online write (domain/reports.ts's recomputedVariance).
+  const variance = recomputedVariance(recon, cashSales);
   const varianceOk = Math.abs(variance) < 0.005;
 
   // Same per-shift data the Time Clock's Daily Hours view reads — just scoped
@@ -527,7 +538,7 @@ const CashReconTab: React.FC<{
         </div>
       </div>
 
-      <CashHistory cashReconciliations={cashReconciliations} onPick={setDate} />
+      <CashHistory cashReconciliations={cashReconciliations} salesTransactions={salesTransactions} onPick={setDate} />
     </div>
   );
 };
@@ -541,7 +552,7 @@ const CashReconTab: React.FC<{
 const RANGES: { days: number; label: string }[] = [
   { days: 30, label: '30 days' }, { days: 90, label: '90 days' }, { days: 365, label: '1 year' }, { days: 0, label: 'All' },
 ];
-const CashHistory: React.FC<{ cashReconciliations: CashReconciliation[]; onPick: (date: string) => void }> = ({ cashReconciliations, onPick }) => {
+const CashHistory: React.FC<{ cashReconciliations: CashReconciliation[]; salesTransactions: SalesTransaction[]; onPick: (date: string) => void }> = ({ cashReconciliations, salesTransactions, onPick }) => {
   const [days, setDays] = useState(30);
   const cutoff = useMemo(() => {
     if (!days) return '';
@@ -573,6 +584,10 @@ const CashHistory: React.FC<{ cashReconciliations: CashReconciliation[]; onPick:
           <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
             {rows.map(r => {
               const reconciled = !!r.reconciledAt;
+              // Derived per row rather than read off the record — an offline
+              // merge write leaves the stored variance stale until the next
+              // online write rewrites it.
+              const variance = recomputedVariance(r, expectedCashForDate(salesTransactions, r.date));
               return (
                 <tr key={r.id} className="cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/40" onClick={() => onPick(r.date)}>
                   <td className="py-2 font-medium text-slate-700 dark:text-slate-200">{r.date}</td>
@@ -582,7 +597,7 @@ const CashHistory: React.FC<{ cashReconciliations: CashReconciliation[]; onPick:
                   <td className="py-2 text-right text-slate-500 dark:text-slate-400">{money(sumDrawerEntries(r.withdrawals))}</td>
                   <td className="py-2 text-right text-slate-500 dark:text-slate-400">{reconciled && r.countedCash != null ? money(r.countedCash) : <span className="text-slate-400">—</span>}</td>
                   {reconciled && r.countedCash != null
-                    ? <td className={`py-2 text-right font-semibold ${Math.abs(r.variance) < 0.005 ? 'text-emerald-600' : 'text-amber-600 dark:text-amber-400'}`}>{r.variance > 0 ? '+' : ''}{money(r.variance)}</td>
+                    ? <td className={`py-2 text-right font-semibold ${Math.abs(variance) < 0.005 ? 'text-emerald-600' : 'text-amber-600 dark:text-amber-400'}`}>{variance > 0 ? '+' : ''}{money(variance)}</td>
                     : <td className="py-2 text-right text-slate-400">—</td>}
                   <td className="py-2 pl-4 text-slate-500 dark:text-slate-400 truncate max-w-[220px]">{r.note || '—'}</td>
                   <td className="py-2">
@@ -601,11 +616,11 @@ const CashHistory: React.FC<{ cashReconciliations: CashReconciliation[]; onPick:
 };
 
 /* ---------------- Sales tax remittance ---------------- */
-const TaxReportTab: React.FC<{ salesTransactions: SalesTransaction[] }> = ({ salesTransactions }) => {
+const TaxReportTab: React.FC<{ salesTransactions: SalesTransaction[]; booksStartDate?: string }> = ({ salesTransactions, booksStartDate }) => {
   const [start, setStart] = useState(monthStartISO());
   const [end, setEnd] = useState(todayISO());
   const [grouping, setGrouping] = useState<TaxGrouping>('month');
-  const report = useMemo(() => taxRemittance(salesTransactions, start, end, grouping), [salesTransactions, start, end, grouping]);
+  const report = useMemo(() => taxRemittance(salesTransactions, start, end, grouping, booksStartDate), [salesTransactions, start, end, grouping, booksStartDate]);
 
   const exportCsv = () => {
     const csv = toCSV(taxReportCsvRows(report));
@@ -630,6 +645,7 @@ const TaxReportTab: React.FC<{ salesTransactions: SalesTransaction[] }> = ({ sal
             <Download className="w-4 h-4" /> Export CSV
           </button>
         </div>
+        {report.clampedToBooksStart && <BooksStartNote from={report.start} />}
         <p className="text-xs text-slate-400">
           Tax collected on recognized sales only — voided, returned and not-yet-settled layaway sales are excluded. Repairs don't collect sales tax separately, so all remittable tax comes from sales.
         </p>
@@ -701,6 +717,17 @@ const PLRow: React.FC<{ label: string; value: number; negative?: boolean; income
 // the ARITHMETIC is unchanged: pl.expenses is still the full workspace expense
 // total and pl.netProfit still subtracts it. The split governs who may browse
 // the ledger, not what the accounting includes.
+
+// Shown whenever a chosen range reaches back before the books start date and
+// was pulled forward. Saying it out loud is the point: a total that silently
+// covers fewer days than its own date controls claim is exactly the kind of
+// figure an owner would act on without noticing.
+const BooksStartNote: React.FC<{ from: string }> = ({ from }) => (
+  <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-2">
+    Figures start {from} (books start date) — earlier records are excluded from totals, but are still there and searchable.
+  </p>
+);
+
 const ProfitLossTab: React.FC<{ plInput: ProfitLossInput; showExpenseCategories: boolean }> = ({ plInput, showExpenseCategories }) => {
   const [start, setStart] = useState(monthStartISO());
   const [end, setEnd] = useState(todayISO());
@@ -718,11 +745,16 @@ const ProfitLossTab: React.FC<{ plInput: ProfitLossInput; showExpenseCategories:
       </div>
       <div className={`${card} p-5`}>
         <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200 mb-3">Profit &amp; Loss · {pl.start} → {pl.end}</h3>
+        {pl.clampedToBooksStart && <BooksStartNote from={pl.start} />}
         <div className="text-sm">
           <PLRow label="Revenue" value={pl.revenue} />
           <PLRow label="Cost of goods sold" value={pl.costOfGoods} negative />
           <PLRow label="Gross profit" value={pl.grossProfit} bold />
           <PLRow label="Payroll" value={pl.payroll} negative />
+          {/* Separate from Payroll (hours × rate, which the accountant
+              reconciles against timesheets) and from Expenses (whose Wages
+              category is excluded from the P&L by design). */}
+          <PLRow label="Staff bonuses" value={pl.bonuses} negative />
           {showExpenseCategories
             ? pl.expensesByCategory.map(c => (
                 <PLRow key={c.category} label={`Expense: ${c.label}${c.excludedFromPL ? ' (informational)' : ''}`} value={c.total} negative={!c.excludedFromPL} />
@@ -745,10 +777,10 @@ const ProfitLossTab: React.FC<{ plInput: ProfitLossInput; showExpenseCategories:
 };
 
 /* ---------------- Device buyer settlement history ---------------- */
-const SettlementsTab: React.FC<{ settlements: Settlement[]; deviceBuyers: DeviceBuyer[] }> = ({ settlements, deviceBuyers }) => {
+const SettlementsTab: React.FC<{ settlements: Settlement[]; deviceBuyers: DeviceBuyer[]; booksStartDate?: string }> = ({ settlements, deviceBuyers, booksStartDate }) => {
   const [start, setStart] = useState(monthStartISO());
   const [end, setEnd] = useState(todayISO());
-  const h = useMemo(() => settlementHistory(settlements, deviceBuyers, start, end), [settlements, deviceBuyers, start, end]);
+  const h = useMemo(() => settlementHistory(settlements, deviceBuyers, start, end, booksStartDate), [settlements, deviceBuyers, start, end, booksStartDate]);
   const exportCsv = () => {
     const rows = h.lines.map(l => ({
       Date: l.date, DeviceBuyer: l.buyerName,
@@ -849,6 +881,7 @@ const YearEndTab: React.FC<{ plInput: ProfitLossInput; showExpenseCategories: bo
     { label: 'Cost of goods sold', value: summary.costOfGoods },
     { label: 'Gross profit', value: summary.grossProfit, strong: true },
     { label: 'Payroll paid', value: summary.payrollPaid },
+    { label: 'Staff bonuses paid', value: summary.bonuses },
     ...(showExpenseCategories
       ? summary.expensesByCategory.map(c => ({ label: `Expense: ${c.label}${c.excludedFromPL ? ' (informational)' : ''}`, value: c.total }))
       : [{ label: 'Expenses', value: summary.expenses }]),
@@ -873,6 +906,7 @@ const YearEndTab: React.FC<{ plInput: ProfitLossInput; showExpenseCategories: bo
             <Download className="w-4 h-4" /> Export CSV
           </button>
         </div>
+        {summary.clampedToBooksStart && <BooksStartNote from={summary.figuresStart} />}
         <p className="mt-3 text-xs text-slate-400">One consolidated annual summary to hand to your accountant — revenue, profit, payroll, cash expenses, device buyer service fee income and sales tax collected for {year}.</p>
       </div>
       <div className={`${card} p-5`}>
@@ -930,6 +964,16 @@ const ExpenseModal: React.FC<{
             <select value={draft.category} onChange={e => setDraft(d => ({ ...d, category: e.target.value }))} className={`${input} w-full`}>
               {activeCategories.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
             </select>
+            {/* The Wages category is excludeFromPL — it is informational only,
+                so hourly payroll (already subtracted from the pay-period
+                records) is not counted twice. A BONUS logged here therefore
+                never reduces net profit, which is a silent loss of real
+                money. Say so at the point of entry. */}
+            {activeCategories.find(c => c.key === draft.category)?.excludeFromPL && (
+              <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-1">
+                This category is informational — it does not reduce net profit. For a staff bonus, use Staff → Add bonus instead so it counts in profit.
+              </p>
+            )}
           </div>
           <div>
             <label className={label}>Payment method</label>
@@ -1086,7 +1130,8 @@ const ExpensesTab: React.FC<{
   onDeleteRecurringExpense: (id: string) => void;
   onGenerateRecurringExpense: (r: RecurringExpense, period: DuePeriod, enteredAmount?: number) => void;
   onSkipRecurringPeriod: (r: RecurringExpense, periodKey: string) => void;
-}> = ({ expenses, categories, recurringExpenses, canViewAll, currentUserId, onSaveExpense, onDeleteExpense, onSaveRecurringExpense, onDeleteRecurringExpense, onGenerateRecurringExpense, onSkipRecurringPeriod }) => {
+  booksStartDate?: string;
+}> = ({ expenses, categories, recurringExpenses, canViewAll, currentUserId, onSaveExpense, onDeleteExpense, onSaveRecurringExpense, onDeleteRecurringExpense, onGenerateRecurringExpense, onSkipRecurringPeriod, booksStartDate }) => {
   const [start, setStart] = useState(monthStartISO());
   const [end, setEnd] = useState(todayISO());
   const [editing, setEditing] = useState<Expense | null | 'new'>(null);
@@ -1112,7 +1157,7 @@ const ExpensesTab: React.FC<{
   // the due list or the template list at all.
   const dueByRecurring = useMemo(
     () => canViewAll
-      ? recurringExpenses.filter(r => r.active).map(r => ({ r, due: duePeriodsFor(r, now) })).filter(x => x.due.length > 0)
+      ? recurringExpenses.filter(r => r.active).map(r => ({ r, due: duePeriodsFor(r, now, booksStartDate) })).filter(x => x.due.length > 0)
       : [],
     [recurringExpenses, now, canViewAll],
   );
