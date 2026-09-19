@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { KioskStaff, TimeEntry, TimeBreak, BreakReason } from '../types';
 import {
   punchRoster, punchStateFor, confirmLabel, fmtDuration, breakElapsedMs, canStepOut,
-  isPunchableEntry, isStaleOpenShift,
+  isPunchableEntry, isStaleOpenShift, staleShiftLabel,
   initialPinAttempts, registerFailedPin, pinCooldownActive, pinErrorMessage,
   MAX_PIN_ATTEMPTS, PIN_COOLDOWN_MS, WRONG_PIN_MESSAGE,
   buildKioskClockIn, buildKioskClockOut, buildKioskStartBreak, buildKioskEndBreak,
@@ -390,5 +390,35 @@ describe('every builder produces a legal evolution', () => {
     expect(validateKioskWrite(open, { ...open, clockIn: NOON - H }).ok).toBe(false);
     expect(validateKioskWrite(closed, { ...closed, clockOut: NOON + 9 * H }).ok).toBe(false);
     expect(validateKioskWrite(open, { ...open, userId: 'u2' }).ok).toBe(false);
+  });
+});
+
+/* ---------------- A shift left open over a weekend ---------------- */
+
+describe('a shift somebody never clocked out of on Friday', () => {
+  // The read window is four days so the punch screen can SEE this. It still
+  // refuses to touch it: firestore.rules allows a kiosk write only within the
+  // last day, and the door iPad must never decide what somebody's hours were.
+  const friday = NOON - 72 * H;
+  const open = shiftFor('u1', { clockIn: friday });
+  const state = punchStateFor('u1', [open], NOON);
+
+  it('is recognised as stale rather than punchable', () => {
+    expect(isStaleOpenShift(state, NOON)).toBe(true);
+    expect(isPunchableEntry(open, NOON)).toBe(false);
+  });
+
+  it('NAMES the shift, so the person recognises which one it is', () => {
+    const label = staleShiftLabel(state, ms => new Date(ms).toLocaleString([], { weekday: 'long', hour: 'numeric', minute: '2-digit' }));
+    expect(label).toMatch(/^You're still clocked in from .+\.$/);
+  });
+
+  it('says nothing when there is no open shift to describe', () => {
+    expect(staleShiftLabel(punchStateFor('nobody', [], NOON), () => 'x')).toBeNull();
+  });
+
+  it('a shift from this morning is NOT stale — the punch goes through', () => {
+    const today = punchStateFor('u1', [shiftFor('u1', { clockIn: NOON - 3 * H })], NOON);
+    expect(isStaleOpenShift(today, NOON)).toBe(false);
   });
 });

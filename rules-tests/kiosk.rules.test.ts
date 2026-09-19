@@ -70,6 +70,16 @@ beforeEach(async () => {
     const twoDaysAgo = Date.now() - 50 * 3600_000;
     await setDoc(doc(db, 'user_data', WORKSPACE, 'timeEntries', 'employee-stale'),
       { id: 'employee-stale', userId: 'employee-uid', userEmail: 'employee@shop.test', clockIn: twoDaysAgo, breaks: [], createdAt: twoDaysAgo });
+    // THE WEEKEND CASE: clocked in Friday morning, back Monday morning, never
+    // clocked out. 72 hours — outside the old two-day window, which is why the
+    // punch screen could not see it and offered a second clock-in.
+    const fridayMorning = Date.now() - 72 * 3600_000;
+    await setDoc(doc(db, 'user_data', WORKSPACE, 'timeEntries', 'employee-friday'),
+      { id: 'employee-friday', userId: 'employee-uid', userEmail: 'employee@shop.test', clockIn: fridayMorning, breaks: [], createdAt: fridayMorning });
+    // Genuinely old. Past the read window by any measure.
+    const lastMonth = Date.now() - 30 * 24 * 3600_000;
+    await setDoc(doc(db, 'user_data', WORKSPACE, 'timeEntries', 'employee-ancient'),
+      { id: 'employee-ancient', userId: 'employee-uid', userEmail: 'employee@shop.test', clockIn: lastMonth, breaks: [], createdAt: lastMonth });
   });
 });
 
@@ -275,7 +285,8 @@ describe('a kiosk timeEntries read is BOUNDED, server-side', () => {
   // would return, which is what makes a clockIn floor enforceable: an
   // unbounded query reaches an old entry, that entry fails, the whole query is
   // denied.
-  const WINDOW_MS = 48 * 3600_000;
+  // FOUR DAYS. Two was not enough to cover a weekend — see the Friday case.
+  const WINDOW_MS = 96 * 3600_000;
   const entries = () => collection(asKiosk(), 'user_data', WORKSPACE, 'timeEntries');
   const bounded = (since: number) =>
     query(entries(), where('clockIn', '>=', since), orderBy('clockIn', 'desc'), limit(200));
@@ -293,13 +304,29 @@ describe('a kiosk timeEntries read is BOUNDED, server-side', () => {
     expect(snap.docs.map(d => d.id)).toContain('employee-open');
   });
 
-  it('a bound reaching FURTHER BACK than the window is denied', async () => {
-    // 50 hours ago would sweep in the stale shift, and everything older.
+  it('a bound reaching FURTHER BACK than the window is still denied', async () => {
+    // Widening to four days did NOT make the read unbounded: a month-old
+    // query still sweeps in an entry that fails the rule, so it is refused.
     await assertFails(getDocs(bounded(Date.now() - 30 * 24 * 3600_000)));
   });
 
   it('a kiosk cannot read an entry older than the bound even one at a time', async () => {
-    await assertFails(getDoc(doc(asKiosk(), 'user_data', WORKSPACE, 'timeEntries', 'employee-stale')));
+    await assertFails(getDoc(doc(asKiosk(), 'user_data', WORKSPACE, 'timeEntries', 'employee-ancient')));
+  });
+
+  it('SEES the Friday shift somebody never clocked out of', async () => {
+    // The whole point of widening: at 48 hours this fell outside the window,
+    // so the punch screen offered "Clock in" and the person ended up with two
+    // open entries.
+    const snap = await getDocs(bounded(Date.now() - WINDOW_MS));
+    expect(snap.docs.map(d => d.id)).toContain('employee-friday');
+  });
+
+  it('but may still NOT write to it — reading is not correcting', async () => {
+    // The write window (withinLastDay) is untouched. The door iPad can now
+    // show the stale shift; it still cannot decide what those hours were.
+    await assertFails(updateDoc(doc(asKiosk(), 'user_data', WORKSPACE, 'timeEntries', 'employee-friday'),
+      { clockOut: Date.now() }));
   });
 
   it('a list without a page cap is denied', async () => {
@@ -308,7 +335,7 @@ describe('a kiosk timeEntries read is BOUNDED, server-side', () => {
 
   it('owner and manager reads are UNCHANGED — they still see everything', async () => {
     await assertSucceeds(getDocs(collection(asOwner(), 'user_data', WORKSPACE, 'timeEntries')));
-    await assertSucceeds(getDoc(doc(asOwner(), 'user_data', WORKSPACE, 'timeEntries', 'employee-stale')));
+    await assertSucceeds(getDoc(doc(asOwner(), 'user_data', WORKSPACE, 'timeEntries', 'employee-ancient')));
   });
 });
 

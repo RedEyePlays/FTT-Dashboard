@@ -44,7 +44,7 @@ import { skuPrefix, nextSku } from './services/sku';
 import { REPAIR_PREFIX, BATCH_PREFIX, applyTechEdit, techUpdateAuditPlan, repairSalePrefill, completeRepair, completeRepairSale, dateToEpochMs, isRepairOpen, flagDeviceForRepair, restoredDeviceStatus } from './domain/repairs';
 import { repairCostWriteback, applyRepairCostDelta } from './domain/repairCostWriteback';
 import { bonusDrawerEffect, canSaveBonus, visibleBonuses } from './domain/bonuses';
-import { attributeDrawerEntry } from './domain/dayLedger';
+import { attributeDrawerEntry, stampNewEntries } from './domain/dayLedger';
 import { paidBreakChangeImpact, paidBreakChangeMessage, paidBreakChangeAudit, sameReasons } from './domain/paidBreakChange';
 import { buildKioskClockIn, buildKioskClockOut, buildKioskStartBreak, buildKioskEndBreak, validateKioskWrite } from './domain/kiosk';
 import { markTicketDeviceSold } from './domain/repairVisibility';
@@ -1081,18 +1081,26 @@ const App: React.FC = () => {
     // attributeDrawerEntry never overwrites a field an entry already has, so
     // re-saving the Reports editor's lists keeps whoever actually made each
     // entry instead of crediting them all to whoever last pressed Save.
-    const stamp = (entries?: CashDrawerEntry[]) => entries?.map(e => attributeDrawerEntry(e, {
+    const stampCtx = {
       at: Date.now(), by: appUser.id, byEmail: appUser.email,
       source: auditCtx?.path,
       refId: (auditCtx?.transactionId || auditCtx?.dropOffId || auditCtx?.settlementId
         || auditCtx?.bonusId || auditCtx?.expenseId || auditCtx?.purchaseId) as string | undefined,
-    }));
+    };
+    // The record as it stands, so the stamp can tell a genuinely NEW entry
+    // from one that was already there. The Reports editor saves the WHOLE of
+    // each list as a patch, so without this every pre-existing entry on a day
+    // got credited to whoever pressed Save the first time it was edited — see
+    // domain/dayLedger.ts's stampNewEntries.
+    const current = cashReconciliations.find(r => r.date === date);
     const attributedPatch: Partial<CashReconciliation> = {
       ...patch,
-      ...(patch.cashIn ? { cashIn: stamp(patch.cashIn) } : {}),
-      ...(patch.cashOut ? { cashOut: stamp(patch.cashOut) } : {}),
-      ...(patch.withdrawals ? { withdrawals: stamp(patch.withdrawals) } : {}),
+      ...(patch.cashIn ? { cashIn: stampNewEntries(patch.cashIn, current?.cashIn, stampCtx) } : {}),
+      ...(patch.cashOut ? { cashOut: stampNewEntries(patch.cashOut, current?.cashOut, stampCtx) } : {}),
+      ...(patch.withdrawals ? { withdrawals: stampNewEntries(patch.withdrawals, current?.withdrawals, stampCtx) } : {}),
     };
+    // Appends are new by definition, so they are stamped outright.
+    const stamp = (entries?: CashDrawerEntry[]) => entries?.map(e => attributeDrawerEntry(e, stampCtx));
     const attributedAppends: DrawerAppends | undefined = appends && {
       ...(appends.cashIn ? { cashIn: stamp(appends.cashIn) } : {}),
       ...(appends.cashOut ? { cashOut: stamp(appends.cashOut) } : {}),

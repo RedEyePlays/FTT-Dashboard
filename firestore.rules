@@ -81,13 +81,22 @@ service cloud.firestore {
     // The only fields a kiosk UPDATE may CHANGE — clock out, or start/end a
     // break. Never clockIn, never userId, never hours by any other route.
     function kioskUpdateKeys() { return ['clockOut', 'breaks']; }
-    // How far back a kiosk may LIST timeEntries. Wider than withinLastDay
-    // because the punch screen has to see an overnight shift and a shift left
-    // open since yesterday (which it refuses, telling the person to see a
-    // manager). Kept in step with services/firestoreDb.ts's
-    // KIOSK_TIME_ENTRY_WINDOW_MS, which is a touch wider so a clock-skewed
-    // device doesn't sit exactly on the boundary.
-    function withinLastTwoDays(ms) { return ms > request.time.toMillis() - 180000000; }
+    // How far back a kiosk may LIST timeEntries: FOUR DAYS (100h here, a touch
+    // wider than the client's 96h so a clock-skewed device doesn't sit exactly
+    // on the boundary and get its whole query denied).
+    //
+    // Wider than withinLastDay because the punch screen has to SEE a shift it
+    // will then refuse to touch. Two days was not enough: somebody who forgot
+    // to clock out on Friday and came back Monday had their open shift fall
+    // outside the window entirely, so the screen offered "Clock in" and they
+    // ended up with two open entries. Four days covers a weekend and a long
+    // weekend. Kept in step with services/firestoreDb.ts's
+    // KIOSK_TIME_ENTRY_WINDOW_MS.
+    //
+    // Note this only widens what a kiosk may READ. What it may WRITE is still
+    // withinLastDay — a stale shift is a correction, and the door iPad must
+    // never decide what somebody's hours were.
+    function withinKioskReadWindow(ms) { return ms > request.time.toMillis() - 360000000; }
     // The page cap a kiosk list must carry. Belt and braces with the clockIn
     // floor below: the floor is what actually bounds the data, this stops an
     // unbounded scan being attempted at all.
@@ -288,7 +297,7 @@ service cloud.firestore {
         // now.
         //
         // In a `list` rule Firestore evaluates the condition against EVERY
-        // document the query would return, so requiring withinLastTwoDays on
+        // document the query would return, so requiring withinKioskReadWindow on
         // resource.data.clockIn makes an unbounded query fail outright: it
         // would return an old entry, that entry fails the rule, the whole
         // query is denied. A query carrying the clockIn floor returns only
@@ -299,11 +308,11 @@ service cloud.firestore {
         // The same bound applies to a single-document read, or it would be a
         // way around the list rule one id at a time.
         allow get: if activeMemberOf(ws)
-          || (isKioskOf(ws) && withinLastTwoDays(resource.data.clockIn));
+          || (isKioskOf(ws) && withinKioskReadWindow(resource.data.clockIn));
         allow list: if activeMemberOf(ws)
           || (isKioskOf(ws)
               && request.query.limit <= kioskListLimit()
-              && withinLastTwoDays(resource.data.clockIn));
+              && withinKioskReadWindow(resource.data.clockIn));
         allow create: if isManagerUp(ws)
           || (isSelfServiceStaffOf(ws)
               && request.resource.data.userId == request.auth.uid

@@ -3,7 +3,7 @@ import { Clock, Delete, ArrowLeft, Check, Coffee, LogIn, LogOut, WifiOff } from 
 import { KioskStaff, TimeEntry, BreakReason } from '../types';
 import {
   punchRoster, punchStateFor, PunchState, confirmLabel, fmtDuration, breakElapsedMs,
-  canStepOut, isStaleOpenShift,
+  canStepOut, isStaleOpenShift, staleShiftLabel,
   initialPinAttempts, PinAttemptState, pinCooldownActive, registerFailedPin, pinErrorMessage,
 } from '../domain/kiosk';
 import { BREAK_REASONS, breakReasonLabel, PaidBreakReasons } from '../domain/timeclock';
@@ -252,7 +252,8 @@ export const KioskPunchView: React.FC<Props> = ({
               <>
                 <p className="text-xl font-semibold mb-2">{person.displayName}</p>
                 <p className="text-amber-300 mb-6">
-                  Your shift from {new Date(state.open!.clockIn).toLocaleDateString()} is still open. A manager needs to fix that on the Time Clock screen — it can't be corrected here.
+                  {staleShiftLabel(state, ms => new Date(ms).toLocaleString([], { weekday: 'long', hour: 'numeric', minute: '2-digit' }))}
+                  {' '}A manager needs to close that shift on the Time Clock screen — it can&apos;t be corrected here, and clocking in again would leave you with two open shifts.
                 </p>
                 <button onClick={reset} className={`${tile} bg-white/10 hover:bg-white/20 px-6 py-4 w-full text-lg`}>Done</button>
               </>

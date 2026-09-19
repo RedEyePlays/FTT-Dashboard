@@ -4,7 +4,7 @@ import {
 } from '../types';
 import {
   buildDayLedger, cashOnly, shortfallWalk, rowsForWalkLine, dayLedgerFacts,
-  trimForViewer, ledgerCsvRows, attributeDrawerEntry, isUnattributed, sortLedger,
+  trimForViewer, ledgerCsvRows, attributeDrawerEntry, isUnattributed, sortLedger, stampNewEntries,
   LedgerRow,
 } from './dayLedger';
 import { expectedEndingCash } from './reports';
@@ -347,5 +347,71 @@ describe('stamping attribution onto a drawer entry', () => {
     expect(isUnattributed(e)).toBe(true);
     expect(e.source).toBeUndefined();
     expect(e.refType).toBeUndefined();
+  });
+});
+
+/* ---------------- Editing a day must not fabricate attribution ---------------- */
+
+describe('saving an edit never invents who moved the money', () => {
+  // The Reports → Cash editor saves the WHOLE of a day's lists as a patch.
+  // Stamping that patch stamped every pre-existing entry too, and entries
+  // written before attribution existed have nothing to overwrite — so the
+  // never-overwrite guard did not help and the stamp simply landed. The first
+  // edit of any past day credited all of its old entries to whoever pressed
+  // Save. That is worse than the honest blank it replaced.
+  const ctx = { at: T(17), by: 'editor', byEmail: 'editor@shop.test', source: 'reportsEditNoCount' };
+
+  // Written before attribution existed: no by, no at, no source.
+  const legacy: CashDrawerEntry = { id: 'old', amount: 200, note: 'till float' };
+  const attributed: CashDrawerEntry = {
+    id: 'mine', amount: 50, at: T(9), by: 'ali', byEmail: 'ali@shop.test', source: 'logCashMovement',
+  };
+
+  it('leaves an untouched legacy entry UNATTRIBUTED after a save', () => {
+    const [out] = stampNewEntries([legacy], [legacy], ctx)!;
+    expect(out).toEqual(legacy);
+    expect(isUnattributed(out)).toBe(true);
+    expect(out.at).toBeUndefined();
+  });
+
+  it('leaves an EDITED legacy entry unattributed too', () => {
+    // Same id, changed amount and note. Recording the edit belongs in the
+    // audit log, never in a rewrite of who moved the money.
+    const edited = { ...legacy, amount: 250, note: 'till float (corrected)' };
+    const [out] = stampNewEntries([edited], [legacy], ctx)!;
+    expect(out).toEqual(edited);
+    expect(isUnattributed(out)).toBe(true);
+  });
+
+  it('stamps a genuinely NEW entry added in the same save', () => {
+    const added: CashDrawerEntry = { id: 'new', amount: 30, note: 'tips' };
+    const out = stampNewEntries([legacy, added], [legacy], ctx)!;
+    expect(out[0]).toEqual(legacy);
+    expect(out[1]).toMatchObject({ id: 'new', by: 'editor', byEmail: 'editor@shop.test', at: T(17), source: 'reportsEditNoCount' });
+    expect(isUnattributed(out[1])).toBe(false);
+  });
+
+  it('an entry that already has `by` keeps its ORIGINAL by, not the editor', () => {
+    const [out] = stampNewEntries([{ ...attributed, amount: 75 }], [attributed], ctx)!;
+    expect(out.by).toBe('ali');
+    expect(out.at).toBe(T(9));
+  });
+
+  it('every entry is new when the day has no record yet', () => {
+    const out = stampNewEntries([legacy], undefined, ctx)!;
+    expect(out[0].by).toBe('editor');
+  });
+
+  it('passes undefined straight through, so an untouched list is not created', () => {
+    expect(stampNewEntries(undefined, [legacy], ctx)).toBeUndefined();
+  });
+
+  it('and the trail still reports the legacy entry as unattributed afterwards', () => {
+    // The whole point: isUnattributed() must keep being able to tell the truth.
+    const saved = stampNewEntries([legacy], [legacy], ctx)!;
+    const rows = buildDayLedger({ date: DATE, sales: [], recon: recon({ cashIn: saved }) });
+    const row = rows.find(r => r.kind === 'cash_in')!;
+    expect(row.unattributed).toBe(true);
+    expect(row.who).toBeUndefined();
   });
 });
