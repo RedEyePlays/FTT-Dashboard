@@ -44,6 +44,7 @@ import { skuPrefix, nextSku } from './services/sku';
 import { REPAIR_PREFIX, BATCH_PREFIX, applyTechEdit, techUpdateAuditPlan, repairSalePrefill, completeRepair, completeRepairSale, dateToEpochMs, isRepairOpen, flagDeviceForRepair, restoredDeviceStatus } from './domain/repairs';
 import { repairCostWriteback, applyRepairCostDelta } from './domain/repairCostWriteback';
 import { bonusDrawerEffect, canSaveBonus, visibleBonuses } from './domain/bonuses';
+import { paidBreakChangeImpact, paidBreakChangeMessage, paidBreakChangeAudit, sameReasons } from './domain/paidBreakChange';
 import { buildKioskClockIn, buildKioskClockOut, buildKioskStartBreak, buildKioskEndBreak, validateKioskWrite } from './domain/kiosk';
 import { markTicketDeviceSold } from './domain/repairVisibility';
 import { MergePlan, resolveCustomerForDraft, CustomerDraft } from './domain/customers';
@@ -603,6 +604,25 @@ const App: React.FC = () => {
     catch { /* ignore */ }
   }, [settings.tax.percent]);
 
+  // Ticking a paid-break reason recalculates hours for every period that has
+  // not been paid yet. Already-paid periods carry a snapshot and are safe, but
+  // the owner must be told the real number before the change lands — so this
+  // computes it rather than asserting a sentence.
+  const paidBreakImpactOf = (after: BreakReason[]) => paidBreakChangeImpact({
+    entries: timeEntries,
+    users: workspaceUsers,
+    approvals: payPeriodApprovals,
+    paid: payPeriods,
+    before: settings.operations.paidBreakReasons || [],
+    after,
+    now: Date.now(),
+    days: PAY_CYCLE_DAYS[settings.payroll.cycle],
+    anchorISO: settings.payroll.anchorISO,
+  });
+
+  const confirmPaidBreakChange = (after: BreakReason[]): boolean =>
+    window.confirm(paidBreakChangeMessage(paidBreakImpactOf(after)));
+
   // Persist owner settings to Firestore, and mirror the few values that other
   // components read from localStorage (POS tax rate, default label template).
   const handleSaveSettings = async (next: AppSettings) => {
@@ -610,8 +630,18 @@ const App: React.FC = () => {
     // Record which sections actually changed (e.g. ['tax','labels']) rather than a
     // generic "Settings updated" with no detail.
     const changed = changedSettingsSections(settings, next);
+    // A paid-break change rewrites hours for every unpaid period, so it gets
+    // its own audit entry — old reasons, new reasons, and how many periods
+    // recalculated — instead of hiding inside "Settings updated: operations".
+    const breaksBefore = settings.operations.paidBreakReasons || [];
+    const breaksAfter = next.operations.paidBreakReasons || [];
     await saveSettings(uid, next);
     audit('settings.update', 'settings', 'app', undefined, { changed });
+    if (!sameReasons(breaksBefore, breaksAfter)) {
+      audit('settings.paid_breaks', 'settings', 'app', { paidBreakReasons: [...breaksBefore] }, paidBreakChangeAudit(
+        breaksBefore, breaksAfter, paidBreakImpactOf(breaksAfter),
+      ));
+    }
     logActivity(changed.length ? `Settings updated: ${changed.join(', ')}` : 'Settings updated');
     try {
       localStorage.setItem('posSettings', JSON.stringify({ taxRate: next.tax.percent }));
@@ -1837,6 +1867,11 @@ const App: React.FC = () => {
         periodEnd: toISODate(period.end - 1),
         approvedBy: appUser.id, approvedByEmail: appUser.email, approvedAt: Date.now(),
         hours: pay.hours, gross: pay.gross, rate: pay.rate,
+        // The paid-break setting these figures were computed under. Stored so
+        // that a later change to it is DETECTABLE on this period rather than
+        // inferred — an approval without it means "unknown", and nothing is
+        // claimed about it.
+        paidBreakReasons: [...(settings.operations.paidBreakReasons || [])],
       };
       await savePayPeriodApproval(uid, rec).catch(() => {});
       audit('timeclock.approve_paid', 'payPeriod', rec.id, undefined, { hours: pay.hours, gross: pay.gross });
@@ -2778,6 +2813,7 @@ const App: React.FC = () => {
               onUnmarkPaid={handleUnmarkPaid}
               onCorrectClockOut={handleCorrectClockOut}
               paidBreakReasons={settings.operations.paidBreakReasons}
+              paidBreakReasonsUpdatedAt={settings.operations.paidBreakReasonsUpdatedAt}
               staffBonuses={visibleBonuses(staffBonuses, { id: appUser.id, canViewPayroll: allow('payroll.manage') })}
               canAddBonus={appUser.role === 'owner'}
               onSaveBonus={appUser.role === 'owner' ? handleSaveBonus : undefined}
@@ -2809,6 +2845,7 @@ const App: React.FC = () => {
             <SettingsView
               settings={settings}
               onSave={handleSaveSettings}
+              confirmPaidBreakChange={confirmPaidBreakChange}
               canManage={allow('settings.manage')}
               role={appUser.role}
               loadBackupHistory={appUser.role === 'owner' && workspaceId ? () => import('./services/backupStorage').then(m => m.listWorkspaceBackups(workspaceId)) : undefined}

@@ -73,9 +73,15 @@ interface Props {
   // Automated-backup history (owner-only). Provided by App from Cloud Storage.
   loadBackupHistory?: () => Promise<BackupFileMeta[]>;
   onDownloadBackup?: (path: string) => void;
+  // Asked before a paid-break reason is ticked or un-ticked. App supplies it
+  // because only App has the shifts, approvals and paid periods needed to say
+  // how many periods actually recalculate — Settings must not guess at a
+  // number that changes what people are paid. Returning false leaves the
+  // setting alone. Omitted (e.g. in tests) means no confirm.
+  confirmPaidBreakChange?: (next: BreakReason[]) => boolean;
 }
 
-export const SettingsView: React.FC<Props> = ({ settings, onSave, canManage, role, appVersion = '1.0.0', backupSlot, loadBackupHistory, onDownloadBackup }) => {
+export const SettingsView: React.FC<Props> = ({ settings, onSave, canManage, role, appVersion = '1.0.0', backupSlot, loadBackupHistory, onDownloadBackup, confirmPaidBreakChange }) => {
   const isMobile = useIsMobile();
   const [active, setActive] = useState<SectionId>('general');
   const [draft, setDraft] = useState<AppSettings>(settings);
@@ -160,7 +166,7 @@ export const SettingsView: React.FC<Props> = ({ settings, onSave, canManage, rol
             {active === 'taxes' && <TaxesSection draft={draft} patch={patch} />}
             {active === 'labels' && <LabelsSection draft={draft} patch={patch} />}
             {active === 'customers' && <CustomersSection draft={draft} patch={patch} />}
-            {active === 'operations' && <OperationsSection draft={draft} patch={patch} />}
+            {active === 'operations' && <OperationsSection draft={draft} patch={patch} confirmPaidBreakChange={confirmPaidBreakChange} />}
             {active === 'payroll' && <PayrollSection draft={draft} patch={patch} />}
             {active === 'expenses' && <ExpenseCategoriesSection draft={draft} patch={patch} />}
             {active === 'reviews' && <ReviewsSection draft={draft} patch={patch} />}
@@ -396,7 +402,7 @@ const CustomersSection: React.FC<{ draft: AppSettings; patch: PatchFn }> = ({ dr
   </SettingsSection>
 );
 
-const OperationsSection: React.FC<{ draft: AppSettings; patch: PatchFn }> = ({ draft, patch }) => (
+const OperationsSection: React.FC<{ draft: AppSettings; patch: PatchFn; confirmPaidBreakChange?: (next: BreakReason[]) => boolean }> = ({ draft, patch, confirmPaidBreakChange }) => (
   <SettingsSection title="Operations" description="Defaults and windows for the cash drawer, sale reversals and inventory alerts.">
     <SettingsCard>
       <SettingsTextField label="Default opening cash float ($)" type="number" min={0} step={0.01}
@@ -426,7 +432,10 @@ const OperationsSection: React.FC<{ draft: AppSettings; patch: PatchFn }> = ({ d
         onChange={v => patch('operations', { booksStartDate: v })} />
       <PaidBreakPicker
         value={draft.operations.paidBreakReasons || []}
-        onChange={v => patch('operations', { paidBreakReasons: v })} />
+        confirmChange={confirmPaidBreakChange}
+        // Stamped so a pay period approved under the previous setting can be
+        // DATED as such rather than merely flagged.
+        onChange={v => patch('operations', { paidBreakReasons: v, paidBreakReasonsUpdatedAt: Date.now() })} />
     </SettingsCard>
   </SettingsSection>
 );
@@ -752,9 +761,18 @@ const AboutSection: React.FC<{ appVersion: string; role: Role }> = ({ appVersion
 // workedMs). A checkbox per reason rather than one on/off switch, because
 // paid-ness is decided per break: the realistic setup here is lunch paid,
 // personal and bank unpaid, on the same shift.
-const PaidBreakPicker: React.FC<{ value: BreakReason[]; onChange: (v: BreakReason[]) => void }> = ({ value, onChange }) => {
-  const toggle = (id: BreakReason) =>
-    onChange(value.includes(id) ? value.filter(v => v !== id) : [...value, id]);
+const PaidBreakPicker: React.FC<{
+  value: BreakReason[];
+  onChange: (v: BreakReason[]) => void;
+  confirmChange?: (next: BreakReason[]) => boolean;
+}> = ({ value, onChange, confirmChange }) => {
+  // Ticking a reason here rewrites hours for every period that hasn't been
+  // paid yet. The owner is told how many, for real, BEFORE the change lands.
+  const toggle = (id: BreakReason) => {
+    const next = value.includes(id) ? value.filter(v => v !== id) : [...value, id];
+    if (confirmChange && !confirmChange(next)) return;
+    onChange(next);
+  };
   return (
     <div className="py-2">
       <p className="text-sm font-medium text-slate-700 dark:text-slate-200">Paid breaks</p>

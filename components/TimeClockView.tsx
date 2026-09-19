@@ -15,6 +15,7 @@ import {
   toISODate, periodEndInclusive, entriesOnDate, PayPeriod, PayCycle, PAY_CYCLE_DAYS,
   isMissedClockOut, missedClockOuts, isValidClockOutCorrection, isCorrectedEntry, payrollFlagsFor,
 } from '../domain/timeclock';
+import { paidBreakSettingNote } from '../domain/paidBreakChange';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 import { toCSV, triggerDownload } from '../services/backup';
 import { printPayrollSummary, printPayStub } from '../services/payrollPrint';
@@ -44,6 +45,9 @@ interface Props {
   // settings.operations.paidBreakReasons — break kinds the shop pays through.
   // Empty (the default) means every break is deducted, exactly as before.
   paidBreakReasons?: PaidBreakReasons;
+  // When that setting last changed, used only to DATE the note on a period
+  // approved under the previous one.
+  paidBreakReasonsUpdatedAt?: number;
   // Staff bonuses (domain/bonuses.ts) — one-off payments on top of hours.
   // `staffBonuses` is pre-filtered by the caller to what this viewer may see;
   // `canAddBonus` is owner-only.
@@ -80,6 +84,7 @@ export const TimeClockView: React.FC<Props> = ({
   me, users, entries, payPeriods, payPeriodApprovals, payCycle, payAnchorISO, canManagePayroll, canMarkPaid,
   onClockIn, onClockOut, onStartBreak, onEndBreak, onApprovePeriod, onApproveAllPeriod, onMarkPaid, onUnmarkPaid, onCorrectClockOut,
   staffBonuses = [], canAddBonus = false, onSaveBonus, onDeleteBonus, paidBreakReasons = [],
+  paidBreakReasonsUpdatedAt,
 }) => {
   const now = useNow();
   const [showBreakPicker, setShowBreakPicker] = useState(false);
@@ -179,6 +184,7 @@ export const TimeClockView: React.FC<Props> = ({
           onAddBonus={(u, periodStart) => setBonusFor({ user: u, periodStart })}
           onDeleteBonus={onDeleteBonus}
           paidBreakReasons={paidBreakReasons}
+          paidBreakReasonsUpdatedAt={paidBreakReasonsUpdatedAt}
         />
       )}
 
@@ -486,7 +492,8 @@ const PayrollSummary: React.FC<{
   onAddBonus?: (user: AppUser, periodStart: string) => void;
   onDeleteBonus?: (bonusId: string) => void;
   paidBreakReasons?: PaidBreakReasons;
-}> = ({ users, entries, payPeriods, payPeriodApprovals, payCycle, payAnchorISO, now, canApprove, canMarkPaid, onApprovePeriod, onApproveAllPeriod, onMarkPaid, onUnmarkPaid, staffBonuses = [], canAddBonus = false, onAddBonus, onDeleteBonus, paidBreakReasons = [] }) => {
+  paidBreakReasonsUpdatedAt?: number;
+}> = ({ users, entries, payPeriods, payPeriodApprovals, payCycle, payAnchorISO, now, canApprove, canMarkPaid, onApprovePeriod, onApproveAllPeriod, onMarkPaid, onUnmarkPaid, staffBonuses = [], canAddBonus = false, onAddBonus, onDeleteBonus, paidBreakReasons = [], paidBreakReasonsUpdatedAt }) => {
   const days = PAY_CYCLE_DAYS[payCycle];
   const periods = useMemo(() => recentPayPeriods(now, 6, days, payAnchorISO), [now, days, payAnchorISO]);
   const [periodIdx, setPeriodIdx] = useState(0);
@@ -513,7 +520,10 @@ const PayrollSummary: React.FC<{
   );
 
   const rows = staff.map(u => {
-    const pay = periodPayFor(entries, u.id, u.hourlyRate, period, now);
+    // paidBreakReasons matters here: without it this table showed gross pay
+    // computed as if no break were ever paid, contradicting the breakdown
+    // line right above it.
+    const pay = periodPayFor(entries, u.id, u.hourlyRate, period, now, paidBreakReasons);
     const key = paidKey(u.id, toISODate(period.start));
     const paid = paidByKey.get(key);
     const approved = approvedByKey.get(key);
@@ -566,6 +576,15 @@ const PayrollSummary: React.FC<{
   );
   const allApproved = rows.length > 0 && rows.every(r => r.approved || r.pay.hours <= 0);
 
+  // Was any figure on this period approved under a DIFFERENT paid-break
+  // setting than the one now in force? If so the numbers on screen are not the
+  // numbers that were signed off, and saying so is the difference between a
+  // reviewable change and a silent one. Approvals written before the setting
+  // was captured say nothing — unknown is not the same as different.
+  const settingChangedNote = rows
+    .map(r => paidBreakSettingNote(r.approved?.paidBreakReasons, paidBreakReasons, paidBreakReasonsUpdatedAt))
+    .find(Boolean) || null;
+
   return (
     <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl overflow-hidden">
       <div className="px-4 py-3 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40 flex flex-wrap items-center justify-between gap-2">
@@ -599,6 +618,12 @@ const PayrollSummary: React.FC<{
       {(periodBreakdown.paidBreak >= 0.005 || periodBreakdown.unpaidBreak >= 0.005) && (
         <p className="px-4 pt-1 text-xs text-slate-500 dark:text-slate-400">
           This period: {shiftHoursLabel(periodBreakdown, paidBreakReasons)}. Staff punch every break either way — only the pay treatment differs.
+        </p>
+      )}
+
+      {settingChangedNote && (
+        <p className="px-4 pt-1 text-xs text-amber-700 dark:text-amber-400 flex items-center gap-1.5">
+          <History className="w-3.5 h-3.5 shrink-0" /> {settingChangedNote}
         </p>
       )}
 

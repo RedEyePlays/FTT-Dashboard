@@ -874,6 +874,11 @@ export interface PayPeriodApproval {
   hours: number;           // hours snapshot at approval time
   gross: number;           // gross pay snapshot at approval time
   rate: number;            // hourly rate snapshot at approval time
+  // The paid-break reasons in force when these figures were computed. Stored
+  // so that "this period was approved under a different setting" is DETECTED
+  // rather than guessed: approvals written before this field existed leave it
+  // undefined, which means unknown, and no claim is made about them.
+  paidBreakReasons?: BreakReason[];
 }
 
 // Where a bonus was actually paid from. Deliberately the same vocabulary as
