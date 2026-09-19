@@ -86,12 +86,14 @@ describe('mergeSettings', () => {
       // Empty = no clamp: an existing workspace's reports are unchanged until
       // an owner actually sets a books start date.
       booksStartDate: '',
+      // Empty = every break is unpaid, exactly today's behaviour.
+      paidBreakReasons: [],
     });
   });
 
   it('merges a partial operations patch over the defaults', () => {
     const o = mergeSettings({ operations: { voidWindowDays: 3, returnRestockingFeePercent: 15 } as any }).operations;
-    expect(o).toEqual({ openingFloatDefault: 0, voidWindowDays: 3, returnRestockingFeePercent: 15, agingInventoryDays: 30, autoLockMinutes: 4, staleLayawayDays: 60, booksStartDate: '' });
+    expect(o).toEqual({ openingFloatDefault: 0, voidWindowDays: 3, returnRestockingFeePercent: 15, agingInventoryDays: 30, autoLockMinutes: 4, staleLayawayDays: 60, booksStartDate: '', paidBreakReasons: [] });
   });
 });
 

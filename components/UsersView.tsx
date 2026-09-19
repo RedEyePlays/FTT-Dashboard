@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Users, UserPlus, ShieldCheck, Ban, CheckCircle2, Trash2, Mail, Eye, DollarSign, KeyRound, X, Lock, MessageSquarePlus, AlertTriangle, RotateCcw, UserCog } from 'lucide-react';
+import { Users, UserPlus, ShieldCheck, Ban, CheckCircle2, Trash2, Mail, Eye, DollarSign, KeyRound, X, Lock, MessageSquarePlus, AlertTriangle, RotateCcw, UserCog, Tablet } from 'lucide-react';
 import { AppUser, WorkspaceInvite, Role, StaffNote } from '../types';
 import { ROLE_LABEL } from '../services/rbac';
-import { canAssignPin, isValidPinFormat, PIN_MAX_LENGTH } from '../domain/pin';
+import { canAssignPin, isValidPinFormat, PIN_MAX_LENGTH, canHaveKioskPin, isValidKioskPinFormat, KIOSK_PIN_LENGTH } from '../domain/pin';
 import { sortStaffNotes, canAddStaffNote } from '../domain/staffNotes';
 import { validatePassword, canResetPasswordFor, MIN_PASSWORD_LENGTH } from '../domain/password';
 import { useSubmitGuard } from '../hooks/useSubmitGuard';
@@ -31,6 +31,15 @@ interface Props {
   // Auto-lock PIN — a manager/owner may set a PIN for anyone strictly below
   // their role (never a peer or above; see domain/pin.ts canAssignPin).
   onSetPin?: (uid: string, pin: string) => Promise<boolean>;
+  // KIOSK PUNCH PIN — a different credential from the unlock PIN above (see
+  // types.ts's AppUser). Owner-only, exactly 6 digits, and it only ever
+  // identifies someone at the shared door iPad.
+  onSetKioskPin?: (uid: string, pin: string) => Promise<boolean>;
+  onClearKioskPin?: (uid: string) => Promise<boolean>;
+  // Owner-only: create the kiosk DEVICE account (role 'kiosk'), and delete it
+  // again in one click if the iPad is lost or retired.
+  onCreateKioskDevice?: (input: { email: string; password: string }) => Promise<string | null>;
+  onRevokeKioskDevice?: (uid: string) => void;
   // Auto-lock timer — owner + manager (security.manage).
   canManageSecurity?: boolean;
   autoLockMinutes?: number;
@@ -49,6 +58,10 @@ interface Props {
 
 const AUTO_LOCK_OPTIONS = [1, 2, 4, 5, 10, 15, 30];
 
+// The roles the per-user dropdown offers. 'kiosk' is deliberately ABSENT: a
+// kiosk is a device, created through its own explicit "Add kiosk device"
+// action below, and promoting a person to a kiosk (or a kiosk to a person)
+// by picking it off a dropdown would be a mistake waiting to happen.
 const ROLES: Role[] = ['owner', 'manager', 'employee', 'technician'];
 
 // Owner-only hourly-rate editor. Commits on blur / Enter so typing doesn't fire
@@ -345,12 +358,15 @@ const CreateUserModal: React.FC<{
 
 export const UsersView: React.FC<Props> = ({
   me, users, invites, canManageAll = true, onSetRole, onSetDisabled, onSetAllowProfit, onSetHourlyRate, onInvite, onDeleteInvite, onCreateUser,
-  onSetPin, canManageSecurity, autoLockMinutes, onSetAutoLockMinutes, onResetPassword,
+  onSetPin, onSetKioskPin, onClearKioskPin, onCreateKioskDevice, onRevokeKioskDevice,
+  canManageSecurity, autoLockMinutes, onSetAutoLockMinutes, onResetPassword,
   staffNotes = [], canManageStaffNotes = false, onAddStaffNote, onDeleteStaffNote,
 }) => {
   const [email, setEmail] = useState('');
   const [role, setRole] = useState<Role>(canManageAll ? 'employee' : 'technician');
   const [pinTarget, setPinTarget] = useState<AppUser | null>(null);
+  const [kioskPinTarget, setKioskPinTarget] = useState<AppUser | null>(null);
+  const [showAddKiosk, setShowAddKiosk] = useState(false);
   const [pwTarget, setPwTarget] = useState<AppUser | null>(null);
   const [noteText, setNoteText] = useState('');
   const [showCreate, setShowCreate] = useState(false);
@@ -372,6 +388,11 @@ export const UsersView: React.FC<Props> = ({
   // viewer may take): a manager may PIN employees too, even though they can't
   // otherwise re-role, disable, or set pay for them.
   const pinTargets = users.filter(u => canAssignPin(me.role, u.role));
+  // The kiosk DEVICE account(s) — never in the member list's role dropdown.
+  const kioskDevices = users.filter(u => u.role === 'kiosk');
+  // Everyone who actually works shifts, so can be given a punch PIN. The kiosk
+  // device itself is excluded by canHaveKioskPin — a device has no shifts.
+  const kioskPinTargets = users.filter(u => canHaveKioskPin(u.role) && !u.disabled);
   const showSecurity = (canManageSecurity && onSetAutoLockMinutes) || (onSetPin && pinTargets.length > 0);
 
   return (
@@ -405,6 +426,82 @@ export const UsersView: React.FC<Props> = ({
                   <div key={u.id} className="flex items-center justify-between text-sm bg-slate-50 dark:bg-slate-800/50 rounded-md px-3 py-1.5">
                     <span className="text-slate-700 dark:text-slate-200">{u.email} <span className="text-slate-400">· {ROLE_LABEL[u.role]}</span>{u.pinHash && <span className="ml-2 text-[10px] font-semibold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">PIN set</span>}</span>
                     <button onClick={() => setPinTarget(u)} className="flex items-center gap-1 text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:underline"><KeyRound className="w-3.5 h-3.5" /> {u.pinHash ? 'Update PIN' : 'Set PIN'}</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* --- Kiosk: the door iPad + who may punch on it ------------------- */}
+      {onCreateKioskDevice && (
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl p-5">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div>
+              <h3 className="font-semibold text-slate-800 dark:text-slate-100 flex items-center gap-2">
+                <Tablet className="w-4 h-4 text-indigo-500" /> Clock-in kiosk
+              </h3>
+              <p className="text-xs text-slate-400 mt-1">
+                A shared iPad by the door. It can only record clock-ins and clock-outs — no dashboard, no sales, no customer data — so it's worthless if it walks off.
+              </p>
+            </div>
+            {kioskDevices.length === 0 && (
+              <button onClick={() => setShowAddKiosk(true)} className="shrink-0 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium">Add kiosk device</button>
+            )}
+          </div>
+
+          {kioskDevices.length > 0 && (
+            <div className="mt-4 space-y-1">
+              {kioskDevices.map(k => (
+                <div key={k.id} className="flex flex-wrap items-center gap-2 justify-between text-sm bg-slate-50 dark:bg-slate-800/50 rounded-md px-3 py-2">
+                  <span className="text-slate-700 dark:text-slate-200">
+                    {k.email}
+                    <span className="ml-2 text-[10px] font-semibold px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300">Device</span>
+                    {k.disabled && <span className="ml-1 text-[10px] font-semibold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300">Revoked</span>}
+                  </span>
+                  <span className="flex items-center gap-2">
+                    {onResetPassword && (
+                      <button onClick={() => setPwTarget(k)} className="text-xs font-medium text-slate-500 hover:underline">Reset password</button>
+                    )}
+                    {onRevokeKioskDevice && !k.disabled && (
+                      <button
+                        onClick={() => { if (window.confirm(`Revoke ${k.email}? The iPad is signed out of the punch screen immediately and staff can't clock in on it until you add a device again.`)) onRevokeKioskDevice(k.id); }}
+                        className="text-xs font-medium text-rose-600 dark:text-rose-400 hover:underline">Revoke</button>
+                    )}
+                    {onRevokeKioskDevice && k.disabled && (
+                      <button onClick={() => onSetDisabled(k.id, false)} className="text-xs font-medium text-emerald-600 dark:text-emerald-400 hover:underline">Re-enable</button>
+                    )}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Punch PINs — separate from the unlock PIN on purpose. */}
+          {onSetKioskPin && kioskPinTargets.length > 0 && (
+            <div className="mt-4">
+              <p className="text-xs font-semibold text-slate-500 uppercase mb-1">Punch PINs</p>
+              <p className="text-xs text-slate-400 mb-2">
+                A {KIOSK_PIN_LENGTH}-digit code each person taps at the door. <strong>Different from the app-unlock PIN above</strong> — this one is typed in public, so it never unlocks anyone's dashboard session.
+              </p>
+              <div className="space-y-1">
+                {kioskPinTargets.map(u => (
+                  <div key={u.id} className="flex items-center justify-between text-sm bg-slate-50 dark:bg-slate-800/50 rounded-md px-3 py-1.5">
+                    <span className="text-slate-700 dark:text-slate-200">
+                      {u.email} <span className="text-slate-400">· {ROLE_LABEL[u.role]}</span>
+                      {u.kioskPinHash && <span className="ml-2 text-[10px] font-semibold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">Punch PIN set</span>}
+                    </span>
+                    <span className="flex items-center gap-2">
+                      <button onClick={() => setKioskPinTarget(u)} className="flex items-center gap-1 text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:underline">
+                        <KeyRound className="w-3.5 h-3.5" /> {u.kioskPinHash ? 'Update punch PIN' : 'Set punch PIN'}
+                      </button>
+                      {u.kioskPinHash && onClearKioskPin && (
+                        <button
+                          onClick={() => { if (window.confirm(`Remove ${u.email}'s punch PIN? They disappear from the kiosk immediately and can't clock in at the door until you set a new one.`)) void onClearKioskPin(u.id); }}
+                          className="text-xs font-medium text-rose-600 dark:text-rose-400 hover:underline">Remove</button>
+                      )}
+                    </span>
                   </div>
                 ))}
               </div>
@@ -578,6 +675,12 @@ export const UsersView: React.FC<Props> = ({
         <CreateUserModal roles={inviteRoles} onClose={() => setShowCreate(false)} onSave={onCreateUser} />
       )}
 
+      {kioskPinTarget && onSetKioskPin && (
+        <KioskPinModal email={kioskPinTarget.email} onClose={() => setKioskPinTarget(null)} onSave={pin => onSetKioskPin(kioskPinTarget.id, pin)} />
+      )}
+      {showAddKiosk && onCreateKioskDevice && (
+        <AddKioskModal onClose={() => setShowAddKiosk(false)} onCreate={onCreateKioskDevice} />
+      )}
       {pinTarget && onSetPin && (
         <PinModal email={pinTarget.email} onClose={() => setPinTarget(null)} onSave={pin => onSetPin(pinTarget.id, pin)} />
       )}
@@ -590,6 +693,117 @@ export const UsersView: React.FC<Props> = ({
           onSave={pw => onResetPassword(pwTarget.id, pw)}
         />
       )}
+    </div>
+  );
+};
+
+/* ---------------- Kiosk: punch PIN + device creation ---------------- */
+
+// The KIOSK PUNCH PIN. Separate modal from PinModal on purpose: different
+// length rule (exactly 6), different credential, and different wording, so
+// nobody sets one thinking they set the other.
+const KioskPinModal: React.FC<{ email: string; onClose: () => void; onSave: (pin: string) => Promise<boolean> }> = ({ email, onClose, onSave }) => {
+  const [pin, setPin] = useState('');
+  const [confirmPin, setConfirmPin] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const digitsOnly = (v: string) => v.replace(/\D/g, '').slice(0, KIOSK_PIN_LENGTH);
+  const valid = isValidKioskPinFormat(pin);
+  const matches = pin.length > 0 && pin === confirmPin;
+  const canSave = valid && matches && !busy;
+
+  useEscapeKey(onClose);
+
+  const save = async () => {
+    if (!canSave) return;
+    setBusy(true); setError(null);
+    const ok = await onSave(pin);
+    setBusy(false);
+    if (ok) onClose(); else setError('Could not save the punch PIN. Please try again.');
+  };
+
+  const pinInput = 'w-full px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md text-sm tracking-[0.4em] text-center';
+
+  return (
+    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={onClose}>
+      <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-sm border border-slate-200 dark:border-slate-700" onClick={e => e.stopPropagation()}>
+        <div className="px-5 py-3 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
+          <h2 className="font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2"><Tablet className="w-4 h-4" /> Punch PIN — {email}</h2>
+          <button onClick={onClose} aria-label="Close"><X className="w-5 h-5 text-slate-400" /></button>
+        </div>
+        <div className="p-5 space-y-3">
+          <p className="text-xs text-slate-400">
+            A {KIOSK_PIN_LENGTH}-digit code typed at the shared door iPad to clock in and out. <strong className="text-slate-600 dark:text-slate-300">This is NOT the app-unlock PIN</strong> — it can't open anyone's dashboard, which is why it's safe to type in front of the shop. Stored hashed; never shown again once saved.
+          </p>
+          <input inputMode="numeric" autoFocus value={pin} onChange={e => setPin(digitsOnly(e.target.value))} placeholder={'•'.repeat(KIOSK_PIN_LENGTH)} className={pinInput} />
+          <input inputMode="numeric" value={confirmPin} onChange={e => setConfirmPin(digitsOnly(e.target.value))} placeholder="Confirm" className={pinInput} />
+          {pin.length > 0 && !valid && <p className="text-xs text-rose-500">The punch PIN must be exactly {KIOSK_PIN_LENGTH} digits.</p>}
+          {confirmPin.length > 0 && !matches && <p className="text-xs text-rose-500">The two codes don't match.</p>}
+          {error && <p className="text-xs text-rose-500">{error}</p>}
+          <div className="flex justify-end gap-2 pt-1">
+            <button onClick={onClose} className="px-3 py-2 rounded-lg text-sm text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">Cancel</button>
+            <button onClick={save} disabled={!canSave} className="px-4 py-2 rounded-lg text-sm font-semibold bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white">
+              {busy ? 'Saving…' : 'Save punch PIN'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// Creates the kiosk DEVICE account. A normal Firebase Auth account through the
+// same createStaffUser path every other staff account uses — the difference is
+// entirely in its role, which is what firestore.rules keys off.
+const AddKioskModal: React.FC<{
+  onClose: () => void;
+  onCreate: (input: { email: string; password: string }) => Promise<string | null>;
+}> = ({ onClose, onCreate }) => {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEscapeKey(onClose);
+
+  const canSave = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()) && password.length >= 8 && !busy;
+  const field = 'w-full px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md text-sm';
+
+  const save = async () => {
+    if (!canSave) return;
+    setBusy(true); setError(null);
+    const err = await onCreate({ email: email.trim(), password });
+    setBusy(false);
+    if (err) setError(err); else onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={onClose}>
+      <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-sm border border-slate-200 dark:border-slate-700" onClick={e => e.stopPropagation()}>
+        <div className="px-5 py-3 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
+          <h2 className="font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2"><Tablet className="w-4 h-4" /> Add kiosk device</h2>
+          <button onClick={onClose} aria-label="Close"><X className="w-5 h-5 text-slate-400" /></button>
+        </div>
+        <div className="p-5 space-y-3">
+          <p className="text-xs text-slate-400">
+            Sign the iPad in with these once and leave it on the punch screen. The account can only read the punch roster and write clock-ins — no dashboard, no sales, no customer data. Nothing is emailed; write the password down and keep it off the iPad.
+          </p>
+          <div>
+            <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Email (a login identifier, no mailbox needed)</label>
+            <input autoFocus value={email} onChange={e => setEmail(e.target.value)} placeholder="kiosk@yourshop.com" className={field} />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Password (at least 8 characters)</label>
+            <input type="text" value={password} onChange={e => setPassword(e.target.value)} className={field} />
+          </div>
+          {error && <p className="text-xs text-rose-500">{error}</p>}
+          <div className="flex justify-end gap-2 pt-1">
+            <button onClick={onClose} className="px-3 py-2 rounded-lg text-sm text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">Cancel</button>
+            <button onClick={save} disabled={!canSave} className="px-4 py-2 rounded-lg text-sm font-semibold bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white">
+              {busy ? 'Creating…' : 'Create kiosk device'}
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 };

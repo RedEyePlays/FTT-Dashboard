@@ -14,7 +14,7 @@ import {
   drawerCarryOver,
 } from '../domain/reports';
 import { computeAnalytics, presetRange } from '../domain/analytics';
-import { entriesOnDate, workedHours } from '../domain/timeclock';
+import { entriesOnDate, workedHours, PaidBreakReasons } from '../domain/timeclock';
 import { toCSV, triggerDownload } from '../services/backup';
 import { newId } from '../domain/ids';
 import { toISODate, todayISO } from '../domain/dates';
@@ -32,6 +32,9 @@ interface Props {
   // settings.operations.booksStartDate — every total on every tab starts here
   // when set, and each tab says so when a chosen range reaches further back.
   booksStartDate?: string;
+  // settings.operations.paidBreakReasons — break kinds that still count as
+  // paid hours in the Day History figures.
+  paidBreakReasons?: PaidBreakReasons;
   settlements: Settlement[];
   deviceBuyers: DeviceBuyer[];
   expenses: Expense[];
@@ -110,7 +113,7 @@ const tabAllowed = (id: TabId, perms: { canReconcile: boolean; canViewProfit: bo
 };
 
 export const ReportsView: React.FC<Props> = ({
-  salesTransactions, cashReconciliations, inventory, payPeriods, staffBonuses = [], booksStartDate, settlements, deviceBuyers, onSaveReconciliation,
+  salesTransactions, cashReconciliations, inventory, payPeriods, staffBonuses = [], booksStartDate, paidBreakReasons = [], settlements, deviceBuyers, onSaveReconciliation,
   repairs, customers, auditLogs, activity, timeEntries, users, expenses, expenseCategories,
   recurringExpenses, canAddExpense, canViewAllExpenses, currentUserId, canReconcile, canViewProfit,
   onSaveExpense, onDeleteExpense,
@@ -147,7 +150,7 @@ export const ReportsView: React.FC<Props> = ({
         <DailyHistoryTab
           salesTransactions={salesTransactions} cashReconciliations={cashReconciliations}
           repairs={repairs} inventory={inventory} customers={customers} auditLogs={auditLogs} activity={activity}
-          timeEntries={timeEntries} users={users} settlements={settlements} booksStartDate={booksStartDate}
+          timeEntries={timeEntries} users={users} settlements={settlements} booksStartDate={booksStartDate} paidBreakReasons={paidBreakReasons}
         />
       )}
       {tab === 'cash' && tabAllowed('cash', perms) && <CashReconTab salesTransactions={salesTransactions} cashReconciliations={cashReconciliations} onSave={onSaveReconciliation} />}
@@ -193,7 +196,8 @@ const DailyHistoryTab: React.FC<{
   // day's history reconciles with the P&L tab for the same date.
   settlements: Settlement[];
   booksStartDate?: string;
-}> = ({ salesTransactions, cashReconciliations, repairs, inventory, customers, auditLogs, activity, timeEntries, users, settlements, booksStartDate }) => {
+  paidBreakReasons?: PaidBreakReasons;
+}> = ({ salesTransactions, cashReconciliations, repairs, inventory, customers, auditLogs, activity, timeEntries, users, settlements, booksStartDate, paidBreakReasons = [] }) => {
   const [date, setDate] = useState(todayISO());
   const now = Date.now();
 
@@ -229,7 +233,7 @@ const DailyHistoryTab: React.FC<{
   const dayEntries = useMemo(() => entriesOnDate(timeEntries, date), [timeEntries, date]);
   const hoursByUser = useMemo(() => {
     const byUser = new Map<string, number>();
-    for (const e of dayEntries) byUser.set(e.userId, (byUser.get(e.userId) || 0) + workedHours(e, now));
+    for (const e of dayEntries) byUser.set(e.userId, (byUser.get(e.userId) || 0) + workedHours(e, now, paidBreakReasons));
     return [...byUser.entries()]
       .map(([userId, hours]) => ({ userId, name: nameById.get(userId) || userId, hours }))
       .sort((x, y) => x.name.localeCompare(y.name));

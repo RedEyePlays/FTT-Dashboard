@@ -469,7 +469,23 @@ export interface ActivityEntry {
 }
 
 // --- Users / roles / audit ---
-export type Role = 'owner' | 'manager' | 'employee' | 'technician';
+/**
+ * 'kiosk' is a DEVICE, not a person.
+ *
+ * It is the account the shared iPad by the door signs in as, and it exists to
+ * be worthless if the iPad is stolen: it can read the punch roster and write
+ * clock-in/out/break entries, and nothing else. It holds no permissions
+ * (services/rbac.ts), never appears in payroll, is never counted as an
+ * employee, and is deliberately absent from the PIN role hierarchy — a kiosk
+ * account can never be assigned an app-unlock PIN, because it is not somebody
+ * who unlocks a session.
+ *
+ * It is listed LAST on purpose: every exhaustive Record<Role, …> in the
+ * codebase must name it explicitly, so adding it here is a compile error
+ * anywhere it was forgotten rather than a silent fall-through to an
+ * employee-shaped default.
+ */
+export type Role = 'owner' | 'manager' | 'employee' | 'technician' | 'kiosk';
 
 export type Permission =
   | 'inventory.add' | 'inventory.edit' | 'inventory.delete'
@@ -519,6 +535,44 @@ export interface AppUser {
   pinUpdatedAt?: number;      // epoch ms
   pinUpdatedBy?: string;      // uid of the manager/owner who set it
   pinUpdatedByEmail?: string;
+  // KIOSK PUNCH PIN — a DIFFERENT credential from `pinHash` above, on purpose.
+  // The unlock PIN opens this person's own dashboard session; this one only
+  // identifies them at the shared door iPad. Keeping them separate means a
+  // 6-digit code shoulder-surfed at the door cannot unlock anybody's session.
+  // Exactly 6 digits (domain/pin.ts's KIOSK_PIN_LENGTH), hashed the same way.
+  kioskPinHash?: string;
+  kioskPinSalt?: string;
+  kioskPinIterations?: number;
+  kioskPinUpdatedAt?: number;
+  kioskPinUpdatedBy?: string;
+  kioskPinUpdatedByEmail?: string;
+}
+
+/**
+ * The ONLY thing the punch screen is allowed to read about a person.
+ *
+ * Lives in its own `kioskStaff` collection rather than being read off
+ * `users/{uid}`, because a device sitting unattended by the front door must
+ * not be able to read wages, roles, emails or anything else personal — and
+ * `users` carries all of that. This holds the bare minimum to draw a name
+ * tile and check a PIN, and nothing more.
+ *
+ * Written SERVER-SIDE ONLY (functions/src/kioskStaff.ts, via the Admin SDK)
+ * and kept in sync whenever a kiosk PIN is set or cleared, an account is
+ * disabled or re-enabled, or a name changes. firestore.rules allows no client
+ * write to it at all, ever.
+ */
+export interface KioskStaff {
+  id: string;            // === uid, so the doc id is the person's uid
+  uid: string;
+  displayName: string;   // what the tile shows — never the email
+  workspaceId: string;
+  active: boolean;       // false hides the tile without deleting the record
+  // The kiosk PIN triple, mirrored from users/{uid}. A hash, never a PIN.
+  pinHash: string;
+  pinSalt: string;
+  pinIterations: number;
+  updatedAt: number;
 }
 
 export interface WorkspaceInvite {
@@ -778,6 +832,12 @@ export interface TimeEntry {
   note?: string;
   createdAt?: number;
   corrections?: TimeEntryCorrection[]; // history of manual clock-out corrections, oldest first
+  // Where this punch came from. Absent = the in-app Time Clock on someone's
+  // own signed-in session (every entry written before the kiosk existed).
+  // 'kiosk' = the shared iPad by the door. Recorded so a door punch and a
+  // phone punch are told apart in the Time Clock view and the audit log —
+  // they carry different trust, and the owner should be able to see which.
+  source?: 'kiosk';
 }
 
 // A record-keeping acknowledgment that an owner reviewed/paid an employee for a

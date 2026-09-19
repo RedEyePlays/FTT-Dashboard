@@ -1,4 +1,4 @@
-import { ViewState, RepairStatus, RecurringFrequency } from '../types';
+import { ViewState, RepairStatus, RecurringFrequency, BreakReason } from '../types';
 import { REPAIR_STATUSES } from './repairs';
 import { PayCycle, PAY_PERIOD_ANCHOR } from './timeclock';
 import { ExpenseCategory, DEFAULT_EXPENSE_CATEGORIES } from './expenses';
@@ -155,6 +155,15 @@ export interface AppSettings {
     // UNSET (the default) means no clamp at all — every existing workspace
     // behaves exactly as it does today until an owner sets this.
     booksStartDate?: string;
+    // Break reasons the shop PAYS through — those breaks still count as paid
+    // hours (domain/timeclock.ts's workedMs). Empty (the default) is exactly
+    // today's behaviour: every break is deducted from pay.
+    //
+    // The bug this exists for: this owner pays through lunch, so deducting
+    // all break time underpaid every staff member who honestly punched one.
+    // Staff still punch EVERY break either way, so the record is kept — only
+    // the pay treatment differs, and it is decided per break by its reason.
+    paidBreakReasons?: BreakReason[];
   };
   // Owner-configurable pay-period schedule (domain/timeclock.ts's payPeriodFor/
   // recentPayPeriods read these instead of the old hardcoded constants).
@@ -207,7 +216,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   dashboard: { widgets: Object.fromEntries(DASHBOARD_WIDGETS.map(w => [w, true])), landingView: 'dashboard', analyticsRange: 'today' },
   appearance: { theme: 'system' },
   backups: { enabled: false, frequency: 'daily', retention: 14 },
-  operations: { openingFloatDefault: 0, voidWindowDays: 0, returnRestockingFeePercent: 0, agingInventoryDays: 30, staleLayawayDays: 60, autoLockMinutes: 4, booksStartDate: '' },
+  operations: { openingFloatDefault: 0, voidWindowDays: 0, returnRestockingFeePercent: 0, agingInventoryDays: 30, staleLayawayDays: 60, autoLockMinutes: 4, booksStartDate: '', paidBreakReasons: [] },
   payroll: { cycle: 'biweekly', anchorISO: PAY_PERIOD_ANCHOR },
   expenses: { categories: DEFAULT_EXPENSE_CATEGORIES },
   reviews: {

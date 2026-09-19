@@ -55,10 +55,24 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   technician: [
     'repairs.tech', 'timeclock.use',
   ],
+  // A KIOSK IS A DEVICE, NOT A PERSON. The shared iPad by the door holds NO
+  // permissions at all — deliberately empty, not "employee minus a few".
+  //
+  // In particular it does NOT hold 'timeclock.use': that permission means
+  // "clock MYSELF in", and a kiosk has no shifts. It punches on behalf of the
+  // staff member who just entered their PIN, which is authorised by that PIN
+  // and by firestore.rules' kiosk branch on timeEntries, never by a
+  // permission on the device account. Granting it here would be the silent
+  // fall-through this role exists to avoid.
+  //
+  // App.tsx renders the punch screen for this role by an early return, so no
+  // permission is consulted to reach it and no other view is ever mounted.
+  kiosk: [],
 };
 
 export const ROLE_LABEL: Record<Role, string> = {
   owner: 'Owner', manager: 'Manager', employee: 'Employee', technician: 'Technician',
+  kiosk: 'Kiosk device',
 };
 
 // can(role, permission, { allowProfit }) — profit visibility is split into two
@@ -76,15 +90,19 @@ export const can = (
   opts?: { allowProfit?: boolean },
 ): boolean => {
   if (!role) return false;
+  // Checked BEFORE the profit branches below, which have their own
+  // role-by-role logic and would otherwise need a kiosk case in each. A kiosk
+  // can do nothing, full stop — one place to read it, nothing to forget.
+  if (role === 'kiosk') return false;
   if (perm === 'reports.profit.summary') {
     if (role === 'owner' || role === 'manager') return true;
     if (role === 'employee') return !!opts?.allowProfit;
-    return false; // technician
+    return false; // technician (kiosk already returned false above)
   }
   if (perm === 'reports.profit.detailed') {
     if (role === 'owner') return true;
     if (role === 'manager' || role === 'employee') return !!opts?.allowProfit;
-    return false; // technician
+    return false; // technician (kiosk already returned false above)
   }
   return ROLE_PERMISSIONS[role].includes(perm);
 };

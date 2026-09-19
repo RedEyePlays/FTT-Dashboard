@@ -4,12 +4,12 @@ import {
   Palette, ShieldCheck, DatabaseBackup, Info, Save, RotateCcw, Check, Lock, Plus, Trash2,
   Download, RefreshCw, Loader2, CalendarClock, SlidersHorizontal, Copy, DollarSign, Archive, ArchiveRestore, Star,
 } from 'lucide-react';
-import { Role, Permission } from '../types';
+import { Role, Permission, BreakReason } from '../types';
 import {
   AppSettings, ThemeMode, PaymentMethodKey, CURRENCIES, TIME_ZONES,
   DASHBOARD_WIDGETS, STATUS_COLOR_OPTIONS, LabelSize, mergeLabelSizes,
 } from '../domain/settings';
-import { PayCycle, PAY_CYCLE_LABEL } from '../domain/timeclock';
+import { PayCycle, PAY_CYCLE_LABEL, BREAK_REASONS } from '../domain/timeclock';
 import { ExpenseCategory } from '../domain/expenses';
 import { newId } from '../domain/ids';
 import { MAX_PUSH_DOWN_MM } from '../services/labelLayout';
@@ -424,6 +424,9 @@ const OperationsSection: React.FC<{ draft: AppSettings; patch: PatchFn }> = ({ d
         hint="Reports, profit, expenses and alerts ignore anything before this date. Nothing is deleted — every sale, repair, customer and inventory record stays fully visible and searchable. Leave blank to include everything."
         value={draft.operations.booksStartDate || ''}
         onChange={v => patch('operations', { booksStartDate: v })} />
+      <PaidBreakPicker
+        value={draft.operations.paidBreakReasons || []}
+        onChange={v => patch('operations', { paidBreakReasons: v })} />
     </SettingsCard>
   </SettingsSection>
 );
@@ -742,5 +745,35 @@ const AboutSection: React.FC<{ appVersion: string; role: Role }> = ({ appVersion
         </dl>
       </SettingsCard>
     </SettingsSection>
+  );
+};
+
+// Which break kinds still count as PAID hours (domain/timeclock.ts's
+// workedMs). A checkbox per reason rather than one on/off switch, because
+// paid-ness is decided per break: the realistic setup here is lunch paid,
+// personal and bank unpaid, on the same shift.
+const PaidBreakPicker: React.FC<{ value: BreakReason[]; onChange: (v: BreakReason[]) => void }> = ({ value, onChange }) => {
+  const toggle = (id: BreakReason) =>
+    onChange(value.includes(id) ? value.filter(v => v !== id) : [...value, id]);
+  return (
+    <div className="py-2">
+      <p className="text-sm font-medium text-slate-700 dark:text-slate-200">Paid breaks</p>
+      <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 mb-2">
+        Breaks of these kinds still count as paid hours. Staff punch every break either way, so you keep the record.
+      </p>
+      <div className="flex flex-wrap gap-2">
+        {BREAK_REASONS.map(r => (
+          <button key={r.id} type="button" onClick={() => toggle(r.id)}
+            className={`px-3 py-1.5 rounded-lg text-sm font-medium border ${value.includes(r.id)
+              ? 'bg-emerald-600 text-white border-emerald-600'
+              : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700'}`}>
+            {r.label}{value.includes(r.id) ? ' · paid' : ''}
+          </button>
+        ))}
+      </div>
+      {value.length === 0 && (
+        <p className="text-[11px] text-slate-400 mt-1.5">Nothing selected — every break is deducted from paid hours.</p>
+      )}
+    </div>
   );
 };

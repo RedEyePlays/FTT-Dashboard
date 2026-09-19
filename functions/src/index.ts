@@ -27,6 +27,11 @@ export { setStaffPassword } from "./staffPassword";
 // self-claimed "pending invite" step.
 export { createStaffUser } from "./staffUser";
 
+// Keeps the kiosk punch roster (user_data/{ws}/kioskStaff) in sync with
+// users/{uid} — the ONLY writer of that collection (see kioskStaff.ts for why
+// the mirror exists and why it's a trigger, not a callable).
+export { syncKioskStaff } from "./kioskStaff";
+
 // The Gemini API key lives in Firebase's server-side Secret Manager — it is
 // NEVER shipped to the client. Set it before deploy with:
 //   firebase functions:secrets:set GEMINI_API_KEY

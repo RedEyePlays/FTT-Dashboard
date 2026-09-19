@@ -8,7 +8,11 @@
 // material. `validatePassword` is handed the candidate only to measure it and
 // returns a reason string, never the value.
 
-export type Role = "owner" | "manager" | "employee" | "technician";
+// Mirrors the client's Role union (types.ts) — the client tree can't be
+// imported here, so this copy is kept in sync deliberately. 'kiosk' is the
+// shared door-iPad DEVICE account: it holds no permissions, is never payroll
+// staff, and may never be a PIN or password target.
+export type Role = "owner" | "manager" | "employee" | "technician" | "kiosk";
 
 /** The user-registry shape this policy reads (users/{uid} in Firestore). */
 export interface UserRecord {
