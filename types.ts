@@ -763,6 +763,19 @@ export interface CashDrawerEntry {
   id: string;
   amount: number;          // dollars moved (always positive)
   note?: string;           // reason / note
+  // WHO moved the money, WHEN, and WHY. A $200 cash-out used to be an amount
+  // and nothing else, which made a shortfall untraceable.
+  //
+  // EVERY FIELD IS OPTIONAL, and that is the point: entries written before
+  // this existed have none of them and keep working unchanged. They display
+  // as "unattributed" and are never back-filled — a guess on the page used to
+  // work out where money went is worse than an honest gap.
+  at?: number;             // epoch ms the movement was recorded
+  by?: string;             // uid of the authenticated user who recorded it
+  byEmail?: string;
+  source?: string;         // the write path (see domain/dayLedger.ts)
+  refType?: 'sale' | 'expense' | 'settlement' | 'dropoff' | 'bonus' | 'purchase' | 'layaway' | 'manual';
+  refId?: string;          // the underlying record, so the trail can link to it
 }
 
 // A saved daily cash-drawer record (one per calendar day; id === date). It can

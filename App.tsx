@@ -39,11 +39,12 @@ const UsersView = lazy(() => import('./components/UsersView').then(m => ({ defau
 const AuditLogView = lazy(() => import('./components/AuditLogView').then(m => ({ default: m.AuditLogView })));
 const TimeClockView = lazy(() => import('./components/TimeClockView').then(m => ({ default: m.TimeClockView })));
 const CloseOutView = lazy(() => import('./components/CloseOutView').then(m => ({ default: m.CloseOutView })));
-import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, DeviceBuyer, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission, Repair, RepairBatch, TimeEntry, PayPeriodPaid, PayPeriodApproval, BreakReason, SalesTransaction, CashReconciliation, StaffNote, BalancePayment, Expense, RecurringExpense, RefundSplit, StaffBonus, KioskStaff } from './types';
+import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, DeviceBuyer, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission, Repair, RepairBatch, TimeEntry, PayPeriodPaid, PayPeriodApproval, BreakReason, SalesTransaction, CashReconciliation, StaffNote, BalancePayment, Expense, RecurringExpense, RefundSplit, StaffBonus, KioskStaff, CashDrawerEntry } from './types';
 import { skuPrefix, nextSku } from './services/sku';
 import { REPAIR_PREFIX, BATCH_PREFIX, applyTechEdit, techUpdateAuditPlan, repairSalePrefill, completeRepair, completeRepairSale, dateToEpochMs, isRepairOpen, flagDeviceForRepair, restoredDeviceStatus } from './domain/repairs';
 import { repairCostWriteback, applyRepairCostDelta } from './domain/repairCostWriteback';
 import { bonusDrawerEffect, canSaveBonus, visibleBonuses } from './domain/bonuses';
+import { attributeDrawerEntry } from './domain/dayLedger';
 import { paidBreakChangeImpact, paidBreakChangeMessage, paidBreakChangeAudit, sameReasons } from './domain/paidBreakChange';
 import { buildKioskClockIn, buildKioskClockOut, buildKioskStartBreak, buildKioskEndBreak, validateKioskWrite } from './domain/kiosk';
 import { markTicketDeviceSold } from './domain/repairVisibility';
@@ -764,7 +765,7 @@ const App: React.FC = () => {
       const existing = cashReconciliations.find(rec => rec.date === date);
       const listKey: 'cashIn' | 'cashOut' = purchaseEffect.kind;
       const entry = { id: newId(), amount: purchaseEffect.amount, note: `Quick Purchase — ${item.item}` };
-      commitDrawerRecord(date, {}, { [listKey]: [entry] }, { path: 'quickPurchase' });
+      commitDrawerRecord(date, {}, { [listKey]: [entry] }, { path: 'quickPurchase', purchaseId: item.id });
       logActivity(`Cash paid out $${purchaseEffect.amount.toFixed(2)} — quick purchase (${item.item})`);
     }
   };
@@ -910,7 +911,7 @@ const App: React.FC = () => {
       const date = todayISO();
       const existing = cashReconciliations.find(r => r.date === date);
       const entry = { id: newId(), amount: cashPortion, note: `Layaway balance collected — ${tx.id.slice(0, 8)} (${tx.customerName || 'customer'})` };
-      commitDrawerRecord(date, {}, { cashIn: [entry] }, { path: 'collectBalance' });
+      commitDrawerRecord(date, {}, { cashIn: [entry] }, { path: 'collectBalance', transactionId: tx.id });
     }
 
     return transaction;
@@ -1071,8 +1072,34 @@ const App: React.FC = () => {
   ): Promise<{ record: CashReconciliation; queued: boolean } | null> => {
     if (!uid || !appUser) return null;
     const actor = { id: appUser.id, email: appUser.email };
+    // ATTRIBUTION, stamped centrally rather than at each of the fourteen call
+    // sites — a call site that forgot would silently write an untraceable
+    // entry, which is the exact failure this closes. The write path and the
+    // related record id are already here in `auditCtx`, and the actor is the
+    // AUTHENTICATED user, never anything a caller passed in.
+    //
+    // attributeDrawerEntry never overwrites a field an entry already has, so
+    // re-saving the Reports editor's lists keeps whoever actually made each
+    // entry instead of crediting them all to whoever last pressed Save.
+    const stamp = (entries?: CashDrawerEntry[]) => entries?.map(e => attributeDrawerEntry(e, {
+      at: Date.now(), by: appUser.id, byEmail: appUser.email,
+      source: auditCtx?.path,
+      refId: (auditCtx?.transactionId || auditCtx?.dropOffId || auditCtx?.settlementId
+        || auditCtx?.bonusId || auditCtx?.expenseId || auditCtx?.purchaseId) as string | undefined,
+    }));
+    const attributedPatch: Partial<CashReconciliation> = {
+      ...patch,
+      ...(patch.cashIn ? { cashIn: stamp(patch.cashIn) } : {}),
+      ...(patch.cashOut ? { cashOut: stamp(patch.cashOut) } : {}),
+      ...(patch.withdrawals ? { withdrawals: stamp(patch.withdrawals) } : {}),
+    };
+    const attributedAppends: DrawerAppends | undefined = appends && {
+      ...(appends.cashIn ? { cashIn: stamp(appends.cashIn) } : {}),
+      ...(appends.cashOut ? { cashOut: stamp(appends.cashOut) } : {}),
+      ...(appends.withdrawals ? { withdrawals: stamp(appends.withdrawals) } : {}),
+    };
     const args = {
-      date, patch, appends,
+      date, patch: attributedPatch, appends: attributedAppends,
       cashSales: expectedCashForDate(salesTransactions, date),
       carry: drawerCarryOver(cashReconciliations, date, d => expectedCashForDate(salesTransactions, d)),
       actor,
@@ -1246,7 +1273,7 @@ const App: React.FC = () => {
     if (isNew && next.paymentMethod === 'cash') {
       const existing = cashReconciliations.find(r => r.date === next.date);
       const entry = { id: newId(), amount: next.amount, note: `${next.category} — ${next.payee || next.note || 'expense'}` };
-      commitDrawerRecord(next.date, {}, { cashOut: [entry] }, { path: 'expenseCashOut' });
+      commitDrawerRecord(next.date, {}, { cashOut: [entry] }, { path: 'expenseCashOut', expenseId: next.id });
       next.cashDrawerLinked = true;
     }
     saveExpense(uid, next).catch(e => console.error('Expense save failed', e));
@@ -1305,7 +1332,7 @@ const App: React.FC = () => {
     if (expense.paymentMethod === 'cash') {
       const existing = cashReconciliations.find(rec => rec.date === expense.date);
       const entry = { id: newId(), amount: expense.amount, note: `${expense.category} — ${expense.payee || 'recurring expense'}` };
-      commitDrawerRecord(expense.date, {}, { cashOut: [entry] }, { path: 'expenseDeleteReversal' });
+      commitDrawerRecord(expense.date, {}, { cashOut: [entry] }, { path: 'recurringExpenseCashOut', expenseId: expense.id });
       expense.cashDrawerLinked = true;
     }
     saveExpense(uid, expense).catch(e => console.error('Expense save failed', e));
@@ -2085,7 +2112,7 @@ const App: React.FC = () => {
             const date = todayISO();
             const listKey: 'cashIn' | 'cashOut' = purchaseEffect.kind;
             const entry = { id: newId(), amount: purchaseEffect.amount, note: `Device purchase — ${next.repairNumber || candidate.item}` };
-            commitDrawerRecord(date, {}, { [listKey]: [entry] }, { path: 'autoInventoryPurchase' });
+            commitDrawerRecord(date, {}, { [listKey]: [entry] }, { path: 'autoInventoryPurchase', purchaseId: next.id });
             logActivity(`Cash paid out $${purchaseEffect.amount.toFixed(2)} — device purchase (${candidate.item})`);
           }
         } else {
@@ -2601,6 +2628,7 @@ const App: React.FC = () => {
                   canAddExpense={allow('expenses.add')} canViewAllExpenses={allow('expenses.viewAll')}
                   currentUserId={appUser?.id || ''} recurringExpenses={recurringExpenses}
                   canReconcile={allow('cash.reconcile')} canViewProfit={allow('reports.profit.summary')}
+                  canViewDetailedProfit={allow('reports.profit.detailed')}
                   onSaveExpense={handleSaveExpense} onDeleteExpense={handleDeleteExpense}
                   onSaveRecurringExpense={handleSaveRecurringExpense} onDeleteRecurringExpense={handleDeleteRecurringExpense}
                   onGenerateRecurringExpense={handleGenerateRecurringExpense} onSkipRecurringPeriod={handleSkipRecurringPeriod} />
