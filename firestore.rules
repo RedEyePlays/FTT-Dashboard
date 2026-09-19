@@ -81,6 +81,34 @@ service cloud.firestore {
     // The only fields a kiosk UPDATE may CHANGE — clock out, or start/end a
     // break. Never clockIn, never userId, never hours by any other route.
     function kioskUpdateKeys() { return ['clockOut', 'breaks']; }
+    // How far back a kiosk may LIST timeEntries. Wider than withinLastDay
+    // because the punch screen has to see an overnight shift and a shift left
+    // open since yesterday (which it refuses, telling the person to see a
+    // manager). Kept in step with services/firestoreDb.ts's
+    // KIOSK_TIME_ENTRY_WINDOW_MS, which is a touch wider so a clock-skewed
+    // device doesn't sit exactly on the boundary.
+    function withinLastTwoDays(ms) { return ms > request.time.toMillis() - 180000000; }
+    // The page cap a kiosk list must carry. Belt and braces with the clockIn
+    // floor below: the floor is what actually bounds the data, this stops an
+    // unbounded scan being attempted at all.
+    function kioskListLimit() { return 500; }
+    // A kiosk write to `breaks` may only GROW the list — append a new break,
+    // or end the last open one. It may never SHRINK it.
+    //
+    // THE HOLE THIS CLOSES: the kiosk update branch checked WHICH fields
+    // change, never HOW `breaks` changes. Anyone holding the kiosk credential
+    // could shorten or drop a break on today's entry, which inflates paid
+    // hours for any unpaid break reason. The door UI never does that — the
+    // permission was simply wider than the intent.
+    //
+    // Rules cannot deep-compare array contents, so this is the coarse half;
+    // the real integrity check (same ids, same order, at most one change) is
+    // domain/kiosk.ts's validateBreakEvolution, which App.tsx runs before it
+    // writes and audits on mismatch.
+    function kioskBreaksOnlyGrow() {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(['breaks'])
+        || request.resource.data.breaks.size() >= resource.data.breaks.size();
+    }
 
     // The exact field set the real clock-in/clock-out/break UI writes
     // (App.tsx's handleClockIn/handleClockOut/handleStartBreak/handleEndBreak)
@@ -252,9 +280,30 @@ service cloud.firestore {
       //     is a correction, and corrections happen on a real screen with an
       //     audit trail.
       match /timeEntries/{id} {
-        // The kiosk must read these to know whether the person who just
-        // punched has an open shift, and whether they are on a break.
-        allow read: if activeMemberOf(ws) || isKioskOf(ws);
+        // READ is split into get/list so the kiosk's access can be BOUNDED.
+        //
+        // THE PROBLEM: a kiosk could read the whole collection, so a tablet
+        // left unattended by the front door cached months of everyone's
+        // hours. The punch screen only needs to know who is on shift right
+        // now.
+        //
+        // In a `list` rule Firestore evaluates the condition against EVERY
+        // document the query would return, so requiring withinLastTwoDays on
+        // resource.data.clockIn makes an unbounded query fail outright: it
+        // would return an old entry, that entry fails the rule, the whole
+        // query is denied. A query carrying the clockIn floor returns only
+        // recent entries and is allowed. That is what turns "please send a
+        // bounded query" into something the server actually enforces.
+        //
+        // Owner/manager reads are untouched.
+        // The same bound applies to a single-document read, or it would be a
+        // way around the list rule one id at a time.
+        allow get: if activeMemberOf(ws)
+          || (isKioskOf(ws) && withinLastTwoDays(resource.data.clockIn));
+        allow list: if activeMemberOf(ws)
+          || (isKioskOf(ws)
+              && request.query.limit <= kioskListLimit()
+              && withinLastTwoDays(resource.data.clockIn));
         allow create: if isManagerUp(ws)
           || (isSelfServiceStaffOf(ws)
               && request.resource.data.userId == request.auth.uid
@@ -285,6 +334,7 @@ service cloud.firestore {
           || (isKioskOf(ws)
               && request.resource.data.userId == resource.data.userId
               && request.resource.data.diff(resource.data).affectedKeys().hasOnly(kioskUpdateKeys())
+              && kioskBreaksOnlyGrow()
               && withinLastDay(resource.data.clockIn)
               && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['clockOut'])
                   || closeToNow(request.resource.data.clockOut)));

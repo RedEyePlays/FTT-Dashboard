@@ -3,7 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   assertFails, assertSucceeds, initializeTestEnvironment, RulesTestEnvironment,
 } from '@firebase/rules-unit-testing';
-import { setDoc, getDoc, getDocs, collection, doc, deleteDoc, updateDoc } from 'firebase/firestore';
+import { setDoc, getDoc, getDocs, collection, doc, deleteDoc, updateDoc, query, where, orderBy, limit } from 'firebase/firestore';
 
 /**
  * The kiosk device account must be worthless if the iPad is stolen.
@@ -172,9 +172,6 @@ describe('kiosk punches', () => {
       { id: 'kiosk-in', userId: 'employee-uid', userEmail: 'employee@shop.test', clockIn: Date.now(), breaks: [], createdAt: Date.now(), source: 'kiosk' }));
   });
 
-  it('may read timeEntries, to know who is already on shift', async () => {
-    await assertSucceeds(getDocs(collection(asKiosk(), 'user_data', WORKSPACE, 'timeEntries')));
-  });
 
   it('may CLOCK OUT today\'s open shift', async () => {
     await assertSucceeds(updateDoc(doc(asKiosk(), 'user_data', WORKSPACE, 'timeEntries', 'employee-open'),
@@ -265,5 +262,100 @@ describe('kiosk PIN fields', () => {
   it('the kiosk may not write to any user document', async () => {
     await assertFails(updateDoc(doc(asKiosk(), 'users', 'employee-uid'), { disabled: true }));
     await assertFails(updateDoc(doc(asKiosk(), 'users', 'kiosk-uid'), { role: 'owner' }));
+  });
+});
+
+/* ---------------- How MUCH history the door iPad may hold ---------------- */
+
+describe('a kiosk timeEntries read is BOUNDED, server-side', () => {
+  // The punch screen only needs to know who is currently on shift or on a
+  // break. Left unbounded, a tablet sitting by the front door caches months of
+  // everyone's hours — so the bound is enforced in rules, not merely applied
+  // by the client. A `list` rule is evaluated against EVERY document the query
+  // would return, which is what makes a clockIn floor enforceable: an
+  // unbounded query reaches an old entry, that entry fails, the whole query is
+  // denied.
+  const WINDOW_MS = 48 * 3600_000;
+  const entries = () => collection(asKiosk(), 'user_data', WORKSPACE, 'timeEntries');
+  const bounded = (since: number) =>
+    query(entries(), where('clockIn', '>=', since), orderBy('clockIn', 'desc'), limit(200));
+
+  it('an UNBOUNDED list is DENIED', async () => {
+    await assertFails(getDocs(entries()));
+  });
+
+  it('a bounded list is allowed', async () => {
+    await assertSucceeds(getDocs(bounded(Date.now() - WINDOW_MS)));
+  });
+
+  it('and it returns the open shift the punch screen needs', async () => {
+    const snap = await getDocs(bounded(Date.now() - WINDOW_MS));
+    expect(snap.docs.map(d => d.id)).toContain('employee-open');
+  });
+
+  it('a bound reaching FURTHER BACK than the window is denied', async () => {
+    // 50 hours ago would sweep in the stale shift, and everything older.
+    await assertFails(getDocs(bounded(Date.now() - 30 * 24 * 3600_000)));
+  });
+
+  it('a kiosk cannot read an entry older than the bound even one at a time', async () => {
+    await assertFails(getDoc(doc(asKiosk(), 'user_data', WORKSPACE, 'timeEntries', 'employee-stale')));
+  });
+
+  it('a list without a page cap is denied', async () => {
+    await assertFails(getDocs(query(entries(), where('clockIn', '>=', Date.now() - WINDOW_MS), orderBy('clockIn', 'desc'))));
+  });
+
+  it('owner and manager reads are UNCHANGED — they still see everything', async () => {
+    await assertSucceeds(getDocs(collection(asOwner(), 'user_data', WORKSPACE, 'timeEntries')));
+    await assertSucceeds(getDoc(doc(asOwner(), 'user_data', WORKSPACE, 'timeEntries', 'employee-stale')));
+  });
+});
+
+/* ---------------- A kiosk may not trim a break ---------------- */
+
+describe('a kiosk write may only GROW the breaks list', () => {
+  // The kiosk update branch checked WHICH fields change, not HOW `breaks`
+  // changes — so anybody holding the credential could shorten or delete a
+  // break on today's entry and inflate paid hours for every unpaid reason.
+  // Rules cannot deep-compare array contents; this is the coarse half (the
+  // list never gets shorter). The exact check lives in domain/kiosk.ts's
+  // validateBreakEvolution, which runs before the write.
+  const twoBreaks = [
+    { id: 'b1', start: 0, end: 1000, reason: 'lunch' },
+    { id: 'b2', start: 2000, end: 3000, reason: 'bank' },
+  ];
+  const seedBreaks = async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await updateDoc(doc(ctx.firestore(), 'user_data', WORKSPACE, 'timeEntries', 'employee-open'), { breaks: twoBreaks });
+    });
+  };
+  const openEntry = () => doc(asKiosk(), 'user_data', WORKSPACE, 'timeEntries', 'employee-open');
+
+  it('may APPEND a break', async () => {
+    await seedBreaks();
+    await assertSucceeds(updateDoc(openEntry(), { breaks: [...twoBreaks, { id: 'b3', start: 4000, reason: 'personal' }] }));
+  });
+
+  it('may END the last break — same length, so still allowed', async () => {
+    await seedBreaks();
+    await assertSucceeds(updateDoc(openEntry(), {
+      breaks: [twoBreaks[0], { ...twoBreaks[1], end: 3500 }],
+    }));
+  });
+
+  it('may NOT DELETE a break', async () => {
+    await seedBreaks();
+    await assertFails(updateDoc(openEntry(), { breaks: [twoBreaks[0]] }));
+  });
+
+  it('may NOT clear the breaks list outright', async () => {
+    await seedBreaks();
+    await assertFails(updateDoc(openEntry(), { breaks: [] }));
+  });
+
+  it('the owner may still correct breaks — this bound is on the DEVICE only', async () => {
+    await seedBreaks();
+    await assertSucceeds(updateDoc(doc(asOwner(), 'user_data', WORKSPACE, 'timeEntries', 'employee-open'), { breaks: [twoBreaks[0]] }));
   });
 });

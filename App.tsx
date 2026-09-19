@@ -39,12 +39,14 @@ const UsersView = lazy(() => import('./components/UsersView').then(m => ({ defau
 const AuditLogView = lazy(() => import('./components/AuditLogView').then(m => ({ default: m.AuditLogView })));
 const TimeClockView = lazy(() => import('./components/TimeClockView').then(m => ({ default: m.TimeClockView })));
 const CloseOutView = lazy(() => import('./components/CloseOutView').then(m => ({ default: m.CloseOutView })));
-import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, DeviceBuyer, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission, Repair, RepairBatch, TimeEntry, PayPeriodPaid, PayPeriodApproval, BreakReason, SalesTransaction, CashReconciliation, StaffNote, BalancePayment, Expense, RecurringExpense, RefundSplit, StaffBonus, KioskStaff } from './types';
+import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, DeviceBuyer, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission, Repair, RepairBatch, TimeEntry, PayPeriodPaid, PayPeriodApproval, BreakReason, SalesTransaction, CashReconciliation, StaffNote, BalancePayment, Expense, RecurringExpense, RefundSplit, StaffBonus, KioskStaff, CashDrawerEntry } from './types';
 import { skuPrefix, nextSku } from './services/sku';
 import { REPAIR_PREFIX, BATCH_PREFIX, applyTechEdit, techUpdateAuditPlan, repairSalePrefill, completeRepair, completeRepairSale, dateToEpochMs, isRepairOpen, flagDeviceForRepair, restoredDeviceStatus } from './domain/repairs';
 import { repairCostWriteback, applyRepairCostDelta } from './domain/repairCostWriteback';
 import { bonusDrawerEffect, canSaveBonus, visibleBonuses } from './domain/bonuses';
-import { buildKioskClockIn, buildKioskClockOut, buildKioskStartBreak, buildKioskEndBreak } from './domain/kiosk';
+import { attributeDrawerEntry } from './domain/dayLedger';
+import { paidBreakChangeImpact, paidBreakChangeMessage, paidBreakChangeAudit, sameReasons } from './domain/paidBreakChange';
+import { buildKioskClockIn, buildKioskClockOut, buildKioskStartBreak, buildKioskEndBreak, validateKioskWrite } from './domain/kiosk';
 import { markTicketDeviceSold } from './domain/repairVisibility';
 import { MergePlan, resolveCustomerForDraft, CustomerDraft } from './domain/customers';
 import { can, canPrintDropOffLabel } from './services/rbac';
@@ -603,6 +605,25 @@ const App: React.FC = () => {
     catch { /* ignore */ }
   }, [settings.tax.percent]);
 
+  // Ticking a paid-break reason recalculates hours for every period that has
+  // not been paid yet. Already-paid periods carry a snapshot and are safe, but
+  // the owner must be told the real number before the change lands — so this
+  // computes it rather than asserting a sentence.
+  const paidBreakImpactOf = (after: BreakReason[]) => paidBreakChangeImpact({
+    entries: timeEntries,
+    users: workspaceUsers,
+    approvals: payPeriodApprovals,
+    paid: payPeriods,
+    before: settings.operations.paidBreakReasons || [],
+    after,
+    now: Date.now(),
+    days: PAY_CYCLE_DAYS[settings.payroll.cycle],
+    anchorISO: settings.payroll.anchorISO,
+  });
+
+  const confirmPaidBreakChange = (after: BreakReason[]): boolean =>
+    window.confirm(paidBreakChangeMessage(paidBreakImpactOf(after)));
+
   // Persist owner settings to Firestore, and mirror the few values that other
   // components read from localStorage (POS tax rate, default label template).
   const handleSaveSettings = async (next: AppSettings) => {
@@ -610,8 +631,18 @@ const App: React.FC = () => {
     // Record which sections actually changed (e.g. ['tax','labels']) rather than a
     // generic "Settings updated" with no detail.
     const changed = changedSettingsSections(settings, next);
+    // A paid-break change rewrites hours for every unpaid period, so it gets
+    // its own audit entry — old reasons, new reasons, and how many periods
+    // recalculated — instead of hiding inside "Settings updated: operations".
+    const breaksBefore = settings.operations.paidBreakReasons || [];
+    const breaksAfter = next.operations.paidBreakReasons || [];
     await saveSettings(uid, next);
     audit('settings.update', 'settings', 'app', undefined, { changed });
+    if (!sameReasons(breaksBefore, breaksAfter)) {
+      audit('settings.paid_breaks', 'settings', 'app', { paidBreakReasons: [...breaksBefore] }, paidBreakChangeAudit(
+        breaksBefore, breaksAfter, paidBreakImpactOf(breaksAfter),
+      ));
+    }
     logActivity(changed.length ? `Settings updated: ${changed.join(', ')}` : 'Settings updated');
     try {
       localStorage.setItem('posSettings', JSON.stringify({ taxRate: next.tax.percent }));
@@ -734,7 +765,7 @@ const App: React.FC = () => {
       const existing = cashReconciliations.find(rec => rec.date === date);
       const listKey: 'cashIn' | 'cashOut' = purchaseEffect.kind;
       const entry = { id: newId(), amount: purchaseEffect.amount, note: `Quick Purchase — ${item.item}` };
-      commitDrawerRecord(date, {}, { [listKey]: [entry] }, { path: 'quickPurchase' });
+      commitDrawerRecord(date, {}, { [listKey]: [entry] }, { path: 'quickPurchase', purchaseId: item.id });
       logActivity(`Cash paid out $${purchaseEffect.amount.toFixed(2)} — quick purchase (${item.item})`);
     }
   };
@@ -880,7 +911,7 @@ const App: React.FC = () => {
       const date = todayISO();
       const existing = cashReconciliations.find(r => r.date === date);
       const entry = { id: newId(), amount: cashPortion, note: `Layaway balance collected — ${tx.id.slice(0, 8)} (${tx.customerName || 'customer'})` };
-      commitDrawerRecord(date, {}, { cashIn: [entry] }, { path: 'collectBalance' });
+      commitDrawerRecord(date, {}, { cashIn: [entry] }, { path: 'collectBalance', transactionId: tx.id });
     }
 
     return transaction;
@@ -1041,8 +1072,34 @@ const App: React.FC = () => {
   ): Promise<{ record: CashReconciliation; queued: boolean } | null> => {
     if (!uid || !appUser) return null;
     const actor = { id: appUser.id, email: appUser.email };
+    // ATTRIBUTION, stamped centrally rather than at each of the fourteen call
+    // sites — a call site that forgot would silently write an untraceable
+    // entry, which is the exact failure this closes. The write path and the
+    // related record id are already here in `auditCtx`, and the actor is the
+    // AUTHENTICATED user, never anything a caller passed in.
+    //
+    // attributeDrawerEntry never overwrites a field an entry already has, so
+    // re-saving the Reports editor's lists keeps whoever actually made each
+    // entry instead of crediting them all to whoever last pressed Save.
+    const stamp = (entries?: CashDrawerEntry[]) => entries?.map(e => attributeDrawerEntry(e, {
+      at: Date.now(), by: appUser.id, byEmail: appUser.email,
+      source: auditCtx?.path,
+      refId: (auditCtx?.transactionId || auditCtx?.dropOffId || auditCtx?.settlementId
+        || auditCtx?.bonusId || auditCtx?.expenseId || auditCtx?.purchaseId) as string | undefined,
+    }));
+    const attributedPatch: Partial<CashReconciliation> = {
+      ...patch,
+      ...(patch.cashIn ? { cashIn: stamp(patch.cashIn) } : {}),
+      ...(patch.cashOut ? { cashOut: stamp(patch.cashOut) } : {}),
+      ...(patch.withdrawals ? { withdrawals: stamp(patch.withdrawals) } : {}),
+    };
+    const attributedAppends: DrawerAppends | undefined = appends && {
+      ...(appends.cashIn ? { cashIn: stamp(appends.cashIn) } : {}),
+      ...(appends.cashOut ? { cashOut: stamp(appends.cashOut) } : {}),
+      ...(appends.withdrawals ? { withdrawals: stamp(appends.withdrawals) } : {}),
+    };
     const args = {
-      date, patch, appends,
+      date, patch: attributedPatch, appends: attributedAppends,
       cashSales: expectedCashForDate(salesTransactions, date),
       carry: drawerCarryOver(cashReconciliations, date, d => expectedCashForDate(salesTransactions, d)),
       actor,
@@ -1216,7 +1273,7 @@ const App: React.FC = () => {
     if (isNew && next.paymentMethod === 'cash') {
       const existing = cashReconciliations.find(r => r.date === next.date);
       const entry = { id: newId(), amount: next.amount, note: `${next.category} — ${next.payee || next.note || 'expense'}` };
-      commitDrawerRecord(next.date, {}, { cashOut: [entry] }, { path: 'expenseCashOut' });
+      commitDrawerRecord(next.date, {}, { cashOut: [entry] }, { path: 'expenseCashOut', expenseId: next.id });
       next.cashDrawerLinked = true;
     }
     saveExpense(uid, next).catch(e => console.error('Expense save failed', e));
@@ -1275,7 +1332,7 @@ const App: React.FC = () => {
     if (expense.paymentMethod === 'cash') {
       const existing = cashReconciliations.find(rec => rec.date === expense.date);
       const entry = { id: newId(), amount: expense.amount, note: `${expense.category} — ${expense.payee || 'recurring expense'}` };
-      commitDrawerRecord(expense.date, {}, { cashOut: [entry] }, { path: 'expenseDeleteReversal' });
+      commitDrawerRecord(expense.date, {}, { cashOut: [entry] }, { path: 'recurringExpenseCashOut', expenseId: expense.id });
       expense.cashDrawerLinked = true;
     }
     saveExpense(uid, expense).catch(e => console.error('Expense save failed', e));
@@ -1743,6 +1800,26 @@ const App: React.FC = () => {
   const punchAudit = (action: string, entryId: string, person: KioskStaff, extra?: Record<string, unknown>) =>
     audit(action, 'timeEntry', entryId, undefined, { source: 'kiosk', userId: person.uid, name: person.displayName, ...extra });
 
+  // Every kiosk write to an EXISTING entry goes through here. The builders
+  // already produce `existing breaks + at most one change`, and this re-checks
+  // that property on the record about to be written: the breaks list may only
+  // grow or have the last open break ended, never shrink, reorder, or be
+  // edited. A mismatch is refused AND audited, so an attempt to trim a break
+  // from the door shows up rather than failing silently. firestore.rules
+  // enforces the coarse half of the same rule server-side.
+  const kioskSaveEntry = async (
+    person: KioskStaff, before: TimeEntry, after: TimeEntry,
+    action: string, extra?: Record<string, unknown>,
+  ) => {
+    const check = validateKioskWrite(before, after);
+    if (check.ok === false) {
+      punchAudit('timeclock.punch_rejected', before.id, person, { ...extra, reason: check.reason });
+      return;
+    }
+    await saveTimeEntry(uid!, after);
+    punchAudit(action, before.id, person, extra);
+  };
+
   const handleKioskClockIn = async (person: KioskStaff) => {
     if (!uid || appUser?.role !== 'kiosk') return;
     if (openEntryFor(timeEntries, person.uid)) return; // already on shift
@@ -1755,22 +1832,19 @@ const App: React.FC = () => {
   const handleKioskClockOut = async (person: KioskStaff, open: TimeEntry) => {
     if (!uid || appUser?.role !== 'kiosk') return;
     await kioskGuard.run(`out:${person.uid}`, async () => {
-      await saveTimeEntry(uid, buildKioskClockOut(open, Date.now()));
-      punchAudit('timeclock.clock_out', open.id, person);
+      await kioskSaveEntry(person, open, buildKioskClockOut(open, Date.now()), 'timeclock.clock_out');
     });
   };
   const handleKioskStartBreak = async (person: KioskStaff, open: TimeEntry, reason: BreakReason) => {
     if (!uid || appUser?.role !== 'kiosk' || isOnBreak(open)) return;
     await kioskGuard.run(`brk:${person.uid}`, async () => {
-      await saveTimeEntry(uid, buildKioskStartBreak(open, newId(), reason, Date.now()));
-      punchAudit('timeclock.break_start', open.id, person, { reason });
+      await kioskSaveEntry(person, open, buildKioskStartBreak(open, newId(), reason, Date.now()), 'timeclock.break_start', { reason });
     });
   };
   const handleKioskEndBreak = async (person: KioskStaff, open: TimeEntry) => {
     if (!uid || appUser?.role !== 'kiosk') return;
     await kioskGuard.run(`endbrk:${person.uid}`, async () => {
-      await saveTimeEntry(uid, buildKioskEndBreak(open, Date.now()));
-      punchAudit('timeclock.break_end', open.id, person);
+      await kioskSaveEntry(person, open, buildKioskEndBreak(open, Date.now()), 'timeclock.break_end');
     });
   };
 
@@ -1820,6 +1894,11 @@ const App: React.FC = () => {
         periodEnd: toISODate(period.end - 1),
         approvedBy: appUser.id, approvedByEmail: appUser.email, approvedAt: Date.now(),
         hours: pay.hours, gross: pay.gross, rate: pay.rate,
+        // The paid-break setting these figures were computed under. Stored so
+        // that a later change to it is DETECTABLE on this period rather than
+        // inferred — an approval without it means "unknown", and nothing is
+        // claimed about it.
+        paidBreakReasons: [...(settings.operations.paidBreakReasons || [])],
       };
       await savePayPeriodApproval(uid, rec).catch(() => {});
       audit('timeclock.approve_paid', 'payPeriod', rec.id, undefined, { hours: pay.hours, gross: pay.gross });
@@ -2033,7 +2112,7 @@ const App: React.FC = () => {
             const date = todayISO();
             const listKey: 'cashIn' | 'cashOut' = purchaseEffect.kind;
             const entry = { id: newId(), amount: purchaseEffect.amount, note: `Device purchase — ${next.repairNumber || candidate.item}` };
-            commitDrawerRecord(date, {}, { [listKey]: [entry] }, { path: 'autoInventoryPurchase' });
+            commitDrawerRecord(date, {}, { [listKey]: [entry] }, { path: 'autoInventoryPurchase', purchaseId: next.id });
             logActivity(`Cash paid out $${purchaseEffect.amount.toFixed(2)} — device purchase (${candidate.item})`);
           }
         } else {
@@ -2549,6 +2628,7 @@ const App: React.FC = () => {
                   canAddExpense={allow('expenses.add')} canViewAllExpenses={allow('expenses.viewAll')}
                   currentUserId={appUser?.id || ''} recurringExpenses={recurringExpenses}
                   canReconcile={allow('cash.reconcile')} canViewProfit={allow('reports.profit.summary')}
+                  canViewDetailedProfit={allow('reports.profit.detailed')}
                   onSaveExpense={handleSaveExpense} onDeleteExpense={handleDeleteExpense}
                   onSaveRecurringExpense={handleSaveRecurringExpense} onDeleteRecurringExpense={handleDeleteRecurringExpense}
                   onGenerateRecurringExpense={handleGenerateRecurringExpense} onSkipRecurringPeriod={handleSkipRecurringPeriod} />
@@ -2761,6 +2841,7 @@ const App: React.FC = () => {
               onUnmarkPaid={handleUnmarkPaid}
               onCorrectClockOut={handleCorrectClockOut}
               paidBreakReasons={settings.operations.paidBreakReasons}
+              paidBreakReasonsUpdatedAt={settings.operations.paidBreakReasonsUpdatedAt}
               staffBonuses={visibleBonuses(staffBonuses, { id: appUser.id, canViewPayroll: allow('payroll.manage') })}
               canAddBonus={appUser.role === 'owner'}
               onSaveBonus={appUser.role === 'owner' ? handleSaveBonus : undefined}
@@ -2792,6 +2873,7 @@ const App: React.FC = () => {
             <SettingsView
               settings={settings}
               onSave={handleSaveSettings}
+              confirmPaidBreakChange={confirmPaidBreakChange}
               canManage={allow('settings.manage')}
               role={appUser.role}
               loadBackupHistory={appUser.role === 'owner' && workspaceId ? () => import('./services/backupStorage').then(m => m.listWorkspaceBackups(workspaceId)) : undefined}

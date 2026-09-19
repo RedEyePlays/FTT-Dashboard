@@ -164,6 +164,9 @@ export interface AppSettings {
     // Staff still punch EVERY break either way, so the record is kept — only
     // the pay treatment differs, and it is decided per break by its reason.
     paidBreakReasons?: BreakReason[];
+    // When that list last changed. Only used to date the "figures
+    // recalculated" note on a pay period — the setting itself is the list.
+    paidBreakReasonsUpdatedAt?: number;
   };
   // Owner-configurable pay-period schedule (domain/timeclock.ts's payPeriodFor/
   // recentPayPeriods read these instead of the old hardcoded constants).

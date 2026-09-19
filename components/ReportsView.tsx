@@ -15,6 +15,10 @@ import {
 } from '../domain/reports';
 import { computeAnalytics, presetRange } from '../domain/analytics';
 import { entriesOnDate, workedHours, PaidBreakReasons } from '../domain/timeclock';
+import {
+  buildDayLedger, cashOnly, shortfallWalk, rowsForWalkLine, dayLedgerFacts,
+  trimForViewer, ledgerCsvRows, WalkLine,
+} from '../domain/dayLedger';
 import { toCSV, triggerDownload } from '../services/backup';
 import { newId } from '../domain/ids';
 import { toISODate, todayISO } from '../domain/dates';
@@ -69,6 +73,10 @@ interface Props {
   // exactly the bug this was added to fix).
   canReconcile: boolean;
   canViewProfit: boolean;
+  // reports.profit.detailed — owner by default. A manager may explain a
+  // shortfall on the Money Trail without being shown cost or margin per unit,
+  // so this gates those two columns and nothing else.
+  canViewDetailedProfit?: boolean;
   // Daily History tab — everything that happened on a given day, reusing the
   // same underlying data every other view already reads (no parallel state).
   repairs: Repair[];
@@ -116,6 +124,7 @@ export const ReportsView: React.FC<Props> = ({
   salesTransactions, cashReconciliations, inventory, payPeriods, staffBonuses = [], booksStartDate, paidBreakReasons = [], settlements, deviceBuyers, onSaveReconciliation,
   repairs, customers, auditLogs, activity, timeEntries, users, expenses, expenseCategories,
   recurringExpenses, canAddExpense, canViewAllExpenses, currentUserId, canReconcile, canViewProfit,
+  canViewDetailedProfit = false,
   onSaveExpense, onDeleteExpense,
   onSaveRecurringExpense, onDeleteRecurringExpense, onGenerateRecurringExpense, onSkipRecurringPeriod,
 }) => {
@@ -151,6 +160,7 @@ export const ReportsView: React.FC<Props> = ({
           salesTransactions={salesTransactions} cashReconciliations={cashReconciliations}
           repairs={repairs} inventory={inventory} customers={customers} auditLogs={auditLogs} activity={activity}
           timeEntries={timeEntries} users={users} settlements={settlements} booksStartDate={booksStartDate} paidBreakReasons={paidBreakReasons}
+          expenses={expenses} staffBonuses={staffBonuses} canViewDetailedProfit={canViewDetailedProfit}
         />
       )}
       {tab === 'cash' && tabAllowed('cash', perms) && <CashReconTab salesTransactions={salesTransactions} cashReconciliations={cashReconciliations} onSave={onSaveReconciliation} />}
@@ -197,7 +207,15 @@ const DailyHistoryTab: React.FC<{
   settlements: Settlement[];
   booksStartDate?: string;
   paidBreakReasons?: PaidBreakReasons;
-}> = ({ salesTransactions, cashReconciliations, repairs, inventory, customers, auditLogs, activity, timeEntries, users, settlements, booksStartDate, paidBreakReasons = [] }) => {
+  // The Money Trail's other sources. `expenses` is the FULL workspace array,
+  // not the per-viewer filtered one: a manager must be able to account for
+  // every dollar that left the till on a short day, and an expense paid in
+  // cash is one of the ways it leaves. `staffBonuses` is already filtered by
+  // the caller to what this viewer may see (the payroll-visibility rule).
+  expenses?: Expense[];
+  staffBonuses?: StaffBonus[];
+  canViewDetailedProfit?: boolean;
+}> = ({ salesTransactions, cashReconciliations, repairs, inventory, customers, auditLogs, activity, timeEntries, users, settlements, booksStartDate, paidBreakReasons = [], expenses = [], staffBonuses = [], canViewDetailedProfit = false }) => {
   const [date, setDate] = useState(todayISO());
   const now = Date.now();
 
@@ -246,6 +264,33 @@ const DailyHistoryTab: React.FC<{
 
   const isToday = date === todayISO();
 
+  /* --- The Money Trail ------------------------------------------------- */
+  // ONE time-ordered list of every money movement on the picked date, built
+  // by domain/dayLedger.ts. The walk above it uses the SAME expectedEndingCash
+  // the drawer screen uses, off the parts — never the stored expectedCash,
+  // which an offline merge write leaves stale.
+  const [cashOnlyView, setCashOnlyView] = useState(true);
+  const [walkFilter, setWalkFilter] = useState<WalkLine | null>(null);
+
+  const allRows = useMemo(() => trimForViewer(buildDayLedger({
+    date, sales: salesTransactions, recon, expenses, settlements, bonuses: staffBonuses, booksStartDate,
+  }), { canSeeCost: canViewDetailedProfit }),
+  [date, salesTransactions, recon, expenses, settlements, staffBonuses, booksStartDate, canViewDetailedProfit]);
+
+  const walk = useMemo(() => shortfallWalk(recon, cashSales, drawer.openingFloat), [recon, cashSales, drawer.openingFloat]);
+  const facts = useMemo(() => dayLedgerFacts(allRows, recon, carry), [allRows, recon, carry]);
+
+  const shownRows = useMemo(() => {
+    const scoped = walkFilter ? rowsForWalkLine(allRows, walkFilter) : allRows;
+    return cashOnlyView ? cashOnly(scoped) : scoped;
+  }, [allRows, walkFilter, cashOnlyView]);
+
+  const handleExportTrail = () => {
+    // The SAME rows the screen shows, already permission-trimmed — the export
+    // cannot reveal a column the viewer isn't allowed to see.
+    triggerDownload(`day-money-trail-${date}.csv`, toCSV(ledgerCsvRows(shownRows)), 'text/csv;charset=utf-8;');
+  };
+
   return (
     <div className="space-y-6">
       <div className={`${card} p-5`}>
@@ -291,6 +336,116 @@ const DailyHistoryTab: React.FC<{
         ) : (
           <div className="flex flex-wrap items-center gap-1.5 text-sm font-semibold text-amber-600 dark:text-amber-400">
             <LockOpen className="w-4 h-4" /> Not reconciled — opening {money(drawer.openingFloat)}, expected {money(drawer.expected)}
+          </div>
+        )}
+      </div>
+
+      {/* --- Money Trail ------------------------------------------------------ */}
+      {/* Why this exists: a short drawer used to be a dead end — this tab
+          showed totals and nothing else. One list, one walk, one day. */}
+      <div className={`${card} p-5`}>
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+          <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200">Money Trail</h3>
+          <div className="flex items-center gap-2">
+            <div className="inline-flex rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden text-xs font-medium">
+              <button onClick={() => setCashOnlyView(true)} className={`px-3 py-1.5 ${cashOnlyView ? 'bg-indigo-600 text-white' : 'text-slate-600 dark:text-slate-300'}`}>Cash only</button>
+              <button onClick={() => setCashOnlyView(false)} className={`px-3 py-1.5 ${!cashOnlyView ? 'bg-indigo-600 text-white' : 'text-slate-600 dark:text-slate-300'}`}>All money</button>
+            </div>
+            <button onClick={handleExportTrail} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800">
+              <Download className="w-3.5 h-3.5" /> Export day (CSV)
+            </button>
+          </div>
+        </div>
+
+        {/* The walk, top to bottom. Every line filters the list below it. */}
+        <div className="rounded-lg border border-slate-200 dark:border-slate-700 divide-y divide-slate-100 dark:divide-slate-800 mb-4">
+          {walk.steps.map(step => (
+            <button
+              key={step.key}
+              onClick={() => setWalkFilter(walkFilter === step.key ? null : step.key)}
+              className={`w-full flex items-center justify-between px-3 py-2 text-sm text-left ${walkFilter === step.key ? 'bg-indigo-50 dark:bg-indigo-900/20' : 'hover:bg-slate-50 dark:hover:bg-slate-800/50'}`}>
+              <span className={`${step.op === '=' ? 'font-semibold text-slate-700 dark:text-slate-200' : 'text-slate-600 dark:text-slate-300'}`}>
+                {step.op !== '=' && <span className="text-slate-400 mr-1.5">{step.op}</span>}{step.label}
+              </span>
+              <span className={`tabular-nums font-semibold ${step.key === 'variance' ? (step.amount < 0 ? 'text-rose-600 dark:text-rose-400' : step.amount > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400') : 'text-slate-900 dark:text-white'}`}>
+                {step.amount < 0 ? `−${money(Math.abs(step.amount))}` : money(step.amount)}
+              </span>
+            </button>
+          ))}
+        </div>
+
+        {/* Facts to CHECK. Never an accusation — nothing here names a suspect
+            or implies one; each line is something a person can go and look at. */}
+        {walk.counted_ && Math.abs(walk.variance) >= 0.005 && (
+          <div className="mb-4 px-3 py-2 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 text-xs text-amber-800 dark:text-amber-300 space-y-1">
+            <p className="font-semibold">Worth checking</p>
+            {facts.unattributedCount > 0 && (
+              <p>{facts.unattributedCount} drawer {facts.unattributedCount === 1 ? 'entry has' : 'entries have'} nobody recorded against {facts.unattributedCount === 1 ? 'it' : 'them'} — {money(facts.unattributedTotal)} in total.</p>
+            )}
+            {facts.noNoteCount > 0 && <p>{facts.noNoteCount} drawer {facts.noNoteCount === 1 ? 'entry has' : 'entries have'} no note.</p>}
+            {facts.afterReconcile.length > 0 && (
+              <p>{facts.afterReconcile.length} {facts.afterReconcile.length === 1 ? 'movement was' : 'movements were'} logged after the drawer was counted.</p>
+            )}
+            {facts.previousDayNeverClosed && <p>The drawer was never closed on {facts.previousDayDate}, so this day started from a till nobody counted.</p>}
+            {facts.unattributedCount === 0 && facts.noNoteCount === 0 && facts.afterReconcile.length === 0 && !facts.previousDayNeverClosed && (
+              <p>Nothing unusual in the record — every movement has a person, a time and a note.</p>
+            )}
+          </div>
+        )}
+
+        {walkFilter && (
+          <button onClick={() => setWalkFilter(null)} className="mb-2 text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:underline">
+            Showing {walk.steps.find(x => x.key === walkFilter)?.label} only — show everything
+          </button>
+        )}
+
+        {shownRows.length === 0 ? (
+          <p className="text-sm text-slate-400">No money moved on this day{cashOnlyView ? ' in cash' : ''}.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-[11px] uppercase tracking-wide text-slate-400 text-left">
+                  <th className="py-1.5 pr-3 font-medium">Time</th>
+                  <th className="py-1.5 pr-3 font-medium">What</th>
+                  <th className="py-1.5 pr-3 font-medium">Who</th>
+                  <th className="py-1.5 pr-3 font-medium">Method</th>
+                  <th className="py-1.5 pr-3 font-medium text-right">Amount</th>
+                  <th className="py-1.5 pr-3 font-medium text-right">Cash effect</th>
+                  {canViewDetailedProfit && <th className="py-1.5 font-medium text-right">Margin</th>}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                {shownRows.map(r => (
+                  <tr key={r.id} className="align-top">
+                    <td className="py-1.5 pr-3 text-slate-500 tabular-nums whitespace-nowrap">
+                      {r.at == null ? '—' : new Date(r.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </td>
+                    <td className="py-1.5 pr-3 text-slate-700 dark:text-slate-200">
+                      {r.label}
+                      {r.voided && <span className="ml-1.5 text-[11px] font-medium text-rose-600 dark:text-rose-400">voided</span>}
+                      {r.returned && <span className="ml-1.5 text-[11px] font-medium text-amber-600 dark:text-amber-400">returned</span>}
+                      {r.note && <span className="block text-[11px] text-slate-400">{r.note}</span>}
+                      {r.link && <span className="block text-[11px] text-slate-400">{r.link.type} · {r.link.id.slice(0, 12)}</span>}
+                    </td>
+                    <td className="py-1.5 pr-3 text-slate-500">
+                      {/* Unattributed is stated, never guessed at. */}
+                      {r.who || <span className="italic text-slate-400">unattributed</span>}
+                    </td>
+                    <td className="py-1.5 pr-3 text-slate-500">{r.method === 'none' ? '—' : r.method}</td>
+                    <td className={`py-1.5 pr-3 text-right tabular-nums ${r.amount < 0 ? 'text-rose-600 dark:text-rose-400' : 'text-slate-900 dark:text-white'}`}>
+                      {r.amount === 0 ? '—' : r.amount < 0 ? `−${money(Math.abs(r.amount))}` : money(r.amount)}
+                    </td>
+                    <td className={`py-1.5 pr-3 text-right tabular-nums ${r.cashAmount < 0 ? 'text-rose-600 dark:text-rose-400' : 'text-slate-600 dark:text-slate-300'}`}>
+                      {r.cashAmount === 0 ? '—' : r.cashAmount < 0 ? `−${money(Math.abs(r.cashAmount))}` : money(r.cashAmount)}
+                    </td>
+                    {canViewDetailedProfit && (
+                      <td className="py-1.5 text-right tabular-nums text-slate-500">{r.margin == null ? '—' : money(r.margin)}</td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
       </div>

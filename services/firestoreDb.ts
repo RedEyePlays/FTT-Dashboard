@@ -61,10 +61,17 @@ export function subscribeCollection<T extends { id: string }>(
   // Optional server-side bound: only fetch the most recent `limitTo` docs ordered
   // by `orderByField` (desc). Used for the unbounded logs (activity/audit) so load
   // time and memory don't scale with the shop's entire history.
-  opts?: { orderByField: string; limitTo: number },
+  //
+  // `since` adds a `where(field, '>=', value)` floor. The kiosk uses it to read
+  // only the last ~48 hours of timeEntries; firestore.rules REQUIRES that bound
+  // for a kiosk list, so this is not merely an optimization — an unbounded
+  // kiosk query is denied outright (see KIOSK_TIME_ENTRY_WINDOW_MS below).
+  opts?: { orderByField: string; limitTo: number; since?: { field: string; value: number } },
 ) {
   const ref = opts
-    ? query(colRef(uid, name), orderBy(opts.orderByField, 'desc'), limit(opts.limitTo))
+    ? (opts.since
+        ? query(colRef(uid, name), where(opts.since.field, '>=', opts.since.value), orderBy(opts.since.field, 'desc'), limit(opts.limitTo))
+        : query(colRef(uid, name), orderBy(opts.orderByField, 'desc'), limit(opts.limitTo)))
     : colRef(uid, name);
   return onSnapshot(ref,
     snap => cb(snap.docs.map(d => ({ ...(d.data() as any), id: d.id })) as T[]),
@@ -328,6 +335,33 @@ export const saveTimeEntry = (uid: string, e: TimeEntry) => saveItem(uid, 'timeE
 // The punch roster the kiosk reads. Read-only from the client — the ONLY
 // writer is the syncKioskStaff Admin-SDK trigger (functions/src/kioskStaff.ts),
 // and firestore.rules denies every client write to it.
+/**
+ * How far back the door iPad may read timeEntries.
+ *
+ * THE PROBLEM THIS FIXES: the kiosk could read the WHOLE timeEntries
+ * collection, so a tablet sitting unattended by the front door cached months
+ * of everyone's hours. The punch screen only needs to know who is currently on
+ * shift or on a break.
+ *
+ * ~48 hours, not 24: it has to cover an overnight shift and a shift left open
+ * since yesterday, which the punch screen already surfaces (it refuses the
+ * punch and says to see a manager). Kept slightly wider than the rules'
+ * window so a clock-skewed device doesn't sit exactly on the boundary and get
+ * its whole query denied.
+ */
+export const KIOSK_TIME_ENTRY_WINDOW_MS = 48 * 60 * 60 * 1000;
+/** Matching page cap — firestore.rules requires a kiosk list to carry one. */
+export const KIOSK_TIME_ENTRY_LIMIT = 200;
+
+/** The bounded timeEntries read a kiosk is allowed to make. */
+export const subscribeKioskTimeEntries = (
+  uid: string, now: number, cb: (rows: TimeEntry[]) => void, onError: (e: Error) => void,
+) => subscribeCollection<TimeEntry>(uid, 'timeEntries', cb, onError, {
+  orderByField: 'clockIn',
+  limitTo: KIOSK_TIME_ENTRY_LIMIT,
+  since: { field: 'clockIn', value: now - KIOSK_TIME_ENTRY_WINDOW_MS },
+});
+
 export const subscribeKioskStaff = (
   uid: string, cb: (rows: KioskStaff[]) => void, onError: (e: Error) => void,
 ) => subscribeCollection<KioskStaff>(uid, 'kioskStaff', cb, onError);
