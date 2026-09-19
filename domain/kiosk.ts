@@ -275,6 +275,22 @@ export const isPunchableEntry = (e: TimeEntry, now: number): boolean =>
 export const isStaleOpenShift = (s: PunchState, now: number): boolean =>
   !!s.open && !isPunchableEntry(s.open, now);
 
+/**
+ * "You're still clocked in from Friday, 9:14 AM."
+ *
+ * NAMES the shift rather than gesturing at it: somebody who forgot to clock
+ * out on Friday needs to recognise which shift this is before a manager can
+ * fix it. Returns null when there is no stale shift to describe.
+ *
+ * The screen deliberately offers NO punch here — not a clock-out, not a fresh
+ * clock-in. firestore.rules refuses a kiosk write to an entry this old anyway
+ * (withinLastDay), and the door iPad must never decide what somebody's hours
+ * were. The shift stays open and flagged for the owner to correct on the Time
+ * Clock screen.
+ */
+export const staleShiftLabel = (s: PunchState, fmt: (ms: number) => string): string | null =>
+  s.open && s.open.clockIn ? `You're still clocked in from ${fmt(s.open.clockIn)}.` : null;
+
 /** Wording for the confirm step, so the screen and the tests agree on it. */
 export const confirmLabel = (
   s: PunchState, name: string, timeLabel: string, now: number,

@@ -63,7 +63,7 @@ export function subscribeCollection<T extends { id: string }>(
   // time and memory don't scale with the shop's entire history.
   //
   // `since` adds a `where(field, '>=', value)` floor. The kiosk uses it to read
-  // only the last ~48 hours of timeEntries; firestore.rules REQUIRES that bound
+  // only the last ~4 days of timeEntries; firestore.rules REQUIRES that bound
   // for a kiosk list, so this is not merely an optimization — an unbounded
   // kiosk query is denied outright (see KIOSK_TIME_ENTRY_WINDOW_MS below).
   opts?: { orderByField: string; limitTo: number; since?: { field: string; value: number } },
@@ -343,13 +343,22 @@ export const saveTimeEntry = (uid: string, e: TimeEntry) => saveItem(uid, 'timeE
  * of everyone's hours. The punch screen only needs to know who is currently on
  * shift or on a break.
  *
- * ~48 hours, not 24: it has to cover an overnight shift and a shift left open
- * since yesterday, which the punch screen already surfaces (it refuses the
- * punch and says to see a manager). Kept slightly wider than the rules'
- * window so a clock-skewed device doesn't sit exactly on the boundary and get
- * its whole query denied.
+ * FOUR DAYS, NOT TWO — AND THAT SPAN IS THE POINT. It has to cover a shift
+ * left open on Friday by somebody who does not come back until Monday. At 48
+ * hours that shift fell outside the window, so the punch screen could not see
+ * it, offered "Clock in", and the person ended up with two open entries —
+ * exactly the tangle the missed-clock-out handling exists to prevent. Four
+ * days covers a weekend and a long weekend (Friday morning to Tuesday morning
+ * is 96 hours) while keeping the read bounded to days rather than months.
+ *
+ * A shift left open longer than this is still invisible here. That is
+ * accepted: by then it is a payroll correction the owner makes on a real
+ * screen, not something the door iPad should be reasoning about.
+ *
+ * Kept slightly narrower than the rules' window so a clock-skewed device
+ * doesn't sit exactly on the boundary and get its whole query denied.
  */
-export const KIOSK_TIME_ENTRY_WINDOW_MS = 48 * 60 * 60 * 1000;
+export const KIOSK_TIME_ENTRY_WINDOW_MS = 96 * 60 * 60 * 1000;
 /** Matching page cap — firestore.rules requires a kiosk list to carry one. */
 export const KIOSK_TIME_ENTRY_LIMIT = 200;
 

@@ -151,6 +151,37 @@ export const attributeDrawerEntry = (
   };
 };
 
+/**
+ * Stamp only the entries that are genuinely NEW to this record.
+ *
+ * THE BUG THIS FIXES: the Reports → Cash editor saves the WHOLE of a day's
+ * cashIn/cashOut/withdrawals lists as a patch. Stamping that patch stamped
+ * every pre-existing entry too — and because entries written before
+ * attribution existed have nothing to overwrite, attributeDrawerEntry's
+ * never-overwrite guard did not help: the stamp simply landed. The first edit
+ * of any past day therefore credited every old entry on it to whoever pressed
+ * Save, at the moment they pressed it. That is worse than the honest blank it
+ * replaced — the Day Money Trail exists to say where money went, and this made
+ * it invent an answer while isUnattributed() lost the ability to tell.
+ *
+ * An entry already on the record passes through UNTOUCHED, whatever was done
+ * to it: an edited amount or note keeps its original `by`/`at`, and an entry
+ * that never had attribution keeps having none. If the edit itself needs
+ * recording, that belongs in the audit log — never in a rewrite of who moved
+ * the money.
+ *
+ * Appends do not come through here: an appended entry is new by definition.
+ */
+export const stampNewEntries = (
+  next: CashDrawerEntry[] | undefined,
+  existing: CashDrawerEntry[] | undefined,
+  ctx: { at: number; by?: string; byEmail?: string; source?: string; refId?: string },
+): CashDrawerEntry[] | undefined => {
+  if (!next) return next;
+  const known = new Set((existing || []).map(e => e.id));
+  return next.map(e => (known.has(e.id) ? e : attributeDrawerEntry(e, ctx)));
+};
+
 /** True for an entry that cannot say who moved the money. */
 export const isUnattributed = (e: CashDrawerEntry): boolean => !e.by && !e.byEmail;
 
