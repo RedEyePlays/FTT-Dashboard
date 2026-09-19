@@ -10,6 +10,7 @@ import {
 } from '../domain/bonuses';
 import {
   BREAK_REASONS, breakReasonLabel, openEntryFor, isOnBreak, workedHours, isClockedIn,
+  shiftHours, totalShiftHours, shiftHoursLabel, isPaidBreak, isPayrollStaff, PaidBreakReasons,
   hoursInRange, dayRange, weekRange, recentPayPeriods, periodPayFor, paidKey,
   toISODate, periodEndInclusive, entriesOnDate, PayPeriod, PayCycle, PAY_CYCLE_DAYS,
   isMissedClockOut, missedClockOuts, isValidClockOutCorrection, isCorrectedEntry, payrollFlagsFor,
@@ -40,6 +41,9 @@ interface Props {
   // Owner/manager only (same gate as canManagePayroll): fix a shift someone
   // forgot to clock out of, by setting its actual clock-out time.
   onCorrectClockOut: (entryId: string, newClockOut: number) => void;
+  // settings.operations.paidBreakReasons — break kinds the shop pays through.
+  // Empty (the default) means every break is deducted, exactly as before.
+  paidBreakReasons?: PaidBreakReasons;
   // Staff bonuses (domain/bonuses.ts) — one-off payments on top of hours.
   // `staffBonuses` is pre-filtered by the caller to what this viewer may see;
   // `canAddBonus` is owner-only.
@@ -75,7 +79,7 @@ const fmtElapsed = (ms: number): string => {
 export const TimeClockView: React.FC<Props> = ({
   me, users, entries, payPeriods, payPeriodApprovals, payCycle, payAnchorISO, canManagePayroll, canMarkPaid,
   onClockIn, onClockOut, onStartBreak, onEndBreak, onApprovePeriod, onApproveAllPeriod, onMarkPaid, onUnmarkPaid, onCorrectClockOut,
-  staffBonuses = [], canAddBonus = false, onSaveBonus, onDeleteBonus,
+  staffBonuses = [], canAddBonus = false, onSaveBonus, onDeleteBonus, paidBreakReasons = [],
 }) => {
   const now = useNow();
   const [showBreakPicker, setShowBreakPicker] = useState(false);
@@ -113,7 +117,7 @@ export const TimeClockView: React.FC<Props> = ({
               </div>
               <p className="text-xs text-slate-400">
                 Clocked in at {new Date(myOpen.clockIn).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                {' · '}worked {fmtHours(workedHours(myOpen, now))} this shift
+                {' · '}worked {fmtHours(workedHours(myOpen, now, paidBreakReasons))} this shift
               </p>
 
               {onBreak ? (
@@ -152,7 +156,7 @@ export const TimeClockView: React.FC<Props> = ({
       </div>
 
       {/* --- Daily hours (owner/manager) ---------------------------------- */}
-      {canManagePayroll && <DailyHours users={users} entries={entries} now={now} onCorrectClockOut={onCorrectClockOut} />}
+      {canManagePayroll && <DailyHours users={users} entries={entries} now={now} onCorrectClockOut={onCorrectClockOut} paidBreakReasons={paidBreakReasons} />}
 
       {/* --- Payroll summary (owner/manager) ------------------------------ */}
       {canManagePayroll && (
@@ -174,6 +178,7 @@ export const TimeClockView: React.FC<Props> = ({
           canAddBonus={canAddBonus}
           onAddBonus={(u, periodStart) => setBonusFor({ user: u, periodStart })}
           onDeleteBonus={onDeleteBonus}
+          paidBreakReasons={paidBreakReasons}
         />
       )}
 
@@ -325,7 +330,7 @@ const ClockOutFixer: React.FC<{ entry: TimeEntry; now: number; onCancel: () => v
   );
 };
 
-const DailyHours: React.FC<{ users: AppUser[]; entries: TimeEntry[]; now: number; onCorrectClockOut: (entryId: string, newClockOut: number) => void }> = ({ users, entries, now, onCorrectClockOut }) => {
+const DailyHours: React.FC<{ users: AppUser[]; entries: TimeEntry[]; now: number; onCorrectClockOut: (entryId: string, newClockOut: number) => void; paidBreakReasons?: PaidBreakReasons }> = ({ users, entries, now, onCorrectClockOut, paidBreakReasons = [] }) => {
   const today = toISODate(now);
   const [from, setFrom] = useState(today);
   const [to, setTo] = useState(today);
@@ -351,7 +356,7 @@ const DailyHours: React.FC<{ users: AppUser[]; entries: TimeEntry[]; now: number
         userId,
         name: nameById.get(userId) || userId,
         shifts: [...list].sort((a, b) => a.clockIn - b.clockIn),
-        totalHours: list.reduce((s, e) => s + workedHours(e, now), 0),
+        totalHours: list.reduce((s, e) => s + workedHours(e, now, paidBreakReasons), 0),
       }))
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [entries, lo, hi, nameById, now]);
@@ -425,7 +430,7 @@ const DailyHours: React.FC<{ users: AppUser[]; entries: TimeEntry[]; now: number
                           </td>
                           <td className="py-1 text-right text-slate-700 dark:text-slate-200 tabular-nums">
                             <span className="inline-flex items-center gap-2 justify-end">
-                              {fmtHours(workedHours(e, now))}
+                              {fmtHours(workedHours(e, now, paidBreakReasons))}
                               {(stale || isClockedIn(e)) && (
                                 <button onClick={() => setFixing(fixing === e.id ? null : e.id)} title="Fix clock-out" className="p-0.5 text-slate-400 hover:text-indigo-600"><Wrench className="w-3.5 h-3.5" /></button>
                               )}
@@ -480,7 +485,8 @@ const PayrollSummary: React.FC<{
   canAddBonus?: boolean;
   onAddBonus?: (user: AppUser, periodStart: string) => void;
   onDeleteBonus?: (bonusId: string) => void;
-}> = ({ users, entries, payPeriods, payPeriodApprovals, payCycle, payAnchorISO, now, canApprove, canMarkPaid, onApprovePeriod, onApproveAllPeriod, onMarkPaid, onUnmarkPaid, staffBonuses = [], canAddBonus = false, onAddBonus, onDeleteBonus }) => {
+  paidBreakReasons?: PaidBreakReasons;
+}> = ({ users, entries, payPeriods, payPeriodApprovals, payCycle, payAnchorISO, now, canApprove, canMarkPaid, onApprovePeriod, onApproveAllPeriod, onMarkPaid, onUnmarkPaid, staffBonuses = [], canAddBonus = false, onAddBonus, onDeleteBonus, paidBreakReasons = [] }) => {
   const days = PAY_CYCLE_DAYS[payCycle];
   const periods = useMemo(() => recentPayPeriods(now, 6, days, payAnchorISO), [now, days, payAnchorISO]);
   const [periodIdx, setPeriodIdx] = useState(0);
@@ -500,7 +506,9 @@ const PayrollSummary: React.FC<{
 
   // Active members, owners last, sorted by name. Everyone who can work a shift.
   const staff = useMemo(
-    () => users.filter(u => !u.disabled).sort((a, b) => nameOf(a).localeCompare(nameOf(b))),
+    // isPayrollStaff, not a bare !disabled — the kiosk DEVICE account must
+    // never show up here as an employee with zero hours.
+    () => users.filter(isPayrollStaff).sort((a, b) => nameOf(a).localeCompare(nameOf(b))),
     [users],
   );
 
@@ -536,7 +544,7 @@ const PayrollSummary: React.FC<{
     const shifts = entries
       .filter(e => e.userId === userId && e.clockIn >= period.start && e.clockIn < period.end)
       .sort((a, b) => a.clockIn - b.clockIn)
-      .map(e => ({ date: toISODate(e.clockIn), in: fmtTime(e.clockIn), out: e.clockOut ? fmtTime(e.clockOut) : '—', hours: workedHours(e, now).toFixed(2) }));
+      .map(e => ({ date: toISODate(e.clockIn), in: fmtTime(e.clockIn), out: e.clockOut ? fmtTime(e.clockOut) : '—', hours: workedHours(e, now, paidBreakReasons).toFixed(2) }));
     printPayStub(nameOf(r.user), { name: nameOf(r.user), hours: r.pay.hours, rate: r.pay.rate, gross: r.pay.gross, bonus: periodPayTotals(r.pay.gross, staffBonuses, r.user.id, periodStartISO).bonus }, { label: periodLabel(period) }, shifts, { storeName: getStoreProfile().storeName });
   };
   const handleExportCsv = () => {
@@ -550,6 +558,12 @@ const PayrollSummary: React.FC<{
     triggerDownload(`payroll-${toISODate(period.start)}.csv`, toCSV(csvRows), 'text/csv;charset=utf-8;');
   };
 
+  // "8.00 hrs (incl. 0.50 hrs paid lunch, 0.75 hrs unpaid)" for the whole
+  // period, so the payroll figure is explainable to staff rather than
+  // asserted. Says nothing extra when no break time is involved.
+  const periodBreakdown = totalShiftHours(
+    entries.filter(e => e.clockIn >= period.start && e.clockIn < period.end), now, paidBreakReasons,
+  );
   const allApproved = rows.length > 0 && rows.every(r => r.approved || r.pay.hours <= 0);
 
   return (
@@ -582,6 +596,11 @@ const PayrollSummary: React.FC<{
       <p className="px-4 pt-3 text-xs text-slate-400">
         Gross pay is hours × rate for review only — this records no payment and moves no money. Approve, then pay employees outside this app, then mark the period paid.
       </p>
+      {(periodBreakdown.paidBreak >= 0.005 || periodBreakdown.unpaidBreak >= 0.005) && (
+        <p className="px-4 pt-1 text-xs text-slate-500 dark:text-slate-400">
+          This period: {shiftHoursLabel(periodBreakdown, paidBreakReasons)}. Staff punch every break either way — only the pay treatment differs.
+        </p>
+      )}
 
       {(flags.missedClockOuts.length > 0 || flags.correctedEntries.length > 0 || flags.noRateUsers.length > 0) && (
         <div className="mx-4 mt-3 px-3 py-2 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg flex flex-col gap-1">
@@ -734,8 +753,16 @@ const PayrollSummary: React.FC<{
                                   <td className="py-1 pr-4 text-slate-500 dark:text-slate-400">{toISODate(e.clockIn)}</td>
                                   <td className="py-1 pr-4 tabular-nums">{fmtTime(e.clockIn)}</td>
                                   <td className="py-1 pr-4 tabular-nums">{e.clockOut ? fmtTime(e.clockOut) : '—'}</td>
-                                  <td className="py-1 pr-4">{(e.breaks?.length ?? 0) || '—'}</td>
-                                  <td className="py-1 text-right tabular-nums">{workedHours(e, now).toFixed(2)}</td>
+                                  {/* Named, so a paid lunch and an unpaid bank
+                                      run on the same shift are told apart. */}
+                                  <td className="py-1 pr-4">
+                                    {(e.breaks || []).length === 0 ? '—' : (e.breaks || []).map(b => (
+                                      <span key={b.id} className={`inline-block mr-1.5 ${isPaidBreak(b, paidBreakReasons) ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-500 dark:text-slate-400'}`}>
+                                        {b.reason ? breakReasonLabel(b.reason) : 'Break'}{isPaidBreak(b, paidBreakReasons) ? ' (paid)' : ''}
+                                      </span>
+                                    ))}
+                                  </td>
+                                  <td className="py-1 text-right tabular-nums" title={shiftHoursLabel(shiftHours(e, now, paidBreakReasons), paidBreakReasons)}>{workedHours(e, now, paidBreakReasons).toFixed(2)}</td>
                                 </tr>
                               ))}
                             </tbody>

@@ -92,15 +92,108 @@ export const totalBreakMs = (e: TimeEntry, now: number): number => {
 };
 
 /**
- * Paid worked ms for a shift = (end − clock-in) − breaks, never negative. Breaks
- * are always excluded, so they don't count toward pay.
+ * Which break reasons the shop PAYS through. Empty (the default) reproduces
+ * the original behaviour exactly: every break is unpaid.
+ *
+ * THE BUG THIS FIXES: workedMs used to subtract ALL break time unconditionally.
+ * This shop pays through lunch, so every staff member who honestly punched a
+ * lunch break was underpaid for it — the app quietly penalised the honest
+ * punch. Paid-ness is decided PER BREAK, by that break's own reason, so the
+ * realistic setup (lunch paid, personal and bank unpaid) works on a single
+ * shift containing both.
  */
-export const workedMs = (e: TimeEntry, now: number): number => {
-  const gross = Math.max(0, shiftEnd(e, now) - nn(e.clockIn));
-  return Math.max(0, gross - totalBreakMs(e, now));
+export type PaidBreakReasons = readonly BreakReason[];
+
+/**
+ * Is this ONE break paid?
+ *
+ * A break with NO reason recorded is UNPAID — deliberately the safe default,
+ * and exactly today's behaviour. Treating an unlabelled break as paid would
+ * silently start paying for time the shop never agreed to pay for, and
+ * historical entries (written before reasons were captured) carry no reason
+ * at all.
+ */
+export const isPaidBreak = (b: TimeBreak, paidReasons: PaidBreakReasons = []): boolean =>
+  !!b.reason && paidReasons.includes(b.reason);
+
+/** Break ms that DOES count toward pay (the shop pays through these). */
+export const paidBreakMs = (e: TimeEntry, now: number, paidReasons: PaidBreakReasons = []): number => {
+  const end = shiftEnd(e, now);
+  return (e.breaks || []).reduce((sum, b) => sum + (isPaidBreak(b, paidReasons) ? breakMs(b, end) : 0), 0);
 };
 
-export const workedHours = (e: TimeEntry, now: number): number => msToHours(workedMs(e, now));
+/** Break ms deducted from pay — everything not covered by `paidReasons`. */
+export const unpaidBreakMs = (e: TimeEntry, now: number, paidReasons: PaidBreakReasons = []): number => {
+  const end = shiftEnd(e, now);
+  return (e.breaks || []).reduce((sum, b) => sum + (isPaidBreak(b, paidReasons) ? 0 : breakMs(b, end)), 0);
+};
+
+/**
+ * Paid worked ms for a shift = (end − clock-in) − UNPAID breaks, never
+ * negative. A paid break stays inside the paid total; an unpaid one is
+ * deducted exactly as it always was.
+ *
+ * `paidReasons` defaults to empty, so every existing call site and every
+ * workspace that hasn't set the option behaves precisely as before — this is
+ * the one switch, in the one helper, rather than a rule re-derived at a dozen
+ * call sites.
+ */
+export const workedMs = (e: TimeEntry, now: number, paidReasons: PaidBreakReasons = []): number => {
+  const gross = Math.max(0, shiftEnd(e, now) - nn(e.clockIn));
+  return Math.max(0, gross - unpaidBreakMs(e, now, paidReasons));
+};
+
+export const workedHours = (e: TimeEntry, now: number, paidReasons: PaidBreakReasons = []): number =>
+  msToHours(workedMs(e, now, paidReasons));
+
+export interface ShiftHours {
+  /** Hours actually paid — includes any paid break time. */
+  worked: number;
+  /** Break hours inside `worked` because the shop pays through them. */
+  paidBreak: number;
+  /** Break hours deducted from pay. */
+  unpaidBreak: number;
+}
+
+/**
+ * The breakdown behind a shift's paid hours, so the figure is explainable to
+ * the person being paid: "8.00 hrs (incl. 0.50 hrs paid lunch, 0.75 hrs
+ * unpaid)". Derived from the same helpers as the pay itself, so the
+ * explanation can never disagree with the number.
+ */
+export const shiftHours = (e: TimeEntry, now: number, paidReasons: PaidBreakReasons = []): ShiftHours => ({
+  worked: msToHours(workedMs(e, now, paidReasons)),
+  paidBreak: msToHours(paidBreakMs(e, now, paidReasons)),
+  unpaidBreak: msToHours(unpaidBreakMs(e, now, paidReasons)),
+});
+
+/** Sum the same breakdown over many shifts — the pay-summary line. */
+export const totalShiftHours = (
+  entries: TimeEntry[], now: number, paidReasons: PaidBreakReasons = [],
+): ShiftHours => entries.reduce<ShiftHours>((acc, e) => {
+  const h = shiftHours(e, now, paidReasons);
+  return {
+    worked: acc.worked + h.worked,
+    paidBreak: acc.paidBreak + h.paidBreak,
+    unpaidBreak: acc.unpaidBreak + h.unpaidBreak,
+  };
+}, { worked: 0, paidBreak: 0, unpaidBreak: 0 });
+
+/**
+ * "8.00 hrs (incl. 0.50 hrs paid lunch, 0.75 hrs unpaid)" — one wording,
+ * used by the payroll screen and the printed summary alike. Says nothing
+ * extra when there are no breaks, so an ordinary shift reads as it always did.
+ */
+export const shiftHoursLabel = (h: ShiftHours, paidReasons: PaidBreakReasons = []): string => {
+  const base = `${round2(h.worked).toFixed(2)} hrs`;
+  const parts: string[] = [];
+  if (h.paidBreak >= 0.005) {
+    const names = paidReasons.map(r => breakReasonLabel(r).toLowerCase()).join(' / ');
+    parts.push(`incl. ${round2(h.paidBreak).toFixed(2)} hrs paid${names ? ` ${names}` : ''}`);
+  }
+  if (h.unpaidBreak >= 0.005) parts.push(`${round2(h.unpaidBreak).toFixed(2)} hrs unpaid`);
+  return parts.length ? `${base} (${parts.join(', ')})` : base;
+};
 
 // --- Date / pay-period math -------------------------------------------------
 
@@ -200,12 +293,19 @@ export const hoursInRange = (
   startMs: number,
   endMs: number,
   now: number,
+  paidReasons: PaidBreakReasons = [],
 ): number => {
   const ms = entries
     .filter(e => e.userId === userId && nn(e.clockIn) >= startMs && nn(e.clockIn) < endMs)
-    .reduce((sum, e) => sum + workedMs(e, now), 0);
+    .reduce((sum, e) => sum + workedMs(e, now, paidReasons), 0);
   return msToHours(ms);
 };
+
+/** The same window's shifts, for the paid/unpaid-break breakdown. */
+export const entriesInRange = (
+  entries: TimeEntry[], userId: string, startMs: number, endMs: number,
+): TimeEntry[] =>
+  entries.filter(e => e.userId === userId && nn(e.clockIn) >= startMs && nn(e.clockIn) < endMs);
 
 /**
  * Shifts whose CLOCK-IN falls on the given local date (YYYY-MM-DD) — the same
@@ -269,6 +369,11 @@ export interface PeriodPay {
   hours: number;   // rounded to 2 decimals
   rate: number;
   gross: number;   // hours (rounded) × rate, in cents — so it matches what's shown
+  // The break breakdown behind `hours`, so the payroll screen and the printed
+  // summary can explain the figure to the person being paid rather than just
+  // asserting it. Both are 0 when the shop pays through nothing (the default).
+  paidBreakHours: number;
+  unpaidBreakHours: number;
 }
 
 /**
@@ -282,9 +387,15 @@ export const periodPayFor = (
   rate: number | undefined,
   period: PayPeriod,
   now: number,
+  paidReasons: PaidBreakReasons = [],
 ): PeriodPay => {
-  const hours = round2(hoursInRange(entries, userId, period.start, period.end, now));
-  return { userId, hours, rate: nn(rate), gross: grossPay(hours, rate) };
+  const hours = round2(hoursInRange(entries, userId, period.start, period.end, now, paidReasons));
+  const breakdown = totalShiftHours(entriesInRange(entries, userId, period.start, period.end), now, paidReasons);
+  return {
+    userId, hours, rate: nn(rate), gross: grossPay(hours, rate),
+    paidBreakHours: round2(breakdown.paidBreak),
+    unpaidBreakHours: round2(breakdown.unpaidBreak),
+  };
 };
 
 /** Deterministic id for a per-user, per-period paid record (idempotent). */
@@ -341,6 +452,18 @@ export interface PayrollDue {
   employeeCount: number;
   totalGross: number;
 }
+/**
+ * Does this account appear in payroll at all?
+ *
+ * Excludes the KIOSK device account explicitly. A kiosk is a shared iPad, not
+ * a person: it has no shifts, no hourly rate and nothing to pay. Every
+ * payroll list filtered only on `!u.disabled` would otherwise have shown it
+ * as an employee with 0 hours — the silent fall-through this role is designed
+ * to make impossible. One predicate, used by every payroll list.
+ */
+export const isPayrollStaff = (u: Pick<AppUser, 'role' | 'disabled'>): boolean =>
+  !u.disabled && u.role !== 'kiosk';
+
 export const payrollDue = (
   entries: TimeEntry[],
   users: AppUser[],
@@ -348,16 +471,17 @@ export const payrollDue = (
   now: number,
   days: number = PAY_PERIOD_DAYS,
   anchorISO: string = PAY_PERIOD_ANCHOR,
+  paidReasons: PaidBreakReasons = [],
 ): PayrollDue | null => {
   const current = payPeriodFor(now, days, anchorISO);
   const lastEnded: PayPeriod = { index: current.index - 1, start: addDays(current.start, -days), end: current.start };
   const paidIds = new Set(payPeriods.map(p => p.id));
-  const active = users.filter(u => !u.disabled);
+  const active = users.filter(isPayrollStaff);
 
   let employeeCount = 0;
   let totalGross = 0;
   for (const u of active) {
-    const pay = periodPayFor(entries, u.id, u.hourlyRate, lastEnded, now);
+    const pay = periodPayFor(entries, u.id, u.hourlyRate, lastEnded, now, paidReasons);
     if (pay.hours <= 0) continue;
     if (paidIds.has(paidKey(u.id, toISODate(lastEnded.start)))) continue;
     employeeCount++;

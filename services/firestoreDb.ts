@@ -5,7 +5,7 @@ import { db } from './firebase';
 import {
   InventoryItem, DeviceBuyer, DropOff, Settlement, Customer, SalesTransaction, ActivityEntry, Note, Task,
   AppUser, WorkspaceInvite, AuditEntry, TimeEntry, PayPeriodPaid, PayPeriodApproval, CashReconciliation, StaffNote, ListingPlatform, Repair,
-  Expense, RecurringExpense, RefundPaidFrom, RefundSplit, StaffBonus,
+  Expense, RecurringExpense, RefundPaidFrom, RefundSplit, StaffBonus, KioskStaff,
 } from '../types';
 import { collectionFor } from '../domain/inventory';
 import {
@@ -33,6 +33,11 @@ export const COLLECTIONS = [
   'dropOffs', 'runners', 'settlements', 'activityLog', 'auditLogs',
   'repairs', 'repairBatches', 'timeEntries', 'payPeriods', 'payPeriodApprovals', 'staffBonuses', 'cashReconciliations', 'staffNotes',
   'expenses', 'recurringExpenses',
+  // The kiosk punch roster. Deliberately NOT in functions/src/backups.ts's
+  // COLLECTIONS: it is a derived mirror of users/{uid} (rebuilt by the
+  // syncKioskStaff trigger), and it holds PIN hashes, which have no business
+  // sitting in a downloadable backup file.
+  'kioskStaff',
 ] as const;
 export type CollName = typeof COLLECTIONS[number];
 
@@ -320,6 +325,12 @@ export const saveRecurringExpense = (uid: string, r: RecurringExpense) => saveIt
 export const deleteRecurringExpense = (uid: string, id: string) => deleteItem(uid, 'recurringExpenses', id);
 
 export const saveTimeEntry = (uid: string, e: TimeEntry) => saveItem(uid, 'timeEntries', e);
+// The punch roster the kiosk reads. Read-only from the client — the ONLY
+// writer is the syncKioskStaff Admin-SDK trigger (functions/src/kioskStaff.ts),
+// and firestore.rules denies every client write to it.
+export const subscribeKioskStaff = (
+  uid: string, cb: (rows: KioskStaff[]) => void, onError: (e: Error) => void,
+) => subscribeCollection<KioskStaff>(uid, 'kioskStaff', cb, onError);
 export const deleteTimeEntry = (uid: string, id: string) => deleteItem(uid, 'timeEntries', id);
 export const savePayPeriodPaid = (uid: string, p: PayPeriodPaid) => saveItem(uid, 'payPeriods', p);
 export const savePayPeriodApproval = (uid: string, a: PayPeriodApproval) => saveItem(uid, 'payPeriodApprovals', a);

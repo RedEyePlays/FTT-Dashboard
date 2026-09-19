@@ -7,7 +7,11 @@ import { validatePassword, MIN_PASSWORD_LENGTH, UserRecord } from "./staffPasswo
 
 export { validatePassword, MIN_PASSWORD_LENGTH, UserRecord };
 
-export type Role = "owner" | "manager" | "employee" | "technician";
+// Mirrors the client's Role union (types.ts) — the client tree can't be
+// imported here, so this copy is kept in sync deliberately. 'kiosk' is the
+// shared door-iPad DEVICE account: it holds no permissions, is never payroll
+// staff, and may never be a PIN or password target.
+export type Role = "owner" | "manager" | "employee" | "technician" | "kiosk";
 
 export type AuthzFailureCode = "permission-denied" | "not-found" | "invalid-argument";
 
@@ -35,9 +39,12 @@ export interface AuthzInput {
  * also enforced server-side since this path bypasses Firestore rules
  * entirely (the Admin SDK writes the new users/{uid} doc directly):
  *
- *   • owner   → may create manager, employee, or technician (never another owner)
- *   • manager → may create technician ONLY
- *   • employee/technician/no record → denied
+ *   • owner   → may create manager, employee, technician, or a KIOSK device
+ *               account (never another owner)
+ *   • manager → may create technician ONLY — never a kiosk, which is a
+ *               device with its own Firestore-rules privileges and is the
+ *               owner's decision to place in the shop
+ *   • employee/technician/kiosk/no record → denied
  */
 export function authorizeStaffUserCreate(input: AuthzInput): AuthzResult {
   const { callerUid, caller, targetRole } = input;
@@ -48,7 +55,7 @@ export function authorizeStaffUserCreate(input: AuthzInput): AuthzResult {
   if (!caller || caller.disabled === true || typeof caller.workspaceId !== "string" || !caller.workspaceId) {
     return { ok: false, code: "permission-denied", message: "You don't have permission to create a user." };
   }
-  if (targetRole !== "owner" && targetRole !== "manager" && targetRole !== "employee" && targetRole !== "technician") {
+  if (targetRole !== "owner" && targetRole !== "manager" && targetRole !== "employee" && targetRole !== "technician" && targetRole !== "kiosk") {
     return { ok: false, code: "invalid-argument", message: "Invalid role." };
   }
   if (caller.role === "owner") {
@@ -58,6 +65,8 @@ export function authorizeStaffUserCreate(input: AuthzInput): AuthzResult {
     return { ok: true };
   }
   if (caller.role === "manager") {
+    // Explicitly NOT kiosk: placing a device account in the shop is an
+    // owner-only decision, since it carries its own write privileges.
     if (targetRole === "technician") return { ok: true };
     return { ok: false, code: "permission-denied", message: "Managers may only create technician accounts." };
   }

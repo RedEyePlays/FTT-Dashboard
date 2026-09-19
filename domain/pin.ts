@@ -22,16 +22,48 @@ export const isValidPinFormat = (pin: string): boolean =>
 // so a manager can never PIN another manager or the owner, and nobody can PIN
 // themselves via this path.
 
-const ROLE_RANK: Record<Role, number> = { owner: 3, manager: 2, employee: 1, technician: 0 };
+// 'kiosk' is ranked -1 and is then REFUSED outright below. The rank alone
+// would have let it through (−1 is below everyone), which is exactly the
+// silent fall-through this role must never have: a kiosk is a shared device
+// by the door, not a person with a session to unlock, so it can never hold an
+// app-unlock PIN. Its own punch PIN is a different field entirely
+// (AppUser.kioskPinHash — see KIOSK_PIN_LENGTH below).
+const ROLE_RANK: Record<Role, number> = { owner: 3, manager: 2, employee: 1, technician: 0, kiosk: -1 };
 
 export const canAssignPin = (assignerRole: Role | undefined, targetRole: Role): boolean =>
-  (assignerRole === 'owner' || assignerRole === 'manager') && ROLE_RANK[targetRole] < ROLE_RANK[assignerRole];
+  targetRole !== 'kiosk'
+  && (assignerRole === 'owner' || assignerRole === 'manager')
+  && ROLE_RANK[targetRole] < ROLE_RANK[assignerRole];
+
+// --- Kiosk punch PIN --------------------------------------------------------
+//
+// SEPARATE from the app-unlock PIN above, and deliberately so: a PIN typed at
+// a shared iPad by the front door is shoulder-surfable, so it must not also
+// unlock anyone's dashboard session. Stored as AppUser.kioskPinHash, hashed by
+// the same PBKDF2 helpers below.
+//
+// Exactly 6 digits — longer than the 4-digit minimum the unlock PIN allows,
+// because this one is typed in public.
+export const KIOSK_PIN_LENGTH = 6;
+
+export const isValidKioskPinFormat = (pin: string): boolean =>
+  /^\d+$/.test(pin) && pin.length === KIOSK_PIN_LENGTH;
+
+/**
+ * Who may be given a KIOSK punch PIN: anyone who actually clocks in — owner,
+ * manager, employee, technician. Never the kiosk device account itself, which
+ * is a device and does not have shifts.
+ */
+export const canHaveKioskPin = (role: Role | undefined): boolean =>
+  role === 'owner' || role === 'manager' || role === 'employee' || role === 'technician';
 
 // --- Who the INACTIVITY auto-lock timer applies to ---------------------------
 // Owner/manager only — they're the roles with access to sensitive screens
 // (profit figures, settings, users). An employee/technician working the
 // counter is never auto-locked by idle time; they can still lock manually at
 // any time (App.tsx's handleManualLock), which isn't role-gated.
+// A kiosk is never auto-locked: it has nothing sensitive on screen, and an
+// idle overlay on the door iPad would just stop staff punching in.
 export const autoLockAppliesToRole = (role: Role | undefined): boolean =>
   role === 'owner' || role === 'manager';
 

@@ -19,6 +19,9 @@ const QuickPurchaseView = lazy(() => import('./components/QuickPurchaseView').th
 const InventoryView = lazy(() => import('./components/InventoryView').then(m => ({ default: m.InventoryView })));
 const RepairsView = lazy(() => import('./components/RepairsView').then(m => ({ default: m.RepairsView })));
 const TechRepairsView = lazy(() => import('./components/TechRepairsView').then(m => ({ default: m.TechRepairsView })));
+// The kiosk punch screen. Lazy like every other page-level view, so the door
+// iPad downloads this and nothing else of the dashboard.
+const KioskPunchView = lazy(() => import('./components/KioskPunchView').then(m => ({ default: m.KioskPunchView })));
 const CustomersView = lazy(() => import('./components/CustomersView').then(m => ({ default: m.CustomersView })));
 const LayawaysView = lazy(() => import('./components/LayawaysView').then(m => ({ default: m.LayawaysView })));
 const OwnerAnalytics = lazy(() => import('./components/OwnerAnalytics').then(m => ({ default: m.OwnerAnalytics })));
@@ -36,11 +39,12 @@ const UsersView = lazy(() => import('./components/UsersView').then(m => ({ defau
 const AuditLogView = lazy(() => import('./components/AuditLogView').then(m => ({ default: m.AuditLogView })));
 const TimeClockView = lazy(() => import('./components/TimeClockView').then(m => ({ default: m.TimeClockView })));
 const CloseOutView = lazy(() => import('./components/CloseOutView').then(m => ({ default: m.CloseOutView })));
-import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, DeviceBuyer, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission, Repair, RepairBatch, TimeEntry, PayPeriodPaid, PayPeriodApproval, BreakReason, SalesTransaction, CashReconciliation, StaffNote, BalancePayment, Expense, RecurringExpense, RefundSplit, StaffBonus } from './types';
+import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, DeviceBuyer, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission, Repair, RepairBatch, TimeEntry, PayPeriodPaid, PayPeriodApproval, BreakReason, SalesTransaction, CashReconciliation, StaffNote, BalancePayment, Expense, RecurringExpense, RefundSplit, StaffBonus, KioskStaff } from './types';
 import { skuPrefix, nextSku } from './services/sku';
 import { REPAIR_PREFIX, BATCH_PREFIX, applyTechEdit, techUpdateAuditPlan, repairSalePrefill, completeRepair, completeRepairSale, dateToEpochMs, isRepairOpen, flagDeviceForRepair, restoredDeviceStatus } from './domain/repairs';
 import { repairCostWriteback, applyRepairCostDelta } from './domain/repairCostWriteback';
 import { bonusDrawerEffect, canSaveBonus, visibleBonuses } from './domain/bonuses';
+import { buildKioskClockIn, buildKioskClockOut, buildKioskStartBreak, buildKioskEndBreak } from './domain/kiosk';
 import { markTicketDeviceSold } from './domain/repairVisibility';
 import { MergePlan, resolveCustomerForDraft, CustomerDraft } from './domain/customers';
 import { can, canPrintDropOffLabel } from './services/rbac';
@@ -51,7 +55,7 @@ import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, re
 import { LockScreen } from './components/LockScreen';
 import { useInactivityTimer } from './hooks/useInactivityTimer';
 import { useAppLock } from './hooks/useAppLock';
-import { hashPin, verifyPin, canAssignPin, isValidPinFormat, autoLockAppliesToRole } from './domain/pin';
+import { hashPin, verifyPin, canAssignPin, isValidPinFormat, autoLockAppliesToRole, isValidKioskPinFormat, canHaveKioskPin } from './domain/pin';
 import {
   saveMeta, saveItem, deleteItem, syncArray, allocateSku,
   logActivityDoc, commitSale, voidSale, returnSale, collectLayawayBalance, commitCashReconciliation, seedSampleData,
@@ -86,7 +90,7 @@ const OpenDrawerModal = lazy(() => import('./components/OpenDrawerModal').then(m
 const CloseDrawerModal = lazy(() => import('./components/CloseDrawerModal').then(m => ({ default: m.CloseDrawerModal })));
 import {
   openEntryFor, isOnBreak, periodPayFor, paidKey, toISODate, PayPeriod, correctClockOut, isValidClockOutCorrection,
-  payrollDue, PAY_CYCLE_DAYS, payPeriodFor,
+  payrollDue, PAY_CYCLE_DAYS, payPeriodFor, isPayrollStaff,
 } from './domain/timeclock';
 import { buildAlerts } from './domain/alerts';
 import { changedSettingsSections } from './domain/audit';
@@ -132,7 +136,7 @@ const App: React.FC = () => {
     appUser, roleLoading, workspaceId, workspaceUsers, invites, auditLogs, loadMoreAuditLogs, auditHasMore,
     data, notes, setNotes, tasks, setTasks,
     deviceBuyers, dropOffs, settlements, salesTransactions, customers, repairs, repairBatches,
-    timeEntries, payPeriods, payPeriodApprovals, staffBonuses, cashReconciliations, staffNotes, expenses, recurringExpenses,
+    timeEntries, payPeriods, payPeriodApprovals, staffBonuses, kioskStaff, cashReconciliations, staffNotes, expenses, recurringExpenses,
     skuCounters, setSkuCounters, activityLog, lastBackup, settings,
     dbLoading, dbError, reconnect, enableExtendedData, enableCashData,
     deviceBuyersRef, dropOffsRef, settlementsRef, customersRef, salesTransactionsRef,
@@ -299,6 +303,40 @@ const App: React.FC = () => {
     return true;
   };
 
+  // KIOSK PUNCH PIN — owner-only, and a different credential from handleSetPin
+  // above. Writing the six kioskPin* fields to users/{uid} is all the client
+  // does; the syncKioskStaff trigger (functions/src/kioskStaff.ts) then mirrors
+  // them into the kioskStaff roster the door iPad reads. That mirror is never
+  // client-writable, which is what stops a compromised session from inventing
+  // a punch identity.
+  const handleSetKioskPin = async (targetUid: string, pin: string): Promise<boolean> => {
+    if (!appUser || appUser.role !== 'owner' || !isValidKioskPinFormat(pin)) return false;
+    const target = workspaceUsers.find(u => u.id === targetUid);
+    if (!target || !canHaveKioskPin(target.role)) return false;
+    const { hash, salt, iterations } = await hashPin(pin);
+    await updateUserDoc(targetUid, {
+      kioskPinHash: hash, kioskPinSalt: salt, kioskPinIterations: iterations,
+      kioskPinUpdatedAt: Date.now(), kioskPinUpdatedBy: appUser.id, kioskPinUpdatedByEmail: appUser.email,
+    }).catch(() => { throw new Error('save-failed'); });
+    audit('user.set_kiosk_pin', 'user', targetUid, undefined, { email: target.email });
+    return true;
+  };
+
+  // Clearing the PIN removes the person from the door entirely: the trigger
+  // sees no kiosk PIN and DELETES their kioskStaff record, so the tile and the
+  // stored hash both go, not just the tile.
+  const handleClearKioskPin = async (targetUid: string): Promise<boolean> => {
+    if (!appUser || appUser.role !== 'owner') return false;
+    const target = workspaceUsers.find(u => u.id === targetUid);
+    if (!target) return false;
+    await updateUserDoc(targetUid, {
+      kioskPinHash: null, kioskPinSalt: null, kioskPinIterations: null,
+      kioskPinUpdatedAt: Date.now(), kioskPinUpdatedBy: appUser.id, kioskPinUpdatedByEmail: appUser.email,
+    } as any).catch(() => { throw new Error('save-failed'); });
+    audit('user.clear_kiosk_pin', 'user', targetUid, undefined, { email: target.email });
+    return true;
+  };
+
   // Gated by security.manage (owner + manager) rather than routed through
   // handleSaveSettings, which is owner-only (settings.manage) — a manager may
   // change this one operational field without unlocking the rest of Settings.
@@ -388,8 +426,8 @@ const App: React.FC = () => {
   // meaningful once timeEntries/payPeriods are loaded (enableExtendedData is
   // triggered for owner/manager on Dashboard visit — see the effect above).
   const dashboardPayrollDue = useMemo(
-    () => payrollDue(timeEntries, workspaceUsers, payPeriods, Date.now(), PAY_CYCLE_DAYS[settings.payroll.cycle], settings.payroll.anchorISO),
-    [timeEntries, workspaceUsers, payPeriods, settings.payroll.cycle, settings.payroll.anchorISO],
+    () => payrollDue(timeEntries, workspaceUsers, payPeriods, Date.now(), PAY_CYCLE_DAYS[settings.payroll.cycle], settings.payroll.anchorISO, settings.operations.paidBreakReasons),
+    [timeEntries, workspaceUsers, payPeriods, settings.payroll.cycle, settings.payroll.anchorISO, settings.operations.paidBreakReasons],
   );
 
   // Keeps crash reports (services/errorReporting.ts) tagged with where the
@@ -1606,6 +1644,26 @@ const App: React.FC = () => {
     }
   };
 
+  // The kiosk DEVICE account — a normal Firebase Auth account created through
+  // the same createStaffUser callable as every other staff account. The whole
+  // difference is its role, which is what firestore.rules keys off to deny it
+  // everything except the punch roster and clock-in writes. Owner-only, both
+  // here and in the callable's own server-side authorization.
+  const handleCreateKioskDevice = (input: { email: string; password: string }): Promise<string | null> =>
+    handleCreateUser({ ...input, role: 'kiosk' });
+
+  // Revoking is a DISABLE, not a delete: `activeMemberOf` in firestore.rules
+  // refuses a disabled account, so the iPad loses access on its next read —
+  // and the account (and its audit history) stays intact rather than leaving
+  // orphaned punches pointing at a uid that no longer exists.
+  const handleRevokeKioskDevice = (targetUid: string) => {
+    if (!appUser || appUser.role !== 'owner') return;
+    const target = workspaceUsers.find(u => u.id === targetUid);
+    if (target?.role !== 'kiosk') return;
+    updateUserDoc(targetUid, { disabled: true }).catch(() => {});
+    audit('user.disable', 'user', targetUid, { email: target.email, disabled: false }, { disabled: true, kiosk: true });
+  };
+
   // Owner-only hourly-rate edit (rate lives on the user doc). Managers/employees
   // can't change pay — enforced here and in firestore.rules.
   const handleSetHourlyRate = (targetUid: string, hourlyRate: number) => {
@@ -1669,6 +1727,53 @@ const App: React.FC = () => {
     saveTimeEntry(uid, { ...open, breaks }).catch(() => {});
     audit('timeclock.break_end', 'timeEntry', open.id);
   };
+  // --- Kiosk punches (the shared door iPad) --------------------------------
+  //
+  // These punch for SOMEBODY ELSE — the person who just entered their PIN —
+  // which is the one thing the self-service handlers above cannot do. They
+  // build the same TimeEntry shapes through domain/kiosk.ts and write through
+  // the same saveTimeEntry, so there is no second punch path: `source:
+  // 'kiosk'` is the only difference in the stored record, and it exists so a
+  // door punch and a phone punch are told apart later.
+  //
+  // Plain create/update writes, NOT a transaction — which is what lets the
+  // offline cache queue them when the shop wifi drops (see the PR #197 notes:
+  // a transaction requires a server and would simply be thrown away).
+  const kioskGuard = useKeyedSubmitGuard();
+  const punchAudit = (action: string, entryId: string, person: KioskStaff, extra?: Record<string, unknown>) =>
+    audit(action, 'timeEntry', entryId, undefined, { source: 'kiosk', userId: person.uid, name: person.displayName, ...extra });
+
+  const handleKioskClockIn = async (person: KioskStaff) => {
+    if (!uid || appUser?.role !== 'kiosk') return;
+    if (openEntryFor(timeEntries, person.uid)) return; // already on shift
+    await kioskGuard.run(`in:${person.uid}`, async () => {
+      const entry = buildKioskClockIn(person, newId(), Date.now());
+      await saveTimeEntry(uid, entry);
+      punchAudit('timeclock.clock_in', entry.id, person);
+    });
+  };
+  const handleKioskClockOut = async (person: KioskStaff, open: TimeEntry) => {
+    if (!uid || appUser?.role !== 'kiosk') return;
+    await kioskGuard.run(`out:${person.uid}`, async () => {
+      await saveTimeEntry(uid, buildKioskClockOut(open, Date.now()));
+      punchAudit('timeclock.clock_out', open.id, person);
+    });
+  };
+  const handleKioskStartBreak = async (person: KioskStaff, open: TimeEntry, reason: BreakReason) => {
+    if (!uid || appUser?.role !== 'kiosk' || isOnBreak(open)) return;
+    await kioskGuard.run(`brk:${person.uid}`, async () => {
+      await saveTimeEntry(uid, buildKioskStartBreak(open, newId(), reason, Date.now()));
+      punchAudit('timeclock.break_start', open.id, person, { reason });
+    });
+  };
+  const handleKioskEndBreak = async (person: KioskStaff, open: TimeEntry) => {
+    if (!uid || appUser?.role !== 'kiosk') return;
+    await kioskGuard.run(`endbrk:${person.uid}`, async () => {
+      await saveTimeEntry(uid, buildKioskEndBreak(open, Date.now()));
+      punchAudit('timeclock.break_end', open.id, person);
+    });
+  };
+
   // Owner/manager correction of a missed clock-out (gated the same as the rest
   // of Daily Hours / Payroll, via payroll.manage). Appends to the entry's
   // correction history rather than overwriting, and records a matching audit
@@ -1707,7 +1812,7 @@ const App: React.FC = () => {
     const key = `approve:${targetUid}:${startISO}`;
     payrollGuard.run(key, async () => {
       const target = workspaceUsers.find(u => u.id === targetUid);
-      const pay = periodPayFor(timeEntries, targetUid, target?.hourlyRate, period, Date.now());
+      const pay = periodPayFor(timeEntries, targetUid, target?.hourlyRate, period, Date.now(), settings.operations.paidBreakReasons);
       const rec: PayPeriodApproval = {
         id: paidKey(targetUid, startISO),
         userId: targetUid,
@@ -1728,8 +1833,9 @@ const App: React.FC = () => {
     const startISO = toISODate(period.start);
     const approvedIds = new Set(payPeriodApprovals.filter(a => a.periodStart === startISO).map(a => a.userId));
     workspaceUsers
-      .filter(u => !u.disabled && !approvedIds.has(u.id))
-      .filter(u => periodPayFor(timeEntries, u.id, u.hourlyRate, period, Date.now()).hours > 0)
+      // isPayrollStaff excludes the kiosk DEVICE account — it has no shifts.
+      .filter(u => isPayrollStaff(u) && !approvedIds.has(u.id))
+      .filter(u => periodPayFor(timeEntries, u.id, u.hourlyRate, period, Date.now(), settings.operations.paidBreakReasons).hours > 0)
       .forEach(u => handleApprovePayPeriod(u.id, period));
   };
   // Owner-only pay-period sign-off. Records that a period was reviewed/paid — it
@@ -2264,6 +2370,34 @@ const App: React.FC = () => {
     return <LockScreen me={appUser} onUnlockWithPin={handleUnlockWithPin} onUnlockWithPassword={handleUnlockWithPassword} onSignOut={handleLock} />;
   }
 
+  // --- KIOSK: the punch screen and NOTHING ELSE ---------------------------
+  //
+  // An early return, exactly like the auto-lock branch above: the dashboard,
+  // nav, global search and settings are not hidden behind a flag, they are
+  // never mounted. Browser back only changes `view` state underneath, which
+  // this replaces outright whatever its value. The only way out is Sign out,
+  // which requires the full email and password.
+  //
+  // Placed ABOVE the technician branch so role ordering can never accidentally
+  // fall through to a richer screen.
+  if (appUser.role === 'kiosk') {
+    return (
+      <ErrorBoundary variant="route" label="Time clock kiosk">
+        <KioskPunchView
+          staff={kioskStaff}
+          entries={timeEntries}
+          paidBreakReasons={settings.operations.paidBreakReasons}
+          shopName={settings.general.storeName}
+          onClockIn={handleKioskClockIn}
+          onClockOut={handleKioskClockOut}
+          onStartBreak={handleKioskStartBreak}
+          onEndBreak={handleKioskEndBreak}
+          onSignOut={handleLock}
+        />
+      </ErrorBoundary>
+    );
+  }
+
   // --- Technician: simplified, repair-only experience (same workspace) ---
   if (appUser.role === 'technician') {
     return (
@@ -2409,7 +2543,7 @@ const App: React.FC = () => {
             // Reconciliation (and, if granted, Expenses) tab — never a coarse
             // permission standing in as a proxy for profit visibility.
             (allow('cash.reconcile') || allow('reports.profit.summary'))
-              ? <ReportsView salesTransactions={salesTransactions} cashReconciliations={cashReconciliations} inventory={data} payPeriods={payPeriods} staffBonuses={visibleBonuses(staffBonuses, { id: appUser?.id || '', canViewPayroll: allow('payroll.manage') })} settlements={settlements} deviceBuyers={deviceBuyers} onSaveReconciliation={handleSaveReconciliation} booksStartDate={settings.operations.booksStartDate} defaultOpeningFloat={settings.operations.openingFloatDefault}
+              ? <ReportsView salesTransactions={salesTransactions} cashReconciliations={cashReconciliations} inventory={data} payPeriods={payPeriods} staffBonuses={visibleBonuses(staffBonuses, { id: appUser?.id || '', canViewPayroll: allow('payroll.manage') })} settlements={settlements} deviceBuyers={deviceBuyers} onSaveReconciliation={handleSaveReconciliation} booksStartDate={settings.operations.booksStartDate} paidBreakReasons={settings.operations.paidBreakReasons} defaultOpeningFloat={settings.operations.openingFloatDefault}
                   repairs={repairs} customers={customers} auditLogs={auditLogs} activity={activityLog} timeEntries={timeEntries} users={workspaceUsers}
                   expenses={expenses} expenseCategories={settings.expenses.categories}
                   canAddExpense={allow('expenses.add')} canViewAllExpenses={allow('expenses.viewAll')}
@@ -2592,6 +2726,10 @@ const App: React.FC = () => {
               onDeleteInvite={handleDeleteInvite}
               onCreateUser={handleCreateUser}
               onSetPin={allow('users.pin') ? handleSetPin : undefined}
+              onSetKioskPin={appUser.role === 'owner' ? handleSetKioskPin : undefined}
+              onClearKioskPin={appUser.role === 'owner' ? handleClearKioskPin : undefined}
+              onCreateKioskDevice={appUser.role === 'owner' ? handleCreateKioskDevice : undefined}
+              onRevokeKioskDevice={appUser.role === 'owner' ? handleRevokeKioskDevice : undefined}
               onResetPassword={allow('users.manage') ? handleResetStaffPassword : undefined}
               canManageSecurity={allow('security.manage')}
               autoLockMinutes={settings.operations.autoLockMinutes}
@@ -2622,6 +2760,7 @@ const App: React.FC = () => {
               onMarkPaid={handleMarkPaid}
               onUnmarkPaid={handleUnmarkPaid}
               onCorrectClockOut={handleCorrectClockOut}
+              paidBreakReasons={settings.operations.paidBreakReasons}
               staffBonuses={visibleBonuses(staffBonuses, { id: appUser.id, canViewPayroll: allow('payroll.manage') })}
               canAddBonus={appUser.role === 'owner'}
               onSaveBonus={appUser.role === 'owner' ? handleSaveBonus : undefined}

@@ -4,7 +4,7 @@ import { doc, getDoc } from 'firebase/firestore';
 import {
   InventoryItem, Note, Task, DeviceBuyer, DropOff, Settlement, Customer, SalesTransaction,
   ActivityEntry, AppUser, WorkspaceInvite, AuditEntry, Repair, RepairBatch, TimeEntry, PayPeriodPaid, PayPeriodApproval, CashReconciliation, StaffNote,
-  Expense, RecurringExpense, StaffBonus,
+  Expense, RecurringExpense, StaffBonus, KioskStaff,
 } from '../types';
 import { decryptData } from '../services/security';
 import { AppSettings, mergeSettings } from '../domain/settings';
@@ -60,6 +60,10 @@ export function useWorkspaceData() {
   // subscription simply returns their own — the visibility rule is enforced
   // server-side, not only filtered in the view.
   const [staffBonuses, setStaffBonuses] = useState<StaffBonus[]>([]);
+  // The kiosk punch roster (name + punch-PIN hash only — see types.ts's
+  // KioskStaff). firestore.rules restricts reads to the kiosk device and the
+  // payroll tier, so an employee's subscription simply comes back empty.
+  const [kioskStaff, setKioskStaff] = useState<KioskStaff[]>([]);
   const [cashReconciliations, setCashReconciliations] = useState<CashReconciliation[]>([]);
   const [staffNotes, setStaffNotes] = useState<StaffNote[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
@@ -176,6 +180,25 @@ export function useWorkspaceData() {
     setDbLoading(true); setDbError(null);
     const onErr = (e: Error) => { console.error('Firestore error:', e); setDbError(e.message || 'Failed to load data'); setDbLoading(false); };
 
+    // THE KIOSK SUBSCRIBES TO ALMOST NOTHING, and that is the point.
+    //
+    // firestore.rules denies a kiosk account read on inventory, sales,
+    // customers, repairs, settlements and every other shop collection, so
+    // running the normal subscription set below would produce a wall of
+    // permission-denied errors and a broken screen — but more importantly,
+    // subscribing at all would be asking for data a device by the front door
+    // has no business holding. It reads exactly two things: the punch roster
+    // and the time entries it needs to know who is already on shift.
+    if (appUser.role === 'kiosk') {
+      setDbLoading(false);
+      const kioskSubs = [
+        subscribeCollection<KioskStaff>(wsId, 'kioskStaff', setKioskStaff, onErr),
+        subscribeCollection<TimeEntry>(wsId, 'timeEntries', setTimeEntries, onErr),
+      ];
+      setWorkspaceUsers([appUser]);
+      return () => kioskSubs.forEach(u => u());
+    }
+
     // One-time migration of the legacy encrypted blob (owner's own workspace only).
     if (wsId === user.uid) {
       (async () => {
@@ -232,6 +255,7 @@ export function useWorkspaceData() {
       subscribeCollection<PayPeriodPaid>(workspaceId, 'payPeriods', setPayPeriods, onErr),
       subscribeCollection<PayPeriodApproval>(workspaceId, 'payPeriodApprovals', setPayPeriodApprovals, onErr),
       subscribeCollection<StaffBonus>(workspaceId, 'staffBonuses', setStaffBonuses, onErr),
+      subscribeCollection<KioskStaff>(workspaceId, 'kioskStaff', setKioskStaff, onErr),
     ];
     return () => subs.forEach(u => u());
   }, [user, appUser, workspaceId, reconnectKey, extendedEnabled]);
@@ -307,7 +331,7 @@ export function useWorkspaceData() {
     // collections
     devices, accessories, data, notes, setNotes, tasks, setTasks,
     deviceBuyers, dropOffs, settlements, customers, salesTransactions,
-    repairs, repairBatches, timeEntries, payPeriods, payPeriodApprovals, staffBonuses, cashReconciliations, staffNotes,
+    repairs, repairBatches, timeEntries, payPeriods, payPeriodApprovals, staffBonuses, kioskStaff, cashReconciliations, staffNotes,
     expenses, recurringExpenses,
     skuCounters, setSkuCounters, activityLog, lastBackup, settings,
     // connection status

@@ -22,11 +22,33 @@ service cloud.firestore {
     // `disabled` is optional on the user doc; use get(...,false) so a missing
     // field is treated as "not disabled" instead of erroring (an errored rule
     // denies, which previously blocked every workspace read for normal users).
-    function activeMemberOf(ws) { return hasProfile() && me().get('disabled', false) != true && myWorkspace() == ws; }
+    // Any active account in the workspace, INCLUDING the kiosk device.
+    function activeAnyMemberOf(ws) { return hasProfile() && me().get('disabled', false) != true && myWorkspace() == ws; }
+    // An active HUMAN member. The kiosk device is excluded here rather than at
+    // each call site, which is what makes every collection in this file
+    // deny-by-default for it: `allow read: if activeMemberOf(ws)` appears on
+    // sales, inventory, customers, repairs, settlements, drop-offs, pay
+    // periods and more, and a device by the front door must read none of them.
+    // The two places a kiosk legitimately needs access (kioskStaff and
+    // timeEntries) name it explicitly instead.
+    function activeMemberOf(ws) { return activeAnyMemberOf(ws) && myRole() != 'kiosk'; }
     function isOwnerOf(ws) { return activeMemberOf(ws) && myRole() == 'owner'; }
     function isTechOf(ws) { return activeMemberOf(ws) && myRole() == 'technician'; }
-    // A non-technician active member (owner/manager/employee) — the roles that
-    // may write general shop data.
+    // The shared door-iPad DEVICE account. It is NOT a person: it holds no
+    // permissions in services/rbac.ts, never appears in payroll, and below it
+    // is denied read on every collection except the kiosk punch roster and
+    // timeEntries. Everything it may do is spelled out explicitly; nothing
+    // grants it anything by default.
+    function isKioskOf(ws) { return activeAnyMemberOf(ws) && myRole() == 'kiosk'; }
+
+    // A non-technician, non-kiosk active member (owner/manager/employee) — the
+    // roles that may write general shop data.
+    //
+    // THE KIOSK EXCLUSION IS LOAD-BEARING: this was `myRole() != 'technician'`,
+    // which a kiosk account would have satisfied — handing the door iPad write
+    // access to inventory, sales, customers, repairs and drop-offs. Excluded
+    // by name so a new role can never inherit shop-write access simply by not
+    // being a technician.
     function isStaffOf(ws) { return activeMemberOf(ws) && myRole() != 'technician'; }
     // Owner or manager — the payroll.manage / users.* / audit.view tier.
     //
@@ -44,7 +66,21 @@ service cloud.firestore {
     // below) — an employee is not more trusted than a technician here, unlike
     // the old isStaffOf() split which let any employee write ANY coworker's
     // hours with no ownership check at all.
+    // Kiosk excluded for the same reason: it has no shifts of its own, so it
+    // must never write a timeEntry for `request.auth.uid` (which is the
+    // device). It punches for OTHER people through the kiosk branch below,
+    // which has its own, tighter conditions.
     function isSelfServiceStaffOf(ws) { return activeMemberOf(ws) && !isManagerUp(ws); }
+
+    // A kiosk punch may only ever touch TODAY's shift. Nobody fixes their
+    // hours at the iPad: a yesterday entry is a correction, and corrections
+    // are the owner/manager's job on a real screen with an audit trail.
+    function withinLastDay(ms) { return ms > request.time.toMillis() - 86400000 && ms <= request.time.toMillis() + 600000; }
+    // The only fields a kiosk-written entry may contain at all.
+    function kioskEntryKeys() { return ['id', 'userId', 'userEmail', 'clockIn', 'clockOut', 'breaks', 'createdAt', 'source']; }
+    // The only fields a kiosk UPDATE may CHANGE — clock out, or start/end a
+    // break. Never clockIn, never userId, never hours by any other route.
+    function kioskUpdateKeys() { return ['clockOut', 'breaks']; }
 
     // The exact field set the real clock-in/clock-out/break UI writes
     // (App.tsx's handleClockIn/handleClockOut/handleStartBreak/handleEndBreak)
@@ -65,8 +101,17 @@ service cloud.firestore {
     // owner/manager may set a PIN only for someone STRICTLY below their own
     // rank — never a peer or above, so a manager can never PIN another manager
     // or the owner, and nobody can PIN themselves via this path.
+    // 'kiosk' ranks BELOW everyone (-1) and is refused outright by the PIN
+    // branch as well — mirrors domain/pin.ts's canAssignPin. Without the
+    // explicit -1 it would have fallen into the `: 0` technician slot and been
+    // a valid app-unlock-PIN target, which a shared device must never be.
     function roleRank(r) {
-      return r == 'owner' ? 3 : r == 'manager' ? 2 : r == 'employee' ? 1 : 0;
+      return r == 'owner' ? 3 : r == 'manager' ? 2 : r == 'employee' ? 1 : r == 'technician' ? 0 : -1;
+    }
+    // The kiosk PUNCH pin (a different credential from pinKeys() below — see
+    // types.ts's AppUser). Owner-only, and never on the kiosk device itself.
+    function kioskPinKeys() {
+      return ['kioskPinHash', 'kioskPinSalt', 'kioskPinIterations', 'kioskPinUpdatedAt', 'kioskPinUpdatedBy', 'kioskPinUpdatedByEmail'];
     }
     function pinKeys() {
       return ['pinHash', 'pinSalt', 'pinIterations', 'pinUpdatedAt', 'pinUpdatedBy', 'pinUpdatedByEmail'];
@@ -167,8 +212,49 @@ service cloud.firestore {
       // (coworkers' clock-in/out times) that isn't especially sensitive
       // compared to the financial/inventory data already gated more
       // tightly elsewhere in this file.
+      // The kiosk punch roster — the ONLY thing the door iPad may read about a
+      // person (a display name and a punch-PIN hash; see types.ts's KioskStaff
+      // and functions/src/kioskStaffPolicy.ts for why it is not users/{uid}).
+      //
+      // NO CLIENT WRITE, EVER — not by the kiosk, not by an owner. It is
+      // maintained exclusively by the syncKioskStaff Admin-SDK trigger
+      // (functions/src/kioskStaff.ts), which is what guarantees a revoked PIN
+      // or a deactivated account actually disappears from the door.
+      //
+      // Read is the kiosk device itself, plus owner/manager so the roster is
+      // inspectable from the Users screen. An employee/technician cannot read
+      // it: it holds colleagues' PIN hashes, and offline-guessable 6-digit
+      // hashes are exactly what should not be handed around.
+      match /kioskStaff/{id} {
+        allow read: if isKioskOf(ws) || isManagerUp(ws);
+        allow write: if false;
+      }
+
+      // ---- Kiosk punches, folded into the branches below ----------------
+      //
+      // A kiosk writes a timeEntry for SOMEBODY ELSE — that is the whole point
+      // of a shared door iPad, and it is why the kiosk branch cannot reuse the
+      // self-service one (which requires userId == request.auth.uid). The
+      // person is authenticated by their 6-digit punch PIN, checked against
+      // the kioskStaff mirror on the device; these rules bound what the device
+      // can do even if that check were bypassed entirely.
+      //
+      // A kiosk MAY: create today's clock-in for a user in its own workspace,
+      // and update that entry to clock out or start/end a break.
+      //
+      // A kiosk MAY NOT, and why each matters:
+      //   • delete — nothing at the door may destroy an hours record;
+      //   • change clockIn — a shift could otherwise be backdated for pay;
+      //   • change userId — one person's hours could land on another;
+      //   • write corrections/audit fields — those belong to the manager flow;
+      //   • touch an entry from a PREVIOUS DAY (withinLastDay on the STORED
+      //     clockIn) — nobody fixes their hours at the iPad; a yesterday entry
+      //     is a correction, and corrections happen on a real screen with an
+      //     audit trail.
       match /timeEntries/{id} {
-        allow read: if activeMemberOf(ws);
+        // The kiosk must read these to know whether the person who just
+        // punched has an open shift, and whether they are on a break.
+        allow read: if activeMemberOf(ws) || isKioskOf(ws);
         allow create: if isManagerUp(ws)
           || (isSelfServiceStaffOf(ws)
               && request.resource.data.userId == request.auth.uid
@@ -181,14 +267,29 @@ service cloud.firestore {
               // this path (unlike update below) previously checked no
               // skew on clockOut at all.
               && (!request.resource.data.keys().hasAny(['clockOut']) || request.resource.data.clockOut == null
-                  || closeToNow(request.resource.data.clockOut)));
+                  || closeToNow(request.resource.data.clockOut)))
+          || (isKioskOf(ws)
+              && request.resource.data.keys().hasOnly(kioskEntryKeys())
+              && request.resource.data.source == 'kiosk'
+              && request.resource.data.userId is string
+              && request.resource.data.userId != request.auth.uid
+              && closeToNow(request.resource.data.clockIn)
+              && (!request.resource.data.keys().hasAny(['clockOut']) || request.resource.data.clockOut == null));
         allow update: if isManagerUp(ws)
           || (isSelfServiceStaffOf(ws)
               && resource.data.userId == request.auth.uid
               && request.resource.data.userId == request.auth.uid
               && request.resource.data.diff(resource.data).affectedKeys().hasOnly(timeEntrySelfUpdateKeys())
               && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['clockOut'])
+                  || closeToNow(request.resource.data.clockOut)))
+          || (isKioskOf(ws)
+              && request.resource.data.userId == resource.data.userId
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(kioskUpdateKeys())
+              && withinLastDay(resource.data.clockIn)
+              && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['clockOut'])
                   || closeToNow(request.resource.data.clockOut)));
+        // A kiosk may NEVER delete: nothing at the door destroys an hours
+        // record. (Not listed here at all — delete is owner-only.)
         allow delete: if isOwnerOf(ws);
       }
 
@@ -441,7 +542,18 @@ service cloud.firestore {
       allow update: if signedIn() && (
         (request.auth.uid == uid
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastLogin', 'notifSeenTs']))
-        || (hasProfile() && myRole() == 'owner' && resource.data.workspaceId == myWorkspace())
+        // The owner's broad branch: role/disabled/allowProfit/hourlyRate for
+        // anyone in their workspace.
+        //
+        // The one carve-out is a KIOSK DEVICE's credential fields. Without it
+        // this branch swallows the narrower PIN branches below — it grants
+        // every field, so OR-ing a stricter rule after it changes nothing —
+        // and an owner could put an app-unlock PIN, or a punch PIN, on the
+        // shared door iPad. A device must hold neither: the unlock PIN opens a
+        // session, and the punch PIN would make the iPad clock itself in.
+        || (hasProfile() && myRole() == 'owner' && resource.data.workspaceId == myWorkspace()
+            && (resource.data.role != 'kiosk'
+                || !request.resource.data.diff(resource.data).affectedKeys().hasAny(pinKeys().concat(kioskPinKeys()))))
         || (hasProfile() && myRole() == 'manager'
             && resource.data.workspaceId == myWorkspace()
             && resource.data.role == 'technician'
@@ -453,10 +565,25 @@ service cloud.firestore {
         // those fields — no role/workspace/disabled/pay change riding along.
         || (hasProfile() && (myRole() == 'owner' || myRole() == 'manager')
             && resource.data.workspaceId == myWorkspace()
+            && resource.data.role != 'kiosk'
             && roleRank(resource.data.role) < roleRank(myRole())
             && request.resource.data.role == resource.data.role
             && request.resource.data.workspaceId == resource.data.workspaceId
             && request.resource.data.diff(resource.data).affectedKeys().hasOnly(pinKeys()))
+        // KIOSK PUNCH PIN — a different credential from the app-unlock PIN
+        // above (see types.ts's AppUser). Owner-only, because a punch PIN
+        // decides whose hours get recorded. Never settable on the kiosk
+        // DEVICE account itself: a device has no shifts to punch.
+        //
+        // The owner writes only these six fields here; the syncKioskStaff
+        // trigger then mirrors them into the kioskStaff roster the door iPad
+        // reads. That mirror is never client-writable.
+        || (hasProfile() && myRole() == 'owner'
+            && resource.data.workspaceId == myWorkspace()
+            && resource.data.role != 'kiosk'
+            && request.resource.data.role == resource.data.role
+            && request.resource.data.workspaceId == resource.data.workspaceId
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(kioskPinKeys()))
       );
 
       allow delete: if hasProfile() && myRole() == 'owner' && resource.data.workspaceId == myWorkspace();
