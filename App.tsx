@@ -44,7 +44,7 @@ import { skuPrefix, nextSku } from './services/sku';
 import { REPAIR_PREFIX, BATCH_PREFIX, applyTechEdit, techUpdateAuditPlan, repairSalePrefill, completeRepair, completeRepairSale, dateToEpochMs, isRepairOpen, flagDeviceForRepair, restoredDeviceStatus } from './domain/repairs';
 import { repairCostWriteback, applyRepairCostDelta } from './domain/repairCostWriteback';
 import { bonusDrawerEffect, canSaveBonus, visibleBonuses } from './domain/bonuses';
-import { buildKioskClockIn, buildKioskClockOut, buildKioskStartBreak, buildKioskEndBreak } from './domain/kiosk';
+import { buildKioskClockIn, buildKioskClockOut, buildKioskStartBreak, buildKioskEndBreak, validateKioskWrite } from './domain/kiosk';
 import { markTicketDeviceSold } from './domain/repairVisibility';
 import { MergePlan, resolveCustomerForDraft, CustomerDraft } from './domain/customers';
 import { can, canPrintDropOffLabel } from './services/rbac';
@@ -1743,6 +1743,26 @@ const App: React.FC = () => {
   const punchAudit = (action: string, entryId: string, person: KioskStaff, extra?: Record<string, unknown>) =>
     audit(action, 'timeEntry', entryId, undefined, { source: 'kiosk', userId: person.uid, name: person.displayName, ...extra });
 
+  // Every kiosk write to an EXISTING entry goes through here. The builders
+  // already produce `existing breaks + at most one change`, and this re-checks
+  // that property on the record about to be written: the breaks list may only
+  // grow or have the last open break ended, never shrink, reorder, or be
+  // edited. A mismatch is refused AND audited, so an attempt to trim a break
+  // from the door shows up rather than failing silently. firestore.rules
+  // enforces the coarse half of the same rule server-side.
+  const kioskSaveEntry = async (
+    person: KioskStaff, before: TimeEntry, after: TimeEntry,
+    action: string, extra?: Record<string, unknown>,
+  ) => {
+    const check = validateKioskWrite(before, after);
+    if (check.ok === false) {
+      punchAudit('timeclock.punch_rejected', before.id, person, { ...extra, reason: check.reason });
+      return;
+    }
+    await saveTimeEntry(uid!, after);
+    punchAudit(action, before.id, person, extra);
+  };
+
   const handleKioskClockIn = async (person: KioskStaff) => {
     if (!uid || appUser?.role !== 'kiosk') return;
     if (openEntryFor(timeEntries, person.uid)) return; // already on shift
@@ -1755,22 +1775,19 @@ const App: React.FC = () => {
   const handleKioskClockOut = async (person: KioskStaff, open: TimeEntry) => {
     if (!uid || appUser?.role !== 'kiosk') return;
     await kioskGuard.run(`out:${person.uid}`, async () => {
-      await saveTimeEntry(uid, buildKioskClockOut(open, Date.now()));
-      punchAudit('timeclock.clock_out', open.id, person);
+      await kioskSaveEntry(person, open, buildKioskClockOut(open, Date.now()), 'timeclock.clock_out');
     });
   };
   const handleKioskStartBreak = async (person: KioskStaff, open: TimeEntry, reason: BreakReason) => {
     if (!uid || appUser?.role !== 'kiosk' || isOnBreak(open)) return;
     await kioskGuard.run(`brk:${person.uid}`, async () => {
-      await saveTimeEntry(uid, buildKioskStartBreak(open, newId(), reason, Date.now()));
-      punchAudit('timeclock.break_start', open.id, person, { reason });
+      await kioskSaveEntry(person, open, buildKioskStartBreak(open, newId(), reason, Date.now()), 'timeclock.break_start', { reason });
     });
   };
   const handleKioskEndBreak = async (person: KioskStaff, open: TimeEntry) => {
     if (!uid || appUser?.role !== 'kiosk') return;
     await kioskGuard.run(`endbrk:${person.uid}`, async () => {
-      await saveTimeEntry(uid, buildKioskEndBreak(open, Date.now()));
-      punchAudit('timeclock.break_end', open.id, person);
+      await kioskSaveEntry(person, open, buildKioskEndBreak(open, Date.now()), 'timeclock.break_end');
     });
   };
 

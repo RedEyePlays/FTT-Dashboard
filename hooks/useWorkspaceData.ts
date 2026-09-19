@@ -12,7 +12,7 @@ import { auth, db } from '../services/firebase';
 import { onAuthChange } from '../services/auth';
 import { withResolvedBuyerId } from '../domain/dropoffs';
 import {
-  subscribeCollection, subscribeMeta, migrateLegacyIfNeeded,
+  subscribeCollection, subscribeKioskTimeEntries, subscribeMeta, migrateLegacyIfNeeded,
   getUserDoc, setUserDoc, updateUserDoc, subscribeWorkspaceUsers, getInvite, deleteInvite,
   subscribeInvites,
 } from '../services/firestoreDb';
@@ -193,7 +193,12 @@ export function useWorkspaceData() {
       setDbLoading(false);
       const kioskSubs = [
         subscribeCollection<KioskStaff>(wsId, 'kioskStaff', setKioskStaff, onErr),
-        subscribeCollection<TimeEntry>(wsId, 'timeEntries', setTimeEntries, onErr),
+        // BOUNDED, not the whole collection. The punch screen only needs to
+        // know who is currently on shift or on a break, so a tablet left
+        // unattended by the door has no business caching months of everyone's
+        // hours. firestore.rules requires this bound for a kiosk list, so an
+        // unbounded read is denied rather than merely discouraged.
+        subscribeKioskTimeEntries(wsId, Date.now(), setTimeEntries, onErr),
       ];
       setWorkspaceUsers([appUser]);
       return () => kioskSubs.forEach(u => u());

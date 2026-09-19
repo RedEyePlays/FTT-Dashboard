@@ -1,4 +1,4 @@
-import { KioskStaff, TimeEntry, BreakReason } from '../types';
+import { KioskStaff, TimeEntry, TimeBreak, BreakReason } from '../types';
 import { isClockedIn, isOnBreak, openEntryFor, workedMs, msToHours, breakMs, shiftEnd, PaidBreakReasons } from './timeclock';
 
 // The punch screen's decisions, kept pure so every branch is testable without
@@ -153,6 +153,109 @@ export const buildKioskEndBreak = (open: TimeEntry, now: number): TimeEntry => (
   breaks: (open.breaks || []).map(b => (b.end == null ? { ...b, end: now } : b)),
   source: 'kiosk',
 });
+
+/* ---------------- The breaks array may only ever GROW ---------------- */
+//
+// A kiosk write is allowed to touch `breaks`, and firestore.rules can only
+// check the coarse half of that (the list never gets shorter) because rules
+// cannot deep-compare array contents. The real integrity check lives here,
+// next to the builders that produce the array in the first place.
+//
+// What this stops: anybody holding the kiosk credential trimming or deleting a
+// break on today's entry, which would inflate paid hours for every unpaid
+// break reason. The door UI never does that — the permission was simply wider
+// than the intent, and this closes the gap on the way in.
+//
+// The builders above are the ONLY way a kiosk breaks array is produced: each
+// one is `existing breaks` + at most one change. None of them accepts a
+// caller-supplied array, and `validateBreakEvolution` re-checks that property
+// on the value about to be written, so a mutated object in between is caught.
+
+export type BreakEvolution =
+  | { ok: true; change: 'none' | 'appended' | 'ended' }
+  | { ok: false; reason: string };
+
+const sameBreakExceptEnd = (a: TimeBreak, b: TimeBreak): boolean =>
+  a.id === b.id && a.start === b.start && a.reason === b.reason && a.note === b.note;
+
+/**
+ * Is `next` a legal evolution of `prev`?
+ *
+ * Legal: identical; one break appended (open, and only when nothing else is
+ * open); or the end stamped on the one already-open break. Everything else —
+ * a shorter list, a reorder, an edited start/reason, an `end` moved or
+ * cleared — is rejected, and the reason is a sentence so it can be audited
+ * rather than failing silently.
+ */
+export const validateBreakEvolution = (
+  prev: TimeBreak[] = [], next: TimeBreak[] = [],
+): BreakEvolution => {
+  if (next.length < prev.length) {
+    return { ok: false, reason: `breaks shrank from ${prev.length} to ${next.length}` };
+  }
+  if (next.length > prev.length + 1) {
+    return { ok: false, reason: `breaks grew by ${next.length - prev.length}; at most one break may be added` };
+  }
+
+  let ended = 0;
+  for (let i = 0; i < prev.length; i++) {
+    const before = prev[i];
+    const after = next[i];
+    if (!after || before.id !== after.id) {
+      return { ok: false, reason: `break ${i} changed identity or order (${before.id} → ${after?.id ?? 'missing'})` };
+    }
+    if (!sameBreakExceptEnd(before, after)) {
+      return { ok: false, reason: `break ${before.id} was edited; a punch may only set its end` };
+    }
+    if (before.end == null && after.end != null) {
+      ended++;
+      // Only the LAST break can be the open one; ending anything else means
+      // the array was rebuilt rather than punched.
+      if (i !== prev.length - 1) {
+        return { ok: false, reason: `break ${before.id} is not the last break and cannot be ended` };
+      }
+    } else if (before.end !== after.end) {
+      return { ok: false, reason: `break ${before.id} had its end changed from ${before.end} to ${after.end}` };
+    }
+  }
+
+  const appended = next.length > prev.length;
+  if (appended) {
+    if (ended > 0) {
+      return { ok: false, reason: 'a break was ended and another added in the same write' };
+    }
+    const added = next[next.length - 1];
+    if (added.end != null) {
+      return { ok: false, reason: 'an added break must be open; a completed break cannot be back-filled at the door' };
+    }
+    if (prev.some(b => b.end == null)) {
+      return { ok: false, reason: 'a break is already running; it must be ended before another starts' };
+    }
+    return { ok: true, change: 'appended' };
+  }
+
+  return { ok: true, change: ended > 0 ? 'ended' : 'none' };
+};
+
+/**
+ * The same check applied to the whole entry, which is what App.tsx runs
+ * immediately before a kiosk write. Also refuses a punch that re-opens a
+ * closed shift or moves the clock-in, since those travel on the same write.
+ */
+export const validateKioskWrite = (
+  before: TimeEntry, after: TimeEntry,
+): BreakEvolution => {
+  if (before.id !== after.id || before.userId !== after.userId) {
+    return { ok: false, reason: 'a punch may not move an entry to another shift or person' };
+  }
+  if (before.clockIn !== after.clockIn) {
+    return { ok: false, reason: 'a punch may not change the clock-in time' };
+  }
+  if (before.clockOut != null && after.clockOut !== before.clockOut) {
+    return { ok: false, reason: 'a shift that is already clocked out cannot be changed at the door' };
+  }
+  return validateBreakEvolution(before.breaks || [], after.breaks || []);
+};
 
 /**
  * A punch may only ever touch TODAY's shift — the same rule firestore.rules

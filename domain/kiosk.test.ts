@@ -1,11 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { KioskStaff, TimeEntry, BreakReason } from '../types';
+import { KioskStaff, TimeEntry, TimeBreak, BreakReason } from '../types';
 import {
   punchRoster, punchStateFor, confirmLabel, fmtDuration, breakElapsedMs, canStepOut,
   isPunchableEntry, isStaleOpenShift,
   initialPinAttempts, registerFailedPin, pinCooldownActive, pinErrorMessage,
   MAX_PIN_ATTEMPTS, PIN_COOLDOWN_MS, WRONG_PIN_MESSAGE,
   buildKioskClockIn, buildKioskClockOut, buildKioskStartBreak, buildKioskEndBreak,
+  validateBreakEvolution, validateKioskWrite,
 } from './kiosk';
 import { workedHours, isOnBreak, isClockedIn } from './timeclock';
 import { canAssignPin, canHaveKioskPin, isValidKioskPinFormat, KIOSK_PIN_LENGTH, isValidPinFormat } from './pin';
@@ -272,5 +273,122 @@ describe('wrong-PIN throttling, per DEVICE', () => {
     let s = initialPinAttempts;
     for (let i = 0; i < MAX_PIN_ATTEMPTS; i++) s = registerFailedPin(s, NOON);
     expect(pinErrorMessage(s, NOON)).toContain('30 seconds');
+  });
+});
+
+/* ---------------- A kiosk may not trim a break ---------------- */
+
+describe('the breaks array may only ever grow', () => {
+  // The kiosk credential lives on a tablet by the front door. The punch screen
+  // only ever appends a break or ends the running one, but the WRITE permission
+  // was wider than that: anybody holding the credential could shorten or delete
+  // a break on today's entry and inflate paid hours for every unpaid reason.
+  // These are the checks that close the gap on the way in.
+
+  const lunch: TimeBreak = { id: 'b1', start: NOON + H, end: NOON + H + 30 * M, reason: 'lunch' };
+  const bank: TimeBreak = { id: 'b2', start: NOON + 3 * H, end: NOON + 3 * H + 15 * M, reason: 'bank' };
+  const running: TimeBreak = { id: 'b3', start: NOON + 5 * H, reason: 'personal' };
+
+  it('accepts an unchanged list', () => {
+    expect(validateBreakEvolution([lunch, bank], [lunch, bank])).toEqual({ ok: true, change: 'none' });
+  });
+
+  it('accepts one break appended', () => {
+    const r = validateBreakEvolution([lunch], [lunch, { id: 'b9', start: NOON + 6 * H, reason: 'bank' }]);
+    expect(r).toEqual({ ok: true, change: 'appended' });
+  });
+
+  it('accepts the end stamped on the last open break', () => {
+    const r = validateBreakEvolution([lunch, running], [lunch, { ...running, end: NOON + 6 * H }]);
+    expect(r).toEqual({ ok: true, change: 'ended' });
+  });
+
+  it('REJECTS a shrunk list — this is the whole point', () => {
+    const r = validateBreakEvolution([lunch, bank], [lunch]);
+    expect(r.ok).toBe(false);
+    expect(r.ok === false && r.reason).toMatch(/shrank/);
+  });
+
+  it('REJECTS a reordered list even though the length matches', () => {
+    const r = validateBreakEvolution([lunch, bank], [bank, lunch]);
+    expect(r.ok).toBe(false);
+    expect(r.ok === false && r.reason).toMatch(/identity or order/);
+  });
+
+  it('REJECTS shortening a break that was already recorded', () => {
+    const trimmed = { ...lunch, end: lunch.end! - 20 * M };
+    const r = validateBreakEvolution([lunch], [trimmed]);
+    expect(r.ok).toBe(false);
+    expect(r.ok === false && r.reason).toMatch(/end changed/);
+  });
+
+  it('REJECTS moving a break\'s start or changing its reason to a paid one', () => {
+    expect(validateBreakEvolution([bank], [{ ...bank, reason: 'lunch' }]).ok).toBe(false);
+    expect(validateBreakEvolution([bank], [{ ...bank, start: bank.start + 10 * M }]).ok).toBe(false);
+  });
+
+  it('REJECTS clearing an end to re-open a finished break', () => {
+    const reopened = { ...lunch }; delete (reopened as { end?: number }).end;
+    expect(validateBreakEvolution([lunch], [reopened]).ok).toBe(false);
+  });
+
+  it('REJECTS two changes in one write', () => {
+    const r = validateBreakEvolution(
+      [lunch, running],
+      [lunch, { ...running, end: NOON + 6 * H }, { id: 'b4', start: NOON + 7 * H, reason: 'bank' }],
+    );
+    expect(r.ok).toBe(false);
+  });
+
+  it('REJECTS starting a break while one is already running', () => {
+    const r = validateBreakEvolution([running], [running, { id: 'b4', start: NOON + 6 * H, reason: 'bank' }]);
+    expect(r.ok).toBe(false);
+    expect(r.ok === false && r.reason).toMatch(/already running/);
+  });
+
+  it('REJECTS back-filling a completed break at the door', () => {
+    const r = validateBreakEvolution([], [lunch]);
+    expect(r.ok).toBe(false);
+    expect(r.ok === false && r.reason).toMatch(/must be open/);
+  });
+
+  it('REJECTS more than one break added at once', () => {
+    const r = validateBreakEvolution([], [
+      { id: 'x', start: NOON + H, reason: 'bank' },
+      { id: 'y', start: NOON + 2 * H, reason: 'bank' },
+    ]);
+    expect(r.ok).toBe(false);
+    expect(r.ok === false && r.reason).toMatch(/at most one/);
+  });
+});
+
+describe('every builder produces a legal evolution', () => {
+  // The builders are the ONLY way a kiosk breaks array is produced — none of
+  // them takes a caller-supplied array. This pins that property down so a
+  // future edit that starts accepting one fails here.
+  const open = shiftFor('u1', { breaks: [{ id: 'b1', start: NOON + H, end: NOON + H + 30 * M, reason: 'lunch' }] });
+
+  it('starting a break', () => {
+    expect(validateKioskWrite(open, buildKioskStartBreak(open, 'new', 'bank', NOON + 3 * H)))
+      .toEqual({ ok: true, change: 'appended' });
+  });
+
+  it('ending a break', () => {
+    const onBreak = buildKioskStartBreak(open, 'new', 'bank', NOON + 3 * H);
+    expect(validateKioskWrite(onBreak, buildKioskEndBreak(onBreak, NOON + 4 * H)))
+      .toEqual({ ok: true, change: 'ended' });
+  });
+
+  it('clocking out, which also closes the running break', () => {
+    const onBreak = buildKioskStartBreak(open, 'new', 'bank', NOON + 3 * H);
+    expect(validateKioskWrite(onBreak, buildKioskClockOut(onBreak, NOON + 4 * H)))
+      .toEqual({ ok: true, change: 'ended' });
+  });
+
+  it('refuses a punch that moves the clock-in or re-opens a closed shift', () => {
+    const closed = { ...open, clockOut: NOON + 8 * H };
+    expect(validateKioskWrite(open, { ...open, clockIn: NOON - H }).ok).toBe(false);
+    expect(validateKioskWrite(closed, { ...closed, clockOut: NOON + 9 * H }).ok).toBe(false);
+    expect(validateKioskWrite(open, { ...open, userId: 'u2' }).ok).toBe(false);
   });
 });
