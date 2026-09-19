@@ -58,14 +58,34 @@ export const canHaveKioskPin = (role: Role | undefined): boolean =>
   role === 'owner' || role === 'manager' || role === 'employee' || role === 'technician';
 
 // --- Who the INACTIVITY auto-lock timer applies to ---------------------------
-// Owner/manager only — they're the roles with access to sensitive screens
-// (profit figures, settings, users). An employee/technician working the
-// counter is never auto-locked by idle time; they can still lock manually at
-// any time (App.tsx's handleManualLock), which isn't role-gated.
-// A kiosk is never auto-locked: it has nothing sensitive on screen, and an
-// idle overlay on the door iPad would just stop staff punching in.
-export const autoLockAppliesToRole = (role: Role | undefined): boolean =>
-  role === 'owner' || role === 'manager';
+//
+// OFF A REGISTER: owner/manager only, exactly as before — they're the roles
+// with access to sensitive screens (profit figures, settings, users). An
+// employee/technician working their own machine is never auto-locked by idle
+// time; they can still lock manually at any time (App.tsx's handleManualLock),
+// which isn't role-gated.
+//
+// ON A SHARED REGISTER: EVERY role, because the whole point of the lock there
+// is not protecting a screen — it is the handover. Two or three people share
+// that counter, and without a lock the session that was signed in at 9am
+// attributes every sale, refund and drawer pull for the rest of the day (see
+// the Day Money Trail, which then answers "who moved this money" with "the
+// register"). A technician's screen never locking meant there was no moment at
+// which a switch would even be offered.
+//
+// A kiosk is never auto-locked in either mode: it has nothing sensitive on
+// screen, it is a device rather than a person, and an idle overlay on the door
+// iPad would just stop staff punching in.
+export const autoLockAppliesToRole = (
+  role: Role | undefined,
+  // Device-local "this is a shared register" flag (domain/registerMode.ts).
+  // Defaulted so every existing call site keeps its exact behaviour.
+  isRegister: boolean = false,
+): boolean => {
+  if (role === 'kiosk' || !role) return false;
+  if (isRegister) return true;
+  return role === 'owner' || role === 'manager';
+};
 
 // --- Hashing (PBKDF2-SHA256 via Web Crypto) ---------------------------------
 
@@ -84,7 +104,13 @@ const fromHex = (hex: string): Uint8Array =>
 const randomSaltHex = (bytes: number = 16): string =>
   toHex(crypto.getRandomValues(new Uint8Array(bytes)).buffer);
 
-async function deriveHex(pin: string, saltHex: string, iterations: number): Promise<string> {
+/**
+ * Exported ONLY so domain/pin.test.ts can assert it against the shared
+ * vectors in domain/pinFixtures.ts — the same vectors functions' mirror of
+ * this function is asserted against. That pair of assertions is what stops
+ * the two PBKDF2 implementations drifting into a silent lockout.
+ */
+export async function deriveHex(pin: string, saltHex: string, iterations: number): Promise<string> {
   const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(pin), 'PBKDF2', false, ['deriveBits']);
   const bits = await crypto.subtle.deriveBits(
     { name: 'PBKDF2', salt: fromHex(saltHex), iterations, hash: 'SHA-256' },

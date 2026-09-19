@@ -3,7 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   assertFails, assertSucceeds, initializeTestEnvironment, RulesTestEnvironment,
 } from '@firebase/rules-unit-testing';
-import { setDoc, doc } from 'firebase/firestore';
+import { setDoc, getDoc, doc } from 'firebase/firestore';
 
 /**
  * Regression test for the OR-semantics catch-all bug: a recursive
@@ -401,5 +401,38 @@ describe('auditLogs stays append-only (tightened while here)', () => {
       await setDoc(doc(ctx.firestore(), 'user_data', WORKSPACE, 'auditLogs', 'log2'), { ts: 1, action: 'clock_in' });
     });
     await assertFails(setDoc(doc(asOwner(), 'user_data', WORKSPACE, 'auditLogs', 'log2'), { action: 'edited' }, { merge: true }));
+  });
+});
+
+/* ---------------- Switch-user rate limiting ---------------- */
+
+describe('the switch-user attempt counter is server-only', () => {
+  // switchUser (functions/src/switchUser.ts) counts failed PIN attempts per
+  // TARGET uid in user_data/{ws}/_switchAttempts, written with the Admin SDK.
+  // The whole point of holding it server-side is that it cannot be reset by
+  // reloading the page — so no client may read it, clear it, or write it.
+  const attemptDoc = (db: ReturnType<typeof asOwner>) =>
+    doc(db, 'user_data', WORKSPACE, '_switchAttempts', 'employee-uid');
+
+  it('no client may WRITE it — that would hand back a burned budget', async () => {
+    await assertFails(setDoc(attemptDoc(asEmployee()), { failures: [] }));
+    await assertFails(setDoc(attemptDoc(asManager()), { failures: [] }));
+    await assertFails(setDoc(attemptDoc(asOwner()), { failures: [] }));
+  });
+
+  it('no client may DELETE it by overwriting with an empty state', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'user_data', WORKSPACE, '_switchAttempts', 'employee-uid'),
+        { failures: [1, 2, 3], cooldownUntil: Date.now() + 60_000 });
+    });
+    await assertFails(setDoc(attemptDoc(asOwner()), { failures: [] }));
+  });
+
+  it('and no client may READ it — cooldown state is not theirs to inspect', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'user_data', WORKSPACE, '_switchAttempts', 'employee-uid'), { failures: [1] });
+    });
+    await assertFails(getDoc(attemptDoc(asEmployee())));
+    await assertFails(getDoc(attemptDoc(asOwner())));
   });
 });

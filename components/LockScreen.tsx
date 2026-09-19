@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Lock, AlertTriangle, Eye, EyeOff, LogOut, WifiOff } from 'lucide-react';
+import { Lock, AlertTriangle, Eye, EyeOff, LogOut, WifiOff, Users } from 'lucide-react';
 import { AppUser } from '../types';
 import { PIN_MAX_LENGTH } from '../domain/pin';
 import { useConnectionStatus } from '../hooks/useConnectionStatus';
@@ -13,6 +13,10 @@ interface Props {
   onUnlockWithPin: (pin: string) => Promise<boolean>;
   onUnlockWithPassword: (password: string) => Promise<boolean>;
   onSignOut: () => void;
+  // Offered ONLY on a shared register (domain/registerMode.ts). On somebody's
+  // own machine there is nobody to hand over to, so the lock screen is
+  // unchanged: unlock as yourself, or sign out.
+  onSwitchUser?: () => void;
 }
 
 const MAX_ATTEMPTS_BEFORE_COOLDOWN = 5;
@@ -24,7 +28,7 @@ const COOLDOWN_MS = 30_000;
 // re-derives the locked state from sessionStorage before anything else paints,
 // and the browser back button only changes in-app view state, which this
 // screen fully replaces regardless of what it is.
-export const LockScreen: React.FC<Props> = ({ me, onUnlockWithPin, onUnlockWithPassword, onSignOut }) => {
+export const LockScreen: React.FC<Props> = ({ me, onUnlockWithPin, onUnlockWithPassword, onSignOut, onSwitchUser }) => {
   const hasPin = !!me.pinHash;
   // PIN unlock is pure local verification (domain/pin.ts) — works fully
   // offline. Password unlock reauthenticates against Firebase Auth, which
@@ -151,6 +155,17 @@ export const LockScreen: React.FC<Props> = ({ me, onUnlockWithPin, onUnlockWithP
               Unlock
             </button>
           </form>
+        )}
+
+        {/* THE HANDOVER, on a shared register only. Prominent because it is
+            the common case there: the alternative is signing out and typing an
+            email and password, which is too slow to actually happen and is why
+            the whole day ends up attributed to one person. */}
+        {onSwitchUser && (
+          <button onClick={onSwitchUser}
+            className="w-full mt-5 inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold">
+            <Users className="w-4 h-4" /> Someone else is taking over
+          </button>
         )}
 
         <div className="mt-6 text-center">

@@ -32,6 +32,12 @@ export { createStaffUser } from "./staffUser";
 // the mirror exists and why it's a trigger, not a callable).
 export { syncKioskStaff } from "./kioskStaff";
 
+// Fast user switching on a shared counter register. Server-side because
+// firestore.rules will not let a technician's session read a colleague's
+// pinHash, so the browser cannot do the check in the general case — see
+// switchUser.ts.
+export { switchUser } from "./switchUser";
+
 // The Gemini API key lives in Firebase's server-side Secret Manager — it is
 // NEVER shipped to the client. Set it before deploy with:
 //   firebase functions:secrets:set GEMINI_API_KEY

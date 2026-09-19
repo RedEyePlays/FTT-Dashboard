@@ -34,6 +34,13 @@ interface AppHeaderProps {
   onLock: () => void;
   /** Locks the app overlay without signing out — available to every role. */
   onManualLock: () => void;
+  // Shared-register mode (domain/registerMode.ts). When set, the signed-in
+  // name is shown PERSISTENTLY beside the avatar rather than only inside the
+  // menu, and a Switch user action is offered. Somebody must never ring a sale
+  // believing they are themselves when they are not, and a toast that fades is
+  // not good enough for that.
+  isRegister?: boolean;
+  onSwitchUser?: () => void;
   activity?: ActivityEntry[];
   alerts?: Alert[];
   notifSeenTs?: number;
@@ -56,6 +63,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   darkMode, onToggleTheme, onToggleAiSidebar, onOpenFinder,
   onOpenSettings, onOpenBulk, onStartAdd, onLock, onManualLock, activity = [],
   alerts = [], notifSeenTs = 0, onMarkNotificationsSeen = () => {}, showNotes = true,
+  isRegister = false, onSwitchUser,
 }) => {
   // Keyboard hint for the global-search bar (⌘K on Mac, Ctrl K elsewhere).
   const modKey = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl ';
@@ -143,8 +151,22 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
       panelClassName="w-60"
       triggerClassName="tap-target flex items-center justify-center rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
       trigger={
-        <span className="w-9 h-9 rounded-full bg-gradient-to-br from-indigo-500 to-violet-600 text-white text-xs font-bold flex items-center justify-center shadow-sm">
-          {initials}
+        <span className="flex items-center gap-2">
+          <span className="w-9 h-9 rounded-full bg-gradient-to-br from-indigo-500 to-violet-600 text-white text-xs font-bold flex items-center justify-center shadow-sm">
+            {initials}
+          </span>
+          {/* ON A REGISTER the active name is always on screen, never only
+              behind a tap. Whoever is at the counter has to be able to see, at
+              a glance and without looking for it, whose name the next sale
+              will be recorded under. */}
+          {isRegister && (
+            <span className="hidden sm:flex flex-col items-start leading-tight pr-1">
+              <span className="text-xs font-semibold text-slate-800 dark:text-slate-100 capitalize max-w-[9rem] truncate">
+                {userEmail.split('@')[0]}
+              </span>
+              <span className="text-[10px] text-slate-400">on this register</span>
+            </span>
+          )}
         </span>
       }
     >
@@ -166,6 +188,9 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
         )}
         {allow('audit.view') && (
           <MenuItem icon={<ScrollText className="w-4 h-4" />} label="Audit log" active={view === 'audit'} onClick={() => { onNavigate('audit'); close(); }} />
+        )}
+        {isRegister && onSwitchUser && (
+          <MenuItem icon={<UsersIcon className="w-4 h-4" />} label="Switch user" onClick={() => { onSwitchUser(); close(); }} />
         )}
         <MenuItem icon={<Lock className="w-4 h-4" />} label="Lock app" onClick={() => { onManualLock(); close(); }} />
         <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
