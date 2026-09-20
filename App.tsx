@@ -239,18 +239,28 @@ const App: React.FC = () => {
     try { await signOut(auth); } catch (e) { console.error("Error signing out: ", e); }
   };
 
-  // --- AUTO-LOCK (inactivity) ------------------------------------------------
-  // A lock OVERLAY, not a sign-out: the authenticated session stays intact, the
-  // rest of the app just isn't rendered while `appLocked` is true (see the
-  // early return near the bottom). See useAppLock.ts for the sessionStorage
-  // persistence and the "only a genuine sign-out clears it" rule.
-  const [appLocked, setAppLocked] = useAppLock(user, isLoadingAuth);
-
   // REGISTER MODE — a property of this MACHINE, held in localStorage
   // (services/registerMode.ts). Not a user setting (it would follow the owner
   // home) and not a workspace setting (it would put the back-office laptop on
   // a 60-second timer).
   const [deviceMode, setDeviceMode] = useState<DeviceMode>(readDeviceMode);
+
+  // --- AUTO-LOCK (inactivity) ------------------------------------------------
+  // A lock OVERLAY, not a sign-out: the authenticated session stays intact, the
+  // rest of the app just isn't rendered while `appLocked` is true (see the
+  // early return near the bottom). See useAppLock.ts / domain/appLock.ts for
+  // the localStorage persistence (sessionStorage died with the tab, which
+  // walked straight past the lock), the uid keying, and the "only a genuine
+  // sign-out clears it" rule.
+  //
+  // The idle window is passed in so that returning after longer than it comes
+  // back LOCKED: closing the tab must never be a way to reset the timer. It is
+  // 0 when auto-lock doesn't apply to this person on this device, in which
+  // case being away is not by itself a reason to lock.
+  const lockIdleMs = autoLockApplies(appUser?.role, deviceMode)
+    ? Math.round(idleMinutesFor(deviceMode, settings.operations.autoLockMinutes) * 60_000)
+    : 0;
+  const [appLocked, setAppLocked] = useAppLock(user, isLoadingAuth, lockIdleMs);
 
   // Auto-lock (inactivity timeout).
   //
