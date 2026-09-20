@@ -45,6 +45,7 @@ import { REPAIR_PREFIX, BATCH_PREFIX, applyTechEdit, techUpdateAuditPlan, repair
 import { repairCostWriteback, applyRepairCostDelta } from './domain/repairCostWriteback';
 import { bonusDrawerEffect, canSaveBonus, visibleBonuses } from './domain/bonuses';
 import { attributeDrawerEntry, stampNewEntries } from './domain/dayLedger';
+import { CrashReport, crashActivityLine, crashId } from './domain/crashReport';
 import { paidBreakChangeImpact, paidBreakChangeMessage, paidBreakChangeAudit, sameReasons } from './domain/paidBreakChange';
 import { buildKioskClockIn, buildKioskClockOut, buildKioskStartBreak, buildKioskEndBreak, validateKioskWrite } from './domain/kiosk';
 import { markTicketDeviceSold } from './domain/repairVisibility';
@@ -221,6 +222,9 @@ const App: React.FC = () => {
         await signInWithEmailAndPassword(auth, email, password);
       }
     } catch (e: any) {
+      // ALREADY VISIBLE: setAuthError puts the reason on the sign-in form
+      // itself, which is the right place for it. The console line is only for
+      // a developer reading the full error object.
       console.error(e);
       setAuthError(e.message || "Authentication failed");
     }
@@ -236,21 +240,34 @@ const App: React.FC = () => {
     // which is surprising after an explicit sign-out (vs. the whole point of
     // this feature, which is restoring across a same-session navigation).
     if (uid && appUser) clearCheckoutState(checkoutStorageKey(uid, appUser.id));
-    try { await signOut(auth); } catch (e) { console.error("Error signing out: ", e); }
+    // SILENT ON PURPOSE is NOT acceptable here: a sign-out that failed means
+    // the session is still live on a shared register, which is the opposite of
+    // what the person just asked for.
+    try { await signOut(auth); } catch (e) { writeFailed('Signing out', e, 'You are still signed in on this device.'); }
   };
-
-  // --- AUTO-LOCK (inactivity) ------------------------------------------------
-  // A lock OVERLAY, not a sign-out: the authenticated session stays intact, the
-  // rest of the app just isn't rendered while `appLocked` is true (see the
-  // early return near the bottom). See useAppLock.ts for the sessionStorage
-  // persistence and the "only a genuine sign-out clears it" rule.
-  const [appLocked, setAppLocked] = useAppLock(user, isLoadingAuth);
 
   // REGISTER MODE — a property of this MACHINE, held in localStorage
   // (services/registerMode.ts). Not a user setting (it would follow the owner
   // home) and not a workspace setting (it would put the back-office laptop on
   // a 60-second timer).
   const [deviceMode, setDeviceMode] = useState<DeviceMode>(readDeviceMode);
+
+  // --- AUTO-LOCK (inactivity) ------------------------------------------------
+  // A lock OVERLAY, not a sign-out: the authenticated session stays intact, the
+  // rest of the app just isn't rendered while `appLocked` is true (see the
+  // early return near the bottom). See useAppLock.ts / domain/appLock.ts for
+  // the localStorage persistence (sessionStorage died with the tab, which
+  // walked straight past the lock), the uid keying, and the "only a genuine
+  // sign-out clears it" rule.
+  //
+  // The idle window is passed in so that returning after longer than it comes
+  // back LOCKED: closing the tab must never be a way to reset the timer. It is
+  // 0 when auto-lock doesn't apply to this person on this device, in which
+  // case being away is not by itself a reason to lock.
+  const lockIdleMs = autoLockApplies(appUser?.role, deviceMode)
+    ? Math.round(idleMinutesFor(deviceMode, settings.operations.autoLockMinutes) * 60_000)
+    : 0;
+  const [appLocked, setAppLocked] = useAppLock(user, isLoadingAuth, lockIdleMs);
 
   // Auto-lock (inactivity timeout).
   //
@@ -440,6 +457,45 @@ const App: React.FC = () => {
 
   // Write an activity entry to Firestore (Recent Activity is generated from DB changes)
   const logActivity = (text: string) => { if (uid) logActivityDoc(uid, mkActivity(text)).catch(() => {}); };
+
+  // A crash that nobody screenshots is still recoverable after the fact.
+  // Called from the error boundary, which wraps this in its own try/catch —
+  // but everything in here is already non-throwing (both writes swallow their
+  // own rejections), so a logging failure can never re-enter the boundary
+  // that is currently rendering a crash.
+  const handleCrash = (report: CrashReport) => {
+    logActivity(crashActivityLine(report));
+    audit('app.crash', 'app', crashId(report), undefined, {
+      screen: report.screen,
+      message: report.message,
+      at: report.at,
+      appVersion: report.appVersion,
+    });
+  };
+
+  /**
+   * A WRITE THAT MOVES MONEY, STOCK OR HOURS FAILED, AND SOMEBODY HAS TO KNOW.
+   *
+   * ~16 catch blocks in this file used to handle a failure entirely by calling
+   * console.error. The drawer bug that cost real money hid in exactly one of
+   * them for weeks: the shop carried on, the screen showed a figure that had
+   * never been saved, and nothing said otherwise.
+   *
+   * Every such catch now routes here. Non-throwing by construction, so it can
+   * be used inside a .catch() without turning a failed write into an unhandled
+   * rejection on top of it.
+   */
+  const writeFailed = (what: string, e: unknown, consequence?: string) => {
+    console.error(`${what} failed`, e);
+    try { captureError(e, { where: 'writeFailed', what }); } catch { /* reporting is best-effort */ }
+    try {
+      window.alert(
+        `${what} could NOT be saved.\n\n`
+        + (consequence ? `${consequence}\n\n` : '')
+        + 'Check your connection and try again. If it keeps failing, write it down and tell the owner.',
+      );
+    } catch { /* no window (tests) — the console line above is still there */ }
+  };
 
   // Append an audit entry (who / what / before / after)
   const audit = (action: string, entityType: string, entityId?: string, before?: any, after?: any) => {
@@ -790,10 +846,20 @@ const App: React.FC = () => {
   const handleGenerateSku = async (kind: ItemKind, deviceType?: DeviceType): Promise<string> => {
     const prefix = skuPrefix(kind, deviceType);
     if (!uid) return nextSku(prefix, skuRef.current, dataRef.current).sku; // no workspace yet (unauthenticated preview)
-    const { sku, counters } = await allocateSku(uid, prefix, dataRef.current);
-    skuRef.current = counters;
-    setSkuCounters(counters);
-    return sku;
+    try {
+      const { sku, counters } = await allocateSku(uid, prefix, dataRef.current);
+      skuRef.current = counters;
+      setSkuCounters(counters);
+      return sku;
+    } catch (e) {
+      // SKU allocation cannot be made safe offline — the counter is the only
+      // thing stopping two devices taking the same number, and two
+      // disconnected clients cannot agree on it. So this refuses and SAYS SO,
+      // rather than rejecting with a raw Firebase error or inventing a
+      // provisional SKU that somebody would have to reconcile later.
+      if (e instanceof OfflineError) window.alert(e.message);
+      throw e;
+    }
   };
 
   // Add or update a single inventory item (device or accessory) from InventoryView
@@ -864,7 +930,7 @@ const App: React.FC = () => {
         const a = dataRef.current.find(i => i.id === id); return mkActivity(`${a?.sku || 'Accessory'} quantity updated`);
       }),
     ];
-    commitSale(uid, { soldRows: payload.soldRows, accessoryUpdates, transaction: payload.transaction, customer: payload.customer, activity }).catch(e => console.error('Sale commit failed', e));
+    commitSale(uid, { soldRows: payload.soldRows, accessoryUpdates, transaction: payload.transaction, customer: payload.customer, activity }).catch(e => writeFailed('The sale', e, 'The customer has NOT been charged in the records and stock was not adjusted.'));
 
     // Repair checkout: this sale recognized a repair's revenue/profit, so stamp
     // the repair complete and link it to the transaction. Analytics reads that
@@ -996,6 +1062,7 @@ const App: React.FC = () => {
     const refundSplits = opts.refundSplits || [];
     if (!refundSplitsValid(refundSplits, collectedOnSale(tx)).valid) {
       console.error('Void rejected — refund sources do not add up to the refund.');
+      window.alert('The refund sources do not add up to the amount being refunded, so nothing was voided. Check the split and try again.');
       return;
     }
 
@@ -1024,7 +1091,7 @@ const App: React.FC = () => {
         refundSplits, refundPaidFrom: singleRefundSource(refundSplits),
       },
       activity,
-    }).catch(e => console.error('Void failed', e));
+    }).catch(e => writeFailed('The void', e, 'The sale is still recorded as completed, and no refund was logged.'));
     audit('sale.void', 'sale', tx.id, { totalPaid: tx.totalPaid }, {
       devices: devices.length, accessories: accessoryUpdates.length,
       refundPaidFrom: singleRefundSource(refundSplits), refundSplits,
@@ -1075,6 +1142,7 @@ const App: React.FC = () => {
     const refundSplits = opts.refundSplits || [];
     if (!refundSplitsValid(refundSplits, refundAmount).valid) {
       console.error('Return rejected — refund sources do not add up to the refund.');
+      window.alert('The refund sources do not add up to the amount being refunded, so nothing was returned. Check the split and try again.');
       return;
     }
 
@@ -1091,7 +1159,7 @@ const App: React.FC = () => {
         refundSplits, refundPaidFrom: singleRefundSource(refundSplits),
       },
       activity,
-    }).catch(e => console.error('Return failed', e));
+    }).catch(e => writeFailed('The return', e, 'The sale is still recorded as completed, and no refund was logged.'));
     audit('sale.return', 'sale', tx.id, { totalPaid: tx.totalPaid },
       { refundAmount, restockingFee: restockingFee || 0, disposition: opts.disposition, devices: devices.length, accessories: accessoryUpdates.length,
         refundPaidFrom: singleRefundSource(refundSplits), refundSplits });
@@ -1313,7 +1381,7 @@ const App: React.FC = () => {
         id: newId(), date, amount, category: 'other', paymentMethod: 'cash', payee: note,
         enteredBy: '', enteredByEmail: '', createdAt: 0, cashDrawerLinked: true,
       }, appUser, Date.now());
-      saveExpense(uid, rec).catch(e => console.error('Expense save failed', e));
+      saveExpense(uid, rec).catch(e => writeFailed('The expense', e, 'It is not in the books.'));
       audit('expense.create', 'expense', rec.id, undefined, { amount, category: 'other', paymentMethod: 'cash', viaCashLog: true });
     }
   };
@@ -1350,14 +1418,14 @@ const App: React.FC = () => {
       commitDrawerRecord(next.date, {}, { cashOut: [entry] }, { path: 'expenseCashOut', expenseId: next.id });
       next.cashDrawerLinked = true;
     }
-    saveExpense(uid, next).catch(e => console.error('Expense save failed', e));
+    saveExpense(uid, next).catch(e => writeFailed('The expense', e, 'It is not in the books.'));
     audit(isNew ? 'expense.create' : 'expense.update', 'expense', next.id, before, next);
   };
 
   const handleDeleteExpense = (expense: Expense) => {
     if (!uid || !allow('expenses.add')) return;
     if (!canMutateExpense(expense, expenseViewer)) return;
-    deleteExpense(uid, expense.id).catch(e => console.error('Expense delete failed', e));
+    deleteExpense(uid, expense.id).catch(e => writeFailed('Deleting the expense', e, 'It is still in the books.'));
     // Deleting an expense never reaches back to reverse its drawer effect
     // (same reasoning as edits above — the drawer entry is a historical
     // record of cash that genuinely left the till that day); an owner who
@@ -1371,13 +1439,13 @@ const App: React.FC = () => {
   const handleSaveRecurringExpense = (r: RecurringExpense, isNew: boolean) => {
     if (!uid || !appUser || !allow('expenses.viewAll')) return;
     const next = isNew ? { ...r, createdBy: appUser.id, createdByEmail: appUser.email, createdAt: Date.now() } : r;
-    saveRecurringExpense(uid, next).catch(e => console.error('Recurring expense save failed', e));
+    saveRecurringExpense(uid, next).catch(e => writeFailed('The recurring expense template', e, 'Future bills will not post from it.'));
     audit(isNew ? 'expense.recurring_create' : 'expense.recurring_update', 'recurringExpense', next.id, undefined, next);
   };
 
   const handleDeleteRecurringExpense = (id: string) => {
     if (!uid || !allow('expenses.viewAll')) return;
-    deleteRecurringExpense(uid, id).catch(e => console.error('Recurring expense delete failed', e));
+    deleteRecurringExpense(uid, id).catch(e => writeFailed('Deleting the recurring expense template', e, 'It will keep posting bills.'));
     audit('expense.recurring_delete', 'recurringExpense', id);
   };
 
@@ -1400,6 +1468,7 @@ const App: React.FC = () => {
       draft = buildRecurringExpense(r, period, { id: appUser.id, email: appUser.email }, Date.now(), enteredAmount);
     } catch (e) {
       console.error('Recurring expense needs an amount before it can post', e);
+      window.alert('This bill varies each period, so it needs an amount before it can be posted. Enter the real figure and try again.');
       return;
     }
     const expense: Expense = { ...draft, id: newId() };
@@ -1409,10 +1478,12 @@ const App: React.FC = () => {
       commitDrawerRecord(expense.date, {}, { cashOut: [entry] }, { path: 'recurringExpenseCashOut', expenseId: expense.id });
       expense.cashDrawerLinked = true;
     }
-    saveExpense(uid, expense).catch(e => console.error('Expense save failed', e));
+    saveExpense(uid, expense).catch(e => writeFailed('The expense', e, 'It is not in the books.'));
     audit('expense.create', 'expense', expense.id, undefined, { ...expense, recurring: true });
     saveRecurringExpense(uid, { ...r, generatedPeriods: [...(r.generatedPeriods || []), period.key] })
-      .catch(e => console.error('Recurring expense update failed', e));
+      // If this bookkeeping write is lost the SAME period is offered again,
+      // which posts the bill twice — money, so it is visible.
+      .catch(e => writeFailed('Recording that the recurring bill was posted', e, 'It may be offered again and posted twice — check the expense list.'));
   };
 
   // Skipping is identical for fixed and variable templates — one shared
@@ -1420,7 +1491,9 @@ const App: React.FC = () => {
   const handleSkipRecurringPeriod = (r: RecurringExpense, periodKey: string) => {
     if (!uid || !allow('expenses.viewAll')) return;
     saveRecurringExpense(uid, { ...r, skippedPeriods: [...(r.skippedPeriods || []), periodKey] })
-      .catch(e => console.error('Recurring expense update failed', e));
+      // A lost skip means the period is offered again and the bill somebody
+      // deliberately declined gets posted anyway — money, so it is visible.
+      .catch(e => writeFailed('Skipping this recurring bill', e, 'It will be offered again next time.'));
     audit('expense.recurring_skip', 'recurringExpense', r.id, undefined, { periodKey });
   };
 
@@ -1453,7 +1526,7 @@ const App: React.FC = () => {
   const handleReviewRequestSent = (customer: Customer, channel: 'sms' | 'whatsapp' | 'email' | 'manual') => {
     if (!uid) return;
     saveItem(uid, 'customers', { ...customer, lastReviewRequestedAt: Date.now(), lastReviewRequestChannel: channel })
-      .catch(e => console.error('Customer save failed', e));
+      .catch(e => writeFailed('The customer record', e, 'Your edits were not saved.'));
     audit('review.request_sent', 'customer', customer.id, undefined, { channel });
     setReviewRequest(null);
   };
@@ -1643,7 +1716,7 @@ const App: React.FC = () => {
     // writes, a failure (or just a slow second write) between them would leave
     // the same drop-offs eligible for a second settlement — the buyer could be
     // billed (and collected from) twice for the same batch of devices.
-    settleDeviceBuyer(uid, { settlement: attributed, dropOffIds: attributed.dropOffIds }).catch(e => console.error('Settle device buyer failed', e));
+    settleDeviceBuyer(uid, { settlement: attributed, dropOffIds: attributed.dropOffIds }).catch(e => writeFailed('The settlement', e, 'The device buyer is still shown as unsettled, and no cash was recorded.'));
     // Every edit made on the pre-settlement review screen (components/
     // SettlementReviewModal.tsx) is already ON the settlement record itself
     // (lineAdjustments / adjustmentAmount / adjustmentNote — see
@@ -1769,6 +1842,9 @@ const App: React.FC = () => {
         online: navigator.onLine,
         fallback: 'Could not create the account. Please try again.',
       });
+      // ALREADY VISIBLE: `failure.message` is returned to UsersView and shown
+      // on the form. The console line carries the raw error for a developer
+      // and deliberately never carries `input` (which holds the password).
       console.error('[createStaffUser]', failure.kind, e, { role: input.role });
       if (failure.unexpected) captureError(e, { source: 'createStaffUser', kind: failure.kind, role: input.role });
       return failure.message;
@@ -2045,7 +2121,7 @@ const App: React.FC = () => {
       // discipline every other money record in this file follows.
       createdBy: appUser.id, createdByEmail: appUser.email, createdAt: Date.now(),
     };
-    await saveStaffBonus(uid, bonus).catch(e => console.error('Bonus save failed', e));
+    await saveStaffBonus(uid, bonus).catch(e => writeFailed('The staff bonus', e, 'It will not appear on payroll or in the P&L.'));
     logActivity(`Bonus $${bonus.amount.toFixed(2)} for ${bonus.userEmail.split('@')[0]}${bonus.reason ? ` — ${bonus.reason}` : ''}`);
     audit('payroll.bonus_add', 'staffBonus', bonus.id, undefined, {
       userId: bonus.userId, amount: bonus.amount, date: bonus.date,
@@ -2067,7 +2143,7 @@ const App: React.FC = () => {
     if (!uid || !appUser || appUser.role !== 'owner') return;
     const target = staffBonuses.find(b => b.id === bonusId);
     if (!target) return;
-    await deleteStaffBonus(uid, bonusId).catch(e => console.error('Bonus delete failed', e));
+    await deleteStaffBonus(uid, bonusId).catch(e => writeFailed('Deleting the staff bonus', e, 'It is still counted on payroll.'));
     audit('payroll.bonus_delete', 'staffBonus', bonusId, target, undefined);
     // The drawer entry is deliberately NOT reversed here. It recorded cash
     // that physically left the till on a day that may already be counted and
@@ -2098,9 +2174,15 @@ const App: React.FC = () => {
   const genNumber = async (prefix: string, used: string[]): Promise<string> => {
     const existing = used.map(sku => ({ sku }));
     if (!uid) return nextSku(prefix, skuRef.current, existing as any).sku;
-    const { sku, counters } = await allocateSku(uid, prefix, existing);
-    skuRef.current = counters; setSkuCounters(counters);
-    return sku;
+    try {
+      const { sku, counters } = await allocateSku(uid, prefix, existing);
+      skuRef.current = counters; setSkuCounters(counters);
+      return sku;
+    } catch (e) {
+      // Same allocator, same rule as handleGenerateSku above.
+      if (e instanceof OfflineError) window.alert(e.message);
+      throw e;
+    }
   };
   const handleGenRepairNumber = () => genNumber(REPAIR_PREFIX, repairsRef.current.map(r => r.repairNumber));
   const handleGenBatchNumber = () => genNumber(BATCH_PREFIX, repairBatchesRef.current.map(b => b.batchNumber));
@@ -2171,7 +2253,17 @@ const App: React.FC = () => {
           deviceStatus: 'pending_repair', imeiNormalized: decision.normalized,
           autoCreated: true, sourceTicketId: next.id, batchId: next.batchId,
         };
-        const result = await commitAutoInventory(uid, { normalized: decision.normalized, candidate });
+        let result: Awaited<ReturnType<typeof commitAutoInventory>>;
+        try {
+          result = await commitAutoInventory(uid, { normalized: decision.normalized, candidate });
+        } catch (e) {
+          // The IMEI index is what makes "one device, one record" true, and it
+          // needs a server. Offline, this REFUSES through the ticket's own
+          // blocked-notice path rather than writing a record that would become
+          // the duplicate the index exists to prevent.
+          if (e instanceof OfflineError) return { kind: 'blocked', message: e.message };
+          throw e;
+        }
         next.inventoryId = result.item.id;
         if (result.action === 'create') {
           next.inventoryAutoCreated = true;
@@ -2350,7 +2442,10 @@ const App: React.FC = () => {
       // connection dropping mid-request. Only genuinely unexpected failures
       // are worth a crash report; "you tried this while offline" isn't one.
       if (!(e instanceof OfflineError)) captureError(e, { action: 'tech_update_repair' });
-      console.error('Tech repair update failed', e);
+      // A technician's work log IS the record of the work done — losing it
+      // silently means the notes are simply gone, so this is visible even for
+      // the offline case the UI already tries to prevent.
+      writeFailed('The repair update', e, 'Your notes and status change were not saved.');
     });
   };
 
@@ -2557,7 +2652,7 @@ const App: React.FC = () => {
   // fall through to a richer screen.
   if (appUser.role === 'kiosk') {
     return (
-      <ErrorBoundary variant="route" label="Time clock kiosk">
+      <ErrorBoundary variant="route" label="Time clock kiosk" onCrash={handleCrash} userEmail={appUser?.email}>
         <KioskPunchView
           staff={kioskStaff}
           entries={timeEntries}
@@ -2597,7 +2692,7 @@ const App: React.FC = () => {
         onSwitchUser={switchingAvailable(deviceMode) ? () => { setSwitching(true); setAppLocked(true); } : undefined}
         />
         <main className="mx-auto px-4 sm:px-6 lg:px-8 py-8 flex-1 w-full max-w-6xl">
-          <ErrorBoundary variant="route" label="Repairs">
+          <ErrorBoundary variant="route" label="Repairs" onCrash={handleCrash} userEmail={appUser?.email}>
           <TechRepairsView
             repairs={repairs}
             batches={repairBatches}
@@ -2688,7 +2783,7 @@ const App: React.FC = () => {
               boundary stays tripped forever, and a Reports crash would keep
               blanking Quick Sale (or any other view) too, the next time the
               user navigated there. */}
-          <ErrorBoundary key={view} variant="route" label={PAGE_TITLES[view]}>
+          <ErrorBoundary key={view} variant="route" label={PAGE_TITLES[view]} onCrash={handleCrash} userEmail={appUser?.email}>
           <Suspense fallback={<ViewLoader />}>
           {view === 'dashboard' && (
             allow('reports.view')

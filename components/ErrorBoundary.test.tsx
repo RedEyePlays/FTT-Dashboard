@@ -67,4 +67,50 @@ describe('ErrorBoundary', () => {
     act(() => root.unmount());
     host.remove();
   });
+
+  it('shows a Details section and a Copy details button, so nobody has to open dev tools', () => {
+    // The owner hit "Inventory hit an error" with a Try again button and
+    // nothing else. This is the thing that gets pasted into a bug report.
+    const { host, unmount } = mount(<ErrorBoundary variant="route" label="Inventory"><Boom /></ErrorBoundary>);
+    expect(host.textContent).toContain('Details');
+    expect(host.textContent).toContain('Copy details');
+    expect(host.textContent).toMatch(/ERR-[0-9A-Z]{7}/);
+    unmount();
+  });
+
+  it('the details expand to the message and the component stack', () => {
+    const { host, unmount } = mount(<ErrorBoundary variant="route" label="Inventory"><Boom /></ErrorBoundary>);
+    const toggle = [...host.querySelectorAll('button')].find(b => b.textContent?.includes('Details'))!;
+    act(() => { toggle.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    expect(host.querySelector('pre')!.textContent).toContain('kaboom');
+    expect(host.querySelector('pre')!.textContent).toContain('Component stack');
+    unmount();
+  });
+
+  it('records the crash to the activity trail', () => {
+    const onCrash = vi.fn();
+    const { unmount } = mount(<ErrorBoundary variant="route" label="Inventory" onCrash={onCrash}><Boom /></ErrorBoundary>);
+    expect(onCrash).toHaveBeenCalledWith(expect.objectContaining({ screen: 'Inventory', message: 'kaboom' }));
+    unmount();
+  });
+
+  it('A LOGGING FAILURE CANNOT RE-ENTER THE BOUNDARY', () => {
+    // Throwing from inside a boundary that is already rendering a crash would
+    // take the whole app down with no recovery UI at all.
+    const onCrash = vi.fn(() => { throw new Error('logging is broken too'); });
+    const { host, unmount } = mount(<ErrorBoundary variant="route" label="Inventory" onCrash={onCrash}><Boom /></ErrorBoundary>);
+    expect(onCrash).toHaveBeenCalled();
+    expect(host.textContent).toContain('Inventory hit an error');
+    expect(host.textContent).toContain('Copy details');
+    unmount();
+  });
+
+  it('the root variant gets the details too', () => {
+    const { host, unmount } = mount(<ErrorBoundary variant="root"><Boom /></ErrorBoundary>);
+    expect(host.textContent).toContain('Copy details');
+    // Calm wording is unchanged.
+    expect(host.textContent).toContain('Something went wrong');
+    expect(host.textContent).toContain('last completed sale');
+    unmount();
+  });
 });
