@@ -13,6 +13,7 @@ import {
 } from '../domain/reports';
 import { AppSettings } from '../domain/settings';
 import { allocateSkuInTxn } from './sku';
+import { assertOnline, OFFLINE_SKU_MESSAGE, OFFLINE_IMEI_INDEX_MESSAGE } from './functionsGuard';
 
 // Shared shop data lives under user_data/{workspaceId}/<collection>, where
 // workspaceId is the owning account's uid. The `wsId` arg below is that id.
@@ -96,6 +97,17 @@ export const saveMeta = (uid: string, meta: Partial<AppMeta>) => setDoc(metaRef(
  * counters (so callers can refresh their local mirror immediately).
  */
 export function allocateSku(uid: string, prefix: string, existing: { sku?: string }[] = []) {
+  // OFFLINE: refuse, clearly. A Firestore transaction needs a live server and
+  // is NOT queued by the offline cache (the same finding as PR #197's drawer
+  // writes), so with the wifi down this used to reject with a raw Firebase
+  // error and a device intake simply failed while selling one still worked.
+  //
+  // SKU ALLOCATION CANNOT BE MADE SAFE OFFLINE. The counter is the only thing
+  // that stops two devices taking the same number, and two disconnected
+  // clients cannot agree on it. Inventing a provisional SKU to reconcile later
+  // would trade one clear failure for a silent duplicate that somebody has to
+  // find, so this says so instead — the caller shows the sentence.
+  assertOnline(OFFLINE_SKU_MESSAGE);
   return runTransaction(db, tx => allocateSkuInTxn({
     read: async () => ((await tx.get(metaRef(uid))).data() as AppMeta | undefined)?.skuCounters || {},
     write: counters => { tx.set(metaRef(uid), { skuCounters: counters }, { merge: true }); },
@@ -127,6 +139,12 @@ export async function commitAutoInventory(uid: string, payload: {
   normalized: string;
   candidate: InventoryItem; // pre-built record (id/SKU already allocated) to use if creating
 }): Promise<{ action: 'create' | 'attach'; item: InventoryItem }> {
+  // OFFLINE: refuse, clearly — same reasoning as allocateSku above. The IMEI
+  // index is what makes "one device, one record" true; without a server there
+  // is nothing to check it against, and writing the record anyway would create
+  // exactly the duplicate this transaction exists to prevent. The caller shows
+  // the sentence rather than a raw Firebase error.
+  assertOnline(OFFLINE_IMEI_INDEX_MESSAGE);
   const indexRef = doc(db, 'user_data', uid, 'inventoryImeiIndex', payload.normalized);
   return runTransaction(db, async tx => {
     const indexSnap = await tx.get(indexRef);
