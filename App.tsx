@@ -55,9 +55,13 @@ import { INITIAL_DATA } from './constants';
 import { auth } from './services/firebase';
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, reauthenticateWithCredential, EmailAuthProvider } from 'firebase/auth';
 import { LockScreen } from './components/LockScreen';
+import { SwitchUserScreen } from './components/SwitchUserScreen';
 import { useInactivityTimer } from './hooks/useInactivityTimer';
 import { useAppLock } from './hooks/useAppLock';
-import { hashPin, verifyPin, canAssignPin, isValidPinFormat, autoLockAppliesToRole, isValidKioskPinFormat, canHaveKioskPin } from './domain/pin';
+import { hashPin, verifyPin, canAssignPin, isValidPinFormat, isValidKioskPinFormat, canHaveKioskPin } from './domain/pin';
+import { DeviceMode, autoLockApplies, idleMinutesFor, switchingAvailable } from './domain/registerMode';
+import { readDeviceMode, writeDeviceMode } from './services/registerMode';
+import { switchUser as callSwitchUser, switchErrorMessage } from './services/switchUserFunctions';
 import {
   saveMeta, saveItem, deleteItem, syncArray, allocateSku,
   logActivityDoc, commitSale, voidSale, returnSale, collectLayawayBalance, commitCashReconciliation, seedSampleData,
@@ -242,13 +246,25 @@ const App: React.FC = () => {
   // persistence and the "only a genuine sign-out clears it" rule.
   const [appLocked, setAppLocked] = useAppLock(user, isLoadingAuth);
 
-  // Auto-lock (inactivity timeout) is owner/manager only — those are the
-  // roles with access to sensitive screens (profit, settings, users). An
-  // employee/technician working the counter is never auto-locked; they can
-  // still lock manually at any time via handleManualLock below.
+  // REGISTER MODE — a property of this MACHINE, held in localStorage
+  // (services/registerMode.ts). Not a user setting (it would follow the owner
+  // home) and not a workspace setting (it would put the back-office laptop on
+  // a 60-second timer).
+  const [deviceMode, setDeviceMode] = useState<DeviceMode>(readDeviceMode);
+
+  // Auto-lock (inactivity timeout).
+  //
+  // OFF A REGISTER this is unchanged: owner/manager only, on
+  // settings.operations.autoLockMinutes. An employee/technician working their
+  // own machine is never auto-locked and can still lock manually below.
+  //
+  // ON A REGISTER it applies to EVERY role, on the register's own much shorter
+  // timer — the lock there is not about hiding a screen, it is the moment at
+  // which the handover happens. Without it the session signed in at 9am
+  // attributes the whole day's sales, refunds and drawer pulls.
   useInactivityTimer(
-    settings.operations.autoLockMinutes,
-    autoLockAppliesToRole(appUser?.role) && !appLocked,
+    idleMinutesFor(deviceMode, settings.operations.autoLockMinutes),
+    autoLockApplies(appUser?.role, deviceMode) && !appLocked,
     () => setAppLocked(true),
   );
 
@@ -257,6 +273,56 @@ const App: React.FC = () => {
   // anyone, not just owner/manager. This only sets the overlay flag; unlike
   // handleLock it never signs out, so the session/cart/etc. are untouched.
   const handleManualLock = () => setAppLocked(true);
+
+  /* --- FAST USER SWITCHING on a shared register ------------------------- */
+  //
+  // Two or three people share the counter. Signing out and typing an email and
+  // password at every handover is too slow to survive a Saturday, so it does
+  // not happen — and every sale, refund and drawer pull for the rest of the
+  // day is attributed to whoever signed in that morning. The Day Money Trail
+  // then answers "who moved this money" with "the register", which is no
+  // answer at all.
+  const [switching, setSwitching] = useState(false);
+
+  // A cart must NEVER cross a handover: whoever completes it would be recorded
+  // as the person who rang it, which is exactly the lie this PR exists to stop.
+  // The switch is refused outright until the sale is completed or cleared by
+  // the person who started it — this app has no authority to discard somebody
+  // else's work on their behalf.
+  const switchBlockedBy = (): string | null =>
+    cartDirtyRef.current
+      ? 'There is a sale in progress on this register. Complete it or clear the cart before handing over.'
+      : null;
+
+  const handleSwitchUser = async (targetUid: string, pin: string): Promise<string | null> => {
+    try {
+      // The PIN is checked by the switchUser callable, never here:
+      // firestore.rules will not let a technician's session read a
+      // colleague's pinHash, so the browser genuinely cannot do it.
+      await callSwitchUser(targetUid, pin, deviceMode.deviceId);
+      // On success the Firebase Auth listener fires with the NEW uid, and
+      // useWorkspaceData re-derives appUser, permissions, subscriptions and
+      // every view gate from it. Nothing from the previous user is carried
+      // across: the old session was signed out before the new one was created
+      // (services/switchUserFunctions.ts), and the persisted cart is keyed by
+      // workspace AND user (domain/checkoutPersistence.ts) so the incoming
+      // person never restores somebody else's.
+      //
+      // The drawer is deliberately untouched — it belongs to the shop, not to
+      // whoever is standing at it, so a handover opens, closes and reconciles
+      // nothing.
+      setSwitching(false);
+      setAppLocked(false);
+      setView('dashboard');
+      return null;
+    } catch (e) {
+      // OFFLINE IS THE CASE THAT MATTERS. switchUserFunctions throws before
+      // touching the session, so the person who was signed in is still signed
+      // in and can carry on. What must never happen is the quiet failure:
+      // keeping the previous session while the screen implies a switch took.
+      return switchErrorMessage(e);
+    }
+  };
 
   // Re-entrancy guard for payroll approve/mark-paid — keyed by action+user+
   // period so a double-click on one employee's row can't double-record,
@@ -2454,7 +2520,29 @@ const App: React.FC = () => {
   // nothing in the DOM to inspect/bypass. Browser back only changes `view`
   // state underneath, which this replaces outright regardless of its value.
   if (appLocked) {
-    return <LockScreen me={appUser} onUnlockWithPin={handleUnlockWithPin} onUnlockWithPassword={handleUnlockWithPassword} onSignOut={handleLock} />;
+    // On a register the lock screen is a HANDOVER point, so it offers the
+    // switch. Everywhere else it is unchanged — there is nobody to hand over
+    // to on somebody's own laptop.
+    if (switching) {
+      return (
+        <SwitchUserScreen
+          me={appUser}
+          users={workspaceUsers}
+          onSwitch={handleSwitchUser}
+          onCancel={() => setSwitching(false)}
+          blockingWork={switchBlockedBy()}
+        />
+      );
+    }
+    return (
+      <LockScreen
+        me={appUser}
+        onUnlockWithPin={handleUnlockWithPin}
+        onUnlockWithPassword={handleUnlockWithPassword}
+        onSignOut={handleLock}
+        onSwitchUser={switchingAvailable(deviceMode) ? () => setSwitching(true) : undefined}
+      />
+    );
   }
 
   // --- KIOSK: the punch screen and NOTHING ELSE ---------------------------
@@ -2505,6 +2593,8 @@ const App: React.FC = () => {
           onStartAdd={() => {}}
           onLock={handleLock}
           onManualLock={handleManualLock}
+        isRegister={switchingAvailable(deviceMode)}
+        onSwitchUser={switchingAvailable(deviceMode) ? () => { setSwitching(true); setAppLocked(true); } : undefined}
         />
         <main className="mx-auto px-4 sm:px-6 lg:px-8 py-8 flex-1 w-full max-w-6xl">
           <ErrorBoundary variant="route" label="Repairs">
@@ -2541,6 +2631,8 @@ const App: React.FC = () => {
         onStartAdd={handleStartAdd}
         onLock={handleLock}
         onManualLock={handleManualLock}
+        isRegister={switchingAvailable(deviceMode)}
+        onSwitchUser={switchingAvailable(deviceMode) ? () => { setSwitching(true); setAppLocked(true); } : undefined}
         activity={activityLog}
         alerts={alerts}
         notifSeenTs={appUser.notifSeenTs ?? 0}
@@ -2564,6 +2656,8 @@ const App: React.FC = () => {
         onOpenBulk={() => setShowBulkModal(true)}
         onLock={handleLock}
         onManualLock={handleManualLock}
+        isRegister={switchingAvailable(deviceMode)}
+        onSwitchUser={switchingAvailable(deviceMode) ? () => { setSwitching(true); setAppLocked(true); } : undefined}
         showNotes={canSeeAnyNote}
       />
 

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { isValidPinFormat, canAssignPin, hashPin, verifyPin, PIN_HASH_ITERATIONS, autoLockAppliesToRole } from './pin';
+import { isValidPinFormat, canAssignPin, hashPin, verifyPin, PIN_HASH_ITERATIONS, autoLockAppliesToRole, deriveHex } from './pin';
+import { PIN_VECTORS } from './pinFixtures';
 
 describe('isValidPinFormat', () => {
   it('accepts 4-6 digit numeric codes', () => {
@@ -100,5 +101,38 @@ describe('autoLockAppliesToRole', () => {
 
   it('does not apply when the role is not yet known', () => {
     expect(autoLockAppliesToRole(undefined)).toBe(false);
+  });
+});
+
+
+describe('the PIN hash must never drift from the server implementation', () => {
+  // A register signed in as a TECHNICIAN cannot read a colleague's pinHash
+  // (firestore.rules), so switching users verifies the PIN in a Cloud
+  // Function instead — functions/src/pinHash.ts. Two implementations of one
+  // PBKDF2 scheme is a silent lockout waiting to happen: everyone's PIN stops
+  // working at the counter and nothing says why.
+  //
+  // Both sides assert these SAME vectors, so neither can change alone.
+  // functions/src/pinHash.test.ts is the other half.
+
+  it('produces the shared vectors byte for byte', async () => {
+    for (const v of PIN_VECTORS) {
+      expect(await deriveHex(v.pin, v.salt, v.iterations)).toBe(v.hash);
+    }
+  });
+
+  it('ships the same iteration count the server does', () => {
+    expect(PIN_HASH_ITERATIONS).toBe(150_000);
+  });
+
+  it('verifies a stored hash the server would have written', async () => {
+    const v = PIN_VECTORS[1];
+    expect(await verifyPin(v.pin, { hash: v.hash, salt: v.salt, iterations: v.iterations })).toBe(true);
+    expect(await verifyPin('0000', { hash: v.hash, salt: v.salt, iterations: v.iterations })).toBe(false);
+  });
+
+  it('a PIN with leading zeros survives the round trip', async () => {
+    const v = PIN_VECTORS[2];
+    expect(await verifyPin('000000', { hash: v.hash, salt: v.salt, iterations: v.iterations })).toBe(true);
   });
 });

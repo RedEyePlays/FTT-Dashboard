@@ -25,6 +25,10 @@ interface Props {
   onManualLock: () => void;
   /** See AppHeader's showNotes — visibility is per note, so App decides. */
   showNotes?: boolean;
+  // Shared-register mode (domain/registerMode.ts) — the mobile equivalent of
+  // AppHeader's Switch user action.
+  isRegister?: boolean;
+  onSwitchUser?: () => void;
 }
 
 // Slide-out navigation drawer for tablet/phone — the mobile counterpart of the
@@ -32,6 +36,7 @@ interface Props {
 export const MobileDrawer: React.FC<Props> = ({
   open, onClose, view, onNavigate, allow, userRole, userEmail,
   darkMode, onToggleTheme, onOpenFinder, onOpenSettings, onOpenBulk, onLock, onManualLock, showNotes = true,
+  isRegister = false, onSwitchUser,
 }) => {
   const panelRef = useRef<HTMLDivElement>(null);
   useLockBodyScroll(open);
@@ -75,6 +80,7 @@ export const MobileDrawer: React.FC<Props> = ({
     { label: 'AI Bulk Add', icon: <Sparkles className="w-5 h-5" />, on: () => act(onOpenBulk), show: allow('inventory.add') },
     { label: 'Settings', icon: <Settings className="w-5 h-5" />, on: () => act(onOpenSettings), show: allow('settings.manage') },
     { label: darkMode ? 'Light theme' : 'Dark theme', icon: darkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />, on: () => onToggleTheme(), show: true },
+    { label: 'Switch user', icon: <UsersIcon className="w-5 h-5" />, on: () => act(() => onSwitchUser?.()), show: isRegister && !!onSwitchUser },
     { label: 'Lock app', icon: <Lock className="w-5 h-5" />, on: () => act(onManualLock), show: true },
     { label: 'Sign out', icon: <LogOut className="w-5 h-5" />, on: () => act(onLock), show: true },
   ];

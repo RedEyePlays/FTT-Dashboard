@@ -20,6 +20,8 @@ import { STATUS_PAGE_ORIGIN } from '../domain/statusLink';
 import { useIsMobile } from '../hooks/useMediaQuery';
 import { SettingsSection, SettingsCard, SettingsToggle, SettingsSelect, SettingsTextField } from './settingsPrimitives';
 import { selectOnFocus } from '../hooks/selectOnFocus';
+import { DeviceMode, REGISTER_IDLE_SECONDS, REGISTER_IDLE_MIN_SECONDS, REGISTER_IDLE_MAX_SECONDS } from '../domain/registerMode';
+import { readDeviceMode, writeDeviceMode } from '../services/registerMode';
 import { BackupFileMeta } from '../services/backupStorage';
 
 // The centralized Settings module. Owners configure the whole business here —
@@ -166,7 +168,7 @@ export const SettingsView: React.FC<Props> = ({ settings, onSave, canManage, rol
             {active === 'taxes' && <TaxesSection draft={draft} patch={patch} />}
             {active === 'labels' && <LabelsSection draft={draft} patch={patch} />}
             {active === 'customers' && <CustomersSection draft={draft} patch={patch} />}
-            {active === 'operations' && <OperationsSection draft={draft} patch={patch} confirmPaidBreakChange={confirmPaidBreakChange} />}
+            {active === 'operations' && <OperationsSection draft={draft} patch={patch} confirmPaidBreakChange={confirmPaidBreakChange} canManage={canManage} />}
             {active === 'payroll' && <PayrollSection draft={draft} patch={patch} />}
             {active === 'expenses' && <ExpenseCategoriesSection draft={draft} patch={patch} />}
             {active === 'reviews' && <ReviewsSection draft={draft} patch={patch} />}
@@ -402,7 +404,7 @@ const CustomersSection: React.FC<{ draft: AppSettings; patch: PatchFn }> = ({ dr
   </SettingsSection>
 );
 
-const OperationsSection: React.FC<{ draft: AppSettings; patch: PatchFn; confirmPaidBreakChange?: (next: BreakReason[]) => boolean }> = ({ draft, patch, confirmPaidBreakChange }) => (
+const OperationsSection: React.FC<{ draft: AppSettings; patch: PatchFn; confirmPaidBreakChange?: (next: BreakReason[]) => boolean; canManage?: boolean }> = ({ draft, patch, confirmPaidBreakChange, canManage = false }) => (
   <SettingsSection title="Operations" description="Defaults and windows for the cash drawer, sale reversals and inventory alerts.">
     <SettingsCard>
       <SettingsTextField label="Default opening cash float ($)" type="number" min={0} step={0.01}
@@ -430,6 +432,9 @@ const OperationsSection: React.FC<{ draft: AppSettings; patch: PatchFn; confirmP
         hint="Reports, profit, expenses and alerts ignore anything before this date. Nothing is deleted — every sale, repair, customer and inventory record stays fully visible and searchable. Leave blank to include everything."
         value={draft.operations.booksStartDate || ''}
         onChange={v => patch('operations', { booksStartDate: v })} />
+      {/* Owner-only, and it writes immediately rather than through Save —
+          see the component for why it is not a workspace setting. */}
+      {canManage && <RegisterModeToggle />}
       <PaidBreakPicker
         value={draft.operations.paidBreakReasons || []}
         confirmChange={confirmPaidBreakChange}
@@ -791,6 +796,56 @@ const PaidBreakPicker: React.FC<{
       </div>
       {value.length === 0 && (
         <p className="text-[11px] text-slate-400 mt-1.5">Nothing selected — every break is deducted from paid hours.</p>
+      )}
+    </div>
+  );
+};
+
+
+/**
+ * REGISTER MODE — the one setting on this screen that is NOT stored in the
+ * workspace settings document.
+ *
+ * It describes the MACHINE, so it lives in localStorage on this device
+ * (services/registerMode.ts). A workspace setting would put the back-office
+ * laptop on a 60-second lock; a user setting would follow the owner home to
+ * their own computer. That is why this control saves immediately instead of
+ * waiting for the Save button, and why it says plainly which computer it
+ * applies to.
+ */
+const RegisterModeToggle: React.FC = () => {
+  const [mode, setMode] = useState<DeviceMode>(readDeviceMode);
+  const set = (next: DeviceMode) => setMode(writeDeviceMode(next));
+
+  return (
+    <div className="py-2">
+      <p className="text-sm font-medium text-slate-700 dark:text-slate-200">Shared register</p>
+      <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 mb-2">
+        Turn this on for the counter computer that two or more people share. It applies to
+        THIS COMPUTER ONLY and is not saved to your workspace — every other device is unaffected.
+      </p>
+      <button type="button" onClick={() => set({ ...mode, isRegister: !mode.isRegister })}
+        className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded-lg text-sm font-medium border ${mode.isRegister
+          ? 'bg-indigo-50 dark:bg-indigo-900/20 border-indigo-300 dark:border-indigo-700 text-indigo-700 dark:text-indigo-300'
+          : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400'}`}>
+        <span>This is a shared register</span>
+        <span className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${mode.isRegister ? 'bg-indigo-600' : 'bg-slate-300 dark:bg-slate-700'}`}>
+          <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${mode.isRegister ? 'translate-x-[18px]' : 'translate-x-[3px]'}`} />
+        </span>
+      </button>
+      {mode.isRegister && (
+        <div className="mt-2">
+          <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Lock after (seconds of inactivity)</label>
+          <input type="number" min={REGISTER_IDLE_MIN_SECONDS} max={REGISTER_IDLE_MAX_SECONDS} step={5}
+            value={mode.idleSeconds ?? REGISTER_IDLE_SECONDS}
+            onChange={e => set({ ...mode, idleSeconds: parseInt(e.target.value, 10) })}
+            className="px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm w-32" />
+          <p className="text-[11px] text-slate-400 mt-1">
+            On a register the lock applies to everyone, not just owners and managers — it is the
+            moment the next person takes over, which is what keeps sales attributed to whoever
+            actually rang them. Separate from the workspace auto-lock above, which is unchanged.
+          </p>
+        </div>
       )}
     </div>
   );
