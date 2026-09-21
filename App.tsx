@@ -47,6 +47,7 @@ import { bonusDrawerEffect, canSaveBonus, visibleBonuses } from './domain/bonuse
 import { attributeDrawerEntry, stampNewEntries } from './domain/dayLedger';
 import { CrashReport, crashActivityLine, crashId } from './domain/crashReport';
 import { isCostEntry, isCostEntryField, costAccessFor } from './domain/costVisibility';
+import { dbErrorHeading } from './domain/subscriptionAccess';
 import { floorFor, buildBelowFloorSaleAudit, targetBelowFloor, TARGET_BELOW_FLOOR_NOTE, belowFloorSales } from './domain/priceFloor';
 import { paidBreakChangeImpact, paidBreakChangeMessage, paidBreakChangeAudit, sameReasons } from './domain/paidBreakChange';
 import { buildKioskClockIn, buildKioskClockOut, buildKioskStartBreak, buildKioskEndBreak, validateKioskWrite } from './domain/kiosk';
@@ -2657,7 +2658,7 @@ const App: React.FC = () => {
 
   // --- FIRESTORE CONNECTION STATES ---
   if (dbError) {
-    return <DbErrorScreen message={dbError} onRetry={reconnect} onSignOut={handleLock} />;
+    return <DbErrorScreen heading={dbErrorHeading(dbError.kind)} message={dbError.message} onRetry={reconnect} onSignOut={handleLock} />;
   }
   if (roleLoading || dbLoading || !appUser) {
     return roleLoading || !appUser

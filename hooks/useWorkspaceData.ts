@@ -12,6 +12,9 @@ import { auth, db } from '../services/firebase';
 import { onAuthChange } from '../services/auth';
 import { withResolvedBuyerId } from '../domain/dropoffs';
 import {
+  DbError, dbErrorFor, deferredCollectionsFor, failureAction,
+} from '../domain/subscriptionAccess';
+import {
   subscribeCollection, subscribeKioskTimeEntries, subscribeMeta, migrateLegacyIfNeeded,
   getUserDoc, setUserDoc, updateUserDoc, subscribeWorkspaceUsers, getInvite, deleteInvite,
   subscribeInvites,
@@ -83,7 +86,7 @@ export function useWorkspaceData() {
 
   // Firestore connection state
   const [dbLoading, setDbLoading] = useState(true);
-  const [dbError, setDbError] = useState<string | null>(null);
+  const [dbError, setDbError] = useState<DbError | null>(null);
   const [reconnectKey, setReconnectKey] = useState(0);
   // Deferred collections: time entries, pay periods, drop-offs and settlements
   // are read only by the Time Clock, Reports and Drop-off views (and the write
@@ -178,7 +181,10 @@ export function useWorkspaceData() {
     if (!user || !appUser || !workspaceId) return;
     const wsId = workspaceId;
     setDbLoading(true); setDbError(null);
-    const onErr = (e: Error) => { console.error('Firestore error:', e); setDbError(e.message || 'Failed to load data'); setDbLoading(false); };
+    // CORE collections — a failure here really does stop the app working, so it
+    // is fatal. It is still named for its cause: a permission denial says so
+    // rather than sending somebody to check their wifi.
+    const onErr = (e: Error) => { console.error('Firestore error:', e); setDbError(dbErrorFor(e)); setDbLoading(false); };
 
     // THE KIOSK SUBSCRIBES TO ALMOST NOTHING, and that is the point.
     //
@@ -246,7 +252,20 @@ export function useWorkspaceData() {
   // the session, so navigating back and forth never re-subscribes.
   useEffect(() => {
     if (!user || !appUser || !workspaceId || !extendedEnabled) return;
-    const onErr = (e: Error) => { console.error('Firestore error (extended):', e); setDbError(e.message || 'Failed to load data'); };
+    // A refusal on ONE of these must never take down the whole app. They are
+    // OPTIONAL: the rest works perfectly well without them, and blanking the
+    // screen over a missing bonus list is exactly what turned a permission
+    // denial into "Couldn't reach the database" for every employee who opened
+    // Drop-Offs (see domain/subscriptionAccess.ts).
+    const onErr = (coll: string) => (e: Error) => {
+      console.error(`Firestore error (extended: ${coll}):`, e);
+      if (failureAction(e, true) === 'ignore') return;
+      setDbError(dbErrorFor(e));
+    };
+    // Only attach a listener the rules will actually allow. The gate mirrors
+    // firestore.rules through services/rbac.ts rather than role strings
+    // sprinkled inline, so the two can be compared.
+    const allowed = new Set(deferredCollectionsFor(appUser.role));
     const subs = [
       // Legacy-field normalization boundary. Documents written before the
       // Runner→Device Buyer rename carry `runnerId` instead of `buyerId`, and
@@ -254,14 +273,14 @@ export function useWorkspaceData() {
       // is the ONE place that resolves it: every DropOff/Settlement gets
       // `buyerId` backfilled here, so no component, domain function or write
       // handler downstream ever has to know the legacy name existed.
-      subscribeCollection<DropOff>(workspaceId, 'dropOffs', rows => setDropOffs(rows.map(withResolvedBuyerId<DropOff>)), onErr),
-      subscribeCollection<Settlement>(workspaceId, 'settlements', rows => setSettlements(rows.map(withResolvedBuyerId<Settlement>)), onErr),
-      subscribeCollection<TimeEntry>(workspaceId, 'timeEntries', setTimeEntries, onErr),
-      subscribeCollection<PayPeriodPaid>(workspaceId, 'payPeriods', setPayPeriods, onErr),
-      subscribeCollection<PayPeriodApproval>(workspaceId, 'payPeriodApprovals', setPayPeriodApprovals, onErr),
-      subscribeCollection<StaffBonus>(workspaceId, 'staffBonuses', setStaffBonuses, onErr),
-      subscribeCollection<KioskStaff>(workspaceId, 'kioskStaff', setKioskStaff, onErr),
-    ];
+      allowed.has('dropOffs') && subscribeCollection<DropOff>(workspaceId, 'dropOffs', rows => setDropOffs(rows.map(withResolvedBuyerId<DropOff>)), onErr('dropOffs')),
+      allowed.has('settlements') && subscribeCollection<Settlement>(workspaceId, 'settlements', rows => setSettlements(rows.map(withResolvedBuyerId<Settlement>)), onErr('settlements')),
+      allowed.has('timeEntries') && subscribeCollection<TimeEntry>(workspaceId, 'timeEntries', setTimeEntries, onErr('timeEntries')),
+      allowed.has('payPeriods') && subscribeCollection<PayPeriodPaid>(workspaceId, 'payPeriods', setPayPeriods, onErr('payPeriods')),
+      allowed.has('payPeriodApprovals') && subscribeCollection<PayPeriodApproval>(workspaceId, 'payPeriodApprovals', setPayPeriodApprovals, onErr('payPeriodApprovals')),
+      allowed.has('staffBonuses') && subscribeCollection<StaffBonus>(workspaceId, 'staffBonuses', setStaffBonuses, onErr('staffBonuses')),
+      allowed.has('kioskStaff') && subscribeCollection<KioskStaff>(workspaceId, 'kioskStaff', setKioskStaff, onErr('kioskStaff')),
+    ].filter(Boolean) as (() => void)[];
     return () => subs.forEach(u => u());
   }, [user, appUser, workspaceId, reconnectKey, extendedEnabled]);
 
@@ -269,7 +288,10 @@ export function useWorkspaceData() {
   // Reports) so the drawer's read-modify-write path always sees the live record.
   useEffect(() => {
     if (!user || !appUser || !workspaceId || !cashEnabled) return;
-    const onErr = (e: Error) => { console.error('Firestore error (cash):', e); setDbError(e.message || 'Failed to load data'); };
+    // cashReconciliations is readable by every human role, so a denial here is
+    // a real problem rather than a role mismatch — reported, but named for what
+    // it is rather than as a connection failure.
+    const onErr = (e: Error) => { console.error('Firestore error (cash):', e); setDbError(dbErrorFor(e)); };
     return subscribeCollection<CashReconciliation>(workspaceId, 'cashReconciliations', setCashReconciliations, onErr);
   }, [user, appUser, workspaceId, reconnectKey, cashEnabled]);
 
