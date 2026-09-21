@@ -39,7 +39,7 @@ const UsersView = lazy(() => import('./components/UsersView').then(m => ({ defau
 const AuditLogView = lazy(() => import('./components/AuditLogView').then(m => ({ default: m.AuditLogView })));
 const TimeClockView = lazy(() => import('./components/TimeClockView').then(m => ({ default: m.TimeClockView })));
 const CloseOutView = lazy(() => import('./components/CloseOutView').then(m => ({ default: m.CloseOutView })));
-import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, DeviceBuyer, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission, Repair, RepairBatch, TimeEntry, PayPeriodPaid, PayPeriodApproval, BreakReason, SalesTransaction, CashReconciliation, StaffNote, BalancePayment, Expense, RecurringExpense, RefundSplit, StaffBonus, KioskStaff, CashDrawerEntry } from './types';
+import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, DeviceBuyer, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission, Repair, RepairBatch, TimeEntry, PayPeriodPaid, PayPeriodApproval, BreakReason, SalesTransaction, CashReconciliation, StaffNote, BalancePayment, Expense, RecurringExpense, RefundSplit, StaffBonus, KioskStaff, CashDrawerEntry, AppUser } from './types';
 import { skuPrefix, nextSku } from './services/sku';
 import { REPAIR_PREFIX, BATCH_PREFIX, applyTechEdit, techUpdateAuditPlan, repairSalePrefill, completeRepair, completeRepairSale, dateToEpochMs, isRepairOpen, flagDeviceForRepair, restoredDeviceStatus } from './domain/repairs';
 import { repairCostWriteback, applyRepairCostDelta } from './domain/repairCostWriteback';
@@ -47,6 +47,8 @@ import { bonusDrawerEffect, canSaveBonus, visibleBonuses } from './domain/bonuse
 import { attributeDrawerEntry, stampNewEntries } from './domain/dayLedger';
 import { CrashReport, crashActivityLine, crashId } from './domain/crashReport';
 import { isCostEntry, isCostEntryField, costAccessFor } from './domain/costVisibility';
+import { floorFor, buildFloorApprovalAudit, targetBelowFloor, TARGET_BELOW_FLOOR_NOTE } from './domain/priceFloor';
+import { ApproveBelowFloorModal } from './components/ApproveBelowFloorModal';
 import { paidBreakChangeImpact, paidBreakChangeMessage, paidBreakChangeAudit, sameReasons } from './domain/paidBreakChange';
 import { buildKioskClockIn, buildKioskClockOut, buildKioskStartBreak, buildKioskEndBreak, validateKioskWrite } from './domain/kiosk';
 import { markTicketDeviceSold } from './domain/repairVisibility';
@@ -291,6 +293,62 @@ const App: React.FC = () => {
   // anyone, not just owner/manager. This only sets the overlay flag; unlike
   // handleLock it never signs out, so the session/cart/etc. are untouched.
   const handleManualLock = () => setAppLocked(true);
+
+  /* --- Below-floor approval (domain/priceFloor.ts) ---------------------- */
+  //
+  // Staff can't see cost, so nothing stopped them selling a device below what
+  // the shop paid for it. A below-floor line blocks the sale until a manager
+  // or owner signs it off with THEIR OWN PIN.
+  const [floorApproval, setFloorApproval] = useState<
+    { line: { key: string; name: string; price: number; inventoryId?: string };
+      resolve: (v: { uid: string; email: string } | null) => void } | null
+  >(null);
+
+  // Who can approve: managers and owners who actually have a PIN set. Somebody
+  // without one cannot be offered, and the modal says so rather than failing
+  // silently at the keypad.
+  const floorApprovers = useMemo(
+    () => workspaceUsers.filter(u => !u.disabled && (u.role === 'owner' || u.role === 'manager') && !!u.pinHash && !!u.pinSalt),
+    [workspaceUsers],
+  );
+
+  // Verifies the APPROVER's PIN, not the seller's. Reuses the same
+  // domain/pin.ts verifyPin the lock screen uses — one PIN implementation.
+  const verifyApproverPin = async (approverUid: string, pin: string): Promise<boolean> => {
+    const u = floorApprovers.find(x => x.id === approverUid);
+    if (!u?.pinHash || !u.pinSalt) return false;
+    return verifyPin(pin, { hash: u.pinHash, salt: u.pinSalt, iterations: u.pinIterations || 0 });
+  };
+
+  const requestFloorApproval = (line: { key: string; name: string; price: number; inventoryId?: string }) =>
+    new Promise<{ uid: string; email: string } | null>(resolve => setFloorApproval({ line, resolve }));
+
+  const completeFloorApproval = (approver: AppUser | null) => {
+    if (!floorApproval) return;
+    if (approver) {
+      const item = dataRef.current.find(i => i.id === floorApproval.line.inventoryId);
+      const floor = item
+        ? floorFor(item, { minMarginPercent: settings.operations.minMarginPercent, minMarginDollars: settings.operations.minMarginDollars })
+        : null;
+      // The floor and the cost DO go in the audit record — it is owner-visible
+      // only, and without them it cannot answer "how far below was it?". They
+      // are never shown on screen to the seller.
+      audit('sale.below_floor_approved', 'inventory', floorApproval.line.inventoryId, undefined,
+        buildFloorApprovalAudit({
+          sellerUid: appUser?.id || '', sellerEmail: appUser?.email || '',
+          approverUid: approver.id, approverEmail: approver.email,
+          inventoryId: floorApproval.line.inventoryId,
+          deviceLabel: floorApproval.line.name,
+          salePrice: floorApproval.line.price,
+          floorPrice: floor?.price ?? null,
+          costAtApproval: floor?.cost ?? null,
+          at: Date.now(),
+        }));
+      logActivity(`${floorApproval.line.name} approved below minimum price by ${approver.email.split('@')[0]}`);
+    }
+    floorApproval.resolve(approver ? { uid: approver.id, email: approver.email } : null);
+    setFloorApproval(null);
+  };
 
   /* --- FAST USER SWITCHING on a shared register ------------------------- */
   //
@@ -894,6 +952,14 @@ const App: React.FC = () => {
     if (isNew) { logActivity(`${item.sku || item.item || 'Item'} added`); audit('inventory.add', collectionFor(item), item.id, undefined, item); }
     else audit('inventory.edit', collectionFor(item), item.id);
     if (item.soldDate && !raw.soldDate) logActivity(`${item.sku || item.item || 'Device'} sold for $${(item.salePrice || 0).toFixed(2)}`);
+    // A TARGET UNDER THE FLOOR is a pricing mistake, and the moment to catch
+    // it is here — not at the till with a customer waiting. Owner-facing only
+    // (it takes cost visibility to be able to act on it), and it warns rather
+    // than blocks: the owner may have a reason.
+    if (allow('reports.profit.detailed')
+      && targetBelowFloor(item, { minMarginPercent: settings.operations.minMarginPercent, minMarginDollars: settings.operations.minMarginDollars })) {
+      window.alert(`${TARGET_BELOW_FLOOR_NOTE}\n\n${item.sku || item.item || 'This device'} is saved, but its target price is below the minimum it may sell for.`);
+    }
     saveItem(uid, collectionFor(item), item);
     if (item.soldDate && !raw.soldDate) stampSoldDeviceRepairs([item.id]);
   };
@@ -2918,6 +2984,7 @@ const App: React.FC = () => {
               onSave={handleSaveItem}
               onCancel={() => navigate('grid')}
               inventory={data}
+              canViewCost={allow('reports.profit.detailed')}
               customers={customers}
               onCreateCustomer={allow('inventory.add') ? handleCreateCustomerInline : undefined}
             /></Suspense>
@@ -2957,6 +3024,8 @@ const App: React.FC = () => {
               initialRepair={prefillRepairSale ? repairSalePrefill(prefillRepairSale) : undefined}
               onConsumeInitialRepair={() => setPrefillRepairSale(undefined)}
               onSellCart={handleSellCart}
+              floorSettings={{ minMarginPercent: settings.operations.minMarginPercent, minMarginDollars: settings.operations.minMarginDollars }}
+              onApproveBelowFloor={requestFloorApproval}
               canViewProfit={allow('reports.profit.detailed')}
               onGenerateSku={(deviceType) => handleGenerateSku('device', deviceType)}
               cashDrawer={allow('cash.log') ? todayDrawer : undefined}
@@ -3197,6 +3266,16 @@ const App: React.FC = () => {
            canManageSettings={allow('settings.manage')}
            backup={allow('backup.export') ? { lastBackup, onExportJson: handleExportJson, onExportCsv: handleExportCsv } : undefined}
          />
+      )}
+
+      {floorApproval && (
+        <ApproveBelowFloorModal
+          line={floorApproval.line}
+          approvers={floorApprovers}
+          onVerify={verifyApproverPin}
+          onApproved={completeFloorApproval}
+          onCancel={() => completeFloorApproval(null)}
+        />
       )}
 
       {showFinder && <Suspense fallback={null}><GlobalSearch

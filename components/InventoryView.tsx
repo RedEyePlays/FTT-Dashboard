@@ -840,7 +840,7 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
         </div>
       </ResponsiveDialog>
 
-      {expandItem && <ItemFormModal initial={expandItem} deviceBuyers={deviceBuyers} onSave={onSave} onGenerateSku={onGenerateSku} onClose={() => setExpandItem(null)}
+      {expandItem && <ItemFormModal initial={expandItem} canViewCost={canViewCost} deviceBuyers={deviceBuyers} onSave={onSave} onGenerateSku={onGenerateSku} onClose={() => setExpandItem(null)}
         linkedRepair={linkedRepairOf(expandItem.id)}
         onCreateRepair={onCreateRepair ? () => { onCreateRepair(expandItem); setExpandItem(null); } : undefined}
         onOpenRepair={onOpenRepair ? (id: string) => { onOpenRepair(id); setExpandItem(null); } : undefined}

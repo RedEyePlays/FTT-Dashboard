@@ -434,6 +434,14 @@ const OperationsSection: React.FC<{ draft: AppSettings; patch: PatchFn; confirmP
         onChange={v => patch('operations', { booksStartDate: v })} />
       {/* Owner-only, and it writes immediately rather than through Save —
           see the component for why it is not a workspace setting. */}
+      <SettingsTextField label="Minimum margin (%)" type="number" min={0} max={500} step={1}
+        hint="A device must sell for at least its cost plus this percentage. Staff never see the figure — a sale under it needs a manager or owner to approve. 0 = no percentage floor."
+        value={draft.operations.minMarginPercent ?? 0}
+        onChange={v => patch('operations', { minMarginPercent: Math.max(0, parseFloat(v) || 0) })} />
+      <SettingsTextField label="Minimum margin ($)" type="number" min={0} step={0.01}
+        hint="A device must also sell for at least its cost plus this amount. When both are set the HIGHER of the two applies. 0 = no dollar floor."
+        value={draft.operations.minMarginDollars ?? 0}
+        onChange={v => patch('operations', { minMarginDollars: Math.max(0, parseFloat(v) || 0) })} />
       {canManage && <RegisterModeToggle />}
       <PaidBreakPicker
         value={draft.operations.paidBreakReasons || []}
