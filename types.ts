@@ -630,6 +630,15 @@ export interface SalesLine {
   // restore it if the sale is reversed, instead of silently losing the fact
   // that the device might still be listed live elsewhere.
   listedPlatforms?: ListingPlatform[];
+  // This line went out BELOW the device's minimum price (domain/priceFloor.ts).
+  // Warned at the till, never blocked; the owner reviews it afterwards.
+  belowFloor?: boolean;
+  // The floor and the cost AS THEY WERE at the moment of sale. Both depend on
+  // settings and on the device's recorded cost, and both can change later, so
+  // the review list reads these rather than recomputing and quietly restating
+  // history. OWNER-VISIBLE ONLY — trimmed for a manager on the way out.
+  floorAtSale?: number;
+  costAtSale?: number;
 }
 
 export interface SalesTransaction {
@@ -691,6 +700,11 @@ export interface SalesTransaction {
   // sale (legacy rows have no field).
   status?: 'completed' | 'voided' | 'returned';
   voidedAt?: number;       // epoch ms
+  // WHO RANG IT. Stamped in App from the AUTHENTICATED user, never from
+  // anything the checkout payload carried in. Optional, so every sale written
+  // before this reads unchanged and simply shows no seller — never guessed at.
+  soldBy?: string;
+  soldByEmail?: string;
   voidedBy?: string;       // uid of the owner/manager who voided it
   voidedByEmail?: string;
   // Return details (status === 'returned'). refundAmount = amount actually

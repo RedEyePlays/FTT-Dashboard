@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { InventoryItem } from '../types';
 import {
-  recordedCost, floorFor, isBelowFloor, checkLineFloor, targetBelowFloor,
-  buildFloorApprovalAudit, BELOW_FLOOR_MESSAGE, NO_COST_NOTE, TARGET_BELOW_FLOOR_NOTE,
+  recordedCost, floorFor, isBelowFloor, floorGap, targetBelowFloor,
+  buildBelowFloorSaleAudit, BELOW_FLOOR_WARNING, NO_COST_NOTE, TARGET_BELOW_FLOOR_NOTE,
+  belowFloorGapLabel, belowFloorStamp, belowFloorSales, belowFloorCountForDate,
+  belowFloorCountLabel, trimBelowFloorRows,
 } from './priceFloor';
 
 // Staff can't see cost, so nothing stopped them selling a device below what
@@ -76,51 +78,55 @@ describe('floor maths', () => {
   });
 });
 
-describe('blocking a sale below the floor', () => {
-  const floor = floorFor(device(), { minMarginPercent: 10 }); // 264
+describe('a below-floor sale WARNS but completes', () => {
+  const floor = floorFor(device(), { minMarginPercent: 10 }); // cost 240, floor 264
 
-  it('blocks under the floor', () => {
+  it('flags a price under the floor', () => {
     expect(isBelowFloor(263, floor)).toBe(true);
-    expect(checkLineFloor(263, floor).ok).toBe(false);
-    expect(checkLineFloor(263, floor).needsApproval).toBe(true);
   });
 
-  it('lets a sale AT the floor through', () => {
+  it('does not flag a sale AT the floor', () => {
     expect(isBelowFloor(264, floor)).toBe(false);
-    expect(checkLineFloor(264, floor).ok).toBe(true);
   });
 
-  it('lets anything through when there is no floor', () => {
+  it('does not flag anything when there is no floor', () => {
     const none = floorFor(device({ purchaseCost: 0, repairCost: 0 }), { minMarginPercent: 10 });
-    expect(checkLineFloor(1, none).ok).toBe(true);
+    expect(isBelowFloor(1, none)).toBe(false);
   });
 
-  it('an APPROVAL unblocks it — the approval IS the answer', () => {
-    expect(checkLineFloor(100, floor, true)).toEqual({ ok: true, needsApproval: false, message: '' });
+  it('reports the gap for somebody who may see cost', () => {
+    expect(floorGap(200, floor)).toBe(64);
+    expect(floorGap(300, floor)).toBeNull();
+  });
+
+  it('stamps the line with the floor and cost AS THEY WERE', () => {
+    // Both depend on settings and on the device's recorded cost, and both can
+    // change later — a figure recomputed next week would restate history.
+    expect(belowFloorStamp(200, floor)).toEqual({ belowFloor: true, floorAtSale: 264, costAtSale: 240 });
+  });
+
+  it('stamps nothing at or above the floor', () => {
+    expect(belowFloorStamp(264, floor)).toBeNull();
   });
 });
 
-describe('the block message tells staff nothing they should not know', () => {
-  const floor = floorFor(device(), { minMarginPercent: 10 }); // cost 240, floor 264
-  const msg = checkLineFloor(100, floor).message;
-
-  it('is the plain sentence', () => {
-    expect(msg).toBe(BELOW_FLOOR_MESSAGE);
-    expect(msg).toBe('Below the minimum price for this device. A manager or owner needs to approve it.');
+describe('the warning tells staff nothing they should not know', () => {
+  it('is the plain sentence, with no approval demanded', () => {
+    expect(BELOW_FLOOR_WARNING).toBe('Below the minimum price for this device.');
+    expect(BELOW_FLOOR_WARNING).not.toMatch(/approv|manager|owner|pin/i);
   });
 
   it('CARRIES NO FIGURE — not the floor, not the cost, not the gap', () => {
-    // Each of those is the cost back-computable in one subtraction.
-    for (const leak of ['240', '264', '164', '$']) expect(msg).not.toContain(leak);
-    expect(msg).not.toMatch(/\d/);
+    expect(BELOW_FLOOR_WARNING).not.toMatch(/\d/);
+    expect(BELOW_FLOOR_WARNING).not.toMatch(/cost|margin|profit/i);
   });
 
-  it('never uses the words cost or margin', () => {
-    expect(msg).not.toMatch(/cost|margin|profit/i);
-  });
-
-  it('reads the same for everyone, so it reveals nothing about the reader', () => {
-    expect(checkLineFloor(100, floorFor(device({ minSalePrice: 999 }), {})).message).toBe(msg);
+  it('the gap is a SEPARATE owner-facing label, never folded into it', () => {
+    // The gap plus the price IS the floor, and the floor plus the margin
+    // setting IS the cost.
+    expect(belowFloorGapLabel(64)).toBe('$64.00 under minimum');
+    expect(belowFloorGapLabel(null)).toBeNull();
+    expect(belowFloorGapLabel(0)).toBeNull();
   });
 });
 
@@ -145,28 +151,110 @@ describe('owner-facing notes', () => {
   });
 });
 
-describe('the approval is audited', () => {
-  it('records seller, approver, device and price — plus the floor and cost', () => {
+describe('the sale is audited', () => {
+  it('records seller, device and price — plus the floor and cost', () => {
     // The floor and cost DO belong here: the audit log is owner-visible only,
     // and without them the record cannot answer "how far below was it?".
-    const a = buildFloorApprovalAudit({
+    // There is no approver — the sale completed on its own.
+    const a = buildBelowFloorSaleAudit({
       sellerUid: 'u1', sellerEmail: 'sara@shop.test',
-      approverUid: 'u2', approverEmail: 'owner@shop.test',
       inventoryId: 'd1', deviceLabel: 'iPhone 12', salePrice: 200,
-      floorPrice: 264, costAtApproval: 240, at: 5,
+      transactionId: 't1', floorPrice: 264, costAtSale: 240, at: 5,
     });
     expect(a).toMatchObject({
-      seller: 'sara@shop.test', approver: 'owner@shop.test',
-      device: 'iPhone 12', salePrice: 200, floorPrice: 264, costAtApproval: 240,
-      shortfall: 64,
+      seller: 'sara@shop.test', device: 'iPhone 12', salePrice: 200,
+      floorPrice: 264, costAtSale: 240, shortfall: 64, transactionId: 't1',
+    });
+    expect(a).not.toHaveProperty('approver');
+  });
+
+  it('copes with a sale on a device that had no floor stamped', () => {
+    const a = buildBelowFloorSaleAudit({
+      sellerUid: 'u1', sellerEmail: 'a@x', deviceLabel: 'X', salePrice: 10,
+      transactionId: 't2', floorPrice: null, costAtSale: null, at: 5,
+    });
+    expect(a.shortfall).toBeNull();
+  });
+});
+
+/* ---------------- The review list ---------------- */
+
+const sale = (over: Record<string, unknown> = {}) => ({
+  id: 't1', date: '2026-09-20', createdAt: 100, soldByEmail: 'sara@shop.test',
+  lines: [
+    { name: 'iPhone 12', unitPrice: 200, belowFloor: true, floorAtSale: 264, costAtSale: 240 },
+    { name: 'Case', unitPrice: 20 },
+  ],
+  ...over,
+});
+
+describe('where the owner reviews below-minimum sales', () => {
+  it('lists the discounted line, with who rang it', () => {
+    const [row] = belowFloorSales([sale()]);
+    expect(row).toMatchObject({
+      device: 'iPhone 12', seller: 'sara@shop.test', salePrice: 200,
+      floorAtSale: 264, costAtSale: 240, gap: 64, date: '2026-09-20',
     });
   });
 
-  it('copes with an approval on a device that had no floor', () => {
-    const a = buildFloorApprovalAudit({
-      sellerUid: 'u1', sellerEmail: 'a@x', approverUid: 'u2', approverEmail: 'b@x',
-      deviceLabel: 'X', salePrice: 10, floorPrice: null, costAtApproval: null, at: 5,
-    });
-    expect(a.shortfall).toBeNull();
+  it('leaves lines that were at or above the minimum out of it', () => {
+    expect(belowFloorSales([sale()]).map(r => r.device)).toEqual(['iPhone 12']);
+  });
+
+  it('reads the STAMP rather than recomputing', () => {
+    // The floor depends on settings and on the device's cost, both of which
+    // can change after the sale. Recomputing would restate history.
+    const [row] = belowFloorSales([sale({ lines: [{ name: 'X', unitPrice: 5, belowFloor: true, floorAtSale: 99 }] })]);
+    expect(row.floorAtSale).toBe(99);
+    expect(row.gap).toBe(94);
+  });
+
+  it('excludes voided and returned sales — the device came back', () => {
+    expect(belowFloorSales([sale({ status: 'voided' })])).toEqual([]);
+    expect(belowFloorSales([sale({ status: 'returned' })])).toEqual([]);
+  });
+
+  it('filters to a date range', () => {
+    const rows = belowFloorSales([sale(), sale({ id: 't2', date: '2026-08-01' })], { start: '2026-09-01', end: '2026-09-30' });
+    expect(rows.map(r => r.transactionId)).toEqual(['t1']);
+  });
+
+  it('counts a single day, for the Day History and Close Out headers', () => {
+    expect(belowFloorCountForDate([sale()], '2026-09-20')).toBe(1);
+    expect(belowFloorCountForDate([sale()], '2026-09-19')).toBe(0);
+    expect(belowFloorCountLabel(2)).toBe('2 sales below minimum');
+    expect(belowFloorCountLabel(1)).toBe('1 sale below minimum');
+    expect(belowFloorCountLabel(0)).toBeNull();
+  });
+
+  it('a sale with no seller recorded still lists — never guessed at', () => {
+    const [row] = belowFloorSales([sale({ soldByEmail: undefined })]);
+    expect(row.seller).toBeUndefined();
+    expect(row.device).toBe('iPhone 12');
+  });
+});
+
+describe('A MANAGER SEES WHO IS DISCOUNTING, NOT WHAT THE SHOP PAYS', () => {
+  const rows = belowFloorSales([sale()]);
+
+  it('the owner sees the floor, the cost and the gap', () => {
+    const [r] = trimBelowFloorRows(rows, true);
+    expect(r).toMatchObject({ floorAtSale: 264, costAtSale: 240, gap: 64 });
+  });
+
+  it('a manager sees the date, the seller, the device and the price', () => {
+    const [r] = trimBelowFloorRows(rows, false);
+    expect(r).toMatchObject({ date: '2026-09-20', seller: 'sara@shop.test', device: 'iPhone 12', salePrice: 200 });
+  });
+
+  it('but the cost fields are REMOVED, not merely hidden', () => {
+    // Removed from the object, so an export cannot leak what the screen
+    // withholds.
+    const [r] = trimBelowFloorRows(rows, false);
+    expect('floorAtSale' in r).toBe(false);
+    expect('costAtSale' in r).toBe(false);
+    expect('gap' in r).toBe(false);
+    expect(JSON.stringify(r)).not.toContain('264');
+    expect(JSON.stringify(r)).not.toContain('240');
   });
 });

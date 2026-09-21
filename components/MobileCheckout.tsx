@@ -42,8 +42,6 @@ interface Props {
   // Floor price (domain/priceFloor.ts) — the workspace margin settings, and
   // the manager/owner PIN approval for a line that falls under its floor.
   floorSettings?: FloorSettings;
-  onApproveBelowFloor?: (line: { key: string; name: string; price: number; inventoryId?: string }) =>
-    Promise<{ uid: string; email: string } | null>;
 }
 
 const STEPS = ['Items', 'Cart', 'Customer', 'Payment', 'Done'];

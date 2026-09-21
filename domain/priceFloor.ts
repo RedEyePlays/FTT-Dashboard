@@ -5,11 +5,15 @@ import { InventoryItem } from '../types';
  *
  * Staff can't see cost (deliberately), so nothing stopped them selling a
  * device below what the shop paid for it. This computes the minimum a device
- * may go out at, and the block message is written so that somebody without
- * cost access learns only "too low" — never the floor, the cost, or the gap.
+ * may go out at, and the warning is written so that somebody without cost
+ * access learns only "too low" — never the floor, the cost, or the gap.
+ *
+ * IT WARNS, IT DOES NOT BLOCK: the sale completes, is stamped, and the owner
+ * reviews it where he already looks each day.
  *
  * Pure: no DOM, no Firestore. The checkout and the tests use the same
- * functions, so the number that blocks a sale is the number that was tested.
+ * functions, so the number that warns at the till is the number that was
+ * tested.
  */
 
 export interface FloorSettings {
@@ -92,16 +96,25 @@ export const isBelowFloor = (price: number, floor: Floor): boolean =>
 /* ---------------- What the till says ---------------- */
 
 /**
- * The block message.
+ * The warning shown on the line.
+ *
+ * IT WARNS, IT DOES NOT BLOCK. The sale completes; the owner reviews it after
+ * the fact. A manager-PIN gate was tried and removed — besides being more
+ * friction than the owner wants, it verified the approver's PIN client-side
+ * out of the user list, which firestore.rules does not let an employee's
+ * session read. So at the one till that actually needed it the approver list
+ * was always empty and a below-floor sale could never be completed at all.
  *
  * CARRIES NO FIGURE. Not the floor, not the cost, not the gap in dollars —
  * each of those is the cost back-computable in one subtraction, which would
- * undo the whole point of hiding it. The same sentence is shown to everyone,
- * so a seller cannot tell from the wording whether the person beside them can
- * see more than they can.
+ * undo the whole point of hiding it. Somebody WITH cost access gets the gap
+ * as a separate line (belowFloorGapLabel), never folded into this sentence.
  */
-export const BELOW_FLOOR_MESSAGE =
-  'Below the minimum price for this device. A manager or owner needs to approve it.';
+export const BELOW_FLOOR_WARNING = 'Below the minimum price for this device.';
+
+/** OWNER-FACING ONLY: "$64.00 under minimum". Never shown without cost access. */
+export const belowFloorGapLabel = (gap: number | null): string | null =>
+  gap == null || gap <= 0 ? null : `$${gap.toFixed(2)} under minimum`;
 
 /** Shown to the OWNER only, on a device with no cost to check against. */
 export const NO_COST_NOTE = 'No cost recorded — no minimum price check.';
@@ -109,31 +122,11 @@ export const NO_COST_NOTE = 'No cost recorded — no minimum price check.';
 /** Shown to the OWNER when a target price is set under the floor. */
 export const TARGET_BELOW_FLOOR_NOTE = 'Target is under the minimum price.';
 
-export interface FloorCheck {
-  ok: boolean;
-  /** True when the sale needs a manager/owner to approve it. */
-  needsApproval: boolean;
-  /** The sentence to show. Empty when nothing is wrong. */
-  message: string;
-}
-
-/**
- * May this line go through at this price?
- *
- * `approved` is set once a manager or owner has signed off with their PIN, at
- * which point the line passes whatever the floor says — the approval IS the
- * answer, and re-blocking it would make the approval meaningless.
- */
-export const checkLineFloor = (
-  price: number,
-  floor: Floor,
-  approved = false,
-): FloorCheck => {
-  if (approved || !isBelowFloor(price, floor)) {
-    return { ok: true, needsApproval: false, message: '' };
-  }
-  return { ok: false, needsApproval: true, message: BELOW_FLOOR_MESSAGE };
-};
+/** How far under the floor, in dollars. Null when the line is not under it. */
+export const floorGap = (price: number, floor: Floor): number | null =>
+  floor.price != null && isBelowFloor(price, floor)
+    ? round2(floor.price - price)
+    : null;
 
 /**
  * Is a device's TARGET price under its own floor?
@@ -153,37 +146,166 @@ export const targetBelowFloor = (
 
 /* ---------------- Audit ---------------- */
 
-export interface FloorApprovalAudit {
+export interface BelowFloorSaleAudit {
   sellerUid: string;
   sellerEmail: string;
-  approverUid: string;
-  approverEmail: string;
   inventoryId?: string;
   deviceLabel: string;
   salePrice: number;
-  /** OWNER-ONLY, and only ever in the audit record — never on screen. */
+  transactionId: string;
+  /** OWNER-VISIBLE ONLY, and only ever in the audit record — never on screen. */
   floorPrice: number | null;
-  costAtApproval: number | null;
+  costAtSale: number | null;
   at: number;
 }
 
 /**
- * The audit payload for a below-floor approval.
+ * The audit payload for a sale that went out below its floor.
  *
- * The floor and the cost DO go in here: the audit log is owner-visible only,
- * and without them the record cannot answer "how far below was it?" — which is
- * the only question worth asking afterwards.
+ * There is no approver: the sale completes and the owner reviews it after the
+ * fact. The floor and the cost DO go in here — the audit log is owner-visible
+ * only, and without them the record cannot answer "how far below was it?",
+ * which is the only question worth asking afterwards.
  */
-export const buildFloorApprovalAudit = (a: FloorApprovalAudit): Record<string, unknown> => ({
+export const buildBelowFloorSaleAudit = (a: BelowFloorSaleAudit): Record<string, unknown> => ({
   seller: a.sellerEmail,
   sellerUid: a.sellerUid,
-  approver: a.approverEmail,
-  approverUid: a.approverUid,
   device: a.deviceLabel,
   inventoryId: a.inventoryId,
+  transactionId: a.transactionId,
   salePrice: round2(a.salePrice),
   floorPrice: a.floorPrice,
-  costAtApproval: a.costAtApproval,
+  costAtSale: a.costAtSale,
   shortfall: a.floorPrice != null ? round2(a.floorPrice - a.salePrice) : null,
   at: a.at,
 });
+
+
+/* ---------------- What gets recorded on the sale ---------------- */
+
+/**
+ * A sale line that went out under its floor.
+ *
+ * Stamped on SalesLine.belowFloor at checkout so the owner can find it later
+ * without recomputing anything — the floor depends on settings and on the
+ * device's cost, both of which can change afterwards, so a figure recomputed
+ * next week would not be the figure that applied on the day.
+ */
+export interface BelowFloorStamp {
+  belowFloor: true;
+  /** The floor that applied at the moment of sale. Owner-visible only. */
+  floorAtSale?: number;
+  /** The cost that floor came from. Owner-visible only. */
+  costAtSale?: number;
+}
+
+export const belowFloorStamp = (price: number, floor: Floor): BelowFloorStamp | null =>
+  isBelowFloor(price, floor)
+    ? {
+      belowFloor: true,
+      ...(floor.price != null ? { floorAtSale: floor.price } : {}),
+      ...(floor.cost != null ? { costAtSale: floor.cost } : {}),
+    }
+    : null;
+
+/* ---------------- The review list ---------------- */
+
+export interface BelowFloorSaleRow {
+  transactionId: string;
+  date: string;
+  at?: number;
+  lineIndex: number;
+  device: string;
+  /** Who rang it. Visible to managers as well as owners. */
+  seller?: string;
+  salePrice: number;
+  /** OWNER / allowProfit ONLY — stripped for a manager by trimBelowFloorRow. */
+  floorAtSale?: number;
+  costAtSale?: number;
+  gap?: number;
+}
+
+interface SaleLike {
+  id: string;
+  date: string;
+  createdAt?: number;
+  status?: string;
+  soldByEmail?: string;
+  customerName?: string;
+  lines?: {
+    name?: string;
+    unitPrice?: number;
+    quantity?: number;
+    belowFloor?: boolean;
+    floorAtSale?: number;
+    costAtSale?: number;
+  }[];
+}
+
+/**
+ * Every sale line that went out below its minimum, newest first.
+ *
+ * Reads the STAMP on the line rather than recomputing: the floor depends on
+ * settings and on the device's cost, and both can change after the sale. A
+ * recomputed figure would quietly restate history.
+ *
+ * Voided and returned sales are excluded — the device came back, so there is
+ * no discount to review.
+ */
+export const belowFloorSales = <T extends SaleLike>(
+  sales: T[],
+  range?: { start?: string; end?: string },
+): BelowFloorSaleRow[] => {
+  const rows: BelowFloorSaleRow[] = [];
+  for (const t of sales) {
+    if (t.status === 'voided' || t.status === 'returned') continue;
+    if (range?.start && t.date < range.start) continue;
+    if (range?.end && t.date > range.end) continue;
+    (t.lines || []).forEach((l, lineIndex) => {
+      if (!l.belowFloor) return;
+      const salePrice = round2(l.unitPrice || 0);
+      rows.push({
+        transactionId: t.id,
+        date: t.date,
+        at: t.createdAt,
+        lineIndex,
+        device: l.name || 'Device',
+        seller: t.soldByEmail,
+        salePrice,
+        ...(l.floorAtSale != null ? { floorAtSale: l.floorAtSale, gap: round2(l.floorAtSale - salePrice) } : {}),
+        ...(l.costAtSale != null ? { costAtSale: l.costAtSale } : {}),
+      });
+    });
+  }
+  return rows.sort((a, b) => b.date.localeCompare(a.date) || (b.at || 0) - (a.at || 0));
+};
+
+/** How many below-minimum sale lines fall on one date. */
+export const belowFloorCountForDate = <T extends SaleLike>(sales: T[], date: string): number =>
+  belowFloorSales(sales, { start: date, end: date }).length;
+
+/** "2 sales below minimum" / "1 sale below minimum". Null when there are none. */
+export const belowFloorCountLabel = (n: number): string | null =>
+  n <= 0 ? null : `${n} sale${n === 1 ? '' : 's'} below minimum`;
+
+/**
+ * Trim a row for somebody without cost access.
+ *
+ * A MANAGER SEES WHO IS DISCOUNTING WITHOUT LEARNING WHAT THE SHOP PAYS: the
+ * date, the seller, the device and the price stay; the floor, the cost and the
+ * gap are REMOVED from the object, not merely hidden by the table, so an
+ * export cannot leak what the screen withholds.
+ */
+export const trimBelowFloorRow = (
+  row: BelowFloorSaleRow,
+  canViewCost: boolean,
+): BelowFloorSaleRow => {
+  if (canViewCost) return row;
+  const { floorAtSale: _f, costAtSale: _c, gap: _g, ...rest } = row;
+  return rest;
+};
+
+export const trimBelowFloorRows = (
+  rows: BelowFloorSaleRow[],
+  canViewCost: boolean,
+): BelowFloorSaleRow[] => rows.map(r => trimBelowFloorRow(r, canViewCost));

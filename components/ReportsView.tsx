@@ -14,6 +14,7 @@ import {
   drawerCarryOver,
 } from '../domain/reports';
 import { computeAnalytics, presetRange } from '../domain/analytics';
+import { belowFloorSales, belowFloorCountLabel, trimBelowFloorRows } from '../domain/priceFloor';
 import { entriesOnDate, workedHours, PaidBreakReasons } from '../domain/timeclock';
 import {
   buildDayLedger, cashOnly, shortfallWalk, rowsForWalkLine, dayLedgerFacts,
@@ -21,7 +22,7 @@ import {
 } from '../domain/dayLedger';
 import { toCSV, triggerDownload } from '../services/backup';
 import { newId } from '../domain/ids';
-import { toISODate, todayISO } from '../domain/dates';
+import { toISODate, todayISO, clampToBooksStart } from '../domain/dates';
 
 type SaveReconciliation = (r: ReconciliationInput) => void;
 
@@ -87,7 +88,7 @@ interface Props {
   users: AppUser[];
 }
 
-type TabId = 'history' | 'cash' | 'tax' | 'pnl' | 'expenses' | 'yearend' | 'settlements';
+type TabId = 'history' | 'cash' | 'tax' | 'pnl' | 'expenses' | 'yearend' | 'settlements' | 'belowmin';
 const TABS: { id: TabId; label: string; icon: React.ReactNode }[] = [
   { id: 'history', label: 'Daily History', icon: <History className="w-4 h-4" /> },
   { id: 'cash', label: 'Cash Reconciliation', icon: <Wallet className="w-4 h-4" /> },
@@ -95,6 +96,7 @@ const TABS: { id: TabId; label: string; icon: React.ReactNode }[] = [
   { id: 'pnl', label: 'Profit & Loss', icon: <Scale className="w-4 h-4" /> },
   { id: 'expenses', label: 'Expenses', icon: <Banknote className="w-4 h-4" /> },
   { id: 'settlements', label: 'Device Buyer Settlements', icon: <Truck className="w-4 h-4" /> },
+  { id: 'belowmin', label: 'Sold Below Minimum', icon: <AlertTriangle className="w-4 h-4" /> },
   { id: 'yearend', label: 'Year-End Export', icon: <FileArchive className="w-4 h-4" /> },
 ];
 
@@ -117,6 +119,10 @@ const label = 'block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1
 const tabAllowed = (id: TabId, perms: { canReconcile: boolean; canViewProfit: boolean; canAddExpense: boolean; canViewAllExpenses: boolean }): boolean => {
   if (id === 'cash') return perms.canReconcile;
   if (id === 'expenses') return perms.canAddExpense || perms.canViewAllExpenses;
+  // 'belowmin' is gated on canViewProfit like the rest: a MANAGER holds
+  // reports.profit.summary and so sees who is discounting, while the cost,
+  // the floor and the gap are stripped from the rows themselves. Employees
+  // and technicians hold neither and never see the tab.
   return perms.canViewProfit;
 };
 
@@ -177,6 +183,7 @@ export const ReportsView: React.FC<Props> = ({
         />
       )}
       {tab === 'settlements' && tabAllowed('settlements', perms) && <SettlementsTab settlements={settlements} deviceBuyers={deviceBuyers} booksStartDate={booksStartDate} />}
+      {tab === 'belowmin' && tabAllowed('belowmin', perms) && <BelowMinimumTab salesTransactions={salesTransactions} canViewCost={canViewDetailedProfit} booksStartDate={booksStartDate} />}
       {tab === 'yearend' && tabAllowed('yearend', perms) && <YearEndTab plInput={plInput} showExpenseCategories={canViewAllExpenses} />}
     </div>
   );
@@ -264,6 +271,15 @@ const DailyHistoryTab: React.FC<{
 
   const isToday = date === todayISO();
 
+  // Sales that went out under the device's minimum on this date. Trimmed for
+  // anyone without cost access: the seller, device and price stay, the floor,
+  // cost and gap are REMOVED from the row rather than hidden by the markup.
+  const belowFloorRows = useMemo(
+    () => trimBelowFloorRows(belowFloorSales(salesTransactions, { start: date, end: date }), canViewDetailedProfit),
+    [salesTransactions, date, canViewDetailedProfit],
+  );
+  const belowFloorLabel = belowFloorCountLabel(belowFloorRows.length);
+
   /* --- The Money Trail ------------------------------------------------- */
   // ONE time-ordered list of every money movement on the picked date, built
   // by domain/dayLedger.ts. The walk above it uses the SAME expectedEndingCash
@@ -308,6 +324,23 @@ const DailyHistoryTab: React.FC<{
       {/* --- Sales & repairs -------------------------------------------------- */}
       <div className={`${card} p-5`}>
         <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200 mb-3">Sales & Repairs</h3>
+        {/* BELOW-MINIMUM SALES, where the owner already looks each day rather
+            than on a screen of their own. Managers see the count and the
+            seller; only cost-visible viewers see the floor, the cost and the
+            gap (domain/priceFloor.ts's trimBelowFloorRows). */}
+        {belowFloorLabel && (
+          <div className="mb-3 rounded-lg border border-rose-200 dark:border-rose-800 bg-rose-50/60 dark:bg-rose-900/20 px-3 py-2">
+            <p className="text-xs font-semibold text-rose-800 dark:text-rose-300">{belowFloorLabel}</p>
+            <ul className="mt-1 space-y-0.5">
+              {belowFloorRows.map(r => (
+                <li key={`${r.transactionId}:${r.lineIndex}`} className="text-[11px] text-rose-700/80 dark:text-rose-300/80">
+                  {r.device} · {money(r.salePrice)}{r.seller ? ` · ${r.seller.split('@')[0]}` : ' · unattributed'}
+                  {r.gap != null && <span className="font-medium"> · {money(r.gap)} under minimum</span>}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
           <Stat label="Sales" value={String(eod.sales)} />
           <Stat label="Revenue" value={money(eod.revenue)} />
@@ -1447,6 +1480,107 @@ const ExpensesTab: React.FC<{
           onConfirm={amount => onGenerateRecurringExpense(enteringVariable.r, enteringVariable.p, amount)}
         />
       )}
+    </div>
+  );
+};
+
+
+/* ---------------- Sold below minimum ---------------- */
+
+/**
+ * Every sale that went out under the device's minimum price, over a range.
+ *
+ * WHO SEES WHAT. A manager holds reports.profit.summary and sees the date, the
+ * seller, the device and the price — enough to know who is discounting —
+ * while the floor, the cost and the gap are REMOVED from the rows by
+ * trimBelowFloorRows rather than hidden by this markup, so the export cannot
+ * leak what the screen withholds. Only reports.profit.detailed sees those.
+ */
+const BelowMinimumTab: React.FC<{
+  salesTransactions: SalesTransaction[];
+  canViewCost: boolean;
+  booksStartDate?: string;
+}> = ({ salesTransactions, canViewCost, booksStartDate }) => {
+  const [start, setStart] = useState(monthStartISO());
+  const [end, setEnd] = useState(todayISO());
+
+  const rows = useMemo(
+    () => trimBelowFloorRows(
+      belowFloorSales(salesTransactions, { start: clampToBooksStart(start, booksStartDate), end }),
+      canViewCost,
+    ),
+    [salesTransactions, start, end, canViewCost, booksStartDate],
+  );
+
+  const exportCsv = () => {
+    // The SAME rows the screen shows, already trimmed.
+    triggerDownload(`below-minimum_${start}_${end}.csv`, toCSV(rows.map(r => ({
+      date: r.date, seller: r.seller || 'unattributed', device: r.device,
+      salePrice: r.salePrice.toFixed(2),
+      ...(r.floorAtSale != null ? { minimum: r.floorAtSale.toFixed(2) } : {}),
+      ...(r.gap != null ? { under: r.gap.toFixed(2) } : {}),
+    }))), 'text/csv;charset=utf-8;');
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className={`${card} p-5`}>
+        <div className="flex flex-wrap items-end gap-4">
+          <div>
+            <label className={label}>From</label>
+            <input type="date" value={start} onChange={e => setStart(e.target.value)} className={input} />
+          </div>
+          <div>
+            <label className={label}>To</label>
+            <input type="date" max={todayISO()} value={end} onChange={e => setEnd(e.target.value)} className={input} />
+          </div>
+          {rows.length > 0 && (
+            <button onClick={exportCsv} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800">
+              <Download className="w-3.5 h-3.5" /> Export CSV
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className={`${card} p-5`}>
+        <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200 mb-3">
+          {belowFloorCountLabel(rows.length) || 'No sales below minimum'}
+        </h3>
+        {rows.length === 0 ? (
+          <p className="text-sm text-slate-400">Nothing went out under its minimum price in this range.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-[11px] uppercase tracking-wide text-slate-400 text-left">
+                  <th className="py-1.5 pr-3 font-medium">Date</th>
+                  <th className="py-1.5 pr-3 font-medium">Seller</th>
+                  <th className="py-1.5 pr-3 font-medium">Device</th>
+                  <th className="py-1.5 pr-3 font-medium text-right">Sold for</th>
+                  {canViewCost && <th className="py-1.5 pr-3 font-medium text-right">Minimum</th>}
+                  {canViewCost && <th className="py-1.5 font-medium text-right">Under by</th>}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                {rows.map(r => (
+                  <tr key={`${r.transactionId}:${r.lineIndex}`}>
+                    <td className="py-1.5 pr-3 text-slate-500 tabular-nums whitespace-nowrap">{r.date}</td>
+                    {/* The seller is shown to managers as well — knowing WHO is
+                        discounting needs no access to what the shop pays. */}
+                    <td className="py-1.5 pr-3 text-slate-700 dark:text-slate-200">
+                      {r.seller ? r.seller.split('@')[0] : <span className="italic text-slate-400">unattributed</span>}
+                    </td>
+                    <td className="py-1.5 pr-3 text-slate-700 dark:text-slate-200">{r.device}</td>
+                    <td className="py-1.5 pr-3 text-right tabular-nums text-slate-900 dark:text-white">{money(r.salePrice)}</td>
+                    {canViewCost && <td className="py-1.5 pr-3 text-right tabular-nums text-slate-500">{r.floorAtSale != null ? money(r.floorAtSale) : '—'}</td>}
+                    {canViewCost && <td className="py-1.5 text-right tabular-nums text-rose-600 dark:text-rose-400">{r.gap != null ? money(r.gap) : '—'}</td>}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   );
 };

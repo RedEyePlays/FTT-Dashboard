@@ -47,8 +47,8 @@ import { bonusDrawerEffect, canSaveBonus, visibleBonuses } from './domain/bonuse
 import { attributeDrawerEntry, stampNewEntries } from './domain/dayLedger';
 import { CrashReport, crashActivityLine, crashId } from './domain/crashReport';
 import { isCostEntry, isCostEntryField, costAccessFor } from './domain/costVisibility';
-import { floorFor, buildFloorApprovalAudit, targetBelowFloor, TARGET_BELOW_FLOOR_NOTE } from './domain/priceFloor';
-import { ApproveBelowFloorModal } from './components/ApproveBelowFloorModal';
+import { dbErrorHeading } from './domain/subscriptionAccess';
+import { floorFor, buildBelowFloorSaleAudit, targetBelowFloor, TARGET_BELOW_FLOOR_NOTE, belowFloorSales } from './domain/priceFloor';
 import { paidBreakChangeImpact, paidBreakChangeMessage, paidBreakChangeAudit, sameReasons } from './domain/paidBreakChange';
 import { buildKioskClockIn, buildKioskClockOut, buildKioskStartBreak, buildKioskEndBreak, validateKioskWrite } from './domain/kiosk';
 import { markTicketDeviceSold } from './domain/repairVisibility';
@@ -293,62 +293,6 @@ const App: React.FC = () => {
   // anyone, not just owner/manager. This only sets the overlay flag; unlike
   // handleLock it never signs out, so the session/cart/etc. are untouched.
   const handleManualLock = () => setAppLocked(true);
-
-  /* --- Below-floor approval (domain/priceFloor.ts) ---------------------- */
-  //
-  // Staff can't see cost, so nothing stopped them selling a device below what
-  // the shop paid for it. A below-floor line blocks the sale until a manager
-  // or owner signs it off with THEIR OWN PIN.
-  const [floorApproval, setFloorApproval] = useState<
-    { line: { key: string; name: string; price: number; inventoryId?: string };
-      resolve: (v: { uid: string; email: string } | null) => void } | null
-  >(null);
-
-  // Who can approve: managers and owners who actually have a PIN set. Somebody
-  // without one cannot be offered, and the modal says so rather than failing
-  // silently at the keypad.
-  const floorApprovers = useMemo(
-    () => workspaceUsers.filter(u => !u.disabled && (u.role === 'owner' || u.role === 'manager') && !!u.pinHash && !!u.pinSalt),
-    [workspaceUsers],
-  );
-
-  // Verifies the APPROVER's PIN, not the seller's. Reuses the same
-  // domain/pin.ts verifyPin the lock screen uses — one PIN implementation.
-  const verifyApproverPin = async (approverUid: string, pin: string): Promise<boolean> => {
-    const u = floorApprovers.find(x => x.id === approverUid);
-    if (!u?.pinHash || !u.pinSalt) return false;
-    return verifyPin(pin, { hash: u.pinHash, salt: u.pinSalt, iterations: u.pinIterations || 0 });
-  };
-
-  const requestFloorApproval = (line: { key: string; name: string; price: number; inventoryId?: string }) =>
-    new Promise<{ uid: string; email: string } | null>(resolve => setFloorApproval({ line, resolve }));
-
-  const completeFloorApproval = (approver: AppUser | null) => {
-    if (!floorApproval) return;
-    if (approver) {
-      const item = dataRef.current.find(i => i.id === floorApproval.line.inventoryId);
-      const floor = item
-        ? floorFor(item, { minMarginPercent: settings.operations.minMarginPercent, minMarginDollars: settings.operations.minMarginDollars })
-        : null;
-      // The floor and the cost DO go in the audit record — it is owner-visible
-      // only, and without them it cannot answer "how far below was it?". They
-      // are never shown on screen to the seller.
-      audit('sale.below_floor_approved', 'inventory', floorApproval.line.inventoryId, undefined,
-        buildFloorApprovalAudit({
-          sellerUid: appUser?.id || '', sellerEmail: appUser?.email || '',
-          approverUid: approver.id, approverEmail: approver.email,
-          inventoryId: floorApproval.line.inventoryId,
-          deviceLabel: floorApproval.line.name,
-          salePrice: floorApproval.line.price,
-          floorPrice: floor?.price ?? null,
-          costAtApproval: floor?.cost ?? null,
-          at: Date.now(),
-        }));
-      logActivity(`${floorApproval.line.name} approved below minimum price by ${approver.email.split('@')[0]}`);
-    }
-    floorApproval.resolve(approver ? { uid: approver.id, email: approver.email } : null);
-    setFloorApproval(null);
-  };
 
   /* --- FAST USER SWITCHING on a shared register ------------------------- */
   //
@@ -992,9 +936,35 @@ const App: React.FC = () => {
   // create a sales transaction + customer, log activity — one atomic commit.
   const handleSellCart = (payload: CartCheckout) => {
     if (!uid || !allow('sales.complete')) return;
-    const balanceOwing = payload.transaction.balanceOwing || 0;
+    // WHO RANG IT, from the authenticated user — never from the payload. The
+    // below-minimum review list needs it to answer "who is discounting", and
+    // a seller the client could set would not be an answer.
+    const transaction: SalesTransaction = {
+      ...payload.transaction,
+      soldBy: appUser.id,
+      soldByEmail: appUser.email,
+    };
+    const balanceOwing = transaction.balanceOwing || 0;
     const isLayaway = balanceOwing > 0;
-    audit('sale.complete', 'sale', payload.transaction.id, undefined, { totalPaid: payload.transaction.totalPaid, lines: payload.transaction.lines.length, deposit: payload.transaction.deposit, balanceOwing: balanceOwing || undefined });
+    audit('sale.complete', 'sale', transaction.id, undefined, { totalPaid: transaction.totalPaid, lines: transaction.lines.length, deposit: transaction.deposit, balanceOwing: balanceOwing || undefined });
+    // BELOW THE MINIMUM. One audit entry per discounted line, so the owner can
+    // review each one rather than a sale-level flag that hides which device it
+    // was. The floor and the cost go in the RECORD only — it is owner-visible,
+    // and without them it cannot answer how far below the price was.
+    transaction.lines.forEach((l, lineIndex) => {
+      if (!l.belowFloor) return;
+      audit('sale.below_minimum', 'sale', transaction.id, undefined, buildBelowFloorSaleAudit({
+        sellerUid: appUser.id, sellerEmail: appUser.email,
+        inventoryId: l.inventoryId,
+        deviceLabel: l.name || `Line ${lineIndex + 1}`,
+        salePrice: l.unitPrice || 0,
+        transactionId: transaction.id,
+        floorPrice: l.floorAtSale ?? null,
+        costAtSale: l.costAtSale ?? null,
+        at: Date.now(),
+      }));
+      logActivity(`${l.name || 'Device'} sold below minimum price by ${appUser.email.split('@')[0]}`);
+    });
     // Pass a signed delta (not an absolute quantity): commitSale applies it with
     // Firestore's atomic increment(), so two concurrent sales of the same
     // accessory both subtract correctly instead of one silently overwriting the
@@ -1016,12 +986,12 @@ const App: React.FC = () => {
         const a = dataRef.current.find(i => i.id === id); return mkActivity(`${a?.sku || 'Accessory'} quantity updated`);
       }),
     ];
-    commitSale(uid, { soldRows: payload.soldRows, accessoryUpdates, transaction: payload.transaction, customer: payload.customer, activity }).catch(e => writeFailed('The sale', e, 'The customer has NOT been charged in the records and stock was not adjusted.'));
+    commitSale(uid, { soldRows: payload.soldRows, accessoryUpdates, transaction, customer: payload.customer, activity }).catch(e => writeFailed('The sale', e, 'The customer has NOT been charged in the records and stock was not adjusted.'));
 
     // Repair checkout: this sale recognized a repair's revenue/profit, so stamp
     // the repair complete and link it to the transaction. Analytics reads that
     // link to count the repair's money once (via the sale), never twice.
-    const repairId = payload.transaction.repairId;
+    const repairId = transaction.repairId;
     if (repairId && !isLayaway) {
       const rep = repairsRef.current.find(r => r.id === repairId);
       if (rep) {
@@ -1029,11 +999,11 @@ const App: React.FC = () => {
         // Backdated the same way the sale itself was — a repair checked out
         // through a backdated Quick Sale reflects that same completion date,
         // not the moment it was actually entered.
-        const done = { ...completeRepairSale(rep, payload.transaction.id, dateToEpochMs(payload.transaction.date), terminal), completedBy: appUser.id };
+        const done = { ...completeRepairSale(rep, transaction.id, dateToEpochMs(transaction.date), terminal), completedBy: appUser.id };
         saveItem(uid, 'repairs', done);
-        logActivity(`${done.repairNumber} checked out (${payload.transaction.customerName || 'customer'})`);
+        logActivity(`${done.repairNumber} checked out (${transaction.customerName || 'customer'})`);
         audit('repair.status_change', 'repair', done.id, { status: rep.status }, { status: terminal });
-        audit('repair.completed', 'repair', done.id, undefined, { salesTransactionId: payload.transaction.id });
+        audit('repair.completed', 'repair', done.id, undefined, { salesTransactionId: transaction.id });
       }
     }
 
@@ -2688,7 +2658,7 @@ const App: React.FC = () => {
 
   // --- FIRESTORE CONNECTION STATES ---
   if (dbError) {
-    return <DbErrorScreen message={dbError} onRetry={reconnect} onSignOut={handleLock} />;
+    return <DbErrorScreen heading={dbErrorHeading(dbError.kind)} message={dbError.message} onRetry={reconnect} onSignOut={handleLock} />;
   }
   if (roleLoading || dbLoading || !appUser) {
     return roleLoading || !appUser
@@ -3025,7 +2995,6 @@ const App: React.FC = () => {
               onConsumeInitialRepair={() => setPrefillRepairSale(undefined)}
               onSellCart={handleSellCart}
               floorSettings={{ minMarginPercent: settings.operations.minMarginPercent, minMarginDollars: settings.operations.minMarginDollars }}
-              onApproveBelowFloor={requestFloorApproval}
               canViewProfit={allow('reports.profit.detailed')}
               onGenerateSku={(deviceType) => handleGenerateSku('device', deviceType)}
               cashDrawer={allow('cash.log') ? todayDrawer : undefined}
@@ -3266,16 +3235,6 @@ const App: React.FC = () => {
            canManageSettings={allow('settings.manage')}
            backup={allow('backup.export') ? { lastBackup, onExportJson: handleExportJson, onExportCsv: handleExportCsv } : undefined}
          />
-      )}
-
-      {floorApproval && (
-        <ApproveBelowFloorModal
-          line={floorApproval.line}
-          approvers={floorApprovers}
-          onVerify={verifyApproverPin}
-          onApproved={completeFloorApproval}
-          onCancel={() => completeFloorApproval(null)}
-        />
       )}
 
       {showFinder && <Suspense fallback={null}><GlobalSearch

@@ -38,14 +38,18 @@ export const LoadingSkeleton: React.FC<{ message: string }> = ({ message }) => (
 );
 
 export const DbErrorScreen: React.FC<{
+  // The heading must match the CAUSE. "Couldn't reach the database" over a
+  // permission denial sent people to check their wifi, which costs more time
+  // than no message at all (domain/subscriptionAccess.ts's dbErrorHeading).
+  heading?: string;
   message: string;
   onRetry: () => void;
   onSignOut: () => void;
-}> = ({ message, onRetry, onSignOut }) => (
+}> = ({ heading = "Couldn't reach the database", message, onRetry, onSignOut }) => (
   <div className="min-h-screen flex flex-col items-center justify-center gap-4 bg-slate-50 dark:bg-slate-950 text-center px-6">
     <div className="w-14 h-14 rounded-full bg-rose-100 dark:bg-rose-900/30 flex items-center justify-center text-rose-500 text-2xl">!</div>
     <div>
-      <p className="text-lg font-bold text-slate-800 dark:text-slate-100">Couldn't reach the database</p>
+      <p className="text-lg font-bold text-slate-800 dark:text-slate-100">{heading}</p>
       <p className="text-sm text-slate-500 dark:text-slate-400 mt-1 max-w-md">{message}</p>
     </div>
     <div className="flex gap-2">
