@@ -36,8 +36,11 @@ export const collectionFor = (i: InventoryItem): InventoryCollection =>
 // cost" row (InventoryView.tsx's InvCard). InventoryView filters every column
 // through this before it reaches the desktop table OR the CSV export, so an
 // unauthorized role can't see or export cost data through either path.
-const COST_REVEALING_COLUMN_KEYS: readonly string[] = ['purchaseCost', 'repairCost', '__total', '__profit', 'costPerUnit'];
-export const isCostRevealingColumn = (key: string): boolean => COST_REVEALING_COLUMN_KEYS.includes(key);
+// MOVED to domain/costVisibility.ts, which splits this one list into the two
+// rules it was conflating: the cost fields staff may RECORD but not read (so
+// they are masked, not removed) and the derived figures that can only ever be
+// hidden. Re-exported here so existing importers keep working.
+export { isCostRevealingColumn, isDerivedCostColumn } from './costVisibility';
 
 // The signed change to an accessory's on-hand quantity when `sold` units leave
 // stock — always a decrement (you can't sell a negative quantity). This delta is

@@ -46,6 +46,7 @@ import { repairCostWriteback, applyRepairCostDelta } from './domain/repairCostWr
 import { bonusDrawerEffect, canSaveBonus, visibleBonuses } from './domain/bonuses';
 import { attributeDrawerEntry, stampNewEntries } from './domain/dayLedger';
 import { CrashReport, crashActivityLine, crashId } from './domain/crashReport';
+import { isCostEntry, isCostEntryField, costAccessFor } from './domain/costVisibility';
 import { paidBreakChangeImpact, paidBreakChangeMessage, paidBreakChangeAudit, sameReasons } from './domain/paidBreakChange';
 import { buildKioskClockIn, buildKioskClockOut, buildKioskStartBreak, buildKioskEndBreak, validateKioskWrite } from './domain/kiosk';
 import { markTicketDeviceSold } from './domain/repairVisibility';
@@ -828,7 +829,26 @@ const App: React.FC = () => {
     const label = target.sku || target.item || id;
     if (field === 'deviceStatus') logActivity(`${label} marked ${String(value).replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}`);
     else if (field === 'quantity') { logActivity(`${label} quantity updated`); audit('accessory.quantity', collectionFor(target), id, { quantity: target.quantity }, { quantity: value }); }
+    // A cost that is ALREADY recorded may only be changed by somebody who can
+    // see it. Checked BEFORE anything is audited or written: without this,
+    // re-typing the field would be a way to learn it — type a number and watch
+    // whether the app treats it as a change. The UI renders these cells
+    // read-only, so reaching here means the guard is doing real work.
+    if (isCostEntryField(field as string)
+      && costAccessFor(allow('reports.profit.detailed'), (target as any)[field]) === 'locked') {
+      return Promise.resolve();
+    }
     audit('inventory.edit', collectionFor(target), id, { [field]: (target as any)[field] }, { [field]: value });
+    // RECORDING A COST gets its own audit entry, distinct from the generic
+    // inventory.edit above. It is the moment a device stops looking like 100%
+    // margin, and the owner needs to be able to see who supplied the number
+    // without reading every edit on the row.
+    if (isCostEntry(field as string, (target as any)[field], value)) {
+      audit('inventory.cost_recorded', collectionFor(target), id, undefined, {
+        field, value, device: label, by: appUser?.email,
+      });
+      logActivity(`${label} — ${field === 'repairCost' ? 'repair cost' : 'cost'} recorded`);
+    }
     // Entering an Actual sale price inline records a direct sale: stamp soldDate +
     // mark sold (like Quick Sale) so it leaves active stock and feeds reporting.
     const next = applyDirectSale({ ...target, [field]: value });

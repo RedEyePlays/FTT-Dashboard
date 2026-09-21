@@ -167,6 +167,12 @@ export interface AppSettings {
     // When that list last changed. Only used to date the "figures
     // recalculated" note on a pay period — the setting itself is the list.
     paidBreakReasonsUpdatedAt?: number;
+    // FLOOR PRICE (domain/priceFloor.ts). A device must sell for at least
+    // cost + percent AND cost + dollars — whichever is higher, since each
+    // guards a different worry. Both unset = no floor, which is exactly
+    // today's behaviour.
+    minMarginPercent?: number;
+    minMarginDollars?: number;
   };
   // Owner-configurable pay-period schedule (domain/timeclock.ts's payPeriodFor/
   // recentPayPeriods read these instead of the old hardcoded constants).
