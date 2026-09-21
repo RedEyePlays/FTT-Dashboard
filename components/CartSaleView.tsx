@@ -5,7 +5,7 @@ import {
   Printer, Eye, RotateCcw, QrCode, Sparkles, AlertTriangle, Wrench, HandCoins,
 } from 'lucide-react';
 import { InventoryItem, Customer, DeviceType, Repair } from '../types';
-import { FloorSettings } from '../domain/priceFloor';
+import { FloorSettings, belowFloorGapLabel } from '../domain/priceFloor';
 import { RepairSalePrefill } from '../domain/repairs';
 import { getDeviceDisplayName, suggestedSalePrice, PriceSuggestion } from '../domain/inventory';
 // Lazy: the label modal pulls in jsPDF (~390 kB). Load it only when a label is
@@ -41,8 +41,6 @@ interface Props {
   // Floor price (domain/priceFloor.ts) — the workspace margin settings, and
   // the manager/owner PIN approval for a line that falls under its floor.
   floorSettings?: FloorSettings;
-  onApproveBelowFloor?: (line: { key: string; name: string; price: number; inventoryId?: string }) =>
-    Promise<{ uid: string; email: string } | null>;
 }
 
 // Desktop split-screen Quick Sale. All state / pricing / checkout logic lives in
@@ -287,6 +285,19 @@ export const CartSaleView: React.FC<Props> = (props) => {
                           price is safe to show (unlike a cost). */}
                       {cx.targetPriceOf(l) != null && (
                         <span className="block text-[11px] text-slate-400">Target {money(cx.targetPriceOf(l)!)}</span>
+                      )}
+                      {/* BELOW THE MINIMUM. A warning, not a block — the sale
+                          completes and the owner reviews it afterwards. The
+                          sentence names no figure; only somebody who may see
+                          cost gets the gap, on its own line, because the gap
+                          plus the price IS the floor. */}
+                      {cx.isBelowFloorLine(l) && (
+                        <span className="block text-[11px] font-medium text-rose-600 dark:text-rose-400">
+                          {cx.BELOW_FLOOR_WARNING}
+                          {canViewProfit && belowFloorGapLabel(cx.belowFloorGap(l)) && (
+                            <span className="font-normal"> {belowFloorGapLabel(cx.belowFloorGap(l))}</span>
+                          )}
+                        </span>
                       )}
                       {/* Owner-facing only: Part 1 exists to shrink this set. */}
                       {canViewProfit && cx.hasNoCostRecorded(l) && (
@@ -545,36 +556,12 @@ export const CartSaleView: React.FC<Props> = (props) => {
           </div>
         )}
 
-        {/* FLOOR PRICE. The sentence names no figure — not the floor, not the
-            cost, not the gap — because each of those is the cost
-            back-computable in one subtraction. It reads identically for
-            everyone, so a seller cannot tell from the wording whether the
-            person beside them can see more than they can. */}
-        {cx.blockedByFloor && (
-          <div className="bg-rose-50 dark:bg-rose-900/20 border border-rose-300 dark:border-rose-500/40 rounded-xl p-3 text-sm">
-            <p className="flex items-center gap-2 font-semibold text-rose-800 dark:text-rose-300">
-              <AlertTriangle className="w-4 h-4" /> Minimum price
-            </p>
-            {cx.belowFloorLines.map(l => (
-              <div key={l.key} className="mt-1.5">
-                <p className="text-xs text-rose-700/80 dark:text-rose-300/80">
-                  {l.name} — {cx.BELOW_FLOOR_MESSAGE}
-                </p>
-                <button type="button" onClick={() => cx.approveFloorLine(l)}
-                  className="mt-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-rose-600 hover:bg-rose-500 text-white">
-                  Get approval
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-
         <label className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300 cursor-pointer select-none">
           <input type="checkbox" checked={printReceiptOnComplete} onChange={e => setPrintReceiptOnComplete(e.target.checked)} className="rounded" />
           <Printer className="w-3.5 h-3.5 text-slate-400" /> Print receipt on completion
         </label>
 
-        <button onClick={handleCheckout} disabled={isSubmitting || cart.length === 0 || blockedByZeroPrice || blockedByListedElsewhere || blockedByOpenRepair || cx.blockedByFloor || mixedPaymentMismatch}
+        <button onClick={handleCheckout} disabled={isSubmitting || cart.length === 0 || blockedByZeroPrice || blockedByListedElsewhere || blockedByOpenRepair || mixedPaymentMismatch}
           className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold rounded-xl text-sm transition-colors flex items-center justify-center gap-2">
           <ShoppingCart className="w-4 h-4" /> {isSubmitting ? 'Processing…' : isLayaway ? `Take Deposit · ${money(cx.depositAmount)}` : `Complete Sale · ${money(totalPaid)}`}
         </button>

@@ -7,6 +7,8 @@ import {
   TimeEntry, AppUser, CashReconciliation, ViewState, Settlement,
 } from '../types';
 import { computeAnalytics, presetRange } from '../domain/analytics';
+import { belowFloorCountForDate, belowFloorCountLabel } from '../domain/priceFloor';
+import { todayISO } from '../domain/dates';
 import { CashDrawerSummary } from '../domain/reports';
 import { missedClockOuts } from '../domain/timeclock';
 import { Alert } from '../domain/alerts';
@@ -46,6 +48,9 @@ export const CloseOutView: React.FC<Props> = ({
   alerts, settlements, todayDrawer, todayRecon, booksStartDate, onNavigate,
 }) => {
   const now = Date.now();
+  // Counted, never recomputed — belowFloorSales reads the stamp each line
+  // carries from the moment it sold (domain/priceFloor.ts).
+  const belowMinimumLabel = belowFloorCountLabel(belowFloorCountForDate(salesTransactions, todayISO(now)));
 
   // Today's sales + profit + repairs completed — the exact same end-of-day
   // figures Owner Analytics computes, not a second calculation of them.
@@ -76,6 +81,10 @@ export const CloseOutView: React.FC<Props> = ({
     ...missed.map(e => ({ text: `${nameById.get(e.userId) || e.userId} never clocked out (${new Date(e.clockIn).toLocaleDateString()})`, severity: 'warning' as const, view: 'timeclock' as ViewState })),
     ...(todayDrawer.opened && !reconciled ? [{ text: 'Cash drawer not reconciled yet today', severity: 'warning' as const, view: 'reports' as ViewState }] : []),
     ...(!todayDrawer.opened ? [{ text: 'Cash drawer was never opened today', severity: 'info' as const, view: 'pos' as ViewState }] : []),
+    // BELOW-MINIMUM SALES, in the list that is read when the day is closed —
+    // the count only, since the detail (seller, device, price) lives in Day
+    // History where the permission trimming already applies.
+    ...(belowMinimumLabel ? [{ text: `${belowMinimumLabel} today`, severity: 'warning' as const, view: 'reports' as ViewState }] : []),
     ...alerts.map(al => ({ text: al.text, severity: al.severity, view: al.view })),
   ];
 

@@ -38,16 +38,14 @@ interface Props {
   // Floor price (domain/priceFloor.ts) — the workspace margin settings, and
   // the manager/owner PIN approval for a line that falls under its floor.
   floorSettings?: FloorSettings;
-  onApproveBelowFloor?: (line: { key: string; name: string; price: number; inventoryId?: string }) =>
-    Promise<{ uid: string; email: string } | null>;
 }
 
 // Quick Sale = the desktop split-screen cart on ≥md, a step-based flow on phones.
 // Both share the same checkout logic (hooks/useCheckout) — no duplicated business
 // logic; only the presentation differs, and only one renders at a time.
-export const QuickSaleView: React.FC<Props> = ({ inventory, customers, repairs, initialCustomer, onConsumeInitial, initialRepair, onConsumeInitialRepair, onSellCart, canViewProfit = true, onGenerateSku, cashDrawer, onOpenDrawer, onLogCash, onCloseDrawer, reconciledToday, onCartDirtyChange, persist, floorSettings, onApproveBelowFloor }) => {
+export const QuickSaleView: React.FC<Props> = ({ inventory, customers, repairs, initialCustomer, onConsumeInitial, initialRepair, onConsumeInitialRepair, onSellCart, canViewProfit = true, onGenerateSku, cashDrawer, onOpenDrawer, onLogCash, onCloseDrawer, reconciledToday, onCartDirtyChange, persist, floorSettings }) => {
   const isMobile = useIsMobile();
-  const common = { inventory, customers, repairs, initialCustomer, onConsumeInitial, initialRepair, onConsumeInitialRepair, canViewProfit, onGenerateSku, onDirtyChange: onCartDirtyChange, persist, floorSettings, onApproveBelowFloor } as const;
+  const common = { inventory, customers, repairs, initialCustomer, onConsumeInitial, initialRepair, onConsumeInitialRepair, canViewProfit, onGenerateSku, onDirtyChange: onCartDirtyChange, persist, floorSettings } as const;
   const checkout = isMobile
     ? <MobileCheckout {...common} onComplete={onSellCart} />
     : <CartSaleView {...common} onComplete={onSellCart} />;
