@@ -18,7 +18,10 @@ const LabelModal = lazy(() => import('./LabelModal').then(m => ({ default: m.Lab
 import { useIsMobile } from '../hooks/useMediaQuery';
 import { ResponsiveDialog, EmptyState } from './responsive';
 import { InvSection, INV_SECTIONS } from '../domain/inventoryNav';
-import { getDeviceDisplayName, priceFieldFor, isCostRevealingColumn } from '../domain/inventory';
+import { getDeviceDisplayName, priceFieldFor } from '../domain/inventory';
+import {
+  isDerivedCostColumn, isCostEntryField, costAccessFor, RECORDED_LABEL, stripCostFields,
+} from '../domain/costVisibility';
 import { listedElsewhereTitle } from '../domain/listing';
 import { clampWidth, fitWidths } from '../domain/columnLayout';
 import { usePersistedFilter } from '../hooks/usePersistedFilter';
@@ -277,14 +280,26 @@ const loadLS = <T,>(k: string, fb: T): T => { try { const r = localStorage.getIt
 // Filtered out of activeCols before the table renders or CSV exports it, so
 // an unauthorized role can't see or export cost data through either path
 // (see domain/inventory.ts's isCostRevealingColumn).
+// WITHOUT cost visibility, only the DERIVED columns (total, profit) are
+// removed. The three cost-ENTRY columns stay in the table and are masked per
+// cell — removing them was what took away the only place to type the value,
+// which is why every employee-added device looked like 100% margin until the
+// owner filled the cost in by hand.
 const visibleCols = (cols: Col[], canViewCost: boolean): Col[] =>
-  canViewCost ? cols : cols.filter(c => !isCostRevealingColumn(c.key));
+  canViewCost ? cols : cols.filter(c => !isDerivedCostColumn(c.key));
 
 // --- CSV helpers ---
-const toCSV = (rows: InventoryItem[], cols: Col[]): string => {
+// THE EXPORT WRITES RAW FIELDS, so masking the table cell is not enough on its
+// own: a masked column with an exportable value underneath is a mask in name
+// only. Every row goes through stripCostFields first, which replaces a
+// recorded cost with the word rather than the figure.
+const toCSV = (rows: InventoryItem[], cols: Col[], canViewCost: boolean): string => {
   const headers = ['kind', ...cols.filter(c => c.type !== 'computed').map(c => c.key)];
   const esc = (v: any) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-  const lines = rows.map(r => headers.map(h => esc(h === 'kind' ? kindOf(r) : (r as any)[h])).join(','));
+  const lines = rows.map(r => {
+    const safe = stripCostFields(r as unknown as Record<string, unknown>, canViewCost);
+    return headers.map(h => esc(h === 'kind' ? kindOf(r) : safe[h])).join(',');
+  });
   return [headers.join(','), ...lines].join('\n');
 };
 const parseCSV = (text: string): Record<string, string>[] => {
@@ -484,7 +499,7 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
   };
 
   const exportCSV = (rows: InventoryItem[], cols: Col[], name: string) => {
-    const blob = new Blob([toCSV(rows, cols)], { type: 'text/csv;charset=utf-8;' });
+    const blob = new Blob([toCSV(rows, cols, canViewCost)], { type: 'text/csv;charset=utf-8;' });
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `${name}_${today()}.csv`; a.click();
   };
   const exportAll = () => exportCSV(inventory, visibleCols([...DEVICE_COLS, ...ACCESSORY_COLS], canViewCost), 'inventory');
@@ -723,7 +738,7 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
           {/* Desktop: single table for this page */}
           <div className="hidden md:flex flex-1 flex-col gap-3 overflow-hidden">
             <div className="flex-1 overflow-auto min-w-0">
-              <Sheet title={activeTitle} total={activeRows.length} cols={visCols(activeKind, activeCols)} rows={pageRows}
+              <Sheet title={activeTitle} total={activeRows.length} cols={visCols(activeKind, activeCols)} rows={pageRows} canViewCost={canViewCost}
                 sort={sort} onSort={onSortToggle} selected={selected} onToggleSel={toggleSel} onToggleAll={toggleSelAll}
                 onUpdate={onUpdate} onDelete={onDelete} onDuplicate={duplicate} onExpand={setExpandItem} onLabel={setLabelItem}
                 onHistory={(it, mode) => setHistoryItem({ item: it, mode })}
@@ -825,7 +840,7 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
         </div>
       </ResponsiveDialog>
 
-      {expandItem && <ItemFormModal initial={expandItem} deviceBuyers={deviceBuyers} onSave={onSave} onGenerateSku={onGenerateSku} onClose={() => setExpandItem(null)}
+      {expandItem && <ItemFormModal initial={expandItem} canViewCost={canViewCost} deviceBuyers={deviceBuyers} onSave={onSave} onGenerateSku={onGenerateSku} onClose={() => setExpandItem(null)}
         linkedRepair={linkedRepairOf(expandItem.id)}
         onCreateRepair={onCreateRepair ? () => { onCreateRepair(expandItem); setExpandItem(null); } : undefined}
         onOpenRepair={onOpenRepair ? (id: string) => { onOpenRepair(id); setExpandItem(null); } : undefined}
@@ -924,7 +939,11 @@ const Sheet: React.FC<{
   openRepairOf?: (id: string) => Repair | undefined;
   widths?: Record<string, number>; onResize?: (key: string, w: number) => void; onResetWidth?: (key: string) => void;
   onAddRow?: () => void; addLabel: string; lowFlag?: boolean;
-}> = ({ title, total, cols, rows, sort, onSort, selected, onToggleSel, onToggleAll, onUpdate, onDelete, onDuplicate, onExpand, onLabel, onHistory, linkedRepairOf, onCreateRepair, onOpenRepair, openRepairOf, widths, onResize, onResetWidth, onAddRow, addLabel, lowFlag }) => {
+  // Drives the per-cell cost mask. The COLUMNS are already filtered by
+  // visibleCols; this is what decides, cell by cell, whether a cost field is
+  // enterable (blank) or shown as "Recorded" (already set).
+  canViewCost: boolean;
+}> = ({ title, total, cols, rows, sort, onSort, selected, onToggleSel, onToggleAll, onUpdate, onDelete, onDuplicate, onExpand, onLabel, onHistory, linkedRepairOf, onCreateRepair, onOpenRepair, openRepairOf, widths, onResize, onResetWidth, onAddRow, addLabel, lowFlag, canViewCost }) => {
   // Row overflow menu. State lives at the Sheet root and the menu renders outside
   // the sticky table subtree (fixed-positioned) so it isn't clipped or trapped
   // under the sticky columns' stacking context.
@@ -1169,6 +1188,15 @@ const Sheet: React.FC<{
                         <DateCell value={(i[c.key as keyof InventoryItem] as any) ?? ''}
                           onChange={v => onUpdate(i.id, c.key as keyof InventoryItem, v)}
                           className={`${cellBase} ${emph(c)} dark:[color-scheme:dark]`} />
+                      ) : isCostEntryField(c.key) && costAccessFor(canViewCost, i[c.key as keyof InventoryItem]) === 'locked' ? (
+                        // RECORDED, and this viewer may not see it. Rendered as
+                        // a word, never a figure — and NOT as a disabled input
+                        // holding the value, which would put it in the DOM.
+                        // Read-only because re-typing the field would otherwise
+                        // be a way to learn it.
+                        <div className={`px-2 py-1.5 text-sm truncate ${c.align === 'right' ? 'text-right' : ''} text-slate-400 italic`}>
+                          {RECORDED_LABEL}
+                        </div>
                       ) : (
                         <div className="relative">
                           {low && c.key === 'quantity' && <AlertTriangle className="w-3 h-3 text-rose-500 absolute right-1 top-1/2 -translate-y-1/2 pointer-events-none" />}

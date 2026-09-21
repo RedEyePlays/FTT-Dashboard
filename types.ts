@@ -59,6 +59,11 @@ export interface InventoryItem {
   condition?: string;
   purchaseSource?: string; // channel: Marketplace, Device Buyer, Trade-in, etc.
   targetSalePrice?: number;
+  // OWNER-ONLY per-device floor, for the phone that needs its own answer.
+  // Overrides the workspace margin settings outright (domain/priceFloor.ts) —
+  // a computed floor must never quietly raise a figure the owner set by hand.
+  // Absent on every device, which means "use the workspace setting".
+  minSalePrice?: number;
   deviceStatus?: DeviceStatus;
   listed?: boolean; // posted for sale (marketplace/storefront) — independent of deviceStatus
   // Which external platform(s) this item is ALSO currently listed on (multiple

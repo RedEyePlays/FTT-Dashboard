@@ -15,10 +15,16 @@ import { Wrench } from 'lucide-react';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 import { selectOnFocus } from '../hooks/selectOnFocus';
 import { todayISO } from '../domain/dates';
+import { costAccessFor, RECORDED_LABEL } from '../domain/costVisibility';
 
 interface Props {
   initial?: InventoryItem;
   initialKind?: ItemKind;
+  // reports.profit.detailed. Without it, a cost that is already RECORDED shows
+  // as a word rather than a figure and is read-only; a BLANK one is still
+  // enterable, which is the point — an employee adding a device must be able
+  // to put the cost in, just not read one back.
+  canViewCost?: boolean;
   deviceBuyers: DeviceBuyer[];
   onSave: (item: InventoryItem) => void;
   onGenerateSku: (kind: ItemKind, deviceType?: DeviceType) => Promise<string>;
@@ -72,7 +78,31 @@ const Field: React.FC<{ label: string; value: unknown; onChange: (v: string) => 
   </div>
 );
 
-export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, deviceBuyers, onSave, onGenerateSku, onClose, linkedRepair, onCreateRepair, onOpenRepair, inventory = [], customers, onCreateCustomer, notes, noteRole, onOpenNote }) => {
+/**
+ * A cost field staff may RECORD but not READ.
+ *
+ * Blank → an ordinary input, so an employee adding a device can put the cost
+ * in (the point of the whole change). Already recorded → the word, read-only,
+ * and the figure never reaches the DOM. Not a disabled input holding the
+ * value, which would put it there.
+ */
+const CostField: React.FC<{
+  label: string; value: unknown; onChange: (v: string) => void; canViewCost: boolean;
+  onFocus?: FocusEventHandler<HTMLInputElement>;
+}> = ({ label, value, onChange, canViewCost, onFocus }) => {
+  const access = costAccessFor(canViewCost, value);
+  if (access === 'locked') {
+    return (
+      <div>
+        <label className={lbl}>{label}</label>
+        <div className={`${inp} text-slate-400 italic select-none`}>{RECORDED_LABEL}</div>
+      </div>
+    );
+  }
+  return <Field label={label} value={value} onChange={onChange} type="number" onFocus={onFocus} />;
+};
+
+export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, canViewCost = false, deviceBuyers, onSave, onGenerateSku, onClose, linkedRepair, onCreateRepair, onOpenRepair, inventory = [], customers, onCreateCustomer, notes, noteRole, onOpenNote }) => {
   const [kind, setKind] = useState<ItemKind>(initial?.kind ?? initialKind ?? 'device');
   const [f, setF] = useState<InventoryItem>(() => initial ?? {
     id: uid(), kind: initialKind ?? 'device', sku: '', manufacturerBarcode: '',
@@ -243,9 +273,16 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, deviceBuy
                     {deviceBuyers.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
                   </select>
                 </div>
-                <Field label="Purchase Price ($)" value={f.purchaseCost} onChange={setNum('purchaseCost')} type="number" onFocus={selectOnFocus} />
-                <Field label="Repair Cost ($)" value={f.repairCost} onChange={setNum('repairCost')} type="number" onFocus={selectOnFocus} />
+                <CostField label="Purchase Price ($)" value={f.purchaseCost} onChange={setNum('purchaseCost')} canViewCost={canViewCost} onFocus={selectOnFocus} />
+                <CostField label="Repair Cost ($)" value={f.repairCost} onChange={setNum('repairCost')} canViewCost={canViewCost} onFocus={selectOnFocus} />
                 <Field label="Target Sale Price ($)" value={f.targetSalePrice} onChange={setNum('targetSalePrice')} type="number" onFocus={selectOnFocus} />
+                {/* OWNER-ONLY per-device floor, for the phone that needs its
+                    own answer. Hidden from staff entirely: it is a price, but
+                    one derived from cost, and showing it would give the game
+                    away on any device where it was set. */}
+                {canViewCost && (
+                  <Field label="Minimum Sale Price ($)" value={f.minSalePrice} onChange={setNum('minSalePrice')} type="number" placeholder="Use workspace setting" onFocus={selectOnFocus} />
+                )}
                 <Field label="Date In" value={f.date} onChange={setText('date')} type="date" />
               </div>
               {/* Record a sale made outside Quick Sale (private sale, trade show, …).
@@ -265,7 +302,7 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, deviceBuy
               <div className="col-span-2"><Field label="Item Name" value={f.item} onChange={setText('item')} placeholder="Lightning Cable 1m" /></div>
               <Field label="Category" value={f.category} onChange={setText('category')} placeholder="Cables" />
               <Field label="Quantity" value={f.quantity} onChange={setNum('quantity')} type="number" />
-              <Field label="Cost / Unit ($)" value={f.costPerUnit} onChange={setNum('costPerUnit')} type="number" onFocus={selectOnFocus} />
+              <CostField label="Cost / Unit ($)" value={f.costPerUnit} onChange={setNum('costPerUnit')} canViewCost={canViewCost} onFocus={selectOnFocus} />
               <Field label="Selling Price ($)" value={f.sellingPrice} onChange={setNum('sellingPrice')} type="number" onFocus={selectOnFocus} />
               <Field label="Low Stock Threshold" value={f.lowStockThreshold} onChange={setNum('lowStockThreshold')} type="number" />
               <Field label="Purchase Date" value={f.date} onChange={setText('date')} type="date" />

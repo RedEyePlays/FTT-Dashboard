@@ -10,9 +10,13 @@ import { ImeiScanner } from './ImeiScanner';
 import { selectOnFocus } from '../hooks/selectOnFocus';
 import { findDuplicateDevice } from '../domain/autoInventory';
 import { todayISO } from '../domain/dates';
+import { costAccessFor, RECORDED_LABEL } from '../domain/costVisibility';
 
 interface DataEntryFormProps {
   initialData?: InventoryItem;
+  // reports.profit.detailed. A RECORDED cost is masked; a blank one stays
+  // enterable (domain/costVisibility.ts).
+  canViewCost?: boolean;
   onSave: (item: InventoryItem) => void;
   onCancel: () => void;
   // Existing inventory, for the duplicate IMEI/serial guard (same check the
@@ -24,7 +28,7 @@ interface DataEntryFormProps {
   onCreateCustomer?: (draft: CustomerDraft) => Customer | undefined;
 }
 
-export const DataEntryForm: React.FC<DataEntryFormProps> = ({ initialData, onSave, onCancel, inventory = [], customers, onCreateCustomer }) => {
+export const DataEntryForm: React.FC<DataEntryFormProps> = ({ initialData, canViewCost = false, onSave, onCancel, inventory = [], customers, onCreateCustomer }) => {
   // Initialize state with a default structure or from initialData
   const [formData, setFormData] = useState<Omit<InventoryItem, 'id'>>({
     date: todayISO(),
@@ -158,7 +162,14 @@ export const DataEntryForm: React.FC<DataEntryFormProps> = ({ initialData, onSav
                 onChange={v => setFormData(prev => ({ ...prev, ...v }))} />
               <div>
                 <label htmlFor="purchaseCost" className="block text-sm font-medium text-slate-600 dark:text-slate-300 mb-1">Purchase Cost ($)</label>
-                <input type="number" step="0.01" name="purchaseCost" id="purchaseCost" value={formData.purchaseCost} onChange={handleChange} onFocus={selectOnFocus} required className="w-full p-2 bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-600 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500"/>
+                {/* EDITING an existing device reaches this form with a stored
+                    cost in it, so a plain input would have shown staff the
+                    figure. Blank stays enterable — that is the point. */}
+                {costAccessFor(canViewCost, formData.purchaseCost) === 'locked' ? (
+                  <div className="w-full p-2 bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-600 rounded-md text-slate-400 italic select-none">{RECORDED_LABEL}</div>
+                ) : (
+                  <input type="number" step="0.01" name="purchaseCost" id="purchaseCost" value={formData.purchaseCost} onChange={handleChange} onFocus={selectOnFocus} required className="w-full p-2 bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-600 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500"/>
+                )}
               </div>
             </div>
         </div>
@@ -188,7 +199,11 @@ export const DataEntryForm: React.FC<DataEntryFormProps> = ({ initialData, onSav
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                <div>
                   <label htmlFor="repairCost" className="block text-sm font-medium text-slate-600 dark:text-slate-300 mb-1">Repair Costs ($)</label>
-                  <input type="number" step="0.01" name="repairCost" id="repairCost" value={formData.repairCost} onChange={handleChange} onFocus={selectOnFocus} className="w-full p-2 bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-600 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500"/>
+                  {costAccessFor(canViewCost, formData.repairCost) === 'locked' ? (
+                    <div className="w-full p-2 bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-600 rounded-md text-slate-400 italic select-none">{RECORDED_LABEL}</div>
+                  ) : (
+                    <input type="number" step="0.01" name="repairCost" id="repairCost" value={formData.repairCost} onChange={handleChange} onFocus={selectOnFocus} className="w-full p-2 bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-600 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500"/>
+                  )}
                 </div>
                 <div>
                   <label htmlFor="shippingCost" className="block text-sm font-medium text-slate-600 dark:text-slate-300 mb-1">Shipping Costs ($)</label>

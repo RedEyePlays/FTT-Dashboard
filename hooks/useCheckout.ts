@@ -9,6 +9,9 @@ import { RepairSalePrefill, repairSalePrefill, isRepairOpen, matchesRepair, open
 import { printSalesReceipt, PAYMENT_METHOD_LABEL } from '../services/salesReceipt';
 import { PRINT_PREVIEW_BAR_STYLE, PRINT_PREVIEW_BAR_HTML } from '../services/printPreview';
 import { todayISO } from '../domain/dates';
+import {
+  FloorSettings, floorFor, checkLineFloor, BELOW_FLOOR_MESSAGE, NO_COST_NOTE,
+} from '../domain/priceFloor';
 import { PersistedCheckoutState, revalidateRestoredCart, describeDroppedLines, checkoutStorageKey } from '../domain/checkoutPersistence';
 import { saveCheckoutState, loadCheckoutState, clearCheckoutState } from '../services/checkoutPersistence';
 
@@ -87,11 +90,19 @@ interface Args {
   // cart. Both ids are required together so a caller can't build a
   // half-scoped key by accident.
   persist?: { workspaceId: string; userId: string } | null;
+  // settings.operations.minMarginPercent / minMarginDollars — the workspace
+  // floor. Unset = no floor, which is exactly today's behaviour.
+  floorSettings?: FloorSettings;
+  // Approve a below-floor line. Resolves to the approver (a manager or owner
+  // who entered THEIR OWN PIN — never the seller's) or null if they backed
+  // out. Absent means no approval path is offered and the block simply stands.
+  onApproveBelowFloor?: (line: { key: string; name: string; price: number; inventoryId?: string }) =>
+    Promise<{ uid: string; email: string } | null>;
 }
 
 const uid = newId;
 
-export function useCheckout({ inventory, customers = [], repairs = [], initialCustomer, onConsumeInitial, initialRepair, onConsumeInitialRepair, onComplete, onGenerateSku, persist }: Args) {
+export function useCheckout({ inventory, customers = [], repairs = [], initialCustomer, onConsumeInitial, initialRepair, onConsumeInitialRepair, onComplete, onGenerateSku, persist, floorSettings = {}, onApproveBelowFloor }: Args) {
   const [cart, setCart] = useState<CartLine[]>([]);
   const [picker, setPicker] = useState<null | ItemKind>(null);
   const [search, setSearch] = useState('');
@@ -433,6 +444,60 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
   const hasOpenRepairDevice = openRepairLines.length > 0;
   const blockedByOpenRepair = hasOpenRepairDevice && !allowOpenRepairSale;
 
+  // Approvals are keyed by CART LINE, not by device: approving one line must
+  // not silently clear a second below-floor line in the same sale, and an
+  // approval must not survive the line being removed and re-added at a
+  // different price.
+  const [floorApprovals, setFloorApprovals] = useState<Record<string, { uid: string; email: string }>>({});
+
+  // FLOOR PRICE (domain/priceFloor.ts). Staff cannot see cost, so nothing
+  // stopped them selling a device below what the shop paid for it. A device
+  // line priced under its floor blocks checkout until a manager or owner
+  // approves it with their PIN.
+  //
+  // The message names no figure — not the floor, not the cost, not the gap,
+  // each of which is the cost back-computable in one subtraction.
+  const floorOf = (l: CartLine) => {
+    if (l.kind !== 'device' || l.isCustom || !l.inventoryId) return null;
+    const item = inventory.find(i => i.id === l.inventoryId);
+    return item ? floorFor(item, floorSettings) : null;
+  };
+  const belowFloorLines = cart.filter(l => {
+    const floor = floorOf(l);
+    // The price the customer actually pays for this line, AFTER its discount —
+    // a floor checked against the pre-discount price would be no floor at all.
+    return !!floor && !checkLineFloor(lineSubtotal(l) / Math.max(1, l.quantity), floor, !!floorApprovals[l.key]).ok;
+  });
+  const blockedByFloor = belowFloorLines.length > 0;
+
+  /** Per-line: is this one under its floor and not yet approved? */
+  const isBelowFloorLine = (l: CartLine) => belowFloorLines.some(x => x.key === l.key);
+  /** Owner-facing: this device has no recorded cost, so there is nothing to check. */
+  const hasNoCostRecorded = (l: CartLine) => floorOf(l)?.reason === 'no_cost';
+  /**
+   * Ask a manager or owner to approve one below-floor line.
+   *
+   * The approver enters THEIR OWN PIN — not the seller's. The seller learns
+   * nothing from the exchange either way: the approval is recorded, the price
+   * goes through, and no figure is ever shown to them.
+   */
+  const approveFloorLine = async (l: CartLine) => {
+    if (!onApproveBelowFloor) return;
+    const approver = await onApproveBelowFloor({
+      key: l.key, name: l.name,
+      price: lineSubtotal(l) / Math.max(1, l.quantity),
+      inventoryId: l.inventoryId || undefined,
+    });
+    if (approver) setFloorApprovals(a => ({ ...a, [l.key]: approver }));
+  };
+
+  /** The device's target price, the number staff are supposed to aim for. */
+  const targetPriceOf = (l: CartLine): number | null => {
+    if (l.kind !== 'device' || l.isCustom || !l.inventoryId) return null;
+    const t = inventory.find(i => i.id === l.inventoryId)?.targetSalePrice || 0;
+    return t > 0 ? t : null;
+  };
+
   // ---- mutations ----
   const addDevice = (i: InventoryItem) => {
     setCart(c => [...c, {
@@ -455,7 +520,12 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
   };
   const updateLine = (key: string, patch: Partial<CartLine>) =>
     setCart(c => c.map(l => l.key === key ? { ...l, ...patch } : l));
-  const removeLine = (key: string) => setCart(c => c.filter(l => l.key !== key));
+  const removeLine = (key: string) => {
+    setCart(c => c.filter(l => l.key !== key));
+    // An approval belongs to the line it was given for. Dropping the line
+    // drops it, so re-adding the device at the same low price asks again.
+    setFloorApprovals(a => { const { [key]: _gone, ...rest } = a; return rest; });
+  };
   const num = (v: string) => parseFloat(v) || 0;
 
   const addCustomItem = () => {
@@ -560,7 +630,7 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
   // stale state twice.
   const handleCheckout = async () => {
     if (isSubmittingRef.current) return;
-    if (cart.length === 0 || blockedByZeroPrice || blockedByListedElsewhere || blockedByOpenRepair || mixedPaymentMismatch) return;
+    if (cart.length === 0 || blockedByZeroPrice || blockedByListedElsewhere || blockedByOpenRepair || blockedByFloor || mixedPaymentMismatch) return;
     isSubmittingRef.current = true;
     setIsSubmitting(true);
     try {
@@ -848,6 +918,9 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
     isZeroPricedDevice, hasZeroPricedDevice, allowZeroPrice, setAllowZeroPrice, blockedByZeroPrice,
     hasListedElsewhereDevice, allowListedElsewhereSale, setAllowListedElsewhereSale, blockedByListedElsewhere, delistReminders,
     hasOpenRepairDevice, openRepairLines, allowOpenRepairSale, setAllowOpenRepairSale, blockedByOpenRepair,
+    // Floor price + the per-line helpers the till renders.
+    blockedByFloor, belowFloorLines, isBelowFloorLine, hasNoCostRecorded, targetPriceOf,
+    floorApprovals, approveFloorLine, BELOW_FLOOR_MESSAGE, NO_COST_NOTE,
     addDevice, addAccessory, updateLine, removeLine, num, addCustomItem, handleScan, handleCheckout, isSubmitting, reset, printReceipt, printInvoice, emailReceipt, soldDeviceRows,
     scanResults, addScanResult,
     eligibleRepairs, repairMatches, addRepair,

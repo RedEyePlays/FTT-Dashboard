@@ -9,6 +9,7 @@ import {
 // scanner gun (real POS hardware), so most sessions never touch this at all.
 const QRScanner = lazy(() => import('./QRScanner').then(m => ({ default: m.QRScanner })));
 import { InventoryItem, Customer, DeviceType, Repair } from '../types';
+import { FloorSettings } from '../domain/priceFloor';
 import { RepairSalePrefill } from '../domain/repairs';
 import { getDeviceDisplayName, suggestedSalePrice, PriceSuggestion } from '../domain/inventory';
 import { formatPhoneInput } from '../domain/phone';
@@ -38,6 +39,11 @@ interface Props {
   onGenerateSku?: (deviceType?: DeviceType) => Promise<string>;
   onDirtyChange?: (dirty: boolean) => void; // reports whether the cart has unsaved items
   persist?: { workspaceId: string; userId: string } | null;
+  // Floor price (domain/priceFloor.ts) — the workspace margin settings, and
+  // the manager/owner PIN approval for a line that falls under its floor.
+  floorSettings?: FloorSettings;
+  onApproveBelowFloor?: (line: { key: string; name: string; price: number; inventoryId?: string }) =>
+    Promise<{ uid: string; email: string } | null>;
 }
 
 const STEPS = ['Items', 'Cart', 'Customer', 'Payment', 'Done'];
