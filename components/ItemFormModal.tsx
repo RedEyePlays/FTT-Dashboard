@@ -4,6 +4,7 @@ import { printShelfTag } from '../services/shelfTag';
 import { getStoreProfile } from './SettingsModal';
 import { InventoryItem, ItemKind, DeviceType, DeviceStatus, DeviceBuyer, Repair, ListingPlatform, Note, Role, Customer } from '../types';
 import { SellerCustomerField } from './SellerCustomerField';
+import { useSellerLink } from '../hooks/useSellerLink';
 import { CustomerDraft } from '../domain/customers';
 import { LinkedNotes } from './LinkedNotes';
 import { REPAIR_STATUS_LABEL } from '../domain/repairs';
@@ -138,6 +139,10 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, canViewCo
   // On a NEW item the caret goes into the code field, so a scan works with
   // zero clicks — which was the whole problem with the old "Add Device", where
   // nothing was focused and the code went nowhere.
+  // A typed seller becomes a customer on save — one shared path
+  // (domain/sellerLink.ts), the same one Quick Purchase uses.
+  const sellerLink = useSellerLink({ customers: customers || [], onCreateCustomer });
+
   const codeRef = useRef<HTMLInputElement>(null);
   const nextRef = useRef<HTMLInputElement>(null);
   useEffect(() => { if (!initial) codeRef.current?.focus(); }, [initial]);
@@ -170,8 +175,15 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, canViewCo
       : duplicate.deviceStatus === 'pending_repair' ? 'In repair' : 'In stock')
     : '';
 
-  const save = async () => {
+  const save = () => {
     if (duplicate || saving) return;
+    sellerLink.resolve(
+      { name: f.boughtFrom || '', phone: f.boughtFromPhone, customerId: f.boughtFromCustomerId },
+      boughtFromCustomerId => commit(boughtFromCustomerId),
+    );
+  };
+
+  const commit = async (boughtFromCustomerId: string | undefined) => {
     setSaving(true);
     setSaveError(null);
     try {
@@ -181,7 +193,7 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, canViewCo
       // below rather than swallowed, so an offline save says so instead of
       // appearing to work.)
       const sku = f.sku?.trim() || await onGenerateSku(kind, f.deviceType);
-      const item: InventoryItem = { ...f, kind, sku };
+      const item: InventoryItem = { ...f, kind, sku, boughtFromCustomerId };
       if (kind === 'accessory') {
         // Accessories derive item-level cost/price from per-unit fields
         item.purchaseCost = (f.costPerUnit || 0) * (f.quantity || 0);
@@ -461,6 +473,7 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, canViewCo
         </div>
       </div>
 
+      {sellerLink.prompt}
       {showImeiScanner && (
         <ImeiScanner
           onScan={(imei) => { set('imei', imei); setShowImeiScanner(false); }}

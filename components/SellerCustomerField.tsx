@@ -65,7 +65,7 @@ export const SellerCustomerField: React.FC<Props> = ({
   const unlink = () => onChange({ boughtFrom: value.boughtFrom, boughtFromCustomerId: undefined, boughtFromPhone: undefined });
 
   const openAdd = () => {
-    setDraft({ name: value.boughtFrom.trim(), phone: '', email: '' });
+    setDraft({ name: value.boughtFrom.trim(), phone: value.boughtFromPhone || '', email: '' });
     setAdding(true);
   };
 
@@ -108,6 +108,21 @@ export const SellerCustomerField: React.FC<Props> = ({
             value={value.boughtFrom}
             onChange={e => onChange({ ...value, boughtFrom: e.target.value, boughtFromCustomerId: undefined })}
           />
+          {/* PHONE, RIGHT HERE — no extra click.
+              A typed name becomes a customer on save (domain/sellerLink.ts),
+              and the phone is what makes that link reliable: it is the field
+              findCustomerByContact identifies a person by, so supplying it here
+              turns a guess into a match. Optional, because a one-off seller
+              still costs nothing extra. */}
+          {onCreateCustomer && value.boughtFrom.trim() && (
+            <input
+              className={inputClassName}
+              type="tel" inputMode="tel"
+              placeholder="Phone (optional — links them to a customer record)"
+              value={value.boughtFromPhone || ''}
+              onChange={e => onChange({ ...value, boughtFromPhone: formatPhoneInput(e.target.value) })}
+            />
+          )}
           {onCreateCustomer && !adding && (
             <button type="button" onClick={openAdd}
               className="flex items-center gap-1.5 text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:underline">

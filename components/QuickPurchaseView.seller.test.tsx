@@ -61,11 +61,34 @@ describe('QuickPurchase — Bought From customer picker', () => {
     unmount();
   });
 
-  it('free text alone still works and creates no customer', () => {
+  // CHANGED DELIBERATELY. This used to assert that a typed name created no
+  // customer — which was the bug: at the counter nobody clicks "Add as a new
+  // customer", so sellers never reached the customer database and their
+  // purchase history was lost. A typed name now becomes a customer ON SAVE,
+  // through the same handleCreateCustomerInline path the button already used
+  // (domain/sellerLink.ts).
+  it('a typed name becomes a customer on save, and the purchase is linked to it', () => {
     const onSave = vi.fn();
-    const onCreateCustomer = vi.fn();
+    const created = { id: 'new-1', name: 'Guy at the mall', phone: '', kind: 'retail' as const };
+    const onCreateCustomer = vi.fn(() => created);
     const { host, unmount } = mount(
       <QuickPurchaseView inventory={[]} customers={customers} onSave={onSave} onCreateCustomer={onCreateCustomer} />,
+    );
+    fillRequired(host);
+    setInput(byPlaceholder(host, 'Seller name (optional)'), 'Guy at the mall');
+
+    act(() => { buttonWith(host, 'Add to Inventory')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    expect(onCreateCustomer).toHaveBeenCalledWith(expect.objectContaining({ name: 'Guy at the mall' }));
+    const saved: QuickPurchaseSaveInput = onSave.mock.calls[0][0];
+    expect(saved.boughtFrom).toBe('Guy at the mall');
+    expect(saved.boughtFromCustomerId).toBe('new-1');
+    unmount();
+  });
+
+  it('without the ability to create customers, the name stays free text exactly as before', () => {
+    const onSave = vi.fn();
+    const { host, unmount } = mount(
+      <QuickPurchaseView inventory={[]} customers={customers} onSave={onSave} />,
     );
     fillRequired(host);
     setInput(byPlaceholder(host, 'Seller name (optional)'), 'Guy at the mall');
@@ -74,7 +97,6 @@ describe('QuickPurchase — Bought From customer picker', () => {
     const saved: QuickPurchaseSaveInput = onSave.mock.calls[0][0];
     expect(saved.boughtFrom).toBe('Guy at the mall');
     expect(saved.boughtFromCustomerId).toBeUndefined();
-    expect(onCreateCustomer).not.toHaveBeenCalled();
     unmount();
   });
 

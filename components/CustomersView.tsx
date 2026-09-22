@@ -3,7 +3,7 @@ import {
   Users, Search, ArrowLeft, Phone, Mail, ShoppingCart, Wrench, DollarSign,
   ChevronRight, Receipt, Pencil, X, Clock, Smartphone, ShieldCheck, AlertTriangle,
   Copy, PlusCircle, Printer, FileText, Merge, Hash, Check, Ban, RotateCcw, Star,
-  Filter, PackagePlus,
+  Filter, PackagePlus, UserPlus,
 } from 'lucide-react';
 import { Customer, SalesTransaction, Repair, RepairBatch, InventoryItem, AuditEntry, Note, Role, RefundPaidFrom, RefundSplit } from '../types';
 import { LinkedNotes } from './LinkedNotes';
@@ -11,8 +11,11 @@ import { CollectBalanceModal } from './CollectBalanceModal';
 import {
   customerStats, customerTimeline, customerDevices, customerSearchMatch,
   passesFilter, sortCustomers, findDuplicateGroups, planMerge,
-  CustomerSort, CustomerFilter, CustomerData, CustomerStats, MergePlan,
+  CustomerSort, CustomerFilter, CustomerData, CustomerStats, MergePlan, CustomerDraft,
 } from '../domain/customers';
+import {
+  sellerBackfillGroups, backfillLabel, BACKFILL_EXPLANATION, candidateLabel,
+} from '../domain/sellerLink';
 import { REPAIR_STATUS_CELL, REPAIR_STATUS_LABEL, partName } from '../domain/repairs';
 import {
   isReversed, collectedOnSale, defaultRefundSplits, refundSplitsValid, refundSourceLabel,
@@ -51,6 +54,11 @@ interface Props {
   // Collect a payment against an open layaway's balance (item 1 of the
   // layaway-completion batch). Omitted hides the action for anyone who can't
   // complete sales.
+  // Owner-only backfill: devices whose seller was typed as text before a typed
+  // name became a customer automatically (domain/sellerLink.ts). Omitted hides
+  // the whole panel.
+  onCreateCustomer?: (draft: CustomerDraft) => Customer | undefined;
+  onLinkSeller?: (items: InventoryItem[], customerId: string) => void;
   onCollectBalance?: (tx: SalesTransaction, input: { amount: number; paymentMethod: 'cash' | 'card' | 'mixed' | 'etransfer'; cashAmount?: number; cardAmount?: number; etransferAmount?: number; date: string }) => Promise<SalesTransaction>;
   defaultRestockingFeePercent?: number;                // pre-filled restocking fee % when processing a return
   notes?: Note[];                                      // workspace notes, for the linked-notes panel
@@ -94,6 +102,13 @@ export const CustomersView: React.FC<Props> = (props) => {
   const [filter, setFilter] = useState<CustomerFilter>('all');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [mergeGroup, setMergeGroup] = useState<Customer[] | null>(null);
+  // Sellers recorded as text only, from before a typed name became a customer.
+  // OWNER-ONLY, PREVIEW FIRST, NEVER AUTOMATIC (domain/sellerLink.ts).
+  const [showBackfill, setShowBackfill] = useState(false);
+  const backfill = useMemo(
+    () => (props.onLinkSeller && props.onCreateCustomer ? sellerBackfillGroups(inventory, customers) : []),
+    [inventory, customers, props.onLinkSeller, props.onCreateCustomer],
+  );
 
   const rows = useMemo(() => {
     const withStats = customers.map(c => ({ c, s: customerStats(c, data) }));
@@ -134,6 +149,47 @@ export const CustomersView: React.FC<Props> = (props) => {
           </select>
         </div>
       </div>
+
+      {backfill.length > 0 && (
+        <button onClick={() => setShowBackfill(true)}
+          className="self-start flex items-center gap-2 text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg px-3 py-1.5 hover:border-amber-400">
+          <UserPlus className="w-3.5 h-3.5" /> {backfillLabel(backfill)} — review and link
+        </button>
+      )}
+
+      {showBackfill && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={() => setShowBackfill(false)}>
+          <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-lg border border-slate-200 dark:border-slate-700 max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="px-5 py-3 border-b border-slate-100 dark:border-slate-800 flex justify-between items-center">
+              <h2 className="font-bold text-slate-800 dark:text-slate-100">Unlinked sellers ({backfill.length})</h2>
+              <button onClick={() => setShowBackfill(false)}><X className="w-5 h-5 text-slate-400" /></button>
+            </div>
+            <p className="px-5 pt-3 text-xs text-slate-500 dark:text-slate-400">{BACKFILL_EXPLANATION}</p>
+            <div className="flex-1 overflow-y-auto px-5 py-3 space-y-2">
+              {backfill.map(g => (
+                <div key={g.name} className="flex items-center justify-between gap-3 border-b border-slate-50 dark:border-slate-800/60 last:border-0 py-2">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-slate-800 dark:text-slate-100 truncate">{g.name}</p>
+                    <p className="text-[11px] text-slate-400 truncate">
+                      {g.count} purchase{g.count !== 1 ? 's' : ''}{g.phone ? ` · ${g.phone}` : ''}
+                      {g.existing.length > 0 && ` · matches ${g.existing.map(candidateLabel).join(', ')}`}
+                    </p>
+                  </div>
+                  {/* Linking runs the SAME resolve path the counter uses, so an
+                      existing customer is matched rather than duplicated. */}
+                  <button onClick={() => {
+                    const c = props.onCreateCustomer?.({ name: g.name, phone: g.phone || '', email: '' });
+                    if (c) props.onLinkSeller?.(g.items, c.id);
+                  }}
+                    className="shrink-0 px-3 py-1.5 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 text-white">
+                    {g.existing.length > 0 ? 'Link' : 'Create & link'}
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Filters */}
       <div className="flex flex-wrap gap-1.5">
