@@ -10,10 +10,11 @@
     "deploy": "firebase deploy --only functions"
   },
   "engines": {
-    "node": "20"
+    "node": "22"
   },
   "main": "lib/index.js",
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.127.0",
     "@google/genai": "^1.33.0",
     "firebase-admin": "^12.7.0",
     "firebase-functions": "^6.3.2"
