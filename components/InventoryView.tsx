@@ -26,6 +26,8 @@ import { listedElsewhereTitle } from '../domain/listing';
 import {
   identifierHits, matchesItemIdentifier, outsideFilterNote, noIdentifierMatchMessage,
 } from '../domain/identifierSearch';
+import { buildSearchIndex, queryWords, matchesWords } from '../domain/itemSearch';
+import { blankRows, blankRowsLabel, BLANK_ROWS_EXPLANATION } from '../domain/blankRows';
 import { clampWidth, fitWidths } from '../domain/columnLayout';
 import { usePersistedFilter } from '../hooks/usePersistedFilter';
 import { todayISO } from '../domain/dates';
@@ -377,18 +379,26 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
     lowstock: inventory.filter(isLow).length,
   }), [inventory]);
 
+  // The searchable text for every row, built ONCE per inventory list rather
+  // than re-reading seven fields off every row on every keystroke.
+  const searchIndex = useMemo(() => buildSearchIndex(inventory, getDeviceDisplayName), [inventory]);
+  const words = useMemo(() => queryWords(query), [query]);
+
   const matchesQuery = (i: InventoryItem) => {
-    const q = query.toLowerCase().trim();
-    if (!q) return true;
+    if (words.length === 0) return true;
     // An IDENTIFIER hit first, compared with separators stripped on both sides
     // (domain/identifierSearch.ts). A stored IMEI written "35 123456 789012 3"
     // never matched a scanner's "351234567890123" under plain substring
     // matching, which is why scans came back "Nothing here" for devices sitting
     // on the shelf.
-    if (matchesItemIdentifier(i, q)) return true;
-    // Include the combined display value so search matches the Item column (and
-    // legacy-named rows), alongside the raw brand/model/item fields.
-    return [i.sku, i.manufacturerBarcode, i.imei, i.item, i.brand, i.model, getDeviceDisplayName(i)].some(v => (v || '').toLowerCase().includes(q));
+    if (matchesItemIdentifier(i, query.trim())) return true;
+    // Then a MULTI-WORD search across everything written on the device
+    // (domain/itemSearch.ts). "iPhone 16 128GB White" spans four fields, so
+    // testing the whole query as one substring per field found nothing — and
+    // storage, colour, carrier, condition, battery health, notes and bought-from
+    // were never searched at all.
+    const s = searchIndex.get(i.id);
+    return s ? matchesWords(s, words) : false;
   };
 
   const applySort = (rows: InventoryItem[], cols: Col[]) => {
@@ -497,16 +507,52 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
   };
 
   // --- actions ---
-  const addDeviceRow = async () => {
-    const sku = await onGenerateSku('device', 'Phone');
-    onSave({ id: uid(), kind: 'device', sku, date: today(), item: '', imei: '', boughtFrom: '', purchaseCost: 0, repairCost: 0, soldDate: '', soldTo: '', salePrice: 0, deviceType: 'Phone', brand: '', model: '', storage: '', color: '', carrier: '', batteryHealth: '', condition: 'Good', purchaseSource: '', targetSalePrice: 0, deviceStatus: 'ready', notes: '' });
-    setPage('devices');
+  // --- Adding an item -------------------------------------------------------
+  //
+  // "Add Device" used to open NO FORM. It allocated a SKU and immediately SAVED
+  // a blank device to Firestore, then dropped the user into the inline table.
+  // Nothing was focused, so a USB/Bluetooth scanner — which types the code and
+  // then sends Enter — typed into nothing; and every click that wasn't followed
+  // through left an empty junk device in inventory, counted in every stock
+  // figure. It now opens the real add form (ItemFormModal), which focuses the
+  // IMEI field, handles the scanner's Enter, runs the duplicate guard, and
+  // WRITES NOTHING until Save.
+  const [addKind, setAddKind] = useState<ItemKind | null>(null);
+  const openAddDevice = () => { setPage('devices'); setAddKind('device'); };
+  const openAddAccessory = () => { setPage('accessories'); setAddKind('accessory'); };
+
+  // The inline "Quick add row", kept for people who prefer typing straight into
+  // the table. It is a LOCAL DRAFT: it exists only on screen until the first
+  // field is filled in, at which point it is saved for real (SKU allocated
+  // then). An abandoned draft leaves nothing behind.
+  const [draft, setDraft] = useState<InventoryItem | null>(null);
+  const blankDevice = (): InventoryItem => ({ id: uid(), kind: 'device', sku: '', date: today(), item: '', imei: '', boughtFrom: '', purchaseCost: 0, repairCost: 0, soldDate: '', soldTo: '', salePrice: 0, deviceType: 'Phone', brand: '', model: '', storage: '', color: '', carrier: '', batteryHealth: '', condition: 'Good', purchaseSource: '', targetSalePrice: 0, deviceStatus: 'ready', notes: '' });
+  const blankAccessory = (): InventoryItem => ({ id: uid(), kind: 'accessory', sku: '', date: today(), item: '', imei: '', boughtFrom: '', purchaseCost: 0, repairCost: 0, soldDate: '', soldTo: '', salePrice: 0, manufacturerBarcode: '', category: '', quantity: 1, costPerUnit: 0, sellingPrice: 0, lowStockThreshold: 3, notes: '' });
+  const addDeviceRow = async () => { setPage('devices'); setDraft(blankDevice()); };
+  const addAccessoryRow = async () => { setPage('accessories'); setDraft(blankAccessory()); };
+
+  // The first edit to a draft row is what creates it. Until then it is not in
+  // the database at all.
+  const commitDraft = async (field: keyof InventoryItem, value: any) => {
+    if (!draft) return;
+    const kind = kindOf(draft);
+    const sku = await onGenerateSku(kind, draft.deviceType);
+    onSave({ ...draft, sku, [field]: value });
+    setDraft(null);
   };
-  const addAccessoryRow = async () => {
-    const sku = await onGenerateSku('accessory');
-    onSave({ id: uid(), kind: 'accessory', sku, date: today(), item: '', imei: '', boughtFrom: '', purchaseCost: 0, repairCost: 0, soldDate: '', soldTo: '', salePrice: 0, manufacturerBarcode: '', category: '', quantity: 1, costPerUnit: 0, sellingPrice: 0, lowStockThreshold: 3, notes: '' });
-    setPage('accessories');
+  const updateRow = (id: string, field: keyof InventoryItem, value: any) => {
+    if (draft && id === draft.id) return commitDraft(field, value);
+    return onUpdate(id, field, value);
   };
+
+  // Junk left over from the old behaviour. Listed for the owner to review —
+  // NEVER auto-deleted (domain/blankRows.ts).
+  const [showCleanup, setShowCleanup] = useState(false);
+  const junk = useMemo(() => blankRows(inventory), [inventory]);
+  // The draft is shown at the top of the table it belongs to, and nowhere else.
+  const draftOnThisPage = !!draft && kindOf(draft!) === activeKind
+    && (activeKind === 'device' ? page === 'devices' : page === 'accessories');
+  const sheetRows = draftOnThisPage ? [draft!, ...pageRows] : pageRows;
   const duplicate = async (i: InventoryItem) => {
     const k = kindOf(i);
     const sku = await onGenerateSku(k, i.deviceType);
@@ -628,6 +674,18 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
     </nav>
   );
 
+  // The very first item. These open the same add FORM as the toolbar buttons —
+  // the inline draft row has no table to live in on this screen, so pointing
+  // them at it would give a button that does nothing at all.
+  const addForm = addKind ? (
+    <ItemFormModal initialKind={addKind} canViewCost={canViewCost} deviceBuyers={deviceBuyers}
+      inventory={inventory} customers={customers} onCreateCustomer={onCreateCustomer}
+      onSave={(item) => { onSave(item); setAddKind(null); }}
+      onGenerateSku={onGenerateSku}
+      onOpenDuplicate={(it) => { setAddKind(null); openItem(it); }}
+      onClose={() => { setAddKind(null); if (!isMobile) focusSearch(); }} />
+  ) : null;
+
   if (inventory.length === 0) {
     return (
       <div className="h-full min-h-[60vh] flex flex-col items-center justify-center text-center gap-4">
@@ -637,10 +695,11 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
           <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Add your first device or accessory, or load sample data to explore.</p>
         </div>
         <div className="flex gap-2 flex-wrap justify-center">
-          <button onClick={addDeviceRow} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium"><Smartphone className="w-4 h-4" /> Add Device</button>
-          <button onClick={addAccessoryRow} className="flex items-center gap-2 px-4 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-lg text-sm font-medium"><Package className="w-4 h-4" /> Add Accessory</button>
+          <button onClick={openAddDevice} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium"><Smartphone className="w-4 h-4" /> Add Device</button>
+          <button onClick={openAddAccessory} className="flex items-center gap-2 px-4 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-lg text-sm font-medium"><Package className="w-4 h-4" /> Add Accessory</button>
           {onSeed && <button onClick={onSeed} className="flex items-center gap-2 px-4 py-2 bg-white dark:bg-slate-800 border border-indigo-300 dark:border-indigo-700 text-indigo-600 dark:text-indigo-300 rounded-lg text-sm font-medium"><Boxes className="w-4 h-4" /> Load Sample Data</button>}
         </div>
+        {addForm}
       </div>
     );
   }
@@ -735,10 +794,20 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
             <input ref={fileRef} type="file" accept=".csv" className="hidden" onChange={e => e.target.files?.[0] && importCSV(e.target.files[0])} />
 
             {/* Add button (relevant to this page's kind) */}
-            <button onClick={() => (activeKind === 'device' ? addDeviceRow() : addAccessoryRow())} className="flex items-center gap-2 px-3 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium">
+            <button onClick={() => (activeKind === 'device' ? openAddDevice() : openAddAccessory())} className="flex items-center gap-2 px-3 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium">
               {activeKind === 'device' ? <Smartphone className="w-4 h-4" /> : <Package className="w-4 h-4" />}
               <span className="hidden sm:inline">{activeKind === 'device' ? 'Add Device' : 'Add Accessory'}</span>
             </button>
+            {/* Quick add row: for people who prefer typing straight into the
+                table. It is a local draft — nothing is written (and no SKU is
+                allocated) until the first field is filled in. */}
+            {(page === 'devices' || page === 'accessories') && (
+              <button onClick={() => (activeKind === 'device' ? addDeviceRow() : addAccessoryRow())} disabled={!!draft}
+                title="Add an empty row to type into. Nothing is saved until you fill something in."
+                className="hidden md:flex items-center gap-2 px-3 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-700 dark:text-slate-200 hover:border-indigo-400 disabled:opacity-40">
+                <Plus className="w-4 h-4" /> Quick add row
+              </button>
+            )}
           </div>
 
           {/* Scanned an identifier that this page/filter would have hidden.
@@ -769,6 +838,15 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
               <span>{scanMsg}</span>
               <button onClick={() => setScanMsg(null)} className="ml-auto opacity-70 hover:opacity-100 shrink-0"><X className="w-3.5 h-3.5" /></button>
             </div>
+          )}
+
+          {/* Junk from the old Add Device button. Owner-facing, opt-in, never
+              automatic (domain/blankRows.ts). */}
+          {canViewCost && junk.length > 0 && (
+            <button onClick={() => setShowCleanup(true)}
+              className="self-start flex items-center gap-2 text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg px-3 py-1.5 hover:border-amber-400">
+              <AlertTriangle className="w-3.5 h-3.5" /> {blankRowsLabel(junk.length)} — review and clean up
+            </button>
           )}
 
           {/* Bulk action bar (desktop) */}
@@ -822,7 +900,7 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
                 : pageRows.map(i => (
                   <InvCard key={i.id} item={i} canViewCost={canViewCost} selectMode={selectMode} selected={selected.has(i.id)}
                     onToggleSel={() => toggleSel(i.id)} onOpen={() => openItem(i)} onLabel={() => setLabelItem(i)}
-                    onUpdate={onUpdate} onDelete={onDelete} onDuplicate={duplicate} onHistory={mode => setHistoryItem({ item: i, mode })}
+                    onUpdate={updateRow} onDelete={onDelete} onDuplicate={duplicate} onHistory={mode => setHistoryItem({ item: i, mode })}
                     linkedRepair={linkedRepairOf(i.id)} openRepair={openRepairOf(i.id)} onCreateRepair={onCreateRepair} onOpenRepair={onOpenRepair} />
                 ))}
             </div>
@@ -831,9 +909,10 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
           {/* Desktop: single table for this page */}
           <div className="hidden md:flex flex-1 flex-col gap-3 overflow-hidden">
             <div className="flex-1 overflow-auto min-w-0">
-              <Sheet title={activeTitle} total={activeRows.length} cols={visCols(activeKind, activeCols)} rows={pageRows} canViewCost={canViewCost}
+              <Sheet title={activeTitle} total={activeRows.length} cols={visCols(activeKind, activeCols)} rows={sheetRows} canViewCost={canViewCost}
                 sort={sort} onSort={onSortToggle} selected={selected} onToggleSel={toggleSel} onToggleAll={toggleSelAll}
-                onUpdate={onUpdate} onDelete={onDelete} onDuplicate={duplicate} onExpand={(it: InventoryItem) => openItem(it)} onLabel={setLabelItem}
+                onUpdate={updateRow} onDelete={(id: string) => { if (draft && id === draft.id) { setDraft(null); return; } onDelete(id); }}
+                onDuplicate={duplicate} onExpand={(it: InventoryItem) => openItem(it)} onLabel={setLabelItem}
                 onHistory={(it, mode) => setHistoryItem({ item: it, mode })}
                 linkedRepairOf={linkedRepairOf} onCreateRepair={onCreateRepair} onOpenRepair={onOpenRepair} openRepairOf={openRepairOf}
                 widths={colW[activeKind]} onResize={(key, w) => setColumnWidth(activeKind, key, w)} onResetWidth={(key) => resetColumnWidth(activeKind, key)}
@@ -932,6 +1011,45 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
           </div>
         </div>
       </ResponsiveDialog>
+
+      {/* ADD form. Nothing is written to the database until Save, and no SKU is
+          allocated until then either — an abandoned form burns neither. */}
+      {addForm}
+
+      {/* Empty rows the OLD Add Device button left behind. Listed, never
+          auto-deleted (domain/blankRows.ts). */}
+      {showCleanup && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={() => setShowCleanup(false)}>
+          <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-lg border border-slate-200 dark:border-slate-700 max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="px-5 py-3 border-b border-slate-100 dark:border-slate-800 flex justify-between items-center">
+              <h2 className="font-bold text-slate-800 dark:text-slate-100">Empty inventory rows ({junk.length})</h2>
+              <button onClick={() => setShowCleanup(false)}><X className="w-5 h-5 text-slate-400" /></button>
+            </div>
+            <p className="px-5 pt-3 text-xs text-slate-500 dark:text-slate-400">{BLANK_ROWS_EXPLANATION}</p>
+            <div className="flex-1 overflow-y-auto px-5 py-3 space-y-1">
+              {junk.map(i => (
+                <div key={i.id} className="flex items-center justify-between gap-2 text-sm py-1 border-b border-slate-50 dark:border-slate-800/60 last:border-0">
+                  <span className="font-mono text-xs text-slate-500">{i.sku || i.id}</span>
+                  <span className="text-xs text-slate-400">{kindOf(i)} · added {i.date || '—'}</span>
+                </div>
+              ))}
+              {junk.length === 0 && <p className="text-sm text-slate-400 text-center py-6">Nothing to clean up.</p>}
+            </div>
+            <div className="px-5 py-3 border-t border-slate-100 dark:border-slate-800 flex justify-end gap-2">
+              <button onClick={() => setShowCleanup(false)} className="px-4 py-2 text-sm rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">Close</button>
+              <button disabled={junk.length === 0}
+                onClick={() => {
+                  if (!window.confirm(`Delete ${junk.length} empty row${junk.length === 1 ? '' : 's'}? This cannot be undone.`)) return;
+                  junk.forEach(i => onDelete(i.id));
+                  setShowCleanup(false);
+                }}
+                className="px-4 py-2 text-sm rounded-lg bg-rose-600 hover:bg-rose-700 disabled:opacity-40 text-white font-medium">
+                Delete all {junk.length}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {expandItem && <ItemFormModal initial={expandItem} canViewCost={canViewCost} deviceBuyers={deviceBuyers} onSave={onSave} onGenerateSku={onGenerateSku} onClose={closeItem}
         linkedRepair={linkedRepairOf(expandItem.id)}

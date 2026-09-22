@@ -1,7 +1,8 @@
 import { InventoryItem, SalesTransaction, ListingPlatform, RefundPaidFrom, RefundSplit } from '../types';
-import { kindOf } from './inventory';
+import { kindOf, getDeviceDisplayName } from './inventory';
 import { DrawerEffect } from './dropoffs';
 import { matchesItemIdentifier } from './identifierSearch';
+import { matchesItemQuery } from './itemSearch';
 
 // Shared POS constants/helpers. Extracted from CartSaleView so the platform-fee
 // list has a single home and can be unit-tested and reused by future POS views.
@@ -143,11 +144,12 @@ export const searchCheckoutInventory = (
   const limit = opts?.limit ?? 6;
   // An exact IDENTIFIER match wins regardless of how the stored value was
   // punctuated — a SKU written "FTT-0142" is found by a scanner's "FTT0142"
-  // (domain/identifierSearch.ts, the same comparison Inventory uses).
+  // (domain/identifierSearch.ts, the same comparison Inventory uses). Otherwise
+  // it is the same MULTI-WORD match the inventory table does
+  // (domain/itemSearch.ts), so "iphone 16 128gb white" finds the phone at the
+  // till exactly as it does in Inventory.
   const hit = (i: InventoryItem) =>
-    matchesItemIdentifier(i, q) ||
-    [i.item, i.brand, i.model, i.sku, i.imei, i.manufacturerBarcode]
-      .some(v => (v || '').toLowerCase().includes(q));
+    matchesItemIdentifier(i, q) || matchesItemQuery(i, q, getDeviceDisplayName(i));
   const sellable = (i: InventoryItem) =>
     kindOf(i) === 'device'
       ? !(i.soldDate || i.deviceStatus === 'sold')

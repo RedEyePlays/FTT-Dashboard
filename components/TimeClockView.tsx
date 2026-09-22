@@ -20,6 +20,11 @@ import { useEscapeKey } from '../hooks/useEscapeKey';
 import { toCSV, triggerDownload } from '../services/backup';
 import { printPayrollSummary, printPayStub } from '../services/payrollPrint';
 import { getStoreProfile } from './SettingsModal';
+import { rateAtFor, segmentsLabel } from '../domain/payRates';
+import {
+  UserPayPeriod, payPeriodsForUser, userPeriodKey, staffOnPeriod, userPeriodLabel,
+  payGroupsApply, CATCHUP_NOTE,
+} from '../domain/payGroups';
 
 interface Props {
   me: AppUser;
@@ -35,13 +40,16 @@ interface Props {
   onClockOut: () => void;
   onStartBreak: (reason: BreakReason, note?: string) => void;
   onEndBreak: () => void;
-  onApprovePeriod: (userId: string, period: PayPeriod) => void;
-  onApproveAllPeriod: (period: PayPeriod) => void;
-  onMarkPaid: (userId: string, period: PayPeriod) => void;
-  onUnmarkPaid: (userId: string, period: PayPeriod) => void;
+  onApprovePeriod: (userId: string, period: UserPayPeriod) => void;
+  onApproveAllPeriod: (period: UserPayPeriod) => void;
+  onMarkPaid: (userId: string, period: UserPayPeriod) => void;
+  onUnmarkPaid: (userId: string, period: UserPayPeriod) => void;
   // Owner/manager only (same gate as canManagePayroll): fix a shift someone
   // forgot to clock out of, by setting its actual clock-out time.
   onCorrectClockOut: (entryId: string, newClockOut: number) => void;
+  // Jump to Users, so the payroll screen's "no rate set" warning links straight
+  // to where the rate is actually set.
+  onOpenUsers?: () => void;
   // settings.operations.paidBreakReasons — break kinds the shop pays through.
   // Empty (the default) means every break is deducted, exactly as before.
   paidBreakReasons?: PaidBreakReasons;
@@ -82,7 +90,7 @@ const fmtElapsed = (ms: number): string => {
 
 export const TimeClockView: React.FC<Props> = ({
   me, users, entries, payPeriods, payPeriodApprovals, payCycle, payAnchorISO, canManagePayroll, canMarkPaid,
-  onClockIn, onClockOut, onStartBreak, onEndBreak, onApprovePeriod, onApproveAllPeriod, onMarkPaid, onUnmarkPaid, onCorrectClockOut,
+  onClockIn, onClockOut, onStartBreak, onEndBreak, onApprovePeriod, onApproveAllPeriod, onMarkPaid, onUnmarkPaid, onCorrectClockOut, onOpenUsers,
   staffBonuses = [], canAddBonus = false, onSaveBonus, onDeleteBonus, paidBreakReasons = [],
   paidBreakReasonsUpdatedAt,
 }) => {
@@ -185,6 +193,7 @@ export const TimeClockView: React.FC<Props> = ({
           onDeleteBonus={onDeleteBonus}
           paidBreakReasons={paidBreakReasons}
           paidBreakReasonsUpdatedAt={paidBreakReasonsUpdatedAt}
+          onOpenUsers={onOpenUsers}
         />
       )}
 
@@ -493,11 +502,36 @@ const PayrollSummary: React.FC<{
   onDeleteBonus?: (bonusId: string) => void;
   paidBreakReasons?: PaidBreakReasons;
   paidBreakReasonsUpdatedAt?: number;
-}> = ({ users, entries, payPeriods, payPeriodApprovals, payCycle, payAnchorISO, now, canApprove, canMarkPaid, onApprovePeriod, onApproveAllPeriod, onMarkPaid, onUnmarkPaid, staffBonuses = [], canAddBonus = false, onAddBonus, onDeleteBonus, paidBreakReasons = [], paidBreakReasonsUpdatedAt }) => {
+  // Jump to Users, so the "no rate set" warning is one click from fixing it
+  // rather than an instruction to go and find the screen yourself.
+  onOpenUsers?: () => void;
+}> = ({ users, entries, payPeriods, payPeriodApprovals, payCycle, payAnchorISO, now, canApprove, canMarkPaid, onApprovePeriod, onApproveAllPeriod, onMarkPaid, onUnmarkPaid, staffBonuses = [], canAddBonus = false, onAddBonus, onDeleteBonus, paidBreakReasons = [], paidBreakReasonsUpdatedAt, onOpenUsers }) => {
   const days = PAY_CYCLE_DAYS[payCycle];
-  const periods = useMemo(() => recentPayPeriods(now, 6, days, payAnchorISO), [now, days, payAnchorISO]);
+  // BOTH GROUPS' periods, newest first. On a bi-weekly cycle the two groups are
+  // paid on alternating weeks (domain/payGroups.ts), so the picker interleaves
+  // them and each period shows only its own group's people — otherwise "Approve
+  // all" on one week would reach across and approve the other.
+  const periods = useMemo(() => {
+    if (!payGroupsApply(payCycle)) {
+      return recentPayPeriods(now, 6, days, payAnchorISO)
+        .map(p => ({ ...p, group: 'A' as const, kind: 'regular' as const }));
+    }
+    const seen = new Set<string>();
+    return users
+      .filter(isPayrollStaff)
+      .flatMap(u => payPeriodsForUser(u, now, payCycle, payAnchorISO, 6))
+      .filter(p => {
+        const k = `${p.start}:${p.group}:${p.kind}`;
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      })
+      .sort((a, b) => b.start - a.start)
+      .slice(0, 12);
+  }, [users, now, days, payAnchorISO, payCycle]);
   const [periodIdx, setPeriodIdx] = useState(0);
-  const period = periods[periodIdx];
+  const period = periods[Math.min(periodIdx, Math.max(0, periods.length - 1))]
+    ?? { ...recentPayPeriods(now, 1, days, payAnchorISO)[0], group: 'A' as const, kind: 'regular' as const };
   const [expanded, setExpanded] = useState<string | null>(null);
 
   const paidByKey = useMemo(() => {
@@ -514,17 +548,24 @@ const PayrollSummary: React.FC<{
   // Active members, owners last, sorted by name. Everyone who can work a shift.
   const staff = useMemo(
     // isPayrollStaff, not a bare !disabled — the kiosk DEVICE account must
-    // never show up here as an employee with zero hours.
-    () => users.filter(isPayrollStaff).sort((a, b) => nameOf(a).localeCompare(nameOf(b))),
-    [users],
+    // never show up here as an employee with zero hours. staffOnPeriod then
+    // narrows to the people this period actually belongs to: a group A period
+    // never lists group B, and a catch-up period lists only the person who
+    // moved.
+    () => staffOnPeriod(users.filter(isPayrollStaff), period, payCycle)
+      .sort((a, b) => nameOf(a).localeCompare(nameOf(b))),
+    [users, period, payCycle],
   );
 
   const rows = staff.map(u => {
     // paidBreakReasons matters here: without it this table showed gross pay
     // computed as if no break were ever paid, contradicting the breakdown
     // line right above it.
-    const pay = periodPayFor(entries, u.id, u.hourlyRate, period, now, paidBreakReasons);
-    const key = paidKey(u.id, toISODate(period.start));
+    // rateAtFor prices each shift at the rate in force on the day it was
+    // clocked in, so a raise inside this period doesn't reprice the hours
+    // before it (domain/payRates.ts).
+    const pay = periodPayFor(entries, u.id, u.hourlyRate, period, now, paidBreakReasons, rateAtFor(u));
+    const key = userPeriodKey(u.id, period);
     const paid = paidByKey.get(key);
     const approved = approvedByKey.get(key);
     return { user: u, pay, paid, approved };
@@ -536,8 +577,7 @@ const PayrollSummary: React.FC<{
 
   const flags = useMemo(() => payrollFlagsFor(entries, users, period, now), [entries, users, period, now]);
 
-  const periodLabel = (p: PayPeriod) =>
-    `${new Date(p.start).toLocaleDateString([], { month: 'short', day: 'numeric' })} – ${new Date(periodEndInclusive(p)).toLocaleDateString([], { month: 'short', day: 'numeric' })}`;
+  const periodLabel = (p: UserPayPeriod) => userPeriodLabel(p, payGroupsApply(payCycle));
 
   const nameById = useMemo(() => new Map(users.map(u => [u.id, nameOf(u)])), [users]);
 
@@ -599,7 +639,7 @@ const PayrollSummary: React.FC<{
             className="p-1.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md text-sm"
           >
             {periods.map((p, i) => (
-              <option key={p.index} value={i}>{periodLabel(p)}{i === 0 ? ' (current)' : ''}</option>
+              <option key={`${p.start}-${p.group}-${p.kind}`} value={i}>{periodLabel(p)}{i === 0 ? ' (current)' : ''}</option>
             ))}
           </select>
           {canApprove && !allApproved && (
@@ -612,6 +652,9 @@ const PayrollSummary: React.FC<{
         </div>
       </div>
 
+      {period.kind === 'catchup' && (
+        <p className="px-4 pt-3 text-xs text-indigo-600 dark:text-indigo-400">{CATCHUP_NOTE}</p>
+      )}
       <p className="px-4 pt-3 text-xs text-slate-400">
         Gross pay is hours × rate for review only — this records no payment and moves no money. Approve, then pay employees outside this app, then mark the period paid.
       </p>
@@ -677,10 +720,22 @@ const PayrollSummary: React.FC<{
                     </td>
                     <td className="py-2.5 pr-3 text-slate-700 dark:text-slate-200">
                       {nameOf(user)}
-                      {!user.hourlyRate && <span className="ml-1 text-[11px] text-amber-500">no rate set</span>}
+                      {!user.hourlyRate && (
+                        onOpenUsers
+                          ? <button onClick={onOpenUsers} className="ml-1 text-[11px] text-amber-500 underline hover:text-amber-600"
+                              title="Set this person's hourly rate in Users">no rate set</button>
+                          : <span className="ml-1 text-[11px] text-amber-500">no rate set</span>
+                      )}
                     </td>
                     <td className="py-2.5 px-2 text-right tabular-nums">{pay.hours.toFixed(2)}</td>
-                    <td className="py-2.5 px-2 text-right tabular-nums text-slate-500">{fmtMoney(pay.rate)}</td>
+                    {/* A period that straddles a raise has no single rate, so it
+                        shows both lines rather than one number that is wrong for
+                        half the hours (domain/payRates.ts). */}
+                    <td className="py-2.5 px-2 text-right tabular-nums text-slate-500">
+                      {pay.rateSplit && pay.segments
+                        ? <span className="text-[11px] leading-tight" title="A rate change falls inside this period">{segmentsLabel(pay.segments)}</span>
+                        : fmtMoney(pay.rate)}
+                    </td>
                     <td className="py-2.5 px-2 text-right tabular-nums text-slate-600 dark:text-slate-300">{fmtMoney(totals.hoursPay)}</td>
                     <td className="py-2.5 px-2 text-right tabular-nums text-slate-600 dark:text-slate-300">{totals.bonus > 0 ? fmtMoney(totals.bonus) : <span className="text-slate-400">—</span>}</td>
                     <td className="py-2.5 px-2 text-right tabular-nums font-semibold text-slate-800 dark:text-slate-100">{fmtMoney(totals.total)}</td>

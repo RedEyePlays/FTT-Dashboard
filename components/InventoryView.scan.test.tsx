@@ -142,7 +142,7 @@ describe('InventoryView: scanning an IMEI finds the device', () => {
     type(host, IMEI);
     pressEnter(host);
     // The item form modal is open on that device.
-    expect(host.textContent).toContain('IMEI / Serial');
+    expect(host.textContent).toContain('Scan or type IMEI');
     unmount();
   });
 

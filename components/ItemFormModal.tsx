@@ -1,4 +1,4 @@
-import React, { useState, useMemo, FocusEventHandler } from 'react';
+import React, { useState, useMemo, useRef, useEffect, FocusEventHandler } from 'react';
 import { X, Wand2, Smartphone, Package, Barcode, Camera, Tag } from 'lucide-react';
 import { printShelfTag } from '../services/shelfTag';
 import { getStoreProfile } from './SettingsModal';
@@ -16,6 +16,7 @@ import { useEscapeKey } from '../hooks/useEscapeKey';
 import { selectOnFocus } from '../hooks/selectOnFocus';
 import { todayISO } from '../domain/dates';
 import { costAccessFor, RECORDED_LABEL } from '../domain/costVisibility';
+import { normalizeForLookup } from '../domain/identifierSearch';
 
 interface Props {
   initial?: InventoryItem;
@@ -47,6 +48,10 @@ interface Props {
   notes?: Note[];                        // workspace notes, for the linked-notes panel
   noteRole?: Role;                       // viewer's role, gates which linked notes show
   onOpenNote?: (noteId: string) => void; // jump to a linked note in the Notes board
+  // Open the existing device the duplicate guard found, so "already in
+  // inventory" is one click from the record rather than an instruction to go
+  // and find it.
+  onOpenDuplicate?: (item: InventoryItem) => void;
 }
 
 const DEVICE_TYPES: DeviceType[] = ['Phone', 'Tablet', 'Laptop', 'Console', 'Watch', 'Other'];
@@ -102,7 +107,7 @@ const CostField: React.FC<{
   return <Field label={label} value={value} onChange={onChange} type="number" onFocus={onFocus} />;
 };
 
-export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, canViewCost = false, deviceBuyers, onSave, onGenerateSku, onClose, linkedRepair, onCreateRepair, onOpenRepair, inventory = [], customers, onCreateCustomer, notes, noteRole, onOpenNote }) => {
+export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, canViewCost = false, deviceBuyers, onSave, onGenerateSku, onClose, linkedRepair, onCreateRepair, onOpenRepair, inventory = [], customers, onCreateCustomer, notes, noteRole, onOpenNote, onOpenDuplicate }) => {
   const [kind, setKind] = useState<ItemKind>(initial?.kind ?? initialKind ?? 'device');
   const [f, setF] = useState<InventoryItem>(() => initial ?? {
     id: uid(), kind: initialKind ?? 'device', sku: '', manufacturerBarcode: '',
@@ -129,6 +134,24 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, canViewCo
 
   const genSku = async () => set('sku', await onGenerateSku(kind, f.deviceType));
 
+  // A USB/Bluetooth scanner types wherever the caret is and then sends Enter.
+  // On a NEW item the caret goes into the code field, so a scan works with
+  // zero clicks — which was the whole problem with the old "Add Device", where
+  // nothing was focused and the code went nowhere.
+  const codeRef = useRef<HTMLInputElement>(null);
+  const nextRef = useRef<HTMLInputElement>(null);
+  useEffect(() => { if (!initial) codeRef.current?.focus(); }, [initial]);
+
+  // ENTER IN THE CODE FIELD MUST NOT SUBMIT. Scanners always send it, and a
+  // form that closes on the scan is a form you can never fill in. Enter accepts
+  // the code and moves to the next field instead.
+  const onCodeKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    e.stopPropagation();
+    nextRef.current?.focus();
+  };
+
   // Same normalization + matching auto-inventory and Quick Purchase use — a
   // device already in stock must not be enterable a second time by hand.
   const duplicate = useMemo(
@@ -136,22 +159,47 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, canViewCo
     [kind, f.imei, f.id, inventory],
   );
 
-  const save = () => {
-    if (duplicate) return;
-    const item: InventoryItem = { ...f, kind };
-    if (kind === 'accessory') {
-      // Accessories derive item-level cost/price from per-unit fields
-      item.purchaseCost = (f.costPerUnit || 0) * (f.quantity || 0);
-      item.deviceStatus = undefined;
-      item.imei = '';
-    } else {
-      item.item = f.item || [f.brand, f.model, f.storage].filter(Boolean).join(' ');
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  // Where the existing device actually is, so "already in inventory" answers
+  // the next question without another search.
+  const duplicateWhere = duplicate
+    ? (duplicate.soldDate || duplicate.deviceStatus === 'sold' ? 'Sold'
+      : duplicate.deviceStatus === 'reserved' ? 'Reserved'
+      : duplicate.deviceStatus === 'pending_repair' ? 'In repair' : 'In stock')
+    : '';
+
+  const save = async () => {
+    if (duplicate || saving) return;
+    setSaving(true);
+    setSaveError(null);
+    try {
+      // THE SKU IS ALLOCATED HERE, NOT WHEN THE FORM OPENED. Allocating on open
+      // burned a number on every abandoned form, and the counter never went
+      // back. (onGenerateSku refuses offline with its own message — surfaced
+      // below rather than swallowed, so an offline save says so instead of
+      // appearing to work.)
+      const sku = f.sku?.trim() || await onGenerateSku(kind, f.deviceType);
+      const item: InventoryItem = { ...f, kind, sku };
+      if (kind === 'accessory') {
+        // Accessories derive item-level cost/price from per-unit fields
+        item.purchaseCost = (f.costPerUnit || 0) * (f.quantity || 0);
+        item.deviceStatus = undefined;
+        item.imei = '';
+      } else {
+        item.item = f.item || [f.brand, f.model, f.storage].filter(Boolean).join(' ');
+      }
+      onSave(item);
+      onClose();
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : 'Could not save this item.');
+    } finally {
+      setSaving(false);
     }
-    onSave(item);
-    onClose();
   };
 
-  const canSave = (kind === 'device' ? !!(f.item || f.brand || f.model) : !!f.item) && !duplicate;
+  const canSave = (kind === 'device' ? !!(f.item || f.brand || f.model || f.imei) : !!f.item) && !duplicate && !saving;
 
   // Text/date fields go straight through; number fields parse to a number.
   const setText = (k: keyof InventoryItem) => (v: string) => set(k, v as any);
@@ -183,17 +231,24 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, canViewCo
             <div>
               <label className={lbl}>Internal SKU</label>
               <div className="flex gap-2">
-                <input autoFocus className={inp} value={f.sku ?? ''} onChange={e => set('sku', e.target.value)} placeholder="Auto or manual" />
+                <input ref={nextRef} className={inp} value={f.sku ?? ''} onChange={e => set('sku', e.target.value)} placeholder="Allocated on save" />
                 <button onClick={genSku} title="Generate SKU" className="shrink-0 px-3 rounded-md bg-indigo-600 hover:bg-indigo-700 text-white"><Wand2 className="w-4 h-4" /></button>
               </div>
             </div>
             <div>
-              <label className={lbl}>{kind === 'device' ? 'IMEI / Serial' : 'Manufacturer Barcode (optional)'}</label>
+              <label className={lbl}>{kind === 'device' ? 'Scan or type IMEI' : 'Scan or type barcode'}</label>
               {kind === 'device' ? (
                 <div className="flex gap-2">
                   <div className="relative flex-1 min-w-0">
                     <Barcode className="w-4 h-4 text-slate-400 absolute left-2 top-1/2 -translate-y-1/2" />
-                    <input className={`${inp} pl-8`} value={f.imei} onChange={e => set('imei', e.target.value)} />
+                    <input ref={codeRef} className={`${inp} pl-8`} value={f.imei}
+                      onChange={e => set('imei', e.target.value)}
+                      onKeyDown={onCodeKeyDown}
+                      // Stored with separators stripped, so every IMEI written
+                      // from here on matches a scan without the search having
+                      // to guess how it was punctuated.
+                      onBlur={e => { const n = normalizeForLookup(e.target.value); if (n && n !== e.target.value) set('imei', n); }}
+                      placeholder="Scan or type IMEI" />
                   </div>
                   <button type="button" onClick={() => setShowImeiScanner(true)} title="Scan IMEI / serial with camera"
                     className="shrink-0 px-3 rounded-md bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 text-slate-500 hover:text-indigo-600 hover:border-indigo-400 transition-colors">
@@ -203,7 +258,11 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, canViewCo
               ) : (
                 <div className="relative">
                   <Barcode className="w-4 h-4 text-slate-400 absolute left-2 top-1/2 -translate-y-1/2" />
-                  <input className={`${inp} pl-8`} value={f.manufacturerBarcode ?? ''} onChange={e => set('manufacturerBarcode', e.target.value)} />
+                  <input ref={codeRef} className={`${inp} pl-8`} value={f.manufacturerBarcode ?? ''}
+                    onChange={e => set('manufacturerBarcode', e.target.value)}
+                    onKeyDown={onCodeKeyDown}
+                    onBlur={e => { const n = normalizeForLookup(e.target.value); if (n && n !== e.target.value) set('manufacturerBarcode', n); }}
+                    placeholder="Scan or type barcode" />
                 </div>
               )}
               {/* Blocks the save rather than silently creating a second record
@@ -213,8 +272,11 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, canViewCo
                 <p className="mt-1.5 flex items-start gap-1.5 text-xs font-medium text-rose-600 dark:text-rose-400">
                   <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-px" />
                   <span>
-                    Already in inventory as <strong>{duplicate.sku || duplicate.item || duplicate.id}</strong>
-                    {duplicate.item && duplicate.sku ? ` (${duplicate.item})` : ''}. Open that record instead of adding it twice.
+                    Already in inventory — <strong>{duplicate.sku || duplicate.item || duplicate.id}</strong>
+                    {duplicate.item && duplicate.sku ? ` (${duplicate.item})` : ''}, {duplicateWhere}.
+                    {onOpenDuplicate && (
+                      <> <button type="button" onClick={() => onOpenDuplicate(duplicate)} className="underline font-semibold hover:opacity-80">Open it</button></>
+                    )}
                   </span>
                 </p>
               )}
@@ -381,13 +443,21 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, canViewCo
           {initial && <LinkedNotes notes={notes} role={noteRole} linkType="inventory" linkId={f.id} onOpenNote={onOpenNote} />}
         </div>
 
+        {/* A SKU cannot be allocated offline (services allocateSku refuses with
+            a clear message), so an offline save SAYS SO rather than looking
+            like it worked. */}
+        {saveError && (
+          <p className="mx-5 mb-2 flex items-start gap-1.5 text-xs font-medium text-rose-600 dark:text-rose-400">
+            <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-px" /><span>{saveError}</span>
+          </p>
+        )}
         <div className="px-5 py-3 border-t border-slate-100 dark:border-slate-800 flex justify-end gap-2 sticky bottom-0 bg-white dark:bg-slate-900">
           {initial && (
             <button type="button" onClick={() => printShelfTag({ ...f, kind }, { storeName: getStoreProfile().storeName })}
               className="mr-auto px-4 py-2 text-sm rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-indigo-400 flex items-center gap-1.5"><Tag className="w-4 h-4" /> Shelf Tag</button>
           )}
           <button onClick={requestClose} className="px-4 py-2 text-sm rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">Cancel</button>
-          <button onClick={save} disabled={!canSave} className="px-5 py-2 text-sm rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white font-medium">Save</button>
+          <button onClick={save} disabled={!canSave} className="px-5 py-2 text-sm rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white font-medium">{saving ? 'Saving…' : 'Save'}</button>
         </div>
       </div>
 

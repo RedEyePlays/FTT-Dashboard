@@ -369,6 +369,12 @@ export interface PeriodPay {
   hours: number;   // rounded to 2 decimals
   rate: number;
   gross: number;   // hours (rounded) × rate, in cents — so it matches what's shown
+  // Hours split by the rate each was earned at, when a raise fell inside this
+  // period (domain/payRates.ts). A single entry when one rate applied
+  // throughout, which is the ordinary case.
+  segments?: { rate: number; hours: number; gross: number }[];
+  /** True when more than one rate applied — the screen shows two lines. */
+  rateSplit?: boolean;
   // The break breakdown behind `hours`, so the payroll screen and the printed
   // summary can explain the figure to the person being paid rather than just
   // asserting it. Both are 0 when the shop pays through nothing (the default).
@@ -377,9 +383,55 @@ export interface PeriodPay {
 }
 
 /**
+ * THE ONE PLACE A SHIFT IS PRICED: the rate in force on its CLOCK-IN local
+ * date.
+ *
+ * Not the day it ended (a shift crossing midnight is one shift at one rate),
+ * not the period's rate (a period may straddle a raise), and toISODate is local
+ * — toISOString would move a late-evening shift onto the next day for anyone
+ * west of UTC and pay it at the new rate a day early.
+ *
+ * `rateAt` is a callback rather than a user object so this module stays free of
+ * AppUser's rate-history shape; domain/payRates.ts's `rateAtFor` builds it.
+ */
+export type RateAt = (clockInMs: number) => number | undefined;
+
+export interface RateSegment { rate: number; hours: number; gross: number }
+
+/**
+ * Hours grouped by the rate each was earned at.
+ *
+ * Each SEGMENT's hours are rounded before multiplying and the gross is the sum
+ * of the segment grosses, so the two lines on screen add up to the total beside
+ * them. Computing the total from unrounded hours instead leaves a cent the
+ * employee can see and nobody can explain.
+ */
+export const segmentShifts = (
+  shifts: { clockIn: number; hours: number }[],
+  rateAt: RateAt,
+): RateSegment[] => {
+  const byRate = new Map<number, number>();
+  for (const s of shifts) {
+    const r = nn(rateAt(s.clockIn));
+    byRate.set(r, (byRate.get(r) || 0) + s.hours);
+  }
+  return [...byRate.entries()]
+    .map(([rate, raw]) => {
+      const hours = round2(raw);
+      return { rate, hours, gross: grossPay(hours, rate) };
+    })
+    .filter(s => s.hours > 0)
+    .sort((a, b) => a.rate - b.rate);
+};
+
+/**
  * Hours + gross pay for one user in one pay period. Hours are rounded to two
  * decimals and gross is computed from that rounded figure, so the displayed
  * "hours × rate = gross" always reconciles exactly for the reviewing owner.
+ *
+ * `rateAt` prices each shift at the rate in force on the day it was clocked in.
+ * Omitting it falls back to the flat `rate` for every hour — exactly the old
+ * behaviour, which is what every call site that has no rate history wants.
  */
 export const periodPayFor = (
   entries: TimeEntry[],
@@ -388,13 +440,34 @@ export const periodPayFor = (
   period: PayPeriod,
   now: number,
   paidReasons: PaidBreakReasons = [],
+  rateAt?: RateAt,
 ): PeriodPay => {
+  const inPeriod = entriesInRange(entries, userId, period.start, period.end);
   const hours = round2(hoursInRange(entries, userId, period.start, period.end, now, paidReasons));
-  const breakdown = totalShiftHours(entriesInRange(entries, userId, period.start, period.end), now, paidReasons);
-  return {
-    userId, hours, rate: nn(rate), gross: grossPay(hours, rate),
+  const breakdown = totalShiftHours(inPeriod, now, paidReasons);
+  const base = {
+    userId, hours,
     paidBreakHours: round2(breakdown.paidBreak),
     unpaidBreakHours: round2(breakdown.unpaidBreak),
+  };
+  if (!rateAt) return { ...base, rate: nn(rate), gross: grossPay(hours, rate) };
+
+  const segments = segmentShifts(
+    inPeriod.map(e => ({ clockIn: e.clockIn, hours: workedHours(e, now, paidReasons) })),
+    rateAt,
+  );
+  return {
+    ...base,
+    // `rate` stays the single figure for a period paid at one rate; a split
+    // period reports its HIGHEST rate here, because every existing reader of
+    // this field renders it as "the rate" and the segments carry the truth.
+    rate: segments.length ? segments[segments.length - 1].rate : nn(rate),
+    // Hours are the SUM OF THE SEGMENTS, not the separately-rounded total, so
+    // the lines on screen add up to the figure beside them to the cent.
+    hours: segments.length ? round2(segments.reduce((n, s) => n + s.hours, 0)) : hours,
+    gross: round2(segments.reduce((n, s) => n + s.gross, 0)),
+    segments,
+    rateSplit: segments.length > 1,
   };
 };
 
@@ -472,6 +545,10 @@ export const payrollDue = (
   days: number = PAY_PERIOD_DAYS,
   anchorISO: string = PAY_PERIOD_ANCHOR,
   paidReasons: PaidBreakReasons = [],
+  // Prices each shift at the rate in force on its clock-in date. Supplied by
+  // the caller (domain/payRates.ts's rateAtFor) rather than derived here, so
+  // this module stays free of AppUser's rate-history shape.
+  rateAtOf?: (u: AppUser) => RateAt,
 ): PayrollDue | null => {
   const current = payPeriodFor(now, days, anchorISO);
   const lastEnded: PayPeriod = { index: current.index - 1, start: addDays(current.start, -days), end: current.start };
@@ -481,7 +558,7 @@ export const payrollDue = (
   let employeeCount = 0;
   let totalGross = 0;
   for (const u of active) {
-    const pay = periodPayFor(entries, u.id, u.hourlyRate, lastEnded, now, paidReasons);
+    const pay = periodPayFor(entries, u.id, u.hourlyRate, lastEnded, now, paidReasons, rateAtOf?.(u));
     if (pay.hours <= 0) continue;
     if (paidIds.has(paidKey(u.id, toISODate(lastEnded.start)))) continue;
     employeeCount++;
