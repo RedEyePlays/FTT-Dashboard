@@ -173,6 +173,16 @@ export interface AppSettings {
     // today's behaviour.
     minMarginPercent?: number;
     minMarginDollars?: number;
+    // WARRANTY ON WHAT THE SHOP SELLS (domain/warranty.ts). The shop gives 90
+    // days on devices and nothing on accessories; both are owner-editable and
+    // both are overridable per line in the cart. Stamped at checkout, never
+    // recomputed afterwards — see the module.
+    deviceWarrantyDays?: number;
+    accessoryWarrantyDays?: number;
+    // What an hour of PC-build labour is costed at (domain/pcBuild.ts). The
+    // rate is SNAPSHOTTED onto each labour entry when logged, so changing this
+    // never reprices a build that was already costed.
+    buildLabourRate?: number;
   };
   // Owner-configurable pay-period schedule (domain/timeclock.ts's payPeriodFor/
   // recentPayPeriods read these instead of the old hardcoded constants).
@@ -225,7 +235,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   dashboard: { widgets: Object.fromEntries(DASHBOARD_WIDGETS.map(w => [w, true])), landingView: 'dashboard', analyticsRange: 'today' },
   appearance: { theme: 'system' },
   backups: { enabled: false, frequency: 'daily', retention: 14 },
-  operations: { openingFloatDefault: 0, voidWindowDays: 0, returnRestockingFeePercent: 0, agingInventoryDays: 30, staleLayawayDays: 60, autoLockMinutes: 4, booksStartDate: '', paidBreakReasons: [] },
+  operations: { openingFloatDefault: 0, voidWindowDays: 0, returnRestockingFeePercent: 0, agingInventoryDays: 30, staleLayawayDays: 60, autoLockMinutes: 4, booksStartDate: '', paidBreakReasons: [], deviceWarrantyDays: 90, accessoryWarrantyDays: 0, buildLabourRate: 15 },
   payroll: { cycle: 'biweekly', anchorISO: PAY_PERIOD_ANCHOR },
   expenses: { categories: DEFAULT_EXPENSE_CATEGORIES },
   reviews: {

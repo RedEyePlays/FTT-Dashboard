@@ -14,8 +14,17 @@ export const PAYMENT_METHOD_LABEL: Record<string, string> = { cash: 'Cash', card
 export function printSalesReceipt(tx: SalesTransaction, opts: { storeName?: string } = {}): boolean {
   const store = opts.storeName || 'FlipThatTech';
   const money = (n: number) => `$${(n || 0).toFixed(2)}`;
+  // THE WARRANTY GOES ON THE RECEIPT. A promise the shop makes verbally and
+  // records nowhere is a promise it cannot honour consistently
+  // (domain/warranty.ts). A line with no warranty simply says nothing — it is
+  // not labelled "no warranty", because most accessories never had one and a
+  // receipt full of disclaimers reads worse than one that is quiet.
   const rows = tx.lines.map(l =>
-    `<tr><td>${l.name}</td><td style="text-align:center">${l.quantity}</td><td style="text-align:right">${money(l.quantity * l.unitPrice)}</td></tr>`
+    `<tr><td>${l.name}${l.warrantyUntil
+      ? `<div style="font-size:10px;opacity:.7">${l.warrantyDays}-day warranty — covered until ${l.warrantyUntil}</div>`
+      : l.warrantyStartsAtPickup
+        ? `<div style="font-size:10px;opacity:.7">${l.warrantyDays}-day warranty — starts at pickup</div>`
+        : ''}</td><td style="text-align:center">${l.quantity}</td><td style="text-align:right">${money(l.quantity * l.unitPrice)}</td></tr>`
   ).join('');
   const payParts = tx.paymentMethod === 'mixed'
     ? [['Cash', tx.cashAmount], ['Card', tx.cardAmount], ['E-transfer', tx.etransferAmount]]

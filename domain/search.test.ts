@@ -87,4 +87,53 @@ describe('globalSearch', () => {
   it('below min query returns nothing', () => {
     expect(run('').total).toBe(0);
   });
+
+  /**
+   * The counter question: "is this still under warranty?" — asked of global
+   * search, not only of the repair intake screen. The part-serial case is the
+   * one a plain sale search can never answer: the customer reads the sticker
+   * on the dead graphics card, which is a number the shop never gave the
+   * machine.
+   */
+  describe('warranty', () => {
+    const device = dev({ id: 'inv1', sku: 'FTT-2001', imei: '356789012345678', item: 'Custom PC', deviceType: 'Desktop PC' });
+    const sold = sale({
+      id: 'sale-1', date: '2026-07-01', customerName: 'Dana Wu', customerPhone: '416-555-0100',
+      lines: [{ name: 'Custom PC', sku: 'FTT-2001', inventoryId: 'inv1', quantity: 1, unitPrice: 1200, warrantyDays: 3650, warrantyUntil: '2036-06-28' } as SalesTransaction['lines'][number]],
+    });
+    const build = {
+      id: 'b1', name: 'Starter Gaming PC', kind: 'shelf', status: 'sold', inventoryId: 'inv1',
+      parts: [{ id: 'p1', category: 'GPU', name: 'RTX 4070', cost: 500, condition: 'new', serial: 'GX-9931-AA' }],
+      labour: [], createdBy: 'u', createdByEmail: 'e', createdAt: 1, updatedAt: 1,
+    } as unknown as NonNullable<SearchData['builds']>[number];
+    const over = { inventory: [device], sales: [sold], builds: [build] };
+
+    it('answers by IMEI, by SKU, by phone and by name', () => {
+      for (const q of ['356789012345678', 'FTT-2001', '416-555-0100', 'Dana Wu']) {
+        const g = group(run(q, over), 'warranty');
+        expect({ q, found: g?.results.length ?? 0 }).toEqual({ q, found: 1 });
+      }
+    });
+
+    it('A PART SERIAL FINDS THE BUILD — with or without the dashes', () => {
+      for (const q of ['GX-9931-AA', 'gx9931aa']) {
+        const g = group(run(q, over), 'warranty');
+        expect({ q, found: g?.results.length ?? 0 }).toEqual({ q, found: 1 });
+        expect(g!.results[0].subtitle).toContain('matched the RTX 4070');
+      }
+    });
+
+    it('says whether it is covered, and outranks the plain invoice hit', () => {
+      const r = run('FTT-2001', over);
+      const w = group(r, 'warranty')!.results[0];
+      expect(w.status).toBe('Covered');
+      const inv = group(r, 'sale');
+      if (inv) expect(w.score).toBeGreaterThan(0);
+      expect(w.itemId).toBe('sale-1');
+    });
+
+    it('is simply absent when nothing was sold', () => {
+      expect(group(run('356789012345678', { inventory: [device] }), 'warranty')).toBeUndefined();
+    });
+  });
 });

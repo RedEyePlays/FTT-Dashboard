@@ -3,7 +3,7 @@ import { User, signOut } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
 import {
   InventoryItem, Note, Task, DeviceBuyer, DropOff, Settlement, Customer, SalesTransaction,
-  ActivityEntry, AppUser, WorkspaceInvite, AuditEntry, Repair, RepairBatch, TimeEntry, PayPeriodPaid, PayPeriodApproval, CashReconciliation, StaffNote,
+  ActivityEntry, AppUser, WorkspaceInvite, AuditEntry, Repair, RepairBatch, PcBuild, TimeEntry, PayPeriodPaid, PayPeriodApproval, CashReconciliation, StaffNote,
   Expense, RecurringExpense, StaffBonus, KioskStaff,
 } from '../types';
 import { decryptData } from '../services/security';
@@ -55,6 +55,7 @@ export function useWorkspaceData() {
   const [salesTransactions, setSalesTransactions] = useState<SalesTransaction[]>([]);
   const [repairs, setRepairs] = useState<Repair[]>([]);
   const [repairBatches, setRepairBatches] = useState<RepairBatch[]>([]);
+  const [pcBuilds, setPcBuilds] = useState<PcBuild[]>([]);
   const [timeEntries, setTimeEntries] = useState<TimeEntry[]>([]);
   const [payPeriods, setPayPeriods] = useState<PayPeriodPaid[]>([]);
   const [payPeriodApprovals, setPayPeriodApprovals] = useState<PayPeriodApproval[]>([]);
@@ -232,6 +233,7 @@ export function useWorkspaceData() {
       subscribeCollection<SalesTransaction>(wsId, 'salesTransactions', setSalesTransactions, onErr),
       subscribeCollection<Repair>(wsId, 'repairs', setRepairs, onErr),
       subscribeCollection<RepairBatch>(wsId, 'repairBatches', setRepairBatches, onErr),
+      subscribeCollection<PcBuild>(wsId, 'pcBuilds', setPcBuilds, onErr),
       subscribeCollection<ActivityEntry>(wsId, 'activityLog', rows => setActivityLog(rows.sort((a, b) => b.ts - a.ts)), onErr, { orderByField: 'ts', limitTo: ACTIVITY_LIMIT }),
       subscribeMeta(wsId, m => { setNotes(m.notes || []); setTasks(m.tasks || []); setSkuCounters(m.skuCounters || {}); setLastBackup(m.lastBackup); setSettings(mergeSettings(m.settings)); }, onErr),
     ];
@@ -358,7 +360,7 @@ export function useWorkspaceData() {
     // collections
     devices, accessories, data, notes, setNotes, tasks, setTasks,
     deviceBuyers, dropOffs, settlements, customers, salesTransactions,
-    repairs, repairBatches, timeEntries, payPeriods, payPeriodApprovals, staffBonuses, kioskStaff, cashReconciliations, staffNotes,
+    repairs, repairBatches, pcBuilds, timeEntries, payPeriods, payPeriodApprovals, staffBonuses, kioskStaff, cashReconciliations, staffNotes,
     expenses, recurringExpenses,
     skuCounters, setSkuCounters, activityLog, lastBackup, settings,
     // connection status

@@ -55,7 +55,7 @@ interface Props {
   onOpenDuplicate?: (item: InventoryItem) => void;
 }
 
-const DEVICE_TYPES: DeviceType[] = ['Phone', 'Tablet', 'Laptop', 'Console', 'Watch', 'Other'];
+const DEVICE_TYPES: DeviceType[] = ['Phone', 'Tablet', 'Laptop', 'Console', 'Watch', 'Desktop PC', 'Other'];
 const DEVICE_STATUSES: { value: DeviceStatus; label: string }[] = [
   { value: 'pending_purchase', label: 'Pending Purchase' },
   { value: 'pending_repair', label: 'Pending Repair' },

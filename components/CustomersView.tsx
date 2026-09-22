@@ -21,6 +21,7 @@ import {
   isReversed, collectedOnSale, defaultRefundSplits, refundSplitsValid, refundSourceLabel,
   impliedRefundSplits, REFUND_PAID_FROM_LABEL, REFUND_PAID_FROM_OPTIONS,
 } from '../domain/pos';
+import { warrantyClaimsForSale, warrantyLabel, profitAfterWarranty } from '../domain/warranty';
 import { statusPageUrl } from '../domain/statusLink';
 import { formatPhoneInput } from '../domain/phone';
 import { PRINT_PREVIEW_BAR_STYLE, PRINT_PREVIEW_BAR_HTML } from '../services/printPreview';
@@ -609,7 +610,7 @@ const CustomerProfile: React.FC<Props & { customer: Customer; data: CustomerData
         onReturn={onReturnSale && canReturnSale && canReturnSale(invoice) ? (opts) => { onReturnSale(invoice, opts); setInvoice(null); } : undefined}
         onCollectBalance={onCollectBalance && !isReversed(invoice) && (invoice.balanceOwing || 0) > 0.005 ? () => { setCollectingBalance(invoice); setInvoice(null); } : undefined}
         onRequestReview={onRequestReview && !isReversed(invoice) && (invoice.balanceOwing || 0) <= 0.005 ? () => { onRequestReview(customer); setInvoice(null); } : undefined}
-        defaultRestockingFeePercent={defaultRestockingFeePercent} />}
+        defaultRestockingFeePercent={defaultRestockingFeePercent} repairs={data.repairs} />}
       {ticket && <TicketModal repair={ticket} tech={techFor.get(ticket.id)} customer={customer} onClose={() => setTicket(null)} />}
       {collectingBalance && onCollectBalance && (
         <CollectBalanceModal tx={collectingBalance} onClose={() => setCollectingBalance(null)}
@@ -642,7 +643,7 @@ const Row: React.FC<{ label: string; value: string }> = ({ label, value }) => (
 const Empty: React.FC<{ text: string }> = ({ text }) => <p className="text-sm text-slate-400 py-6 text-center">{text}</p>;
 
 /* ---------------- Invoice modal ---------------- */
-const InvoiceModal: React.FC<{ tx: SalesTransaction; customer: Customer; canViewProfit: boolean; onClose: () => void; onVoid?: (opts: { refundSplits: RefundSplit[] }) => void; onReturn?: (opts: { restockingFee?: number; disposition: ReturnDisposition; refundSplits: RefundSplit[] }) => void; onCollectBalance?: () => void; onRequestReview?: () => void; defaultRestockingFeePercent?: number }> = ({ tx, customer, canViewProfit, onClose, onVoid, onReturn, onCollectBalance, onRequestReview, defaultRestockingFeePercent }) => {
+const InvoiceModal: React.FC<{ tx: SalesTransaction; customer: Customer; canViewProfit: boolean; onClose: () => void; onVoid?: (opts: { refundSplits: RefundSplit[] }) => void; onReturn?: (opts: { restockingFee?: number; disposition: ReturnDisposition; refundSplits: RefundSplit[] }) => void; onCollectBalance?: () => void; onRequestReview?: () => void; defaultRestockingFeePercent?: number; repairs?: Repair[] }> = ({ tx, customer, canViewProfit, onClose, onVoid, onReturn, onCollectBalance, onRequestReview, defaultRestockingFeePercent, repairs = [] }) => {
   // Still an OPEN layaway (not one that later got paid off) — that's the
   // case where voiding/returning must be clearly labeled as a layaway
   // cancellation and must refund only what was actually collected so far,
@@ -676,7 +677,13 @@ const InvoiceModal: React.FC<{ tx: SalesTransaction; customer: Customer; canView
         <thead className="text-[10px] uppercase text-slate-400"><tr><th className="text-left py-1">Item</th><th className="text-right py-1">Qty</th><th className="text-right py-1">Price</th></tr></thead>
         <tbody>
           {tx.lines.map((l, i) => (
-            <tr key={i}><td className="py-1 text-slate-700 dark:text-slate-200">{l.name}{l.sku ? <span className="text-slate-400 font-mono text-xs"> · {l.sku}</span> : ''}</td><td className="py-1 text-right">{l.quantity}</td><td className="py-1 text-right">{money(l.unitPrice)}</td></tr>
+            <tr key={i}><td className="py-1 text-slate-700 dark:text-slate-200">{l.name}{l.sku ? <span className="text-slate-400 font-mono text-xs"> · {l.sku}</span> : ''}
+              {/* What was promised on this line, as stamped at checkout —
+                  never recomputed from today's settings. */}
+              {(l.warrantyDays || l.warrantyStartsAtPickup) && (
+                <span className="block text-[11px] text-slate-400">{l.warrantyStartsAtPickup && !l.warrantyUntil ? 'Warranty starts at pickup' : warrantyLabel(l)}</span>
+              )}
+            </td><td className="py-1 text-right">{l.quantity}</td><td className="py-1 text-right">{money(l.unitPrice)}</td></tr>
           ))}
         </tbody>
       </table>
@@ -691,6 +698,22 @@ const InvoiceModal: React.FC<{ tx: SalesTransaction; customer: Customer; canView
         </>
       )}
       {canViewProfit && <Row label="Profit" value={money(tx.netProfit)} />}
+      {/* PROFIT AFTER WARRANTY WORK. The sale booked a profit on the day; a
+          warranty repair against it is money spent on a sale already closed.
+          Shown only when there IS warranty work, so an ordinary sale reads
+          exactly as it did before. This is a view of the repairs already in
+          the P&L, not a second charge — see WARRANTY_COST_PL_NOTE. */}
+      {canViewProfit && (() => {
+        const claims = warrantyClaimsForSale(repairs, tx.id);
+        if (claims.length === 0) return null;
+        const after = profitAfterWarranty(tx, claims);
+        return (
+          <>
+            <Row label={`Warranty work (${claims.length})`} value={`− ${money(after.warrantyCost)}`} />
+            <div className="flex items-center justify-between py-1 text-sm font-bold"><span>Profit after warranty work</span><span className={after.after >= 0 ? 'text-emerald-600' : 'text-rose-600'}>{money(after.after)}</span></div>
+          </>
+        );
+      })()}
       <button onClick={() => printSalesReceipt(tx, { storeName: getStoreProfile().storeName })}
         className="w-full mt-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700">
         <Printer className="w-4 h-4" /> Print Receipt

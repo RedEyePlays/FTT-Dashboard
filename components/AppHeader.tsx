@@ -1,7 +1,7 @@
 import React from 'react';
 import {
   LayoutDashboard, Table, ShoppingCart, ShoppingBag, Wrench, Contact, Activity, BarChart3, StickyNote,
-  Truck, ScrollText, Users as UsersIcon, Settings, Bot, Sparkles, MessageCircle,
+  Truck, Cpu, ScrollText, Users as UsersIcon, Settings, Bot, Sparkles, MessageCircle,
   Search, PlusCircle, Moon, Sun, Menu, MoreHorizontal, ChevronDown, LogOut, Clock, Receipt, ClipboardCheck, Lock,
 } from 'lucide-react';
 import { ViewState, Permission, ActivityEntry } from '../types';
@@ -71,6 +71,9 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     { key: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard className="w-4 h-4" />, view: 'dashboard', show: true },
     { key: 'grid', label: 'Inventory', icon: <Table className="w-4 h-4" />, view: 'grid', show: true },
     { key: 'repairs', label: 'Repairs', icon: <Wrench className="w-4 h-4" />, view: 'repairs', show: allow('repairs.tech') },
+    // Beside Repairs and Inventory: a build is bench work that becomes stock,
+    // so it belongs where staff already look for both.
+    { key: 'pcbuilds', label: 'PC Builds', icon: <Cpu className="w-4 h-4" />, view: 'pcbuilds', show: allow('inventory.add') },
     { key: 'customers', label: 'Customers', icon: <Contact className="w-4 h-4" />, view: 'customers', show: allow('reports.view') },
     { key: 'pos', label: 'Quick Sale', icon: <ShoppingCart className="w-4 h-4" />, view: 'pos', show: true },
     { key: 'quickpurchase', label: 'Quick Purchase', icon: <ShoppingBag className="w-4 h-4" />, view: 'quickpurchase', show: allow('inventory.add') },

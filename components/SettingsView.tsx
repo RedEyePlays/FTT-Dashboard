@@ -442,6 +442,18 @@ const OperationsSection: React.FC<{ draft: AppSettings; patch: PatchFn; confirmP
         hint="A device must also sell for at least its cost plus this amount. When both are set the HIGHER of the two applies. 0 = no dollar floor."
         value={draft.operations.minMarginDollars ?? 0}
         onChange={v => patch('operations', { minMarginDollars: Math.max(0, parseFloat(v) || 0) })} />
+      <SettingsTextField label="Device warranty (days)" type="number" min={0} max={3650} step={1}
+        hint="Default warranty on devices you sell. Can be changed per sale. It is stamped onto the sale line at checkout, so changing it here never alters a sale already made. 0 = sold as-is."
+        value={draft.operations.deviceWarrantyDays ?? 90}
+        onChange={v => patch('operations', { deviceWarrantyDays: Math.max(0, Math.round(parseFloat(v) || 0)) })} />
+      <SettingsTextField label="Accessory warranty (days)" type="number" min={0} max={3650} step={1}
+        hint="Default warranty on accessories. Can be changed per sale. 0 = sold as-is."
+        value={draft.operations.accessoryWarrantyDays ?? 0}
+        onChange={v => patch('operations', { accessoryWarrantyDays: Math.max(0, Math.round(parseFloat(v) || 0)) })} />
+      <SettingsTextField label="PC build labour rate ($/hr)" type="number" min={0} step={0.01}
+        hint="Pre-filled when logging hours on a custom PC build. The rate is snapshotted onto each entry, so a later change never restates hours already logged."
+        value={draft.operations.buildLabourRate ?? 15}
+        onChange={v => patch('operations', { buildLabourRate: Math.max(0, parseFloat(v) || 0) })} />
       {canManage && <RegisterModeToggle />}
       <PaidBreakPicker
         value={draft.operations.paidBreakReasons || []}

@@ -336,6 +336,39 @@ describe('employee operational permissions (granted)', () => {
       { id: 's1', buyerId: 'b1', amountPaid: 300, settledBy: 'employee-uid', settledByEmail: 'employee@shop.test', settledAt: Date.now() }));
   });
 
+  /* ---------------- PC builds ---------------- */
+  //
+  // A build IS inventory being assembled, so it follows the inventory grant:
+  // anyone who may add inventory may create and work on one. Deleting is
+  // owner-only, like every other record with money on it.
+
+  it('employee can CREATE and WORK ON a PC build', async () => {
+    await assertSucceeds(setDoc(doc(asEmployee(), 'user_data', WORKSPACE, 'pcBuilds', 'pc1'), {
+      id: 'pc1', name: 'Starter Gaming PC', kind: 'shelf', status: 'planning',
+      parts: [], labour: [], createdBy: 'employee-uid', createdByEmail: 'employee@shop.test',
+      createdAt: Date.now(), updatedAt: Date.now(),
+    }));
+    await assertSucceeds(setDoc(doc(asEmployee(), 'user_data', WORKSPACE, 'pcBuilds', 'pc1'),
+      { status: 'assembling', parts: [{ id: 'p1', category: 'CPU', name: 'Ryzen 7', cost: 400, condition: 'new', source: 'retail' }] },
+      { merge: true }));
+  });
+
+  it('technician and manager can read and work on a build too', async () => {
+    await assertSucceeds(getDoc(doc(asTech(), 'user_data', WORKSPACE, 'pcBuilds', 'pc1')));
+    await assertSucceeds(setDoc(doc(asManager(), 'user_data', WORKSPACE, 'pcBuilds', 'pc2'), {
+      id: 'pc2', name: 'Order for Ali', kind: 'customer', status: 'planning',
+      parts: [], labour: [], createdBy: 'manager-uid', createdByEmail: 'manager@shop.test',
+      createdAt: Date.now(), updatedAt: Date.now(),
+    }));
+  });
+
+  it('only the OWNER can delete a build — it carries part costs and labour history', async () => {
+    const { deleteDoc } = await import('firebase/firestore');
+    await assertFails(deleteDoc(doc(asEmployee(), 'user_data', WORKSPACE, 'pcBuilds', 'pc1')));
+    await assertFails(deleteDoc(doc(asManager(), 'user_data', WORKSPACE, 'pcBuilds', 'pc1')));
+    await assertSucceeds(deleteDoc(doc(asOwner(), 'user_data', WORKSPACE, 'pcBuilds', 'pc1')));
+  });
+
   // NOTE: "employee can LOG AN EXPENSE" used to live here. That grant has been
   // REVOKED — expense amounts are cost/profit-sensitive, so the employee role
   // lost expense access entirely in the expenses.add / expenses.viewAll split.

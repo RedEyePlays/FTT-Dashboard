@@ -111,6 +111,7 @@ const DEVICE_CATEGORY = (t?: DeviceType): string => {
     case 'Tablet': return 'Tablets';
     case 'Laptop': return 'Laptops';
     case 'Watch': return 'Watches';
+    case 'Desktop PC': return 'Desktop PCs';
     default: return 'Other Devices';
   }
 };

@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { InventoryItem, Customer, DeviceType, Repair } from '../types';
 import { FloorSettings, belowFloorGapLabel } from '../domain/priceFloor';
+import { WarrantySettings } from '../domain/warranty';
 import { RepairSalePrefill } from '../domain/repairs';
 import { getDeviceDisplayName, suggestedSalePrice, PriceSuggestion } from '../domain/inventory';
 // Lazy: the label modal pulls in jsPDF (~390 kB). Load it only when a label is
@@ -33,6 +34,9 @@ interface Props {
   onConsumeInitial?: () => void;
   initialRepair?: RepairSalePrefill;   // pre-seed a repair checkout (Repairs → Check Out)
   onConsumeInitialRepair?: () => void;
+  /** Pre-seed one inventory device (a customer PC order's reserved build). */
+  initialInventoryId?: string;
+  onConsumeInitialInventory?: () => void;
   onComplete: (payload: import('../hooks/useCheckout').CartCheckout) => void;
   canViewProfit?: boolean;      // gate cost/profit figures (same pattern as Dashboard)
   onGenerateSku?: (deviceType?: DeviceType) => Promise<string>;
@@ -41,6 +45,8 @@ interface Props {
   // Floor price (domain/priceFloor.ts) — the workspace margin settings, and
   // the manager/owner PIN approval for a line that falls under its floor.
   floorSettings?: FloorSettings;
+  // What the shop gives on what it sells (domain/warranty.ts).
+  warrantySettings?: WarrantySettings;
 }
 
 // Desktop split-screen Quick Sale. All state / pricing / checkout logic lives in
@@ -260,7 +266,7 @@ export const CartSaleView: React.FC<Props> = (props) => {
         )}
 
         <div className="flex flex-col gap-3">
-          {cart.map(l => {
+          {cart.map((l, li) => {
             const zeroPrice = isZeroPricedDevice(l);
             return (
             <div key={l.key} className={`bg-white dark:bg-slate-900 border rounded-xl p-4 ${zeroPrice ? 'border-amber-400 dark:border-amber-500/60 ring-1 ring-amber-300/60 dark:ring-amber-500/30' : 'border-slate-200 dark:border-slate-700'}`}>
@@ -317,6 +323,27 @@ export const CartSaleView: React.FC<Props> = (props) => {
                         <input type="checkbox" checked={l.taxable} onChange={e => updateLine(l.key, { taxable: e.target.checked })} className="rounded" /> Taxable
                       </label>
                     </div>
+                    {/* WARRANTY, per line. The shop default is pre-filled from
+                        settings and stamped onto the sale line at checkout —
+                        editing it here changes THIS sale only, and a later
+                        change to the setting never reaches back into it.
+                        Blank is not zero: 0 days means "sold as-is" and the
+                        line carries no warranty fields at all. */}
+                    {!(l.isCustom && l.category === 'service') && (
+                      <div><label className={labelCls}>Warranty (days)</label>
+                        <input type="number" min="0" step="1" className={inputCls}
+                          value={cx.warrantyDaysFor(l, li)}
+                          onChange={e => cx.setLineWarranty(li, Math.max(0, Math.round(num(e.target.value))))}
+                          onFocus={selectOnFocus} />
+                        <span className="block text-[11px] text-slate-400">
+                          {l.startsWarrantyAtPickup
+                            ? 'Starts at pickup'
+                            : cx.warrantyUntilFor(l, li)
+                              ? `Covered until ${cx.warrantyUntilFor(l, li)}`
+                              : 'Sold as-is'}
+                        </span>
+                      </div>
+                    )}
                   </div>
                 </div>
                 <div className="text-right shrink-0">

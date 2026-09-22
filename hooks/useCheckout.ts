@@ -13,6 +13,7 @@ import { todayISO } from '../domain/dates';
 import {
   FloorSettings, floorFor, isBelowFloor, BELOW_FLOOR_WARNING, NO_COST_NOTE, belowFloorStamp,
 } from '../domain/priceFloor';
+import { WarrantySettings, defaultWarrantyDays, stampWarranty, warrantyUntil } from '../domain/warranty';
 import { PersistedCheckoutState, revalidateRestoredCart, describeDroppedLines, checkoutStorageKey } from '../domain/checkoutPersistence';
 import { saveCheckoutState, loadCheckoutState, clearCheckoutState } from '../services/checkoutPersistence';
 
@@ -31,8 +32,9 @@ export interface CartCheckout {
 export type CustomCategory = 'device' | 'accessory' | 'service' | 'other';
 
 // Device-type options for a custom device line — the analytics-meaningful set
-// (Phone/Tablet/Laptop/Watch each map to a named category; Other → Other Devices).
-export const CUSTOM_DEVICE_TYPES: DeviceType[] = ['Phone', 'Tablet', 'Laptop', 'Watch', 'Other'];
+// (Phone/Tablet/Laptop/Watch/Desktop PC each map to a named category;
+// Other → Other Devices).
+export const CUSTOM_DEVICE_TYPES: DeviceType[] = ['Phone', 'Tablet', 'Laptop', 'Watch', 'Desktop PC', 'Other'];
 
 export interface CartLine {
   key: string;
@@ -61,6 +63,9 @@ export interface CartLine {
   // acknowledgement (same non-blocking-but-acknowledged gate as
   // listedPlatforms above; selling a device as-is is legitimate).
   openRepairNumber?: string;
+  // A CUSTOMER PC ORDER: the warranty clock starts when they collect it, not
+  // when the deposit is taken (domain/warranty.ts).
+  startsWarrantyAtPickup?: boolean;
 }
 
 // A device sold that was flagged listed elsewhere — surfaced on the post-sale
@@ -80,6 +85,12 @@ interface Args {
   // completed through the same Quick Sale flow as a regular in-store sale.
   initialRepair?: RepairSalePrefill;
   onConsumeInitialRepair?: () => void;
+  // Pre-seed the cart with one inventory device. Used by a customer PC order's
+  // "Take deposit" button: the reserved build device lands in the cart and the
+  // deposit is then taken through the ORDINARY layaway flow, with no bespoke
+  // deposit path of its own.
+  initialInventoryId?: string;
+  onConsumeInitialInventory?: () => void;
   onComplete: (payload: CartCheckout) => void;
   // Allocate a real SKU the same way normal device intake does (App's atomic
   // generator). Used to give a custom device opted into inventory a proper SKU
@@ -94,11 +105,15 @@ interface Args {
   // settings.operations.minMarginPercent / minMarginDollars — the workspace
   // floor. Unset = no floor, which is exactly today's behaviour.
   floorSettings?: FloorSettings;
+  // settings.operations.deviceWarrantyDays / accessoryWarrantyDays — what the
+  // shop gives on what it sells (domain/warranty.ts). Unset falls back to the
+  // 90/0 defaults.
+  warrantySettings?: WarrantySettings;
 }
 
 const uid = newId;
 
-export function useCheckout({ inventory, customers = [], repairs = [], initialCustomer, onConsumeInitial, initialRepair, onConsumeInitialRepair, onComplete, onGenerateSku, persist, floorSettings = {} }: Args) {
+export function useCheckout({ inventory, customers = [], repairs = [], initialCustomer, onConsumeInitial, initialRepair, onConsumeInitialRepair, initialInventoryId, onConsumeInitialInventory, onComplete, onGenerateSku, persist, floorSettings = {}, warrantySettings = {} }: Args) {
   const [cart, setCart] = useState<CartLine[]>([]);
   const [picker, setPicker] = useState<null | ItemKind>(null);
   const [search, setSearch] = useState('');
@@ -117,6 +132,18 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
   // checkout so the confirmation screen can remind the seller to delist them —
   // guaranteed to surface at least once, independent of the Firestore write.
   const [delistReminders, setDelistReminders] = useState<DelistReminder[]>([]);
+
+  // WARRANTY OVERRIDES, per cart line index. `null` means the seller chose
+  // "No warranty" explicitly; an absent key means they left the default alone.
+  // The two must stay distinguishable — see domain/warranty.ts's stampWarranty.
+  const [warrantyOverrides, setWarrantyOverrides] = useState<Record<number, number | null>>({});
+  const setLineWarranty = (index: number, days: number | null | undefined) =>
+    setWarrantyOverrides(prev => {
+      const next = { ...prev };
+      if (days === undefined) delete next[index];
+      else next[index] = days;
+      return next;
+    });
 
   const [platformName, setPlatformName] = useState('None / In-Store');
   const [platformFeePercent, setPlatformFeePercent] = useState('0');
@@ -500,6 +527,18 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
     }]);
     setPicker(null); setSearch('');
   };
+  // Seed the cart with one named inventory device (a customer PC order's
+  // reserved build). Declared here rather than beside the other prefill effects
+  // so it goes through addDevice, the same path the picker uses — the deposit
+  // that follows is then an ordinary layaway on an ordinary device line.
+  useEffect(() => {
+    if (!initialInventoryId) return;
+    const item = inventory.find(i => i.id === initialInventoryId);
+    if (item && !cart.some(l => l.inventoryId === item.id)) addDevice(item);
+    onConsumeInitialInventory?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialInventoryId]);
+
   const addAccessory = (i: InventoryItem) => {
     setCart(c => [...c, {
       key: uid(), inventoryId: i.id, kind: 'accessory', name: i.item,
@@ -730,7 +769,11 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
       totalCost, totalPaid, netProfit,
       deposit: isLayaway ? depositAmount : undefined,
       balanceOwing: isLayaway ? balanceOwing : undefined,
-      lines: cart.map(l => {
+      // WARRANTY, stamped per line from the workspace setting and whatever the
+      // seller overrode in the cart (domain/warranty.ts). A device sold today
+      // is covered from today; a CUSTOMER PC ORDER is marked to start at
+      // pickup instead, so the ninety days begins when they collect it.
+      lines: stampWarranty(cart.map(l => {
         // BELOW-MINIMUM lines are stamped with the floor and the cost AS THEY
         // WERE at the moment of sale. Both depend on settings and on the
         // device's recorded cost, and both can change afterwards — a figure
@@ -745,6 +788,14 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
           listedPlatforms: l.kind === 'device' ? l.listedPlatforms : undefined,
           ...(stamp || {}),
         };
+      }),
+      {
+        soldDateISO: soldDate,
+        settings: warrantySettings,
+        overrideDays: warrantyOverrides,
+        startsAtPickup: Object.fromEntries(
+          cart.map((l, i) => [i, !!l.startsWarrantyAtPickup]).filter(([, v]) => v),
+        ) as Record<number, boolean>,
       }),
       notes: paymentNotes || undefined,
       repairId: linkedRepairId,
@@ -922,6 +973,16 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
     hasBelowFloorLine, belowFloorGap, BELOW_FLOOR_WARNING, NO_COST_NOTE,
     addDevice, addAccessory, updateLine, removeLine, num, addCustomItem, handleScan, handleCheckout, isSubmitting, reset, printReceipt, printInvoice, emailReceipt, soldDeviceRows,
     scanResults, addScanResult,
+    warrantyOverrides, setLineWarranty, warrantySettings,
+    warrantyDaysFor: (l: CartLine, i: number): number => {
+      const override = warrantyOverrides[i];
+      return override === null ? 0 : override ?? defaultWarrantyDays(l.kind, warrantySettings);
+    },
+    warrantyUntilFor: (l: CartLine, i: number): string | null => {
+      const override = warrantyOverrides[i];
+      const days = override === null ? 0 : override ?? defaultWarrantyDays(l.kind, warrantySettings);
+      return l.startsWarrantyAtPickup ? null : warrantyUntil(soldDate, days);
+    },
     eligibleRepairs, repairMatches, addRepair,
     printReceiptOnComplete, setPrintReceiptOnComplete,
   };

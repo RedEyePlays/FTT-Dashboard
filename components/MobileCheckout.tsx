@@ -10,6 +10,7 @@ import {
 const QRScanner = lazy(() => import('./QRScanner').then(m => ({ default: m.QRScanner })));
 import { InventoryItem, Customer, DeviceType, Repair } from '../types';
 import { FloorSettings } from '../domain/priceFloor';
+import { WarrantySettings } from '../domain/warranty';
 import { RepairSalePrefill } from '../domain/repairs';
 import { getDeviceDisplayName, suggestedSalePrice, PriceSuggestion } from '../domain/inventory';
 import { formatPhoneInput } from '../domain/phone';
@@ -32,6 +33,8 @@ interface Props {
   onConsumeInitial?: () => void;
   initialRepair?: RepairSalePrefill;
   onConsumeInitialRepair?: () => void;
+  initialInventoryId?: string;
+  onConsumeInitialInventory?: () => void;
   onComplete: (payload: CartCheckout) => void;
   // Accepted for a uniform QuickSaleView call; the mobile flow shows no
   // cost/profit figures, so there is nothing to mask here.
@@ -42,6 +45,8 @@ interface Props {
   // Floor price (domain/priceFloor.ts) — the workspace margin settings, and
   // the manager/owner PIN approval for a line that falls under its floor.
   floorSettings?: FloorSettings;
+  // What the shop gives on what it sells (domain/warranty.ts).
+  warrantySettings?: WarrantySettings;
 }
 
 const STEPS = ['Items', 'Cart', 'Customer', 'Payment', 'Done'];
