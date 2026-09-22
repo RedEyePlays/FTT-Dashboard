@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Search, X, Package, Smartphone, Wrench, Receipt, Users as UsersIcon, ArrowRight,
-  Contact, CornerDownLeft, Clock, Trash2,
+  Contact, CornerDownLeft, Clock, Trash2, ShieldCheck,
 } from 'lucide-react';
 import { globalSearch, SearchData, SearchResult, SearchType, MIN_QUERY } from '../domain/search';
 import { useIsMobile, useLockBodyScroll } from '../hooks/useMediaQuery';
@@ -18,6 +18,7 @@ const ICONS: Record<SearchType, React.ReactNode> = {
   inventory: <Package className="w-4 h-4" />, repair: <Wrench className="w-4 h-4" />,
   customer: <Contact className="w-4 h-4" />, sale: <Receipt className="w-4 h-4" />,
   user: <UsersIcon className="w-4 h-4" />, page: <ArrowRight className="w-4 h-4" />,
+  warranty: <ShieldCheck className="w-4 h-4" />,
 };
 const BADGE: Record<string, string> = {
   open: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300',

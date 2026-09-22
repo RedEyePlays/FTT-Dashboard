@@ -1,8 +1,9 @@
-import { InventoryItem, Repair, RepairBatch, Customer, SalesTransaction, AppUser, ViewState } from '../types';
+import { InventoryItem, Repair, RepairBatch, Customer, SalesTransaction, AppUser, ViewState, PcBuild } from '../types';
 import { kindOf } from './inventory';
 import { isRepairOpen, REPAIR_STATUS_LABEL } from './repairs';
 import { normalizeForLookup } from './identifierSearch';
 import { buildSearchable, queryWords, wordScore } from './itemSearch';
+import { warrantyLabel, warrantyLookup } from './warranty';
 
 // Pure, ranked global search over the collections already held in memory (the
 // app subscribes to them via realtime listeners), so a search performs ZERO
@@ -11,7 +12,7 @@ import { buildSearchable, queryWords, wordScore } from './itemSearch';
 // categories) plus `canViewCost` for financial subtitles — this module never
 // invents access.
 
-export type SearchType = 'inventory' | 'repair' | 'customer' | 'sale' | 'user' | 'page';
+export type SearchType = 'inventory' | 'repair' | 'customer' | 'sale' | 'user' | 'page' | 'warranty';
 
 export interface SearchResult {
   key: string;               // stable react key
@@ -38,6 +39,9 @@ export interface SearchData {
   sales: SalesTransaction[];
   users: AppUser[];
   pages: SearchPage[];
+  // Custom PC builds — only needed so a PART SERIAL finds the machine it is
+  // in. Omit them and warranty results simply never match on a part.
+  builds?: PcBuild[];
 }
 
 export interface SearchOpts { canViewCost: boolean; limitPerGroup?: number }
@@ -170,6 +174,29 @@ export function globalSearch(raw: string, data: SearchData, opts: SearchOpts): {
       score, itemId: t.id, customerId: t.customerId,
     } };
   }));
+
+  // WARRANTY — "is this still covered?" asked from anywhere, not only at
+  // repair intake. The heavy lifting is domain/warranty.ts's warrantyLookup,
+  // which is also what the intake panel uses, so both answer identically —
+  // including the case a plain sale search can never handle: the serial of a
+  // PART inside a custom PC finding the machine it was built into.
+  push('warranty', 'Warranty', warrantyLookup(raw, {
+    sales: data.sales, inventory: data.inventory, repairs: data.repairs, builds: data.builds,
+  }).map(hit => ({ r: {
+    key: `wty:${hit.sale.id}:${hit.lineIndex}`, type: 'warranty' as const,
+    title: hit.what,
+    subtitle: [
+      warrantyLabel(hit.line),
+      hit.matchedPartName ? `matched the ${hit.matchedPartName}` : '',
+      `sold ${hit.soldOn}`,
+    ].filter(Boolean).join(' · '),
+    status: hit.state === 'covered' ? 'Covered' : hit.state === 'expired' ? 'Expired' : 'No warranty',
+    statusKind: (hit.state === 'covered' ? 'ready' : hit.state === 'expired' ? 'warn' : 'neutral') as SearchResult['statusKind'],
+    // Ranked above a plain sale hit: somebody typing an IMEI at the counter is
+    // usually asking this question, not looking for the invoice.
+    score: 60 + (hit.state === 'covered' ? 10 : 0),
+    itemId: hit.sale.id, customerId: hit.sale.customerId,
+  } })));
 
   // Users — name/email/role (owner-only; caller passes [] otherwise).
   push('user', 'Users', data.users.map(u => {

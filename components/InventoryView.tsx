@@ -133,7 +133,7 @@ const DateCell: React.FC<{ value?: string; onChange: (v: string) => void; classN
   );
 };
 
-const DEVICE_TYPES: DeviceType[] = ['Phone', 'Tablet', 'Laptop', 'Console', 'Watch', 'Other'];
+const DEVICE_TYPES: DeviceType[] = ['Phone', 'Tablet', 'Laptop', 'Console', 'Watch', 'Desktop PC', 'Other'];
 const CONDITIONS = ['New', 'Like New', 'Excellent', 'Good', 'Fair', 'For Parts'];
 const STATUS_OPTS: { value: DeviceStatus; label: string }[] = [
   { value: 'pending_purchase', label: 'Pending Purchase' },

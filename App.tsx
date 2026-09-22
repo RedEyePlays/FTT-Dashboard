@@ -39,8 +39,10 @@ const UsersView = lazy(() => import('./components/UsersView').then(m => ({ defau
 const AuditLogView = lazy(() => import('./components/AuditLogView').then(m => ({ default: m.AuditLogView })));
 const TimeClockView = lazy(() => import('./components/TimeClockView').then(m => ({ default: m.TimeClockView })));
 const CloseOutView = lazy(() => import('./components/CloseOutView').then(m => ({ default: m.CloseOutView })));
-import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, DeviceBuyer, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission, Repair, RepairBatch, TimeEntry, PayPeriodPaid, PayPeriodApproval, BreakReason, SalesTransaction, CashReconciliation, StaffNote, BalancePayment, Expense, RecurringExpense, RefundSplit, StaffBonus, KioskStaff, CashDrawerEntry, AppUser } from './types';
+const PcBuildsView = lazy(() => import('./components/PcBuildsView').then(m => ({ default: m.PcBuildsView })));
+import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, DeviceBuyer, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission, Repair, RepairBatch, TimeEntry, PayPeriodPaid, PayPeriodApproval, BreakReason, SalesTransaction, CashReconciliation, StaffNote, BalancePayment, Expense, RecurringExpense, RefundSplit, StaffBonus, KioskStaff, CashDrawerEntry, AppUser, PcBuild } from './types';
 import { skuPrefix, nextSku } from './services/sku';
+import { BUILD_STATUS_LABEL, buildToInventoryItem } from './domain/pcBuild';
 import { REPAIR_PREFIX, BATCH_PREFIX, applyTechEdit, techUpdateAuditPlan, repairSalePrefill, completeRepair, completeRepairSale, dateToEpochMs, isRepairOpen, flagDeviceForRepair, restoredDeviceStatus } from './domain/repairs';
 import { repairCostWriteback, applyRepairCostDelta } from './domain/repairCostWriteback';
 import { bonusDrawerEffect, canSaveBonus, visibleBonuses } from './domain/bonuses';
@@ -90,6 +92,7 @@ import { newId, mkActivity } from './domain/ids';
 import { collectionFor, stockChange, applyDirectSale } from './domain/inventory';
 import { canVoidSale, canReturnSale, returnRefund, saleAccessoryRestock, saleDeviceListedPlatforms, collectedOnSale, refundDrawerEffect, refundSplitsValid, singleRefundSource } from './domain/pos';
 import { applyBalancePayment, cashPortionOfPayment } from './domain/layaway';
+import { stampPickupWarranty } from './domain/warranty';
 import { expectedCashForDate, cashDrawerSummary, drawerCarryOver, openDrawerPatch, ReconciliationInput, drawerStateChange, changesDrawerState, recomputedExpectedCash, recomputedVariance, DrawerAppends } from './domain/reports';
 import { useToday } from './hooks/useToday';
 import { duePeriodsFor, buildRecurringExpense, canMutateExpense } from './domain/expenses';
@@ -125,6 +128,7 @@ const PAGE_TITLES: Record<ViewState, string> = {
   grid: 'Inventory', notes: 'Notes', ai: 'AI Assistant', pos: 'Checkout', quickpurchase: 'Quick Purchase', dropoff: 'Drop-Offs',
   repairs: 'Repairs', customers: 'Customers', users: 'Users', audit: 'Audit Log',
   settings: 'Settings', timeclock: 'Time Clock', closeout: 'Close Out', layaways: 'Layaways',
+  pcbuilds: 'PC Builds',
 };
 import { LoadingScreen, LoadingSkeleton, DbErrorScreen } from './components/StatusScreens';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -150,7 +154,7 @@ const App: React.FC = () => {
     user, isLoadingAuth, authError, setAuthError,
     appUser, roleLoading, workspaceId, workspaceUsers, invites, auditLogs, loadMoreAuditLogs, auditHasMore,
     data, notes, setNotes, tasks, setTasks,
-    deviceBuyers, dropOffs, settlements, salesTransactions, customers, repairs, repairBatches,
+    deviceBuyers, dropOffs, settlements, salesTransactions, customers, repairs, repairBatches, pcBuilds,
     timeEntries, payPeriods, payPeriodApprovals, staffBonuses, kioskStaff, cashReconciliations, staffNotes, expenses, recurringExpenses,
     skuCounters, setSkuCounters, activityLog, lastBackup, settings,
     dbLoading, dbError, reconnect, enableExtendedData, enableCashData,
@@ -182,6 +186,9 @@ const App: React.FC = () => {
   // Seeds the POS cart with the repair's service line + customer; on sale commit
   // the repair is stamped complete and linked to the transaction.
   const [prefillRepairSale, setPrefillRepairSale] = useState<Repair | undefined>(undefined);
+  // One inventory device to drop into the POS cart — a customer PC order's
+  // reserved build, on its way to the ordinary layaway deposit.
+  const [prefillInventoryId, setPrefillInventoryId] = useState<string | undefined>(undefined);
   const [drawerOpen, setDrawerOpen] = useState(false);
   // Deep-link targets from Global Search (open a specific record on the target view).
   const [focusRepairId, setFocusRepairId] = useState<string | undefined>(undefined);
@@ -524,6 +531,7 @@ const App: React.FC = () => {
     p.push({ id: 'pos', label: 'Checkout', keywords: 'sell quick sale pos sales', view: 'pos' });
     if (allow('inventory.add')) p.push({ id: 'quickpurchase', label: 'Quick Purchase', keywords: 'buy purchase device counter cash', view: 'quickpurchase' });
     if (allow('repairs.tech')) p.push({ id: 'repairs', label: 'Repairs', keywords: 'tickets', view: 'repairs' });
+    if (allow('inventory.add')) p.push({ id: 'pcbuilds', label: 'PC Builds', keywords: 'custom pc desktop computer build parts gaming', view: 'pcbuilds' });
     if (allow('timeclock.use')) p.push({ id: 'timeclock', label: 'Time Clock', keywords: 'clock in out hours shift break payroll pay', view: 'timeclock' });
     if (allow('closeout.view')) p.push({ id: 'closeout', label: 'Close Out', keywords: 'end of day summary lock up reconcile', view: 'closeout' });
     if (allow('reports.view')) p.push({ id: 'customers', label: 'Customers', keywords: 'crm clients', view: 'customers' });
@@ -546,8 +554,10 @@ const App: React.FC = () => {
     sales: allow('reports.view') ? salesTransactions : [],
     users: allow('users.tech') ? workspaceUsers : [],
     pages: searchPages,
+    // Only so a PART SERIAL finds the custom PC it is inside.
+    builds: pcBuilds,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [data, repairs, customers, salesTransactions, workspaceUsers, searchPages, appUser?.role, appUser?.allowProfit]);
+  }), [data, repairs, customers, salesTransactions, workspaceUsers, searchPages, pcBuilds, appUser?.role, appUser?.allowProfit]);
 
   // Standing, actionable alerts for the notifications menu (low stock, overdue /
   // unclaimed repairs). Derived from live data already in memory.
@@ -580,7 +590,9 @@ const App: React.FC = () => {
       case 'inventory': { const it = data.find(i => i.id === r.itemId); if (it) { setEditingItem(it); setView('edit'); } break; }
       case 'repair': setFocusRepairId(r.itemId); navigate('repairs'); break;
       case 'customer': setFocusCustomerId(r.itemId); navigate('customers'); break;
-      case 'sale': if (r.customerId) { setFocusCustomerId(r.customerId); navigate('customers'); } break;
+      case 'sale':
+      // A warranty hit routes to the buyer, where the sale and its history live.
+      case 'warranty': if (r.customerId) { setFocusCustomerId(r.customerId); navigate('customers'); } break;
       case 'user': navigate('users'); break;
     }
   };
@@ -1055,7 +1067,16 @@ const App: React.FC = () => {
       etransferAmount: input.paymentMethod === 'mixed' ? input.etransferAmount : undefined,
       date: input.date, at: Date.now(), by: appUser.id, byEmail: appUser.email,
     };
-    const { transaction, fullyPaid } = applyBalancePayment(tx, payment);
+    let { transaction, fullyPaid } = applyBalancePayment(tx, payment);
+
+    // PICKUP IS WHEN A CUSTOM PC ORDER'S WARRANTY STARTS. The lines were marked
+    // at deposit time and dated nowhere; this is the moment the customer takes
+    // the machine home, so this is when the ninety days begins
+    // (domain/warranty.ts). Lines already dated are left alone — stamping twice
+    // would restart a clock that is already running.
+    if (fullyPaid) {
+      transaction = { ...transaction, lines: stampPickupWarranty(transaction.lines || [], input.date) };
+    }
 
     const activity: ActivityEntry[] = [
       mkActivity(`${input.amount.toFixed(2)} collected on layaway ${tx.id.slice(0, 8)} (${tx.customerName || 'customer'})${fullyPaid ? ' — paid in full' : ` — ${(transaction.balanceOwing || 0).toFixed(2)} still owing`}`),
@@ -2682,6 +2703,82 @@ const App: React.FC = () => {
     audit('customer.merge', 'customer', pid, { removed }, { keptId: pid, linked: plan.reassignSales.length + plan.reassignRepairs.length + plan.reassignBatches.length });
   };
 
+  // ---- CUSTOM PC BUILDS ----------------------------------------------------
+  // Permissions follow inventory: a build IS stock being assembled, so whoever
+  // may add a device may run a build, and only an owner may delete one.
+  const handleSaveBuild = (build: PcBuild, prev?: PcBuild) => {
+    if (!uid || !allow('inventory.add')) return;
+    const next: PcBuild = { ...build, updatedAt: Date.now() };
+    saveItem(uid, 'pcBuilds', next).catch(() =>
+      writeFailed('The PC build', 'Your change was not saved.'));
+    if (!prev) {
+      audit('build.create', 'pcBuild', next.id, undefined, { name: next.name, kind: next.kind });
+      logActivity(`Started PC build "${next.name}"`);
+    } else if (prev.status !== next.status) {
+      // Every status change is audited with both ends of the move, so a
+      // backwards step is visible afterwards and not only at the confirm.
+      audit('build.status', 'pcBuild', next.id, { status: prev.status }, { status: next.status });
+      logActivity(`PC build "${next.name}" → ${BUILD_STATUS_LABEL[next.status]}`);
+    } else {
+      audit('build.update', 'pcBuild', next.id, prev, next);
+    }
+  };
+
+  const handleDeleteBuild = (id: string) => {
+    if (!uid || appUser?.role !== 'owner') return;
+    const before = pcBuilds.find(b => b.id === id);
+    deleteItem(uid, 'pcBuilds', id).catch(() =>
+      writeFailed('The PC build deletion', 'The build is still there.'));
+    audit('build.delete', 'pcBuild', id, before, undefined);
+  };
+
+  /**
+   * The build becomes an ordinary inventory device.
+   *
+   * The SKU is allocated HERE — at the moment the machine exists — not when the
+   * build was started, so a build that never finishes never burns a number.
+   * Allocation is atomic and refuses offline (handleGenerateSku), so this can
+   * throw; the caller shows the message rather than creating a device with a
+   * blank SKU.
+   */
+  const handleFinishBuild = async (build: PcBuild, itemName: string): Promise<string | undefined> => {
+    if (!uid || !allow('inventory.add')) return undefined;
+    if (build.inventoryId) return build.inventoryId; // already finished — never a second device
+    const sku = await handleGenerateSku('device', 'Desktop PC');
+    const item = buildToInventoryItem({ build, sku, itemId: newId(), today: todayISO(), itemName });
+    // A customer's machine is NOT stock: it is spoken for from the moment it
+    // exists, so it is created reserved and never appears in the sellable list.
+    const device: InventoryItem = build.kind === 'customer'
+      ? { ...item, deviceStatus: 'reserved', customerName: build.customerName || '', customerPhone: build.customerPhone || '' }
+      : item;
+    await saveItem(uid, 'inventory', device).catch(() => {
+      writeFailed('The finished PC', 'The device was not added to inventory.');
+      throw new Error('inventory write failed');
+    });
+    handleSaveBuild({ ...build, inventoryId: device.id, sku, finishedAt: Date.now() }, build);
+    audit('build.finish', 'pcBuild', build.id, undefined, { inventoryId: device.id, sku, cost: device.purchaseCost });
+    logActivity(`PC build "${build.name}" finished as ${sku}`);
+    return device.id;
+  };
+
+  /**
+   * Take a deposit on a customer order.
+   *
+   * There is no bespoke deposit path: the reserved device goes into the cart
+   * and the ordinary layaway flow does the rest (deposit, balance, completion,
+   * and — through the existing refund flow — a cancellation).
+   */
+  const handleTakeDeposit = async (build: PcBuild) => {
+    if (!allow('sales.complete')) return;
+    const id = build.inventoryId || await handleFinishBuild(build, build.name);
+    if (!id) return;
+    if (build.customerId || build.customerName) {
+      setPrefillCustomer({ id: build.customerId || '', name: build.customerName || '', phone: build.customerPhone || '', kind: 'retail' } as Customer);
+    }
+    setPrefillInventoryId(id);
+    navigate('pos');
+  };
+
   // Quick actions from a customer profile: seed the target view with the customer.
   const startSaleFor = (c: Customer) => { setPrefillCustomer(c); navigate('pos'); };
   const createRepairFor = (c: Customer) => { setPrefillCustomer(c); navigate('repairs'); };
@@ -3011,6 +3108,10 @@ const App: React.FC = () => {
               onDeleteBatch={handleDeleteBatch}
               onRecordPayment={handleRecordBatchPayment}
               onPrintAudit={handleRepairPrintAudit}
+              sales={salesTransactions}
+              inventory={data}
+              builds={pcBuilds}
+              canViewCost={allow('reports.profit.detailed')}
               users={workspaceUsers}
               canViewPerformance={allow('repairs.performance')}
               notes={notes}
@@ -3020,6 +3121,24 @@ const App: React.FC = () => {
                 r.customerId ? customers.find(c => c.id === r.customerId) : undefined,
                 { isWarrantyClaim: r.isWarrantyClaim, isCancelled: r.status === 'cancelled' },
               ) : undefined}
+            />
+          )}
+          {view === 'pcbuilds' && allow('inventory.add') && (
+            <PcBuildsView
+              builds={pcBuilds}
+              inventory={data}
+              customers={customers}
+              canViewCost={allow('reports.profit.detailed')}
+              currentUserId={appUser.id}
+              currentUserEmail={appUser.email}
+              labourRate={settings.operations.buildLabourRate ?? 15}
+              warrantyDays={settings.operations.deviceWarrantyDays ?? 90}
+              onSave={handleSaveBuild}
+              onDelete={appUser.role === 'owner' ? handleDeleteBuild : undefined}
+              onFinishBuild={handleFinishBuild}
+              onTakeDeposit={allow('sales.complete') ? handleTakeDeposit : undefined}
+              onCreateCustomer={handleCreateCustomerInline}
+              onOpenInventoryItem={(id) => { const it = data.find(i => i.id === id); if (it) { setEditingItem(it); setView('edit'); } }}
             />
           )}
           {(view === 'entry' || view === 'edit') && (
@@ -3067,8 +3186,11 @@ const App: React.FC = () => {
               onConsumeInitial={() => setPrefillCustomer(undefined)}
               initialRepair={prefillRepairSale ? repairSalePrefill(prefillRepairSale) : undefined}
               onConsumeInitialRepair={() => setPrefillRepairSale(undefined)}
+              initialInventoryId={prefillInventoryId}
+              onConsumeInitialInventory={() => setPrefillInventoryId(undefined)}
               onSellCart={handleSellCart}
               floorSettings={{ minMarginPercent: settings.operations.minMarginPercent, minMarginDollars: settings.operations.minMarginDollars }}
+              warrantySettings={{ deviceWarrantyDays: settings.operations.deviceWarrantyDays, accessoryWarrantyDays: settings.operations.accessoryWarrantyDays }}
               canViewProfit={allow('reports.profit.detailed')}
               onGenerateSku={(deviceType) => handleGenerateSku('device', deviceType)}
               cashDrawer={allow('cash.log') ? todayDrawer : undefined}

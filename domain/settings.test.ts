@@ -88,12 +88,18 @@ describe('mergeSettings', () => {
       booksStartDate: '',
       // Empty = every break is unpaid, exactly today's behaviour.
       paidBreakReasons: [],
+      // The shop's 90-day device warranty, and nothing on accessories
+      // (domain/warranty.ts). Both overridable per line at the till.
+      deviceWarrantyDays: 90,
+      accessoryWarrantyDays: 0,
+      // What an hour of PC-build labour is costed at (domain/pcBuild.ts).
+      buildLabourRate: 15,
     });
   });
 
   it('merges a partial operations patch over the defaults', () => {
     const o = mergeSettings({ operations: { voidWindowDays: 3, returnRestockingFeePercent: 15 } as any }).operations;
-    expect(o).toEqual({ openingFloatDefault: 0, voidWindowDays: 3, returnRestockingFeePercent: 15, agingInventoryDays: 30, autoLockMinutes: 4, staleLayawayDays: 60, booksStartDate: '', paidBreakReasons: [] });
+    expect(o).toEqual({ openingFloatDefault: 0, voidWindowDays: 3, returnRestockingFeePercent: 15, agingInventoryDays: 30, autoLockMinutes: 4, staleLayawayDays: 60, booksStartDate: '', paidBreakReasons: [], deviceWarrantyDays: 90, accessoryWarrantyDays: 0, buildLabourRate: 15 });
   });
 });
 

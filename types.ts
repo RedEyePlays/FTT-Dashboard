@@ -1,7 +1,11 @@
 
 export type ItemKind = 'device' | 'accessory';
 
-export type DeviceType = 'Phone' | 'Tablet' | 'Laptop' | 'Console' | 'Watch' | 'Other';
+// 'Desktop PC' is the shop's own custom builds (domain/pcBuild.ts). It is a
+// device type like any other on purpose: once a build is finished it is an
+// ordinary inventory device and flows through the floor price, the till, the
+// Money Trail, the Sales Ledger and search with no special-casing.
+export type DeviceType = 'Phone' | 'Tablet' | 'Laptop' | 'Console' | 'Watch' | 'Desktop PC' | 'Other';
 
 // External marketplaces an item might ALSO be listed on while in-store —
 // see domain/listing.ts (labels, warning/reminder logic) and
@@ -123,6 +127,11 @@ export interface InventoryItem {
   // e-transfer sale (see hooks/useCheckout.ts's taxApplies).
   etransferTaxStatus?: 'none' | 'separate';
   paymentNotes?: string;
+
+  // The custom PC build this device came out of (domain/pcBuild.ts). Set when
+  // a shelf build is finished; the build carries the matching inventoryId, so
+  // neither is reachable only from the other.
+  pcBuildId?: string;
 
   // Drop-off / device buyer sourcing
   buyerId?: string;
@@ -670,6 +679,24 @@ export interface SalesLine {
   // restore it if the sale is reversed, instead of silently losing the fact
   // that the device might still be listed live elsewhere.
   listedPlatforms?: ListingPlatform[];
+  // THE WARRANTY THE SHOP GIVES ON THIS LINE (domain/warranty.ts).
+  //
+  // Stamped at checkout from settings.operations.deviceWarrantyDays /
+  // accessoryWarrantyDays, per line, and overridable in the cart. Both are
+  // OPTIONAL and absent on every sale written before this existed — such a
+  // sale reads exactly as it always did, and is reported as "no warranty
+  // recorded" rather than being retro-fitted with one the customer was never
+  // promised.
+  //
+  // `warrantyUntil` is a LOCAL YYYY-MM-DD (domain/dates.ts) — a UTC round-trip
+  // would shift an evening sale's expiry to the next day.
+  warrantyDays?: number;
+  warrantyUntil?: string;
+  // A CUSTOMER PC ORDER's warranty starts at PICKUP, not at the deposit, so
+  // the 90 days begins when they take the machine home. The line is stamped
+  // with this flag at deposit time and the dates are filled in at layaway
+  // completion (domain/warranty.ts's stampPickupWarranty).
+  warrantyStartsAtPickup?: boolean;
   // This line went out BELOW the device's minimum price (domain/priceFloor.ts).
   // Warned at the till, never blocked; the owner reviews it afterwards.
   belowFloor?: boolean;
@@ -811,7 +838,7 @@ export interface AppData {
   activityLog?: ActivityEntry[];
 }
 
-export type ViewState = 'dashboard' | 'analytics' | 'reports' | 'entry' | 'edit' | 'grid' | 'notes' | 'ai' | 'pos' | 'quickpurchase' | 'dropoff' | 'repairs' | 'customers' | 'users' | 'audit' | 'settings' | 'timeclock' | 'closeout' | 'layaways';
+export type ViewState = 'dashboard' | 'analytics' | 'reports' | 'entry' | 'edit' | 'grid' | 'notes' | 'ai' | 'pos' | 'quickpurchase' | 'dropoff' | 'repairs' | 'customers' | 'users' | 'audit' | 'settings' | 'timeclock' | 'closeout' | 'layaways' | 'pcbuilds';
 
 // A single cash movement in a day's drawer, logged as part of reconciliation:
 // a manual cash-in (top-up / tip / off-sale payment), a paid cash expense, or an
@@ -1142,6 +1169,12 @@ export interface Repair {
   // so domain/reviews.ts excludes it from review requests same as a void/
   // cancelled ticket.
   isWarrantyClaim?: boolean;
+  // WHICH SALE this claim is against, set when a repair is opened from the
+  // warranty lookup (domain/warranty.ts). `isWarrantyClaim` stays as it was —
+  // a claim can still be flagged by hand without a linked sale, which is what
+  // every existing warranty repair looks like.
+  warrantySaleId?: string;
+  warrantyLineIndex?: number;
   status: RepairStatus;
   photos?: string[];            // reserved for future uploads
   completedAt?: number;
@@ -1183,4 +1216,105 @@ export interface RepairBatch {
   // reads as private without a data migration. Never set by new code; every
   // batch save writes `private` instead.
   autoInventory?: boolean;
+}
+
+/* ================= PC builds ================= */
+//
+// The shop builds custom PCs, two ways: a SHELF build (the shop builds it, it
+// becomes sellable inventory) and a CUSTOMER order (someone orders one, pays a
+// deposit through the EXISTING layaway flow, and picks it up).
+//
+// Parts are NOT stock. The shop buys them from Facebook, retail and trade-ins
+// and the owner types each part's cost in — there is no parts inventory to
+// deplete and none is modelled here.
+//
+// See domain/pcBuild.ts for the totals, the labour snapshot and the name
+// generation; domain/buildSheet.ts for what a customer is allowed to see.
+
+export type BuildKind = 'shelf' | 'customer';
+
+export type BuildStatus =
+  | 'planning' | 'parts_ordered' | 'assembling' | 'testing'
+  | 'ready' | 'sold' | 'picked_up' | 'cancelled';
+
+export type PartCategory =
+  | 'CPU' | 'GPU' | 'Motherboard' | 'RAM' | 'Storage'
+  | 'PSU' | 'Case' | 'Cooler' | 'Fans' | 'OS' | 'Other';
+
+export type PartCondition = 'new' | 'used' | 'open_box';
+export type PartSource = 'facebook' | 'retail' | 'trade_in' | 'online' | 'other';
+
+export interface BuildPart {
+  id: string;
+  category: PartCategory;
+  /** The exact model, e.g. "RTX 4070 Windforce OC 12GB". */
+  name: string;
+  /** Typed by the user. No stock tracking — see the note above. */
+  cost: number;
+  condition: PartCondition;
+  source: PartSource;
+  /** The listing / order link this part came from. NEVER shown to a customer. */
+  sourceUrl?: string;
+  /**
+   * Per-part serial and MANUFACTURER warranty, so a GPU that dies in month
+   * four is claimed through its maker rather than paid for by the shop. The
+   * serial is also what makes a build findable from a warranty lookup
+   * (domain/warranty.ts).
+   */
+  serial?: string;
+  mfrWarrantyUntil?: string;   // YYYY-MM-DD, local
+  /**
+   * What the part sells for NEW, typed by the user for now, always stored with
+   * where it came from and WHEN it was checked — a price with no date behind it
+   * looks current forever, and a six-month-old GPU price is worse than none.
+   */
+  retailPrice?: number;
+  retailSource?: string;
+  retailCheckedAt?: string;    // YYYY-MM-DD, local
+  /** The exact PCPartPicker product link, pasted once found. */
+  pcpartpickerUrl?: string;
+}
+
+export interface BuildLabourEntry {
+  id: string;
+  userId: string;
+  userEmail: string;
+  hours: number;
+  date: string;                // YYYY-MM-DD, local
+  note?: string;
+  /**
+   * The rate IN FORCE WHEN THIS WAS LOGGED, snapshotted so changing
+   * settings.operations.buildLabourRate later never reprices a build that was
+   * already costed. Same discipline as PayPeriodPaid's rate snapshot.
+   */
+  rate: number;
+  loggedAt: number;
+}
+
+export interface PcBuild {
+  id: string;
+  name: string;
+  kind: BuildKind;
+  status: BuildStatus;
+  parts: BuildPart[];
+  labour: BuildLabourEntry[];
+  /** Shelf build: what the shop intends to sell it for. */
+  targetPrice?: number;
+  /** Customer order: what the customer was quoted. */
+  quotePrice?: number;
+  customerId?: string;
+  customerName?: string;
+  customerPhone?: string;
+  notes?: string;
+  /** Set when a shelf build is finished and becomes an inventory device. */
+  inventoryId?: string;
+  /** The device's SKU, allocated at the moment the build was finished. */
+  sku?: string;
+  finishedAt?: number;
+  /** Set when a customer order takes a deposit / is sold. */
+  saleId?: string;
+  createdBy: string;
+  createdByEmail: string;
+  createdAt: number;
+  updatedAt: number;
 }

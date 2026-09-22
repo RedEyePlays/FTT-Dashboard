@@ -34,6 +34,8 @@ export const COLLECTIONS = [
   'dropOffs', 'runners', 'settlements', 'activityLog', 'auditLogs',
   'repairs', 'repairBatches', 'timeEntries', 'payPeriods', 'payPeriodApprovals', 'staffBonuses', 'cashReconciliations', 'staffNotes',
   'expenses', 'recurringExpenses',
+  // Custom PC builds (domain/pcBuild.ts).
+  'pcBuilds',
   // The kiosk punch roster. Deliberately NOT in functions/src/backups.ts's
   // COLLECTIONS: it is a derived mirror of users/{uid} (rebuilt by the
   // syncKioskStaff trigger), and it holds PIN hashes, which have no business

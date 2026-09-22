@@ -1,6 +1,7 @@
 import React from 'react';
 import { InventoryItem, Customer, DeviceType, Repair } from '../types';
 import { FloorSettings } from '../domain/priceFloor';
+import { WarrantySettings } from '../domain/warranty';
 import { RepairSalePrefill } from '../domain/repairs';
 import { CashDrawerSummary } from '../domain/reports';
 import { CartSaleView, CartCheckout } from './CartSaleView';
@@ -17,6 +18,8 @@ interface Props {
   onConsumeInitial?: () => void;
   initialRepair?: RepairSalePrefill; // pre-seed a repair checkout (Repairs → Check Out)
   onConsumeInitialRepair?: () => void;
+  initialInventoryId?: string;
+  onConsumeInitialInventory?: () => void;
   onSellCart: (payload: CartCheckout) => void;
   canViewProfit?: boolean;         // gate cost/profit figures (same pattern as Dashboard)
   onGenerateSku?: (deviceType?: DeviceType) => Promise<string>; // real SKU for a custom device added to inventory
@@ -38,14 +41,16 @@ interface Props {
   // Floor price (domain/priceFloor.ts) — the workspace margin settings, and
   // the manager/owner PIN approval for a line that falls under its floor.
   floorSettings?: FloorSettings;
+  // What the shop gives on what it sells (domain/warranty.ts).
+  warrantySettings?: WarrantySettings;
 }
 
 // Quick Sale = the desktop split-screen cart on ≥md, a step-based flow on phones.
 // Both share the same checkout logic (hooks/useCheckout) — no duplicated business
 // logic; only the presentation differs, and only one renders at a time.
-export const QuickSaleView: React.FC<Props> = ({ inventory, customers, repairs, initialCustomer, onConsumeInitial, initialRepair, onConsumeInitialRepair, onSellCart, canViewProfit = true, onGenerateSku, cashDrawer, onOpenDrawer, onLogCash, onCloseDrawer, reconciledToday, onCartDirtyChange, persist, floorSettings }) => {
+export const QuickSaleView: React.FC<Props> = ({ inventory, customers, repairs, initialCustomer, onConsumeInitial, initialRepair, onConsumeInitialRepair, initialInventoryId, onConsumeInitialInventory, onSellCart, canViewProfit = true, onGenerateSku, cashDrawer, onOpenDrawer, onLogCash, onCloseDrawer, reconciledToday, onCartDirtyChange, persist, floorSettings, warrantySettings }) => {
   const isMobile = useIsMobile();
-  const common = { inventory, customers, repairs, initialCustomer, onConsumeInitial, initialRepair, onConsumeInitialRepair, canViewProfit, onGenerateSku, onDirtyChange: onCartDirtyChange, persist, floorSettings } as const;
+  const common = { inventory, customers, repairs, initialCustomer, onConsumeInitial, initialRepair, onConsumeInitialRepair, initialInventoryId, onConsumeInitialInventory, canViewProfit, onGenerateSku, onDirtyChange: onCartDirtyChange, persist, floorSettings, warrantySettings } as const;
   const checkout = isMobile
     ? <MobileCheckout {...common} onComplete={onSellCart} />
     : <CartSaleView {...common} onComplete={onSellCart} />;

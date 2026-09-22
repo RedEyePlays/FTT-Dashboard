@@ -1,11 +1,12 @@
 import React, { useState, useMemo, useEffect, lazy, Suspense } from 'react';
 import {
   Wrench, Plus, Search, X, Trash2, Printer, FileText, Receipt, History as HistoryIcon,
-  ArrowLeft, DollarSign, ChevronRight, Building2, ClipboardCheck, PackageCheck, ScrollText, QrCode, BarChart3, Link as LinkIcon, Check, Camera, Star,
+  ArrowLeft, DollarSign, ChevronRight, Building2, ClipboardCheck, PackageCheck, ScrollText, QrCode, BarChart3, Link as LinkIcon, Check, Camera, Star, ShieldCheck,
 } from 'lucide-react';
 import { ImeiScanner } from './ImeiScanner';
-import { Repair, RepairBatch, Customer, AuditEntry, RepairStatus, RepairType, DeviceType, RepairPart, AppUser, RepairPurchasePaidBy, Note, Role } from '../types';
+import { Repair, RepairBatch, Customer, AuditEntry, RepairStatus, RepairType, DeviceType, RepairPart, AppUser, RepairPurchasePaidBy, Note, Role, SalesTransaction, InventoryItem, PcBuild } from '../types';
 import { LinkedNotes } from './LinkedNotes';
+import { WarrantyLookupPanel } from './WarrantyLookupPanel';
 import {
   REPAIR_STATUSES, REPAIR_STATUS_CELL,
   balanceOwing, batchTotals, matchesRepair, matchesBatch, canSaveRepair,
@@ -71,9 +72,15 @@ interface Props {
   // when the owner hasn't configured a review link in Settings, so a shop
   // that never set one up never even sees the button (App.tsx).
   onRequestReview?: (r: Repair) => void;
+  // WARRANTY LOOKUP AT INTAKE (domain/warranty.ts). Sales + inventory + builds
+  // are what the lookup searches; omit them and the panel simply isn't offered.
+  sales?: SalesTransaction[];
+  inventory?: InventoryItem[];
+  builds?: PcBuild[];
+  canViewCost?: boolean;
 }
 
-const DEVICE_TYPES: DeviceType[] = ['Phone', 'Tablet', 'Laptop', 'Console', 'Watch', 'Other'];
+const DEVICE_TYPES: DeviceType[] = ['Phone', 'Tablet', 'Laptop', 'Console', 'Watch', 'Desktop PC', 'Other'];
 const today = () => todayISO();
 const money = (n?: number) => `$${(n || 0).toFixed(2)}`;
 const deviceName = (r: Repair) => [r.brand, r.model].filter(Boolean).join(' ') || r.deviceType || 'Device';
@@ -544,6 +551,7 @@ export const RepairsView: React.FC<Props> = (props) => {
           onDelete={() => { onDeleteRepair(drawer.repair.id); setDrawer(null); }}
           onPrint={(doc) => { printRetailReceipt(drawer.repair, doc, { storeName: getStoreProfile().storeName, internal: isInternalTicket(drawer.repair) }); onPrintAudit('repair', drawer.repair.id, doc); }}
           onRequestReview={onRequestReview}
+          sales={props.sales} inventory={props.inventory} builds={props.builds} canViewCost={props.canViewCost}
           onPrintSheet={() => printSheet(drawer.repair)}
           onPrintLabel={() => openLabel(drawer.repair)}
           onPrintEstimate={() => { printRepairEstimate(drawer.repair, { storeName: getStoreProfile().storeName }); onPrintAudit('repair', drawer.repair.id, 'estimate'); }} />
@@ -723,10 +731,12 @@ const RepairDrawer: React.FC<{
   // App.tsx). Not offered on a warranty claim or cancelled ticket — those are
   // unhappy paths (domain/reviews.ts).
   onRequestReview?: (r: Repair) => void;
-}> = ({ initial, isNew, canDelete, auditLogs, customers, batch, notes, noteRole, onOpenNote, onClose, onSave, onCheckoutViaSale, onDelete, onPrint, onPrintSheet, onPrintLabel, onPrintEstimate, onRequestReview }) => {
+  sales?: SalesTransaction[]; inventory?: InventoryItem[]; builds?: PcBuild[]; canViewCost?: boolean;
+}> = ({ initial, isNew, canDelete, auditLogs, customers, batch, notes, noteRole, onOpenNote, onClose, onSave, onCheckoutViaSale, onDelete, onPrint, onPrintSheet, onPrintLabel, onPrintEstimate, onRequestReview, sales, inventory, builds, canViewCost = false }) => {
   const [f, setF] = useState<Repair>(initial);
   const [linkCopied, setLinkCopied] = useState(false);
   const [showImeiScanner, setShowImeiScanner] = useState(false);
+  const [showWarrantyLookup, setShowWarrantyLookup] = useState(false);
   // Snapshot the form state at mount for a dirty check, so a stray backdrop/X
   // click doesn't silently discard typed changes.
   const [snapshot] = useState(() => JSON.stringify(initial));
@@ -871,6 +881,53 @@ const RepairDrawer: React.FC<{
                 <input type="checkbox" className="mt-0.5" checked={!!f.isWarrantyClaim} onChange={e => set({ isWarrantyClaim: e.target.checked })} />
                 <span>This is a warranty claim / redo against earlier work — not a happy-path visit; skipped from Google review requests.</span>
               </label>
+            )}
+            {/* IS IT UNDER WARRANTY? Asked at the counter, so answered at the
+                counter. Picking a result links THIS ticket to the exact sale
+                line, which is what makes "profit after warranty work" and the
+                repeat-claim count possible later. */}
+            {isRetail && sales && inventory && (
+              <div className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-800">
+                {f.warrantySaleId ? (
+                  <p className="text-xs text-emerald-700 dark:text-emerald-400 flex items-center gap-2">
+                    <ShieldCheck className="w-3.5 h-3.5" /> Linked to the original sale.
+                    <button type="button" className="underline text-slate-400 hover:text-rose-500"
+                      onClick={() => set({ warrantySaleId: undefined, warrantyLineIndex: undefined })}>Unlink</button>
+                  </p>
+                ) : showWarrantyLookup ? (
+                  <>
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-xs font-semibold text-slate-600 dark:text-slate-300">Check warranty</p>
+                      <button type="button" className="text-xs text-slate-400 hover:text-slate-600" onClick={() => setShowWarrantyLookup(false)}>Hide</button>
+                    </div>
+                    <WarrantyLookupPanel
+                      sales={sales} inventory={inventory} repairs={[]} builds={builds}
+                      canViewCost={canViewCost}
+                      onStartClaim={(hit) => {
+                        const inv = inventory.find(i => i.id === hit.line.inventoryId);
+                        set({
+                          isWarrantyClaim: true,
+                          warrantySaleId: hit.sale.id,
+                          warrantyLineIndex: hit.lineIndex,
+                          customerName: f.customerName || hit.sale.customerName || '',
+                          customerPhone: f.customerPhone || hit.sale.customerPhone || '',
+                          customerId: f.customerId || hit.sale.customerId,
+                          imei: f.imei || inv?.imei || '',
+                          deviceType: f.deviceType || inv?.deviceType,
+                          brand: f.brand || inv?.brand || '',
+                          model: f.model || inv?.model || hit.what,
+                        });
+                        setShowWarrantyLookup(false);
+                      }}
+                    />
+                  </>
+                ) : (
+                  <button type="button" onClick={() => setShowWarrantyLookup(true)}
+                    className="text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1">
+                    <ShieldCheck className="w-3.5 h-3.5" /> Check warranty — IMEI, SKU, part serial, phone or name
+                  </button>
+                )}
+              </div>
             )}
             {isNew && privateBatch && (
               <div className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-800">

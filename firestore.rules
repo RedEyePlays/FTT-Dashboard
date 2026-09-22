@@ -476,6 +476,27 @@ service cloud.firestore {
         allow delete: if isOwnerOf(ws);
       }
 
+      // CUSTOM PC BUILDS (domain/pcBuild.ts). An EXPLICIT block rather than the
+      // catch-all below, so the permissions are stated where somebody reading
+      // the rules will find them.
+      //
+      // Anyone who may add inventory may create and work on a build — a build
+      // IS inventory being assembled, and gating it more tightly than the
+      // device it becomes would be arbitrary. Deleting stays owner-only, like
+      // every other record with money on it: a build carries part costs and
+      // labour, and a deleted one takes that history with it.
+      //
+      // NOTE on cost visibility: rules cannot hide individual FIELDS on read,
+      // so part costs are readable by any member here. Hiding them from staff
+      // is a UI boundary (domain/costVisibility.ts), exactly as it already is
+      // for inventory purchaseCost — this rule is not the thing enforcing it,
+      // and pretending otherwise would be worse than saying so.
+      match /pcBuilds/{id} {
+        allow read: if activeMemberOf(ws);
+        allow create, update: if isStaffOf(ws);
+        allow delete: if isOwnerOf(ws);
+      }
+
       // Workspace meta doc (settings, notes, tasks, sku counters, backup
       // stamp — see services/firestoreDb.ts's metaRef): any staff may touch
       // it (sku counters advance on every device add, notes/tasks are shared

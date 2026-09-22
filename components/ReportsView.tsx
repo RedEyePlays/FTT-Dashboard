@@ -23,6 +23,7 @@ import {
   buildDayLedger, cashOnly, shortfallWalk, rowsForWalkLine, dayLedgerFacts,
   trimForViewer, ledgerCsvRows, WalkLine,
 } from '../domain/dayLedger';
+import { warrantyCostRows, WARRANTY_COST_PL_NOTE } from '../domain/warranty';
 import { toCSV, triggerDownload } from '../services/backup';
 import { newId } from '../domain/ids';
 import { toISODate, todayISO, clampToBooksStart } from '../domain/dates';
@@ -175,7 +176,7 @@ export const ReportsView: React.FC<Props> = ({
       )}
       {tab === 'cash' && tabAllowed('cash', perms) && <CashReconTab salesTransactions={salesTransactions} cashReconciliations={cashReconciliations} onSave={onSaveReconciliation} />}
       {tab === 'tax' && tabAllowed('tax', perms) && <TaxReportTab salesTransactions={salesTransactions} booksStartDate={booksStartDate} />}
-      {tab === 'pnl' && tabAllowed('pnl', perms) && <ProfitLossTab plInput={plInput} showExpenseCategories={canViewAllExpenses} />}
+      {tab === 'pnl' && tabAllowed('pnl', perms) && <ProfitLossTab plInput={plInput} repairs={repairs} showExpenseCategories={canViewAllExpenses} />}
       {tab === 'expenses' && tabAllowed('expenses', perms) && (
         <ExpensesTab
           expenses={expenses} categories={expenseCategories} recurringExpenses={recurringExpenses}
@@ -928,11 +929,26 @@ const BooksStartNote: React.FC<{ from: string }> = ({ from }) => (
   </p>
 );
 
-const ProfitLossTab: React.FC<{ plInput: ProfitLossInput; showExpenseCategories: boolean }> = ({ plInput, showExpenseCategories }) => {
+const ProfitLossTab: React.FC<{ plInput: ProfitLossInput; repairs: Repair[]; showExpenseCategories: boolean }> = ({ plInput, repairs, showExpenseCategories }) => {
   const [start, setStart] = useState(monthStartISO());
   const [end, setEnd] = useState(todayISO());
   const pl = useMemo(() => profitAndLoss(plInput, start, end), [plInput, start, end]);
-  const exportCsv = () => triggerDownload(`profit-loss_${pl.start}_to_${pl.end}.csv`, toCSV(profitLossCsvRows(pl, showExpenseCategories)), 'text/csv;charset=utf-8;');
+  // WARRANTY COST — reporting only, and deliberately NOT part of the maths
+  // above. A warranty repair's parts and labour already reach the P&L through
+  // the repairs path; the repairs path is AUTHORITATIVE for the money, and
+  // this row exists so the owner can see how much of it was warranty work,
+  // dated by the day the repair was COMPLETED rather than the day the device
+  // was sold. Subtracting it here would count the same dollars twice.
+  const warranty = useMemo(() => warrantyCostRows(repairs, pl.start, pl.end), [repairs, pl.start, pl.end]);
+  const warrantyTotal = useMemo(() => Math.round(warranty.reduce((n, r) => n + r.cost, 0) * 100) / 100, [warranty]);
+  const exportCsv = () => triggerDownload(
+    `profit-loss_${pl.start}_to_${pl.end}.csv`,
+    toCSV([
+      ...profitLossCsvRows(pl, showExpenseCategories),
+      { label: 'Warranty work (informational — already in cost of goods via repairs)', value: warrantyTotal },
+    ]),
+    'text/csv;charset=utf-8;',
+  );
 
   return (
     <div className="space-y-6">
@@ -968,6 +984,14 @@ const ProfitLossTab: React.FC<{ plInput: ProfitLossInput; showExpenseCategories:
           <PLRow label="Device buyer service fees (income)" value={pl.deviceBuyerFeeIncome} income />
           <PLRow label="Net profit" value={pl.netProfit} total />
         </div>
+        {/* Below the total on purpose: it is not a deduction, it is a view of
+            money already counted. */}
+        {warranty.length > 0 && (
+          <div className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-800 text-sm">
+            <PLRow label={`Warranty work (${warranty.length}) — informational`} value={warrantyTotal} />
+            <p className="text-xs text-slate-400 mt-1">{WARRANTY_COST_PL_NOTE}</p>
+          </div>
+        )}
         <p className="mt-3 text-xs text-slate-400">
           Recognized sales only (voided, returned and not-yet-settled layaway sales excluded). The store finances the device buyer: only the service fee it charges is income. The principal the buyer repays is a receivable being settled — never revenue, never profit — and financed devices are the buyer's, so they are not store inventory or cost of goods.
         </p>
