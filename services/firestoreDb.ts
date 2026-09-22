@@ -168,6 +168,43 @@ export async function commitAutoInventory(uid: string, payload: {
 
 export const saveItem = (uid: string, name: CollName, item: { id: string } & Record<string, any>) =>
   setDoc(docRef(uid, name, item.id), clean(item));
+
+/**
+ * A WRITE THE CALLER CAN HONESTLY WAIT FOR.
+ *
+ * `saveItem` returns setDoc's promise, which while offline only settles on
+ * reconnect — so awaiting it directly hangs the counter for the length of the
+ * outage, and NOT awaiting it means the screen says "Saved" for a write that
+ * may never have happened. A reported Quick Purchase vanished exactly that
+ * way: the view said Saved, cleared the form, and the device was never
+ * written.
+ *
+ * This resolves as soon as the write is durable ENOUGH to promise:
+ *  - 'committed' — the server acknowledged it;
+ *  - 'queued'    — the offline cache took it and will sync on reconnect.
+ *
+ * Anything else (permissions, a rules rejection, a real bug) REJECTS, so the
+ * caller can keep the form filled and say what actually went wrong instead of
+ * reporting success. Same contract as the drawer's DrawerWriteResult.outcome.
+ */
+export async function saveItemSettled(
+  uid: string, name: CollName, item: { id: string } & Record<string, any>,
+): Promise<'committed' | 'queued'> {
+  const ref = docRef(uid, name, item.id);
+  const payload = clean(item);
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    // The cache has already accepted it; awaiting would block until reconnect.
+    setDoc(ref, payload).catch(e => console.error(`[${name}] queued write failed on sync`, item.id, e));
+    return 'queued';
+  }
+  try {
+    await setDoc(ref, payload);
+    return 'committed';
+  } catch (e) {
+    if (!isConnectivityError(e)) throw e;
+    return 'queued';
+  }
+}
 export const deleteItem = (uid: string, name: CollName, id: string) =>
   deleteDoc(docRef(uid, name, id));
 

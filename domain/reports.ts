@@ -151,6 +151,34 @@ export const reconcileCash = (counted: number, expected: number): CashVariance =
 export const sumDrawerEntries = (entries?: { amount: number }[]): number =>
   round2((entries || []).reduce((s, e) => s + Math.max(0, e.amount || 0), 0));
 
+/** The label the close-time removal is recorded under, in one place. */
+export const CLOSE_REMOVAL_NOTE = 'Removed at close';
+export const FLOAT_CORRECTION_NOTE = 'Float correction';
+
+/** A bookkeeping entry rather than a till movement — see CashDrawerEntry.adjustment. */
+export const isAdjustmentEntry = (e: Pick<CashDrawerEntry, 'adjustment'>): boolean => !!e.adjustment;
+
+/**
+ * Withdrawals that belong in the day's expected-vs-counted arithmetic.
+ *
+ * Every ordinary withdrawal counts. The two adjustment kinds do not, and both
+ * are still shown in full in the Money Trail:
+ *
+ *  - the close removal happened AFTER the count, so including it would make a
+ *    perfectly balanced till read as over by exactly the amount banked;
+ *  - a float correction moved no cash at all, and the corrected float already
+ *    carries its effect.
+ *
+ * Keeping the sums separate is what lets both be recorded honestly without
+ * either one landing twice.
+ */
+export const sumTillWithdrawals = (entries?: CashDrawerEntry[]): number =>
+  sumDrawerEntries((entries || []).filter(e => !isAdjustmentEntry(e)));
+
+/** The cash physically taken out of the till at close, for the day's trail. */
+export const sumCloseRemovals = (entries?: CashDrawerEntry[]): number =>
+  sumDrawerEntries((entries || []).filter(e => e.adjustment === 'closeRemoval'));
+
 export interface DayCashInputs {
   openingFloat?: number;   // starting cash in the drawer
   cashSales?: number;      // cash-in from that day's sales
@@ -183,6 +211,16 @@ export interface CashDrawerSummary {
   cashOut: number;
   withdrawals: number;
   expected: number;
+  /** The day was explicitly closed (reconciledAt set). */
+  closed: boolean;
+  /** What was counted at close, or null while the day is still open. */
+  countedCash: number | null;
+  /** What was left in for tomorrow, or null (an open day, or a legacy close). */
+  leftInDrawer: number | null;
+  /** What was taken out at close. */
+  removedAtClose: number;
+  /** counted − expected; 0 while the day is open. */
+  variance: number;
 }
 // What the reconciliation screen hands back when a day is counted + closed. The
 // app recomputes expectedCash / variance from these via the shared math (so the
@@ -281,9 +319,21 @@ export const drawerCarryOver = (
   // forward. `cashSalesFor` supplies that day's cash sales; without it this
   // falls back to the stored figure, which is all a caller without the sales
   // data can do.
-  const float = prior.countedCash != null
-    ? round2(prior.countedCash)
-    : recomputedExpectedCash(prior, cashSalesFor?.(prior.date));
+  //
+  // WHAT WAS LEFT IN beats what was counted. Closing now asks how much stays in
+  // the drawer for tomorrow and how much is going to the bank; the leftover is
+  // the float. Before that existed the whole count carried forward, so every
+  // day's takings compounded into the next morning's float and it climbed
+  // without limit — the reported $11,865 in a phone shop's till.
+  //
+  // `leftInDrawer` is ABSENT on every day closed before this shipped, and those
+  // days deliberately fall through to the count exactly as they always did.
+  // Fixing the future must not restate the past.
+  const float = prior.leftInDrawer != null
+    ? round2(prior.leftInDrawer)
+    : prior.countedCash != null
+      ? round2(prior.countedCash)
+      : recomputedExpectedCash(prior, cashSalesFor?.(prior.date));
   return {
     float: Math.max(0, float),
     fromDate: prior.date,
@@ -318,7 +368,7 @@ export const recomputedExpectedCash = (
     cashSales: sales,
     cashIn: sumDrawerEntries(recon.cashIn),
     cashOut: sumDrawerEntries(recon.cashOut),
-    withdrawals: sumDrawerEntries(recon.withdrawals),
+    withdrawals: sumTillWithdrawals(recon.withdrawals),
   });
 };
 
@@ -349,13 +399,21 @@ export const cashDrawerSummary = (
   );
   const cashIn = sumDrawerEntries(recon?.cashIn);
   const cashOut = sumDrawerEntries(recon?.cashOut);
-  const withdrawals = sumDrawerEntries(recon?.withdrawals);
+  const withdrawals = sumTillWithdrawals(recon?.withdrawals);
+  const expected = expectedEndingCash({ openingFloat, cashSales, cashIn, cashOut, withdrawals });
   return {
     // Open if opened today, OR carried forward from a day that was opened
     // and never closed — the drawer nobody ever closed is still open.
     opened: !!recon?.openedAt || (!recon?.reconciledAt && !!carry?.stillOpen),
     openingFloat, cashSales: round2(cashSales), cashIn, cashOut, withdrawals,
-    expected: expectedEndingCash({ openingFloat, cashSales, cashIn, cashOut, withdrawals }),
+    expected,
+    // The closed state, so the panel can stop showing a live figure for a day
+    // that is finished. `closed` is the explicit close, never inferred.
+    closed: !!recon?.reconciledAt,
+    countedCash: recon?.countedCash ?? null,
+    leftInDrawer: recon?.leftInDrawer ?? null,
+    removedAtClose: sumCloseRemovals(recon?.withdrawals),
+    variance: recon?.countedCash == null ? 0 : round2(recon.countedCash - expected),
   };
 };
 
@@ -376,7 +434,7 @@ export function openDrawerPatch(
   user: { id: string; email: string },
   existing: Pick<CashReconciliation, 'openedAt' | 'openedBy' | 'openedByEmail'> | undefined,
   now: number = Date.now(),
-): Pick<CashReconciliation, 'openingFloat' | 'openedAt' | 'openedBy' | 'openedByEmail' | 'reconciledAt' | 'reconciledBy' | 'reconciledByEmail' | 'countedCash'> {
+): Pick<CashReconciliation, 'openingFloat' | 'openedAt' | 'openedBy' | 'openedByEmail' | 'reconciledAt' | 'reconciledBy' | 'reconciledByEmail' | 'countedCash' | 'leftInDrawer'> {
   return {
     openingFloat: Math.max(0, openingFloat),
     openedAt: existing?.openedAt ?? now,
@@ -386,6 +444,93 @@ export function openDrawerPatch(
     reconciledBy: undefined,
     reconciledByEmail: undefined,
     countedCash: undefined,
+    // Re-opening undoes the close, so the "left in for tomorrow" figure goes
+    // with it — the float being set right now IS what is in the drawer. The
+    // close-removal entry stays on the record: that cash really did leave, and
+    // it is excluded from the arithmetic either way (sumTillWithdrawals), so
+    // clearing this cannot make it count twice.
+    leftInDrawer: undefined,
+  };
+}
+
+/**
+ * CLOSING THE DRAWER: what was counted, and what stays in it for tomorrow.
+ *
+ * Returns the record patch plus — when anything is being taken out — the
+ * withdrawal entry that records it. Leaving the whole count in writes no
+ * entry at all, because nothing moved.
+ *
+ * The removal is deliberately NOT part of the day's expected-vs-counted
+ * arithmetic (see sumTillWithdrawals): it happens after the count. It reaches
+ * tomorrow through `leftInDrawer`, which is what the carry-over reads.
+ */
+export interface CloseDrawerPlan {
+  patch: Pick<CashReconciliation, 'countedCash' | 'leftInDrawer' | 'note'>;
+  /** The withdrawal to append, or undefined when nothing was taken out. */
+  removal?: CashDrawerEntry;
+  /** counted − leftIn, for the confirmation the screen shows. */
+  removedAmount: number;
+}
+
+export const closeDrawerPlan = (
+  countedCash: number,
+  leftInDrawer: number,
+  note: string | undefined,
+  entryId: string,
+): CloseDrawerPlan => {
+  const counted = round2(Math.max(0, countedCash));
+  // Never more than was counted: you cannot leave behind money that isn't there.
+  const left = round2(Math.min(Math.max(0, leftInDrawer), counted));
+  const removedAmount = round2(counted - left);
+  return {
+    patch: { countedCash: counted, leftInDrawer: left, ...(note ? { note } : {}) },
+    removedAmount,
+    ...(removedAmount >= 0.005
+      ? {
+          removal: {
+            id: entryId,
+            amount: removedAmount,
+            note: CLOSE_REMOVAL_NOTE,
+            refType: 'manual' as const,
+            adjustment: 'closeRemoval' as const,
+          },
+        }
+      : {}),
+  };
+};
+
+/**
+ * PUTTING A WRONG FLOAT RIGHT, ONCE, WITHOUT REWRITING HISTORY.
+ *
+ * The snowballed float is today's number, so today's number is what gets
+ * corrected — no past day is touched and no stored figure is restated. The
+ * correction itself is recorded as an adjustment entry carrying the reason and
+ * both figures, so the Money Trail shows a $11,565 float being written down
+ * rather than a drawer that quietly got smaller overnight.
+ *
+ * The entry moves no cash (nothing physically left the till today), so it is
+ * excluded from the expected arithmetic — the corrected float already carries
+ * the whole effect, and counting it as well would subtract it twice.
+ */
+export const correctFloatPlan = (
+  currentFloat: number,
+  newFloat: number,
+  reason: string,
+  entryId: string,
+): { patch: Pick<CashReconciliation, 'openingFloat'>; entry: CashDrawerEntry; delta: number } => {
+  const from = round2(Math.max(0, currentFloat));
+  const to = round2(Math.max(0, newFloat));
+  const delta = round2(from - to);
+  return {
+    patch: { openingFloat: to },
+    delta,
+    entry: {
+      id: entryId,
+      amount: Math.abs(delta),
+      note: `${FLOAT_CORRECTION_NOTE}: $${from.toFixed(2)} → $${to.toFixed(2)} — ${reason.trim()}`,
+      refType: 'manual',
+      adjustment: 'floatCorrection',
+    },
   };
 }
 
@@ -479,7 +624,7 @@ export function mergeDrawerRecord(input: DrawerMergeInput): CashReconciliation {
   merged.cashSales = cashSales;
   merged.expectedCash = expectedEndingCash({
     openingFloat: merged.openingFloat, cashSales,
-    cashIn: sumDrawerEntries(merged.cashIn), cashOut: sumDrawerEntries(merged.cashOut), withdrawals: sumDrawerEntries(merged.withdrawals),
+    cashIn: sumDrawerEntries(merged.cashIn), cashOut: sumDrawerEntries(merged.cashOut), withdrawals: sumTillWithdrawals(merged.withdrawals),
   });
   merged.variance = merged.countedCash != null ? round2(merged.countedCash - merged.expectedCash) : 0;
   merged.recordedBy = actor.id; merged.recordedByEmail = actor.email; merged.recordedAt = now;

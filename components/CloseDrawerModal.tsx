@@ -6,9 +6,16 @@ import { selectOnFocus } from '../hooks/selectOnFocus';
 
 interface Props {
   onClose: () => void;
-  onCloseDrawer: (countedCash: number, note?: string) => void;
+  onCloseDrawer: (countedCash: number, leftInDrawer: number, note?: string) => void;
   summary: CashDrawerSummary;              // today's live expected-cash breakdown
   alreadyReconciled?: { countedCash: number; variance: number; byEmail?: string; at: number };
+  /**
+   * What to pre-fill "leaving in for tomorrow" with: the owner's usual float
+   * (settings.operations.openingFloatDefault). NEVER the full count — filling
+   * it with the count is what made the float snowball in the first place.
+   * Unset or 0 falls back to today's opening float.
+   */
+  usualFloat?: number;
 }
 
 const money = (n: number) => `$${(n || 0).toFixed(2)}`;
@@ -19,20 +26,29 @@ const input = 'w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-2
 // reconciles in one step — the full history/edit form stays in Reports > Cash
 // for anyone who needs to revisit a past day. Owner/manager only (cash.reconcile),
 // rendered from CashDrawerPanel only when that permission is present.
-export const CloseDrawerModal: React.FC<Props> = ({ onClose, onCloseDrawer, summary, alreadyReconciled }) => {
+export const CloseDrawerModal: React.FC<Props> = ({ onClose, onCloseDrawer, summary, alreadyReconciled, usualFloat }) => {
   const [counted, setCounted] = useState(alreadyReconciled ? String(alreadyReconciled.countedCash) : '');
+  // The float that stays behind. Defaults to the owner's usual float, or to
+  // today's opening float — deliberately never to the count.
+  const defaultLeft = (usualFloat && usualFloat > 0) ? usualFloat : summary.openingFloat;
+  const [leftIn, setLeftIn] = useState(String(defaultLeft || 0));
   const [note, setNote] = useState('');
   const countedNum = parseFloat(counted);
   const hasCount = counted.trim() !== '' && isFinite(countedNum);
+  const leftNum = parseFloat(leftIn);
+  const hasLeft = leftIn.trim() !== '' && isFinite(leftNum) && leftNum >= 0;
   const { variance, direction } = reconcileCash(hasCount ? countedNum : 0, summary.expected);
   const needsNote = hasCount && direction !== 'balanced' && !note.trim();
-  const canSave = hasCount && !needsNote;
+  // You cannot leave behind money that was never counted.
+  const leftTooHigh = hasCount && hasLeft && leftNum > countedNum + 0.005;
+  const removing = hasCount && hasLeft && !leftTooHigh ? Math.round((countedNum - leftNum) * 100) / 100 : 0;
+  const canSave = hasCount && hasLeft && !needsNote && !leftTooHigh;
 
   useEscapeKey(onClose);
 
   const submit = () => {
     if (!canSave) return;
-    onCloseDrawer(Math.round(countedNum * 100) / 100, note.trim() || undefined);
+    onCloseDrawer(Math.round(countedNum * 100) / 100, Math.round(leftNum * 100) / 100, note.trim() || undefined);
     onClose();
   };
 
@@ -80,6 +96,29 @@ export const CloseDrawerModal: React.FC<Props> = ({ onClose, onCloseDrawer, summ
                 : <><AlertTriangle className="w-4 h-4" /> {direction === 'over' ? 'Over' : 'Short'} by {money(Math.abs(variance))}.</>}
             </div>
           )}
+
+          {/* WHAT STAYS IN THE TILL. Without this the whole count became
+              tomorrow's float and every day's takings compounded into it. */}
+          <div>
+            <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Leaving in the drawer for tomorrow ($)</label>
+            <input type="number" min="0" step="0.01" value={leftIn} onChange={e => setLeftIn(e.target.value)}
+              onFocus={selectOnFocus}
+              onKeyDown={e => { if (e.key === 'Enter' && canSave) submit(); }} placeholder="0.00"
+              className={`${input} ${leftTooHigh ? 'ring-2 ring-rose-400 border-rose-400' : ''}`} />
+            {leftTooHigh ? (
+              <p className="mt-1 text-[11px] font-medium text-rose-600 dark:text-rose-400">
+                That's more than you counted — you can't leave behind money that isn't in the till.
+              </p>
+            ) : removing >= 0.005 ? (
+              <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
+                {money(removing)} is being taken out. It will be recorded as “Removed at close” on today's Money Trail.
+              </p>
+            ) : hasCount && hasLeft ? (
+              <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
+                Everything stays in the drawer — nothing is recorded as taken out.
+              </p>
+            ) : null}
+          </div>
 
           <div>
             <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Note {hasCount && direction !== 'balanced' ? '(required — explain the variance)' : '(optional)'}</label>

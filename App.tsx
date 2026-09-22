@@ -49,7 +49,7 @@ import { bonusDrawerEffect, canSaveBonus, visibleBonuses } from './domain/bonuse
 import { attributeDrawerEntry, stampNewEntries } from './domain/dayLedger';
 import { CrashReport, crashActivityLine, crashId } from './domain/crashReport';
 import { isCostEntry, isCostEntryField, costAccessFor } from './domain/costVisibility';
-import { dbErrorHeading } from './domain/subscriptionAccess';
+import { dbErrorHeading, sectionUnavailableNotice } from './domain/subscriptionAccess';
 import { floorFor, buildBelowFloorSaleAudit, targetBelowFloor, TARGET_BELOW_FLOOR_NOTE, belowFloorSales } from './domain/priceFloor';
 import { paidBreakChangeImpact, paidBreakChangeMessage, paidBreakChangeAudit, sameReasons } from './domain/paidBreakChange';
 import { buildKioskClockIn, buildKioskClockOut, buildKioskStartBreak, buildKioskEndBreak, validateKioskWrite } from './domain/kiosk';
@@ -69,7 +69,7 @@ import { DeviceMode, autoLockApplies, idleMinutesFor, switchingAvailable } from 
 import { readDeviceMode, writeDeviceMode } from './services/registerMode';
 import { switchUser as callSwitchUser, switchErrorMessage } from './services/switchUserFunctions';
 import {
-  saveMeta, saveItem, deleteItem, syncArray, allocateSku,
+  saveMeta, saveItem, saveItemSettled, deleteItem, syncArray, allocateSku,
   logActivityDoc, commitSale, voidSale, returnSale, collectLayawayBalance, commitCashReconciliation, seedSampleData,
   updateUserDoc, setInvite, deleteInvite,
   logAudit, exportWorkspaceData, recordBackup, saveSettings,
@@ -93,7 +93,7 @@ import { collectionFor, stockChange, applyDirectSale } from './domain/inventory'
 import { canVoidSale, canReturnSale, returnRefund, saleAccessoryRestock, saleDeviceListedPlatforms, collectedOnSale, refundDrawerEffect, refundSplitsValid, singleRefundSource } from './domain/pos';
 import { applyBalancePayment, cashPortionOfPayment } from './domain/layaway';
 import { stampPickupWarranty } from './domain/warranty';
-import { expectedCashForDate, cashDrawerSummary, drawerCarryOver, openDrawerPatch, ReconciliationInput, drawerStateChange, changesDrawerState, recomputedExpectedCash, recomputedVariance, DrawerAppends } from './domain/reports';
+import { expectedCashForDate, cashDrawerSummary, drawerCarryOver, openDrawerPatch, ReconciliationInput, drawerStateChange, changesDrawerState, recomputedExpectedCash, recomputedVariance, DrawerAppends, closeDrawerPlan, correctFloatPlan } from './domain/reports';
 import { useToday } from './hooks/useToday';
 import { duePeriodsFor, buildRecurringExpense, canMutateExpense } from './domain/expenses';
 import { isEligibleForReviewRequest, ReviewEligibility, reviewRequestsSentOn, underDailyReviewRequestCap } from './domain/reviews';
@@ -101,6 +101,7 @@ const RequestReviewModal = lazy(() => import('./components/RequestReviewModal').
 import type { CashMovementKind } from './components/LogCashMovementModal';
 const OpenDrawerModal = lazy(() => import('./components/OpenDrawerModal').then(m => ({ default: m.OpenDrawerModal })));
 const CloseDrawerModal = lazy(() => import('./components/CloseDrawerModal').then(m => ({ default: m.CloseDrawerModal })));
+const CorrectFloatModal = lazy(() => import('./components/CorrectFloatModal').then(m => ({ default: m.CorrectFloatModal })));
 import {
   openEntryFor, isOnBreak, periodPayFor, paidKey, toISODate, PayPeriod, correctClockOut, isValidClockOutCorrection,
   payrollDue, PAY_CYCLE_DAYS, payPeriodFor, isPayrollStaff,
@@ -157,7 +158,7 @@ const App: React.FC = () => {
     deviceBuyers, dropOffs, settlements, salesTransactions, customers, repairs, repairBatches, pcBuilds,
     timeEntries, payPeriods, payPeriodApprovals, staffBonuses, kioskStaff, cashReconciliations, staffNotes, expenses, recurringExpenses,
     skuCounters, setSkuCounters, activityLog, lastBackup, settings,
-    dbLoading, dbError, reconnect, enableExtendedData, enableCashData,
+    dbLoading, dbError, reconnect, refusedCollections, enableExtendedData, enableCashData,
     deviceBuyersRef, dropOffsRef, settlementsRef, customersRef, salesTransactionsRef,
     repairsRef, repairBatchesRef, skuRef, dataRef,
   } = useWorkspaceData();
@@ -216,6 +217,7 @@ const App: React.FC = () => {
   const [cashLogKind, setCashLogKind] = useState<CashMovementKind | null>(null);
   const [showOpenDrawer, setShowOpenDrawer] = useState(false);
   const [showCloseDrawer, setShowCloseDrawer] = useState(false);
+  const [showCorrectFloat, setShowCorrectFloat] = useState(false);
   const [showFinder, setShowFinder] = useState(false);
 
   // Theme State
@@ -816,15 +818,19 @@ const App: React.FC = () => {
   };
 
   // --- Inventory writes go straight to Firestore; live subs update the UI ---
-  const handleSaveItem = (raw: InventoryItem) => {
+  // Leaving the form IS the success message on this screen, so it happens only
+  // once the write has actually landed. It used to navigate away on the next
+  // line regardless, which is the same failure Quick Purchase had: the entry
+  // is gone from the screen and may never have been saved.
+  const handleSaveItem = async (raw: InventoryItem) => {
     // Entering an Actual sale price on the form records a direct sale (stamps
     // soldDate + marks sold) so it counts in reporting like a Quick Sale.
     const item = applyDirectSale(raw);
     const isNew = !dataRef.current.some(i => i.id === item.id);
     if (uid && (isNew ? allow('inventory.add') : allow('inventory.edit'))) {
-      if (isNew) { logActivity(`${item.sku || item.item || 'Item'} added`); audit('inventory.add', collectionFor(item), item.id, undefined, item); }
+      const outcome = await saveItemSettled(uid, collectionFor(item), item);
+      if (isNew) { logActivity(`${item.sku || item.item || 'Item'} added${queuedSuffix(outcome === 'queued')}`); audit('inventory.add', collectionFor(item), item.id, undefined, item); }
       else audit('inventory.edit', collectionFor(item), item.id);
-      saveItem(uid, collectionFor(item), item);
       if (item.soldDate && !raw.soldDate) stampSoldDeviceRepairs([item.id]);
     }
     goInventory(DEFAULT_INV_SECTION);
@@ -902,7 +908,7 @@ const App: React.FC = () => {
   };
 
   // Add or update a single inventory item (device or accessory) from InventoryView
-  const handleSaveInventoryItem = (raw: InventoryItem) => {
+  const handleSaveInventoryItem = async (raw: InventoryItem) => {
     if (!uid) return;
     // Entering an Actual sale price records a direct sale (private sale, trade
     // show, …): stamp soldDate + mark sold so it leaves active stock and feeds
@@ -921,8 +927,11 @@ const App: React.FC = () => {
       && targetBelowFloor(item, { minMarginPercent: settings.operations.minMarginPercent, minMarginDollars: settings.operations.minMarginDollars })) {
       window.alert(`${TARGET_BELOW_FLOOR_NOTE}\n\n${item.sku || item.item || 'This device'} is saved, but its target price is below the minimum it may sell for.`);
     }
-    saveItem(uid, collectionFor(item), item);
+    // Awaited and allowed to REJECT: ItemFormModal keeps the form open and
+    // shows the reason rather than closing on a write that never happened.
+    const outcome = await saveItemSettled(uid, collectionFor(item), item);
     if (item.soldDate && !raw.soldDate) stampSoldDeviceRepairs([item.id]);
+    return { queued: outcome === 'queued' };
   };
 
   // Quick Purchase (QuickPurchaseView): the buying-side counterpart to Quick
@@ -930,23 +939,40 @@ const App: React.FC = () => {
   // Add Item save) and, when store-paid, logs the drawer cash-out in the same
   // action (same pattern as the FTT Personal repair purchase-cost feature —
   // see domain/autoInventory.ts's autoInventoryPurchaseDrawerEffect).
+  /**
+   * NOTHING IS CLAIMED UNTIL IT IS WRITTEN.
+   *
+   * A reported Quick Purchase never reached inventory. The view called this
+   * without awaiting it, then said "Saved" and wiped the form — so a SKU
+   * allocation that threw (it re-throws on any failure) lost the purchase
+   * behind a success message, with everything the staff member had typed gone.
+   *
+   * This now REJECTS on failure, and the view awaits it: the form stays
+   * exactly as typed and the real reason is shown. And the drawer cash-out
+   * happens only AFTER the device is saved — the shop must never pay out for
+   * a phone that isn't in inventory.
+   */
   const handleQuickPurchase = async (input: QuickPurchaseSaveInput) => {
-    if (!uid || !allow('inventory.add')) return;
+    if (!uid || !allow('inventory.add')) throw new Error('You don\'t have permission to add inventory.');
     const sku = await handleGenerateSku('device');
     const item = buildQuickPurchaseItem(input, { id: newId(), sku }, todayISO());
-    logActivity(`${item.sku} added — quick purchase ($${item.purchaseCost.toFixed(2)})`);
+    const outcome = await saveItemSettled(uid, 'inventory', item);
+    // Only now is any of this true.
+    logActivity(`${item.sku} added — quick purchase ($${item.purchaseCost.toFixed(2)})${queuedSuffix(outcome === 'queued')}`);
     audit('inventory.add', 'inventory', item.id, undefined, item);
-    saveItem(uid, 'inventory', item);
 
     const purchaseEffect = quickPurchaseDrawerEffect(input.purchaseCost, input.paidBy);
     if (purchaseEffect) {
       const date = todayISO();
-      const existing = cashReconciliations.find(rec => rec.date === date);
       const listKey: 'cashIn' | 'cashOut' = purchaseEffect.kind;
       const entry = { id: newId(), amount: purchaseEffect.amount, note: `Quick Purchase — ${item.item}` };
-      commitDrawerRecord(date, {}, { [listKey]: [entry] }, { path: 'quickPurchase', purchaseId: item.id });
-      logActivity(`Cash paid out $${purchaseEffect.amount.toFixed(2)} — quick purchase (${item.item})`);
+      const saved = await commitDrawerRecord(date, {}, { [listKey]: [entry] }, { path: 'quickPurchase', purchaseId: item.id });
+      // The device IS saved at this point, so a drawer failure is not a reason
+      // to tell the buyer their purchase was lost — it is its own problem, and
+      // writeFailed (inside commitDrawerRecord) has already said so.
+      if (saved) logActivity(`Cash paid out $${purchaseEffect.amount.toFixed(2)} — quick purchase (${item.item})${queuedSuffix(saved.queued)}`);
     }
+    return { queued: outcome === 'queued' };
   };
 
   // Sell a cart: mark devices sold in Firestore, decrement accessory quantities,
@@ -1401,13 +1427,18 @@ const App: React.FC = () => {
   // entries carry through unchanged; this only adds the count + note and stamps
   // the reconciled-by/at markers. Anyone with cash.reconcile (owner/manager/
   // employee) — closing up is the employee's own end-of-shift action.
-  const handleCloseDrawer = async (countedCash: number, note?: string) => {
+  const handleCloseDrawer = async (countedCash: number, leftInDrawer: number, note?: string) => {
     if (!uid || !appUser || !allow('cash.reconcile')) return;
     const date = todayISO();
+    // The count, what stays in for tomorrow, and — when anything is going to
+    // the bank or the owner — the withdrawal that records it leaving. Written
+    // through the ordinary drawer path, so the Money Trail shows it like any
+    // other movement rather than cash quietly vanishing between two days.
+    const plan = closeDrawerPlan(countedCash, leftInDrawer, note, newId());
     const saved = await commitDrawerRecord(date, {
-      countedCash, note,
+      ...plan.patch,
       ...stampReconcile(appUser, Date.now()),
-    }, undefined, { path: 'closeDrawerModal' });
+    }, plan.removal ? { withdrawals: [plan.removal] } : undefined, { path: 'closeDrawerModal' });
     // "Drawer closed" is only written once the close is actually safe. It
     // used to be logged unconditionally, so a failed write still told the
     // shop the till had been closed and counted.
@@ -1415,8 +1446,31 @@ const App: React.FC = () => {
     const cashSales = expectedCashForDate(salesTransactions, date);
     const expected = recomputedExpectedCash(saved.record, cashSales);
     const variance = recomputedVariance(saved.record, cashSales);
-    logActivity(`Drawer closed — counted $${countedCash.toFixed(2)}${Math.abs(variance) >= 0.005 ? ` (${variance > 0 ? 'over' : 'short'} $${Math.abs(variance).toFixed(2)})` : ''}${queuedSuffix(saved.queued)}`);
-    audit('cash.reconcile', 'cashReconciliation', date, undefined, { expected, counted: countedCash, variance, queued: saved.queued || undefined });
+    logActivity(`Drawer closed — counted $${countedCash.toFixed(2)}${Math.abs(variance) >= 0.005 ? ` (${variance > 0 ? 'over' : 'short'} $${Math.abs(variance).toFixed(2)})` : ''}${plan.removedAmount >= 0.005 ? `, $${plan.removedAmount.toFixed(2)} taken out, $${plan.patch.leftInDrawer!.toFixed(2)} left in` : ', all left in'}${queuedSuffix(saved.queued)}`);
+    audit('cash.reconcile', 'cashReconciliation', date, undefined, {
+      expected, counted: countedCash, variance,
+      leftInDrawer: plan.patch.leftInDrawer, removedAtClose: plan.removedAmount,
+      queued: saved.queued || undefined,
+    });
+  };
+
+  /**
+   * Put a wrong float right, ONCE, as a recorded adjustment.
+   *
+   * The snowballed float is today's number, so today's number is corrected —
+   * no past day is touched and no stored figure is restated. The correction
+   * itself is written to the drawer as an adjustment entry carrying the reason
+   * and both figures, so the Money Trail shows the write-down happening rather
+   * than a till that quietly got smaller overnight. Owner only.
+   */
+  const handleCorrectFloat = async (newFloat: number, reason: string) => {
+    if (!uid || !appUser || appUser.role !== 'owner') return;
+    const date = todayISO();
+    const plan = correctFloatPlan(todayDrawer.openingFloat, newFloat, reason, newId());
+    const saved = await commitDrawerRecord(date, plan.patch, { withdrawals: [plan.entry] }, { path: 'correctFloat' });
+    if (!saved) return;
+    logActivity(`Float corrected $${todayDrawer.openingFloat.toFixed(2)} → $${newFloat.toFixed(2)} — ${reason}${queuedSuffix(saved.queued)}`);
+    audit('cash.float_correction', 'cashReconciliation', date, { openingFloat: todayDrawer.openingFloat }, { openingFloat: newFloat, reason, queued: saved.queued || undefined });
   };
 
   // Open the drawer for the day — record the actual starting float explicitly
@@ -1745,7 +1799,7 @@ const App: React.FC = () => {
   // array (not just "is accepted now") means this only ever fires once per
   // drop-off, on the actual transition — editing an already-accepted drop-off
   // later never re-logs the same cash.
-  const saveDropOffs = (next: DropOff[]) => {
+  const saveDropOffs = async (next: DropOff[]) => {
     if (!uid || !appUser || !allow('dropoffs.manage')) return;
     const prev = dropOffsRef.current;
     const date = todayISO();
@@ -1755,20 +1809,34 @@ const App: React.FC = () => {
     // click carried no acceptedBy at all. It belongs on the accept itself:
     // that's the moment store cash can leave the till. Stamped from the
     // AUTHENTICATED user, never from the incoming record.
+    // The cash-outs a fresh accept implies are COLLECTED here and paid out
+    // below, after the drop-offs are actually saved. They used to be written
+    // inside this map — so a failed syncArray left the till short for a
+    // drop-off the shop had no record of. Same rule as Quick Purchase: never
+    // pay out for something that isn't recorded.
+    const payouts: { d: DropOff; effect: NonNullable<ReturnType<typeof dropOffAcceptDrawerEffect>> }[] = [];
     const stamped = next.map(d => {
       const before = prev.find(p => p.id === d.id);
       if (before?.status === 'accepted' || d.status !== 'accepted') return d; // not a fresh accept
       const effect = dropOffAcceptDrawerEffect(d);
       if (effect) {
-        const listKey: 'cashIn' | 'cashOut' = effect.kind;
-        const entry = { id: newId(), amount: effect.amount, note: `Drop-off accepted — ${d.item || d.id}` };
-        commitDrawerRecord(date, {}, { [listKey]: [entry] }, { path: 'dropOffAccept', dropOffId: d.id });
-        logActivity(`Cash advanced $${effect.amount.toFixed(2)} — drop-off accepted, owed back by the device buyer (${d.item || d.id})`);
+        payouts.push({ d, effect });
       }
       return stampDropOffAccept(d, appUser, now);
     });
-    syncArray(uid, 'dropOffs', stamped, prev);
+    try {
+      await syncArray(uid, 'dropOffs', stamped, prev);
+    } catch (e) {
+      writeFailed('The drop-off', e, 'Nothing was saved and no cash was paid out.');
+      return;
+    }
     audit('dropoff.edit', 'dropOff');
+    for (const { d, effect } of payouts) {
+      const listKey: 'cashIn' | 'cashOut' = effect.kind;
+      const entry = { id: newId(), amount: effect.amount, note: `Drop-off accepted — ${d.item || d.id}` };
+      const saved = await commitDrawerRecord(date, {}, { [listKey]: [entry] }, { path: 'dropOffAccept', dropOffId: d.id });
+      if (saved) logActivity(`Cash advanced $${effect.amount.toFixed(2)} — drop-off accepted, owed back by the device buyer (${d.item || d.id})${queuedSuffix(saved.queued)}`);
+    }
   };
   // Record one completed device buyer settlement — the buyer paying the store
   // back (principal advanced + service fee). Only a 'cash' payment method ever
@@ -1783,7 +1851,7 @@ const App: React.FC = () => {
   // itself. It defaults to today. Backdating it posts the drawer entry to
   // THAT day's record, which can change an already-reconciled day's expected
   // cash — the settlement screen warns and asks before it lets that happen.
-  const handleSettleDeviceBuyer = (settlement: Settlement, opts?: { cashDate?: string }) => {
+  const handleSettleDeviceBuyer = async (settlement: Settlement, opts?: { cashDate?: string }) => {
     if (!uid || !appUser || !allow('dropoffs.manage')) return;
     // Stamp the acting user onto the settlement record itself (not only the
     // audit entry) — employees can settle a device buyer now, and a payout is
@@ -1798,7 +1866,15 @@ const App: React.FC = () => {
     // writes, a failure (or just a slow second write) between them would leave
     // the same drop-offs eligible for a second settlement — the buyer could be
     // billed (and collected from) twice for the same batch of devices.
-    settleDeviceBuyer(uid, { settlement: attributed, dropOffIds: attributed.dropOffIds }).catch(e => writeFailed('The settlement', e, 'The device buyer is still shown as unsettled, and no cash was recorded.'));
+    // AWAITED, and the drawer entry below depends on it. A settlement that
+    // failed to write used to still post its cash collection to the drawer,
+    // leaving money in the till against a settlement that does not exist.
+    try {
+      await settleDeviceBuyer(uid, { settlement: attributed, dropOffIds: attributed.dropOffIds });
+    } catch (e) {
+      writeFailed('The settlement', e, 'The device buyer is still shown as unsettled, and no cash was recorded.');
+      return;
+    }
     // Every edit made on the pre-settlement review screen (components/
     // SettlementReviewModal.tsx) is already ON the settlement record itself
     // (lineAdjustments / adjustmentAmount / adjustmentNote — see
@@ -2706,11 +2782,15 @@ const App: React.FC = () => {
   // ---- CUSTOM PC BUILDS ----------------------------------------------------
   // Permissions follow inventory: a build IS stock being assembled, so whoever
   // may add a device may run a build, and only an owner may delete one.
-  const handleSaveBuild = (build: PcBuild, prev?: PcBuild) => {
+  const handleSaveBuild = async (build: PcBuild, prev?: PcBuild) => {
     if (!uid || !allow('inventory.add')) return;
     const next: PcBuild = { ...build, updatedAt: Date.now() };
-    saveItem(uid, 'pcBuilds', next).catch(() =>
-      writeFailed('The PC build', 'Your change was not saved.'));
+    try {
+      await saveItemSettled(uid, 'pcBuilds', next);
+    } catch (e) {
+      writeFailed('The PC build', e, 'Your change was not saved.');
+      return;
+    }
     if (!prev) {
       audit('build.create', 'pcBuild', next.id, undefined, { name: next.name, kind: next.kind });
       logActivity(`Started PC build "${next.name}"`);
@@ -2751,11 +2831,16 @@ const App: React.FC = () => {
     const device: InventoryItem = build.kind === 'customer'
       ? { ...item, deviceStatus: 'reserved', customerName: build.customerName || '', customerPhone: build.customerPhone || '' }
       : item;
-    await saveItem(uid, 'inventory', device).catch(() => {
-      writeFailed('The finished PC', 'The device was not added to inventory.');
-      throw new Error('inventory write failed');
-    });
-    handleSaveBuild({ ...build, inventoryId: device.id, sku, finishedAt: Date.now() }, build);
+    // Offline-aware: queued counts as landed (the cache holds it), anything
+    // else rejects so the build is never marked finished against a device
+    // that does not exist.
+    try {
+      await saveItemSettled(uid, 'inventory', device);
+    } catch (e) {
+      writeFailed('The finished PC', e, 'The device was not added to inventory.');
+      throw e;
+    }
+    await handleSaveBuild({ ...build, inventoryId: device.id, sku, finishedAt: Date.now() }, build);
     audit('build.finish', 'pcBuild', build.id, undefined, { inventoryId: device.id, sku, cost: device.purchaseCost });
     logActivity(`PC build "${build.name}" finished as ${sku}`);
     return device.id;
@@ -3139,6 +3224,7 @@ const App: React.FC = () => {
               onTakeDeposit={allow('sales.complete') ? handleTakeDeposit : undefined}
               onCreateCustomer={handleCreateCustomerInline}
               onOpenInventoryItem={(id) => { const it = data.find(i => i.id === id); if (it) { setEditingItem(it); setView('edit'); } }}
+              unavailableNotice={refusedCollections.includes('pcBuilds') ? sectionUnavailableNotice('PC Builds') : undefined}
             />
           )}
           {(view === 'entry' || view === 'edit') && (
@@ -3197,6 +3283,7 @@ const App: React.FC = () => {
               onOpenDrawer={allow('cash.log') ? () => setShowOpenDrawer(true) : undefined}
               onLogCash={allow('cash.log') ? (kind) => setCashLogKind(kind) : undefined}
               onCloseDrawer={allow('cash.reconcile') ? () => setShowCloseDrawer(true) : undefined}
+              onCorrectFloat={appUser.role === 'owner' ? () => setShowCorrectFloat(true) : undefined}
               reconciledToday={!!todayRecon?.reconciledAt}
               onCartDirtyChange={(d) => { cartDirtyRef.current = d; }}
               persist={uid && appUser ? { workspaceId: uid, userId: appUser.id } : null}
@@ -3388,6 +3475,12 @@ const App: React.FC = () => {
         </Suspense>
       )}
 
+      {showCorrectFloat && appUser.role === 'owner' && (
+        <Suspense fallback={null}>
+          <CorrectFloatModal currentFloat={todayDrawer.openingFloat} onClose={() => setShowCorrectFloat(false)} onCorrect={handleCorrectFloat} />
+        </Suspense>
+      )}
+
       {cashLogKind && allow('cash.log') && (
         <Suspense fallback={null}>
           <LogCashMovementModal onClose={() => setCashLogKind(null)} onLog={handleLogCashMovement} initialKind={cashLogKind} expectedBefore={todayDrawer.expected} />
@@ -3410,6 +3503,7 @@ const App: React.FC = () => {
       {showCloseDrawer && allow('cash.reconcile') && (
         <Suspense fallback={null}>
           <CloseDrawerModal onClose={() => setShowCloseDrawer(false)} onCloseDrawer={handleCloseDrawer} summary={todayDrawer}
+            usualFloat={settings.operations.openingFloatDefault}
             alreadyReconciled={todayRecon?.reconciledAt ? {
               countedCash: todayRecon.countedCash || 0, variance: todayRecon.variance,
               byEmail: todayRecon.reconciledByEmail, at: todayRecon.reconciledAt,

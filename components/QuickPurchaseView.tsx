@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { quickPurchaseSaveError } from '../domain/writeErrors';
 import { ShoppingBag, AlertTriangle, CheckCircle, Camera } from 'lucide-react';
 import { InventoryItem, Customer } from '../types';
 import { findInventoryMatchByIdentifier, normalizeIdentifier } from '../domain/autoInventory';
@@ -29,7 +30,11 @@ export interface QuickPurchaseSaveInput {
 
 interface Props {
   inventory: InventoryItem[];
-  onSave: (input: QuickPurchaseSaveInput) => void;
+  /**
+   * Resolves only once the device is actually in inventory (or queued by the
+   * offline cache), and REJECTS otherwise. The view awaits it — see commit().
+   */
+  onSave: (input: QuickPurchaseSaveInput) => Promise<{ queued: boolean } | void>;
   customers?: Customer[];
   // Create-and-link a customer without leaving Quick Purchase. Runs the
   // existing phone/email duplicate detection (domain/customers.ts) rather
@@ -56,7 +61,9 @@ const emptyForm = () => ({
 export const QuickPurchaseView: React.FC<Props> = ({ inventory, onSave, customers = [], onCreateCustomer }) => {
   const [f, setF] = useState(emptyForm());
   const [confirmDuplicate, setConfirmDuplicate] = useState(false);
-  const [saved, setSaved] = useState<{ device: string; amount: number } | null>(null);
+  const [saved, setSaved] = useState<{ device: string; amount: number; queued: boolean } | null>(null);
+  // WHAT ACTUALLY WENT WRONG, kept on screen with the form still filled in.
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [showImeiScanner, setShowImeiScanner] = useState(false);
   const set = (patch: Partial<ReturnType<typeof emptyForm>>) => setF(prev => ({ ...prev, ...patch }));
   // onSave logs a cash-out and creates an inventory record — a double-tap on
@@ -89,22 +96,36 @@ export const QuickPurchaseView: React.FC<Props> = ({ inventory, onSave, customer
     );
   };
 
+  /**
+   * "Saved" IS ONLY SAID ONCE IT IS TRUE.
+   *
+   * This used to call onSave without awaiting it and clear the form on the
+   * next line — so a purchase whose SKU allocation failed was reported as
+   * added, with everything typed already wiped. Now the form is cleared only
+   * after the write resolves; on failure every field stays exactly as typed
+   * and the real reason is shown, so nothing has to be retyped.
+   */
   const commit = (boughtFromCustomerId: string | undefined) => {
-    run(() => {
-      onSave({
-        device: f.device.trim(), imei: f.imei.trim() || undefined, purchaseCost: cost, paidBy: f.paidBy,
-        boughtFrom: f.boughtFrom.trim() || undefined,
-        boughtFromCustomerId,
-        boughtFromPhone: f.boughtFromPhone,
-        storage: f.storage.trim() || undefined, color: f.color.trim() || undefined,
-        batteryHealth: f.batteryHealth.trim() || undefined,
-        targetSalePrice: parseFloat(f.targetSalePrice) > 0 ? parseFloat(f.targetSalePrice) : undefined,
-      });
-      setSaved({ device: f.device.trim(), amount: cost });
-      setF(emptyForm());
-      setConfirmDuplicate(false);
-      setTimeout(() => setSaved(null), 3000);
-    });
+    run(() => { void (async () => {
+      setSaveError(null);
+      try {
+        const result = await onSave({
+          device: f.device.trim(), imei: f.imei.trim() || undefined, purchaseCost: cost, paidBy: f.paidBy,
+          boughtFrom: f.boughtFrom.trim() || undefined,
+          boughtFromCustomerId,
+          boughtFromPhone: f.boughtFromPhone,
+          storage: f.storage.trim() || undefined, color: f.color.trim() || undefined,
+          batteryHealth: f.batteryHealth.trim() || undefined,
+          targetSalePrice: parseFloat(f.targetSalePrice) > 0 ? parseFloat(f.targetSalePrice) : undefined,
+        });
+        setSaved({ device: f.device.trim(), amount: cost, queued: !!(result && result.queued) });
+        setF(emptyForm());
+        setConfirmDuplicate(false);
+        setTimeout(() => setSaved(null), 3000);
+      } catch (e) {
+        setSaveError(quickPurchaseSaveError(e));
+      }
+    })(); });
   };
 
   return (
@@ -118,6 +139,15 @@ export const QuickPurchaseView: React.FC<Props> = ({ inventory, onSave, customer
       {saved && (
         <div className="mb-4 flex items-center gap-2 bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-500/30 text-emerald-700 dark:text-emerald-300 rounded-xl px-4 py-3 text-sm">
           <CheckCircle className="w-4 h-4 shrink-0" /> Added "{saved.device}" — ${saved.amount.toFixed(2)}.
+          {saved.queued && <span className="text-emerald-600 dark:text-emerald-400">Offline — it will sync when you're back online.</span>}
+        </div>
+      )}
+
+      {/* The form below is UNTOUCHED when this shows — nothing to retype. */}
+      {saveError && (
+        <div className="mb-4 flex items-start gap-2 bg-rose-50 dark:bg-rose-900/20 border border-rose-200 dark:border-rose-500/30 text-rose-700 dark:text-rose-300 rounded-xl px-4 py-3 text-sm">
+          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+          <span><strong>Not saved.</strong> {saveError} Your entry is still here — fix it and try again.</span>
         </div>
       )}
 

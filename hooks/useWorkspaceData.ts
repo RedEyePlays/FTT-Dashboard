@@ -12,7 +12,7 @@ import { auth, db } from '../services/firebase';
 import { onAuthChange } from '../services/auth';
 import { withResolvedBuyerId } from '../domain/dropoffs';
 import {
-  DbError, dbErrorFor, deferredCollectionsFor, failureAction,
+  DbError, dbErrorFor, deferredCollectionsFor, failureAction, isCoreCollection,
 } from '../domain/subscriptionAccess';
 import {
   subscribeCollection, subscribeKioskTimeEntries, subscribeMeta, migrateLegacyIfNeeded,
@@ -89,6 +89,9 @@ export function useWorkspaceData() {
   const [dbLoading, setDbLoading] = useState(true);
   const [dbError, setDbError] = useState<DbError | null>(null);
   const [reconnectKey, setReconnectKey] = useState(0);
+  // Collections whose subscription was REFUSED but which the app can run
+  // without. Their sections say so inline instead of the whole app going down.
+  const [refusedCollections, setRefusedCollections] = useState<string[]>([]);
   // Deferred collections: time entries, pay periods, drop-offs and settlements
   // are read only by the Time Clock, Reports and Drop-off views (and the write
   // handlers those views invoke) — never by the Dashboard or everyday pages. So
@@ -181,11 +184,34 @@ export function useWorkspaceData() {
   useEffect(() => {
     if (!user || !appUser || !workspaceId) return;
     const wsId = workspaceId;
-    setDbLoading(true); setDbError(null);
+    setDbLoading(true); setDbError(null); setRefusedCollections([]);
     // CORE collections — a failure here really does stop the app working, so it
     // is fatal. It is still named for its cause: a permission denial says so
     // rather than sending somebody to check their wifi.
-    const onErr = (e: Error) => { console.error('Firestore error:', e); setDbError(dbErrorFor(e)); setDbLoading(false); };
+    /**
+     * ONE MISSING RULE MUST NOT LOCK THE WHOLE SHOP OUT.
+     *
+     * Every startup listener used to share a handler that blanked the entire
+     * app on any failure. The day PR #209 shipped, every account got "You
+     * don't have access to that" until firestore.rules were deployed —
+     * because ONE new collection nobody was using yet was refused, and the
+     * till, inventory and repairs went with it.
+     *
+     * Core collections (domain/subscriptionAccess.ts's CORE_COLLECTIONS) are
+     * still fatal: without stock or sales there is no app to show. A denial on
+     * anything else leaves that section empty, records which one it was so the
+     * section can say so itself, and the shop carries on.
+     */
+    const onErrFor = (coll: string) => (e: Error) => {
+      console.error(`Firestore error (${coll}):`, e);
+      setDbLoading(false);
+      if (failureAction(e, !isCoreCollection(coll)) === 'ignore') {
+        setRefusedCollections(prev => (prev.includes(coll) ? prev : [...prev, coll]));
+        return;
+      }
+      setDbError(dbErrorFor(e));
+    };
+    const onErr = onErrFor('inventory');
 
     // THE KIOSK SUBSCRIBES TO ALMOST NOTHING, and that is the point.
     //
@@ -227,15 +253,15 @@ export function useWorkspaceData() {
 
     const subs = [
       subscribeCollection<InventoryItem>(wsId, 'inventory', rows => { setDevices(rows); setDbLoading(false); }, onErr),
-      subscribeCollection<InventoryItem>(wsId, 'accessories', setAccessories, onErr),
-      subscribeCollection<DeviceBuyer>(wsId, 'runners', setDeviceBuyers, onErr),
-      subscribeCollection<Customer>(wsId, 'customers', setCustomers, onErr),
-      subscribeCollection<SalesTransaction>(wsId, 'salesTransactions', setSalesTransactions, onErr),
-      subscribeCollection<Repair>(wsId, 'repairs', setRepairs, onErr),
-      subscribeCollection<RepairBatch>(wsId, 'repairBatches', setRepairBatches, onErr),
-      subscribeCollection<PcBuild>(wsId, 'pcBuilds', setPcBuilds, onErr),
-      subscribeCollection<ActivityEntry>(wsId, 'activityLog', rows => setActivityLog(rows.sort((a, b) => b.ts - a.ts)), onErr, { orderByField: 'ts', limitTo: ACTIVITY_LIMIT }),
-      subscribeMeta(wsId, m => { setNotes(m.notes || []); setTasks(m.tasks || []); setSkuCounters(m.skuCounters || {}); setLastBackup(m.lastBackup); setSettings(mergeSettings(m.settings)); }, onErr),
+      subscribeCollection<InventoryItem>(wsId, 'accessories', setAccessories, onErrFor('accessories')),
+      subscribeCollection<DeviceBuyer>(wsId, 'runners', setDeviceBuyers, onErrFor('runners')),
+      subscribeCollection<Customer>(wsId, 'customers', setCustomers, onErrFor('customers')),
+      subscribeCollection<SalesTransaction>(wsId, 'salesTransactions', setSalesTransactions, onErrFor('salesTransactions')),
+      subscribeCollection<Repair>(wsId, 'repairs', setRepairs, onErrFor('repairs')),
+      subscribeCollection<RepairBatch>(wsId, 'repairBatches', setRepairBatches, onErrFor('repairBatches')),
+      subscribeCollection<PcBuild>(wsId, 'pcBuilds', setPcBuilds, onErrFor('pcBuilds')),
+      subscribeCollection<ActivityEntry>(wsId, 'activityLog', rows => setActivityLog(rows.sort((a, b) => b.ts - a.ts)), onErrFor('activityLog'), { orderByField: 'ts', limitTo: ACTIVITY_LIMIT }),
+      subscribeMeta(wsId, m => { setNotes(m.notes || []); setTasks(m.tasks || []); setSkuCounters(m.skuCounters || {}); setLastBackup(m.lastBackup); setSettings(mergeSettings(m.settings)); }, onErrFor('meta')),
     ];
     // Owners and managers read the full member roster (managers need it for the
     // payroll summary and technician management); everyone else sees only self.
@@ -343,7 +369,7 @@ export function useWorkspaceData() {
   }, [user, appUser, workspaceId, reconnectKey]);
 
   // Retry a failed connection (used by the DB-error screen's Retry button).
-  const reconnect = () => { setDbError(null); setDbLoading(true); setReconnectKey(k => k + 1); };
+  const reconnect = () => { setDbError(null); setRefusedCollections([]); setDbLoading(true); setReconnectKey(k => k + 1); };
 
   // Stable so App's per-view effect doesn't re-run every render.
   const enableExtendedData = useCallback(() => setExtendedEnabled(true), []);
@@ -365,6 +391,8 @@ export function useWorkspaceData() {
     skuCounters, setSkuCounters, activityLog, lastBackup, settings,
     // connection status
     dbLoading, dbError, setDbError, reconnect,
+    // Which optional collections were refused, so a section can say so itself.
+    refusedCollections,
     // Start the deferred subscriptions (time clock / reports / drop-offs data).
     // Idempotent — safe to call on every render of those views.
     enableExtendedData, enableCashData,
