@@ -3,6 +3,7 @@ import {
   PayPeriod, PaidBreakReasons, payPeriodFor, periodPayFor, paidKey, isPayrollStaff,
   PAY_PERIOD_DAYS, PAY_PERIOD_ANCHOR, toISODate,
 } from './timeclock';
+import { rateAtFor } from './payRates';
 
 /**
  * What ticking a paid-break reason in Settings actually does to people's pay.
@@ -96,8 +97,11 @@ export const paidBreakChangeImpact = (input: ImpactInput): PaidBreakImpact => {
   for (const period of periods.values()) {
     const periodStart = toISODate(period.start);
     for (const u of staff) {
-      const was = periodPayFor(entries, u.id, u.hourlyRate, period, now, before);
-      const will = periodPayFor(entries, u.id, u.hourlyRate, period, now, after);
+      // Priced per shift at the rate in force on its clock-in date, so this
+      // preview shows the same gross the payroll screen does.
+      const rateAt = rateAtFor(u);
+      const was = periodPayFor(entries, u.id, u.hourlyRate, period, now, before, rateAt);
+      const will = periodPayFor(entries, u.id, u.hourlyRate, period, now, after, rateAt);
       if (was.hours === will.hours && was.gross === will.gross) continue;
 
       const key = paidKey(u.id, periodStart);

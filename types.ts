@@ -520,6 +520,28 @@ export type Permission =
   | 'expenses.add'       // create an expense (owner + manager). A manager may also edit/delete their OWN entries.
   | 'expenses.viewAll';  // browse the full ledger, its totals + per-category breakdowns, and manage categories/recurring templates (owner only)
 
+// One entry in a person's pay-rate history. `effectiveFrom` is a LOCAL
+// YYYY-MM-DD: a shift is paid at the rate in force on its clock-in local date
+// (domain/payRates.ts), never its UTC date, which would move a late-evening
+// shift onto the next day for anyone west of UTC.
+export interface RateChange {
+  rate: number;
+  effectiveFrom: string;  // YYYY-MM-DD, inclusive. '' means "from the start".
+  setBy: string;          // uid of the owner who set it
+  setAt: number;          // epoch ms
+}
+
+// Which alternating pay week somebody is on. 'A' is the workspace anchor;
+// 'B' is the same schedule shifted by exactly 7 days.
+export type PayGroup = 'A' | 'B';
+
+export interface PayGroupChange {
+  group: PayGroup;
+  effectiveFrom: string;  // YYYY-MM-DD — always a pay-period boundary
+  setBy: string;
+  setAt: number;
+}
+
 export interface AppUser {
   id: string;            // Firebase Auth uid
   email: string;
@@ -527,7 +549,21 @@ export interface AppUser {
   workspaceId: string;   // the owning account's uid; all shop data lives under user_data/{workspaceId}
   disabled?: boolean;
   allowProfit?: boolean; // employee override to view profit-sensitive figures
+  // The CURRENT pay rate — the rate in force today. Kept as a plain number so
+  // every existing reader keeps working; `rateHistory` below is what makes a
+  // raise stop repricing hours already worked. The two are written together
+  // (domain/payRates.ts's applyRateChange) and must never drift apart.
   hourlyRate?: number;   // flat pay rate for the time clock; editable by owner only
+  // Every rate this person has been on, and from when. Absent on staff whose
+  // rate has never been changed — domain/payRates.ts treats that as one entry
+  // effective from the beginning, so nothing needed migrating and nothing
+  // changes for them until a rate is actually changed.
+  rateHistory?: RateChange[];
+  // Which alternating pay week this person is on (see domain/payGroups.ts).
+  // Unset = 'A', so an untouched workspace behaves exactly as it did and every
+  // existing pay-period record is a group A record without being rewritten.
+  payGroup?: PayGroup;
+  payGroupHistory?: PayGroupChange[];
   notifSeenTs?: number;  // newest activity ts this user has seen (per-user read state)
   lastLogin?: number;    // epoch ms (best-effort, updated client-side)
   createdAt?: number;
@@ -886,6 +922,14 @@ export interface PayPeriodPaid {
   hours: number;          // hours snapshot at sign-off
   gross: number;          // gross pay snapshot at sign-off
   rate: number;           // hourly rate snapshot at sign-off
+  // The pay group and period kind these figures were computed under, so a
+  // record stays readable after the person moves groups. Absent on records
+  // written before pay groups existed — all of which are group A regulars.
+  payGroup?: PayGroup;
+  periodKind?: 'regular' | 'catchup';
+  // Hours split by the rate each was earned at, when a raise fell inside the
+  // period (domain/payRates.ts). Absent when one rate applied throughout.
+  rateSegments?: { rate: number; hours: number; gross: number }[];
 }
 
 // A distinct, EARLIER step than PayPeriodPaid: the manager/owner reviewed one
@@ -911,6 +955,10 @@ export interface PayPeriodApproval {
   // rather than guessed: approvals written before this field existed leave it
   // undefined, which means unknown, and no claim is made about them.
   paidBreakReasons?: BreakReason[];
+  // Same three as PayPeriodPaid — see its comments.
+  payGroup?: PayGroup;
+  periodKind?: 'regular' | 'catchup';
+  rateSegments?: { rate: number; hours: number; gross: number }[];
 }
 
 // Where a bonus was actually paid from. Deliberately the same vocabulary as

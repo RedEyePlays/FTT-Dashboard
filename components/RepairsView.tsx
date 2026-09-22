@@ -22,6 +22,10 @@ import { selectOnFocus } from '../hooks/selectOnFocus';
 import { useSubmitGuard } from '../hooks/useSubmitGuard';
 import { AutoInventoryNotice, isPrivateBatch } from '../domain/autoInventory';
 import { isRepairFinished, showsCustomerPayment } from '../domain/repairVisibility';
+import {
+  BatchDeviceView, splitBatchDevices, defaultBatchView, splitBatches,
+  searchHitsOtherView, otherViewHitLabel,
+} from '../domain/batchView';
 // Lazy: the repair label modal pulls in jsPDF (~390 kB); load it on demand.
 const RepairLabelModal = lazy(() => import('./RepairLabelModal').then(m => ({ default: m.RepairLabelModal })));
 import { CustomerSearchInput } from './CustomerSearchInput';
@@ -195,6 +199,12 @@ export const RepairsView: React.FC<Props> = (props) => {
   const visibleBatches = useMemo(() => batches
     .filter(b => !query || matchesBatch(b, query) || repairs.some(r => r.batchId === b.id && matchesRepair(r, query)))
     .sort((a, b) => b.createdAt - a.createdAt), [batches, repairs, query]);
+  // Finished wholesale batches stop crowding the list. A PRIVATE batch that is
+  // still active stays in Active — it is the shop's permanent workbench
+  // (domain/batchView.ts).
+  const [batchView, setBatchView] = useState<'active' | 'completed'>('active');
+  const batchSplit = useMemo(() => splitBatches(visibleBatches), [visibleBatches]);
+  const shownBatches = batchView === 'completed' ? batchSplit.completed : batchSplit.active;
 
   const openBatch = batches.find(b => b.id === openBatchId) || null;
 
@@ -437,10 +447,19 @@ export const RepairsView: React.FC<Props> = (props) => {
 
       {/* Wholesale batches list */}
       {!openBatch && tab === 'batches' && (
+        <div className="flex flex-col gap-3">
+        <div className="flex items-center gap-2 flex-wrap">
+          {(([['active', 'Active', batchSplit.active.length], ['completed', 'Completed', batchSplit.completed.length]]) as ['active' | 'completed', string, number][]).map(([v, label, n]) => (
+            <button key={v} onClick={() => setBatchView(v)}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium ${batchView === v ? 'bg-indigo-600 text-white' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'}`}>
+              {label} <span className="opacity-70">({n})</span>
+            </button>
+          ))}
+        </div>
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl overflow-hidden">
-          {visibleBatches.length === 0 ? <p className="text-sm text-slate-400 text-center py-12">No wholesale batches.</p> : (
+          {shownBatches.length === 0 ? <p className="text-sm text-slate-400 text-center py-12">{batchView === 'completed' ? 'No completed batches.' : 'No active wholesale batches.'}</p> : (
             <div className="divide-y divide-slate-100 dark:divide-slate-800">
-              {visibleBatches.map(b => {
+              {shownBatches.map(b => {
                 const t = batchTotals(b, repairs);
                 return (
                   <div key={b.id} onClick={() => setOpenBatchId(b.id)} className="flex items-center gap-3 px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-800/50 cursor-pointer">
@@ -458,11 +477,12 @@ export const RepairsView: React.FC<Props> = (props) => {
             </div>
           )}
         </div>
+        </div>
       )}
 
       {/* Batch detail */}
       {openBatch && (
-        <BatchDetail batch={openBatch} repairs={repairs} canDelete={canDelete}
+        <BatchDetail batch={openBatch} repairs={repairs} canDelete={canDelete} query={query}
           onBack={() => setOpenBatchId(null)}
           onAddDevice={() => setDrawer({ repair: newDevice(openBatch.id), isNew: true })}
           onEditDevice={(r) => setDrawer({ repair: r, isNew: false })}
@@ -530,21 +550,35 @@ const BatchDetail: React.FC<{
   onStatus: (r: Repair, s: RepairStatus) => void; onPrintDevice: (r: Repair) => void; onPrintLabel: (r: Repair) => void; onRemoveDevice: (r: Repair) => void;
   onEditBatch: () => void; onDeleteBatch: () => void;
   onRecordPayment: (b: RepairBatch, amount: number) => void; onPrint: (doc: 'intake' | 'invoice' | 'summary', justPaid?: number) => void;
-}> = ({ batch, repairs, canDelete, onBack, onAddDevice, onEditDevice, onStatus, onPrintDevice, onPrintLabel, onRemoveDevice, onEditBatch, onDeleteBatch, onRecordPayment, onPrint }) => {
-  const devices = repairs.filter(r => r.batchId === batch.id).sort((a, b) => a.createdAt - b.createdAt);
+  query?: string;
+}> = ({ batch, repairs, canDelete, onBack, onAddDevice, onEditDevice, onStatus, onPrintDevice, onPrintLabel, onRemoveDevice, onEditBatch, onDeleteBatch, onRecordPayment, onPrint, query = '' }) => {
+  // A batch's devices split into In progress / Completed, using the SAME
+  // terminal-status definition the Tickets tab's Completed filter uses
+  // (domain/batchView.ts → isRepairFinished). Without this, every device the
+  // shop ever repaired under its long-running private batch stayed in one
+  // ever-growing list, because that batch is never itself completed.
+  const [view, setView] = useState<BatchDeviceView>(() => defaultBatchView(batch));
+  const split = splitBatchDevices(repairs, batch.id, query);
+  const devices = view === 'completed' ? split.completed : split.inProgress;
+  // Completed devices are MOVED, not hidden — so a search that only matches on
+  // the other side says so rather than reading as "no such device".
+  const otherHits = otherViewHitLabel(searchHitsOtherView(split, view, query), view);
+  const allDevices = repairs.filter(r => r.batchId === batch.id);
   const t = batchTotals(batch, repairs);
   // A private/personal batch is the shop's own stock — there is no customer to
   // invoice, so the money owed to us (repair amount, amount paid, remaining
   // balance), the Invoice document and Record Payment are all hidden. The
   // batch's own amountPaid is untouched, so un-flagging it brings them back.
   const internal = isPrivateBatch(batch);
-  const refurbCost = devices.reduce((n, r) => n + repairPartsCost(r), 0);
+  // Totals cover the WHOLE batch, not the open half — money owed doesn't
+  // change because of which tab you're looking at.
+  const refurbCost = allDevices.reduce((n, r) => n + repairPartsCost(r), 0);
   const [pay, setPay] = useState('');
   // Optional: print the invoice right at checkout (recording a payment) rather
   // than only afterward via the standalone Invoice button above.
   const [printOnPay, setPrintOnPay] = useState(false);
   const statusCounts = REPAIR_STATUSES
-    .map(s => ({ ...s, n: devices.filter(d => d.status === s.value).length }))
+    .map(s => ({ ...s, n: allDevices.filter(d => d.status === s.value).length }))
     .filter(s => s.n > 0);
 
   return (
@@ -596,6 +630,20 @@ const BatchDetail: React.FC<{
         </div>}
       </div>
 
+      {/* In progress / Completed, defaulting to In progress. */}
+      <div className="flex items-center gap-2 flex-wrap">
+        {(([['inprogress', 'In progress', split.totalInProgress], ['completed', 'Completed', split.totalCompleted]]) as [BatchDeviceView, string, number][]).map(([v, label, n]) => (
+          <button key={v} onClick={() => setView(v)}
+            className={`px-3 py-1.5 rounded-lg text-sm font-medium ${view === v ? 'bg-indigo-600 text-white' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'}`}>
+            {label} <span className="opacity-70">({n})</span>
+          </button>
+        ))}
+        {otherHits && (
+          <button onClick={() => setView(view === 'inprogress' ? 'completed' : 'inprogress')}
+            className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline">{otherHits}</button>
+        )}
+      </div>
+
       {/* Devices table */}
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl overflow-x-auto">
         <table className="w-full text-sm">
@@ -603,7 +651,9 @@ const BatchDetail: React.FC<{
             <tr><th className="text-left px-4 py-2">#</th><th className="text-left px-4 py-2">Device</th><th className="text-left px-4 py-2">IMEI/Serial</th><th className="text-left px-4 py-2">Issue</th><th className="text-left px-4 py-2">Status</th><th className="text-right px-4 py-2">{internal ? 'Parts Cost' : 'Price'}</th><th className="text-right px-4 py-2">Actions</th></tr>
           </thead>
           <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-            {devices.length === 0 && <tr><td colSpan={7} className="text-center text-slate-400 py-8">No devices in this batch yet.</td></tr>}
+            {devices.length === 0 && <tr><td colSpan={7} className="text-center text-slate-400 py-8">
+              {query ? 'No devices here match that search.' : view === 'completed' ? 'Nothing completed in this batch yet.' : 'No devices in progress in this batch.'}
+            </td></tr>}
             {devices.map((r, idx) => (
               <tr key={r.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
                 <td className="px-4 py-2 text-slate-400">{idx + 1}</td>

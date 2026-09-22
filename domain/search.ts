@@ -2,6 +2,7 @@ import { InventoryItem, Repair, RepairBatch, Customer, SalesTransaction, AppUser
 import { kindOf } from './inventory';
 import { isRepairOpen, REPAIR_STATUS_LABEL } from './repairs';
 import { normalizeForLookup } from './identifierSearch';
+import { buildSearchable, queryWords, wordScore } from './itemSearch';
 
 // Pure, ranked global search over the collections already held in memory (the
 // app subscribes to them via realtime listeners), so a search performs ZERO
@@ -91,6 +92,7 @@ export function globalSearch(raw: string, data: SearchData, opts: SearchOpts): {
   const q = norm(raw);
   const qd = digits(raw);
   const qn = normalizeForLookup(raw);
+  const qw = queryWords(raw);
   const limit = opts.limitPerGroup ?? 6;
   const groups: SearchGroup[] = [];
   if (q.length < MIN_QUERY) return { groups, total: 0 };
@@ -113,7 +115,14 @@ export function globalSearch(raw: string, data: SearchData, opts: SearchOpts): {
       fieldScore(i.sku, q), fieldScore(i.imei, q), fieldScore(i.manufacturerBarcode, q),
       idScoreNormalized(i.sku, qn), idScoreNormalized(i.imei, qn), idScoreNormalized(i.manufacturerBarcode, qn),
     );
-    const textScore = best(fieldScore(name, q), fieldScore(i.brand, q), fieldScore(i.model, q), fieldScore(i.storage, q), fieldScore(i.color, q));
+    // A MULTI-WORD match across everything written on the item, so
+    // "iphone 16 128gb white" finds the phone here exactly as it does in
+    // Inventory (domain/itemSearch.ts) — the per-field substring scores below
+    // can only ever match a query that lives wholly inside one field.
+    const textScore = best(
+      fieldScore(name, q), fieldScore(i.brand, q), fieldScore(i.model, q), fieldScore(i.storage, q), fieldScore(i.color, q),
+      wordScore(buildSearchable(i, name), qw, name),
+    );
     let score = best(idScore, textScore);
     if (score && kindOf(i) === 'device' && !i.soldDate && i.deviceStatus !== 'sold') score += 30; // in-stock bonus
     const sold = kindOf(i) === 'device' && (!!i.soldDate || i.deviceStatus === 'sold');

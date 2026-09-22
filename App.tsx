@@ -102,6 +102,11 @@ import {
   openEntryFor, isOnBreak, periodPayFor, paidKey, toISODate, PayPeriod, correctClockOut, isValidClockOutCorrection,
   payrollDue, PAY_CYCLE_DAYS, payPeriodFor, isPayrollStaff,
 } from './domain/timeclock';
+import { rateAtFor, applyRateChange, rateChangeAllowed, RATE_IN_PAID_PERIOD_MESSAGE } from './domain/payRates';
+import {
+  UserPayPeriod, userPeriodKey, staffOnPeriod, applyGroupChange, moveAllowed,
+  MOVE_IN_PAID_PERIOD_MESSAGE, payGroupOf,
+} from './domain/payGroups';
 import { buildAlerts } from './domain/alerts';
 import { changedSettingsSections } from './domain/audit';
 import { settlementDrawerEffect, dropOffAcceptDrawerEffect } from './domain/dropoffs';
@@ -553,7 +558,7 @@ const App: React.FC = () => {
   // meaningful once timeEntries/payPeriods are loaded (enableExtendedData is
   // triggered for owner/manager on Dashboard visit — see the effect above).
   const dashboardPayrollDue = useMemo(
-    () => payrollDue(timeEntries, workspaceUsers, payPeriods, Date.now(), PAY_CYCLE_DAYS[settings.payroll.cycle], settings.payroll.anchorISO, settings.operations.paidBreakReasons),
+    () => payrollDue(timeEntries, workspaceUsers, payPeriods, Date.now(), PAY_CYCLE_DAYS[settings.payroll.cycle], settings.payroll.anchorISO, settings.operations.paidBreakReasons, rateAtFor),
     [timeEntries, workspaceUsers, payPeriods, settings.payroll.cycle, settings.payroll.anchorISO, settings.operations.paidBreakReasons],
   );
 
@@ -1929,12 +1934,43 @@ const App: React.FC = () => {
 
   // Owner-only hourly-rate edit (rate lives on the user doc). Managers/employees
   // can't change pay — enforced here and in firestore.rules.
-  const handleSetHourlyRate = (targetUid: string, hourlyRate: number) => {
-    if (!allow('users.manage')) return;
+  //
+  // A RAISE DOES NOT REPRICE HOURS ALREADY WORKED. The new rate is recorded
+  // with the date it takes effect (domain/payRates.ts), and every shift is paid
+  // at the rate in force on the day it was clocked in. `hourlyRate` is kept as
+  // the rate in force TODAY so every existing reader of it keeps working.
+  const handleChangeRate = (targetUid: string, hourlyRate: number, effectiveFrom: string) => {
+    if (!uid || !appUser || !allow('users.manage')) return;
     const rate = Math.max(0, Number.isFinite(hourlyRate) ? hourlyRate : 0);
-    const before = workspaceUsers.find(u => u.id === targetUid)?.hourlyRate;
-    updateUserDoc(targetUid, { hourlyRate: rate }).catch(() => {});
-    audit('user.set_rate', 'user', targetUid, { hourlyRate: before }, { hourlyRate: rate });
+    const target = workspaceUsers.find(u => u.id === targetUid);
+    if (!target) return;
+    // The one hard refusal: a date inside a period that has already been PAID.
+    // Those figures were signed off and the cash has gone.
+    const allowed = rateChangeAllowed(effectiveFrom, payPeriods, targetUid);
+    if (!allowed.ok) { window.alert(RATE_IN_PAID_PERIOD_MESSAGE); return; }
+    const next = applyRateChange(target, { rate, effectiveFrom, setBy: appUser.id, setAt: Date.now() }, todayISO());
+    updateUserDoc(targetUid, next).catch(() => {});
+    audit('user.set_rate', 'user', targetUid,
+      { hourlyRate: target.hourlyRate },
+      { hourlyRate: next.hourlyRate, rate, effectiveFrom });
+  };
+
+  // Which alternating pay week this person is on (domain/payGroups.ts). The
+  // move takes effect at a period boundary and leaves ONE short catch-up
+  // period behind, so no shift falls into both groups or neither.
+  const handleSetPayGroup = (targetUid: string, group: 'A' | 'B', effectiveFrom: string) => {
+    if (!uid || !appUser || !allow('users.manage')) return;
+    const target = workspaceUsers.find(u => u.id === targetUid);
+    if (!target) return;
+    const verdict = moveAllowed(target, group, effectiveFrom, payPeriods, targetUid);
+    if (verdict.ok !== true) {
+      if (verdict.reason === 'inside_paid_period') window.alert(MOVE_IN_PAID_PERIOD_MESSAGE);
+      return;
+    }
+    const next = applyGroupChange(target, { group, effectiveFrom, setBy: appUser.id, setAt: Date.now() }, todayISO());
+    updateUserDoc(targetUid, next).catch(() => {});
+    audit('user.set_pay_group', 'user', targetUid,
+      { payGroup: payGroupOf(target) }, { payGroup: group, effectiveFrom });
   };
 
   // --- Staff notes (owner-only shoutout/notes log) ---
@@ -2086,15 +2122,24 @@ const App: React.FC = () => {
   // than Mark Paid: acknowledges the numbers are reviewed and correct, but
   // moves no money and is not itself a payment record. Mark Paid below
   // refuses to run until a matching approval exists for that user + period.
-  const handleApprovePayPeriod = (targetUid: string, period: PayPeriod) => {
+  const handleApprovePayPeriod = (targetUid: string, period: UserPayPeriod) => {
     if (!uid || !appUser || !allow('payroll.manage')) return;
     const startISO = toISODate(period.start);
-    const key = `approve:${targetUid}:${startISO}`;
+    const key = `approve:${targetUid}:${startISO}:${period.group}:${period.kind}`;
     payrollGuard.run(key, async () => {
       const target = workspaceUsers.find(u => u.id === targetUid);
-      const pay = periodPayFor(timeEntries, targetUid, target?.hourlyRate, period, Date.now(), settings.operations.paidBreakReasons);
+      // Priced per shift at the rate in force on its clock-in date, so a raise
+      // inside the period doesn't reprice the hours before it.
+      const pay = periodPayFor(timeEntries, targetUid, target?.hourlyRate, period, Date.now(), settings.operations.paidBreakReasons, target ? rateAtFor(target) : undefined);
       const rec: PayPeriodApproval = {
-        id: paidKey(targetUid, startISO),
+        // Keyed by group + kind as well as period start: a catch-up period
+        // begins on a boundary that is ALSO a regular period's start, and the
+        // two would otherwise overwrite each other. Group A regulars keep the
+        // legacy key, so every existing record still resolves.
+        id: userPeriodKey(targetUid, period),
+        payGroup: period.group,
+        periodKind: period.kind,
+        ...(pay.rateSplit ? { rateSegments: pay.segments } : {}),
         userId: targetUid,
         periodStart: startISO,
         periodEnd: toISODate(period.end - 1),
@@ -2113,25 +2158,30 @@ const App: React.FC = () => {
   // Approve every active staff member with worked hours in the period who
   // isn't already approved — one audited action per user, guarded individually
   // so a partial failure doesn't block the rest.
-  const handleApproveAllPayPeriod = (period: PayPeriod) => {
+  const handleApproveAllPayPeriod = (period: UserPayPeriod) => {
     if (!uid || !appUser || !allow('payroll.manage')) return;
     const startISO = toISODate(period.start);
     const approvedIds = new Set(payPeriodApprovals.filter(a => a.periodStart === startISO).map(a => a.userId));
-    workspaceUsers
+    // WITHIN THE SHOWN GROUP ONLY. "Approve all" on group A's period must not
+    // reach across and approve group B, whose period is a different fortnight.
+    staffOnPeriod(
       // isPayrollStaff excludes the kiosk DEVICE account — it has no shifts.
-      .filter(u => isPayrollStaff(u) && !approvedIds.has(u.id))
-      .filter(u => periodPayFor(timeEntries, u.id, u.hourlyRate, period, Date.now(), settings.operations.paidBreakReasons).hours > 0)
+      workspaceUsers.filter(u => isPayrollStaff(u) && !approvedIds.has(u.id)),
+      period, settings.payroll.cycle,
+    )
+      .filter(u => periodPayFor(timeEntries, u.id, u.hourlyRate, period, Date.now(), settings.operations.paidBreakReasons, rateAtFor(u)).hours > 0)
       .forEach(u => handleApprovePayPeriod(u.id, period));
   };
   // Owner-only pay-period sign-off. Records that a period was reviewed/paid — it
   // moves no money. Snapshots the numbers so the acknowledgment stays accurate.
   // Refuses to run without a prior Approve record for the same user + period.
-  const handleMarkPaid = (targetUid: string, period: PayPeriod) => {
+  const handleMarkPaid = (targetUid: string, period: UserPayPeriod) => {
     if (!uid || !appUser || appUser.role !== 'owner') return;
     const startISO = toISODate(period.start);
-    const approval = payPeriodApprovals.find(a => a.userId === targetUid && a.periodStart === startISO);
+    const recordId = userPeriodKey(targetUid, period);
+    const approval = payPeriodApprovals.find(a => a.id === recordId);
     if (!approval) return;
-    const key = `pay:${targetUid}:${startISO}`;
+    const key = `pay:${recordId}`;
     payrollGuard.run(key, async () => {
       // Pay from the approval's own snapshot, not a fresh recompute off
       // current timeEntries — a correction made after Approve but before
@@ -2140,20 +2190,23 @@ const App: React.FC = () => {
       // on exactly this case; the reviewer must re-approve, which re-
       // snapshots, before this can record different numbers).
       const rec: PayPeriodPaid = {
-        id: paidKey(targetUid, startISO),
+        id: recordId,
         userId: targetUid,
         periodStart: startISO,
         periodEnd: approval.periodEnd,
         markedBy: appUser.id, markedByEmail: appUser.email, markedAt: Date.now(),
         hours: approval.hours, gross: approval.gross, rate: approval.rate,
+        payGroup: period.group,
+        periodKind: period.kind,
+        ...(approval.rateSegments ? { rateSegments: approval.rateSegments } : {}),
       };
       await savePayPeriodPaid(uid, rec).catch(() => {});
       audit('timeclock.mark_paid', 'payPeriod', rec.id, undefined, { hours: rec.hours, gross: rec.gross });
     });
   };
-  const handleUnmarkPaid = (targetUid: string, period: PayPeriod) => {
+  const handleUnmarkPaid = (targetUid: string, period: UserPayPeriod) => {
     if (!uid || !appUser || appUser.role !== 'owner') return;
-    const id = paidKey(targetUid, toISODate(period.start));
+    const id = userPeriodKey(targetUid, period);
     const key = `unpay:${id}`;
     payrollGuard.run(key, async () => {
       await deletePayPeriodPaid(uid, id).catch(() => {});
@@ -3056,7 +3109,10 @@ const App: React.FC = () => {
               onSetRole={handleSetRole}
               onSetDisabled={handleSetDisabled}
               onSetAllowProfit={handleSetAllowProfit}
-              onSetHourlyRate={allow('users.manage') ? handleSetHourlyRate : undefined}
+              onChangeRate={allow('users.manage') ? handleChangeRate : undefined}
+              onSetPayGroup={allow('users.manage') ? handleSetPayGroup : undefined}
+              payCycle={settings.payroll.cycle}
+              nextBoundaryISO={toISODate(payPeriodFor(Date.now(), PAY_CYCLE_DAYS[settings.payroll.cycle], settings.payroll.anchorISO).end)}
               onInvite={handleInvite}
               onDeleteInvite={handleDeleteInvite}
               onCreateUser={handleCreateUser}
@@ -3094,6 +3150,7 @@ const App: React.FC = () => {
               onApproveAllPeriod={handleApproveAllPayPeriod}
               onMarkPaid={handleMarkPaid}
               onUnmarkPaid={handleUnmarkPaid}
+              onOpenUsers={allow('users.manage') ? () => setView('users') : undefined}
               onCorrectClockOut={handleCorrectClockOut}
               paidBreakReasons={settings.operations.paidBreakReasons}
               paidBreakReasonsUpdatedAt={settings.operations.paidBreakReasonsUpdatedAt}

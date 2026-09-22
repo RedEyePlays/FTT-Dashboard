@@ -8,6 +8,9 @@ import { validatePassword, canResetPasswordFor, MIN_PASSWORD_LENGTH } from '../d
 import { useSubmitGuard } from '../hooks/useSubmitGuard';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 import { selectOnFocus } from '../hooks/selectOnFocus';
+import { rateHistoryForDisplay, effectiveFromLabel } from '../domain/payRates';
+import { PAY_GROUPS, PAY_GROUP_LABEL, payGroupOf, payGroupsApply, WEEKLY_GROUPS_NOTE } from '../domain/payGroups';
+import { PayCycle } from '../domain/timeclock';
 
 interface Props {
   me: AppUser;
@@ -17,7 +20,16 @@ interface Props {
   onSetRole: (uid: string, role: Role) => void;
   onSetDisabled: (uid: string, disabled: boolean) => void;
   onSetAllowProfit: (uid: string, allow: boolean) => void;
-  onSetHourlyRate?: (uid: string, rate: number) => void; // owner only
+  // Owner only. A rate change carries the date it takes effect: a raise must
+  // not reprice hours already worked (domain/payRates.ts).
+  onChangeRate?: (uid: string, rate: number, effectiveFrom: string) => void;
+  // Owner only. Which alternating pay week this person is on
+  // (domain/payGroups.ts). The move takes effect at a period boundary.
+  onSetPayGroup?: (uid: string, group: 'A' | 'B', effectiveFrom: string) => void;
+  // The workspace pay cycle + the default boundary a change takes effect on,
+  // so this screen can offer sensible dates without recomputing the schedule.
+  payCycle?: PayCycle;
+  nextBoundaryISO?: string;
   onInvite: (email: string, role: Role) => void;
   onDeleteInvite: (email: string) => void;
   // Create a fully-usable account directly — email, password and an optional
@@ -64,31 +76,125 @@ const AUTO_LOCK_OPTIONS = [1, 2, 4, 5, 10, 15, 30];
 // by picking it off a dropdown would be a mistake waiting to happen.
 const ROLES: Role[] = ['owner', 'manager', 'employee', 'technician'];
 
-// Owner-only hourly-rate editor. Commits on blur / Enter so typing doesn't fire
-// a write per keystroke. Seeded from the stored value and re-seeds when it changes.
-const RateInput: React.FC<{ rate?: number; onCommit: (rate: number) => void }> = ({ rate, onCommit }) => {
-  const [val, setVal] = useState(rate != null ? String(rate) : '');
-  useEffect(() => { setVal(rate != null ? String(rate) : ''); }, [rate]);
-  const commit = () => {
-    const n = parseFloat(val);
-    const next = Number.isFinite(n) && n >= 0 ? Math.round(n * 100) / 100 : 0;
-    if (next !== (rate ?? 0)) onCommit(next);
-    setVal(next ? String(next) : '');
+// Owner-only pay-rate control.
+//
+// It is NOT a plain number input any more, because a rate is not a single
+// number: the old input wrote hourlyRate directly, which repriced every unpaid
+// hour in the period — including hours worked before the raise. A change now
+// carries the date it takes effect (domain/payRates.ts), defaulting to the
+// start of the next pay period, and the history is shown underneath so the
+// owner can see what somebody has been on.
+const RateControl: React.FC<{
+  user: AppUser;
+  defaultEffectiveFrom: string;
+  onChange: (rate: number, effectiveFrom: string) => void;
+}> = ({ user, defaultEffectiveFrom, onChange }) => {
+  const [open, setOpen] = useState(false);
+  const [rate, setRate] = useState('');
+  const [from, setFrom] = useState(defaultEffectiveFrom);
+  const history = rateHistoryForDisplay(user);
+  const current = user.hourlyRate;
+
+  const start = () => {
+    setRate(current != null ? String(current) : '');
+    // A person with NO rate yet is not getting a raise — they are being given a
+    // rate for the first time, which applies to everything they have worked.
+    setFrom(current == null ? '' : defaultEffectiveFrom);
+    setOpen(true);
   };
+
+  const commit = () => {
+    const n = parseFloat(rate);
+    if (!Number.isFinite(n) || n < 0) return;
+    const next = Math.round(n * 100) / 100;
+    if (from && from < defaultEffectiveFrom && !window.confirm(
+      `Backdating this rate to ${from} will change what is owed for work ALREADY DONE in every unpaid pay period from that date on.\n\nPeriods that have already been paid out are never changed.\n\nContinue?`,
+    )) return;
+    onChange(next, from);
+    setOpen(false);
+  };
+
   return (
-    <label className="flex items-center gap-1 text-xs text-slate-600 dark:text-slate-300" title="Hourly pay rate (owner only)">
-      <DollarSign className="w-3.5 h-3.5 text-slate-400" />
-      <input
-        type="number" min={0} step="0.25" inputMode="decimal"
-        value={val}
-        onChange={e => setVal(e.target.value)}
-        onFocus={selectOnFocus}
-        onBlur={commit}
-        onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-        placeholder="0.00"
-        className="w-20 p-1.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md text-sm"
-      />
-      <span className="text-slate-400">/hr</span>
+    <div className="relative">
+      <button onClick={start}
+        title={current == null ? 'No hourly rate set' : 'Change hourly rate'}
+        className={`flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-medium ${current == null ? 'bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'} hover:bg-slate-200 dark:hover:bg-slate-700`}>
+        <DollarSign className="w-3.5 h-3.5" />
+        {current == null ? 'Set rate' : `${current.toFixed(2)}/hr`}
+      </button>
+
+      {open && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={() => setOpen(false)}>
+          <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-sm border border-slate-200 dark:border-slate-700 p-5 space-y-3" onClick={e => e.stopPropagation()}>
+            <h3 className="font-bold text-slate-800 dark:text-slate-100">Change rate — {user.email}</h3>
+            <div>
+              <label className="block text-xs text-slate-500 dark:text-slate-400 mb-1">New rate ($/hr)</label>
+              <input autoFocus type="number" min={0} step="0.25" inputMode="decimal" value={rate}
+                onChange={e => setRate(e.target.value)} onFocus={selectOnFocus}
+                className="w-full p-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md text-sm" />
+            </div>
+            <div>
+              <label className="block text-xs text-slate-500 dark:text-slate-400 mb-1">Effective from</label>
+              <input type="date" value={from} onChange={e => setFrom(e.target.value)}
+                className="w-full p-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md text-sm" />
+              <p className="text-[11px] text-slate-400 mt-1">
+                {from === defaultEffectiveFrom
+                  ? 'The start of the next pay period — hours already worked keep the old rate.'
+                  : from && from < defaultEffectiveFrom
+                    ? 'Backdated: this will reprice unpaid periods from that date. Already-paid periods are never changed.'
+                    : 'Hours before this date keep the old rate.'}
+              </p>
+            </div>
+
+            {history.length > 0 && (
+              <div className="pt-2 border-t border-slate-100 dark:border-slate-800">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400 mb-1">Rate history</p>
+                <ul className="space-y-0.5 max-h-32 overflow-y-auto">
+                  {history.map((r, i) => (
+                    <li key={`${r.effectiveFrom}-${i}`} className="text-xs text-slate-600 dark:text-slate-300 flex justify-between gap-2">
+                      <span>${r.rate.toFixed(2)}/hr</span>
+                      <span className="text-slate-400">{effectiveFromLabel(r)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 pt-1">
+              <button onClick={() => setOpen(false)} className="px-3 py-1.5 text-sm rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">Cancel</button>
+              <button onClick={commit} disabled={!rate} className="px-3 py-1.5 text-sm rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white font-medium">Save rate</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Owner-only pay-group picker. Hidden on a weekly cycle, where both groups
+// land on the same boundaries and the setting would do nothing.
+const PayGroupControl: React.FC<{
+  user: AppUser;
+  nextBoundaryISO: string;
+  onChange: (group: 'A' | 'B', effectiveFrom: string) => void;
+}> = ({ user, nextBoundaryISO, onChange }) => {
+  const current = payGroupOf(user);
+  return (
+    <label className="flex items-center gap-1 text-xs text-slate-600 dark:text-slate-300"
+      title={`Which alternating pay week this person is on. A move takes effect on ${nextBoundaryISO}, and the hours in between are paid as one short catch-up period.`}>
+      <UserCog className="w-3.5 h-3.5 text-slate-400" />
+      <select value={current}
+        onChange={e => {
+          const next = e.target.value as 'A' | 'B';
+          if (next === current) return;
+          if (!window.confirm(
+            `Move ${user.email} to ${PAY_GROUP_LABEL[next]} from ${nextBoundaryISO}?\n\nThe hours between their last ${PAY_GROUP_LABEL[current]} period and their first ${PAY_GROUP_LABEL[next]} period are paid once, as a short catch-up period. Nothing is lost and nothing is paid twice.`,
+          )) { e.target.value = current; return; }
+          onChange(next, nextBoundaryISO);
+        }}
+        className="p-1.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md text-sm">
+        {PAY_GROUPS.map(g => <option key={g} value={g}>{PAY_GROUP_LABEL[g]}</option>)}
+      </select>
     </label>
   );
 };
@@ -357,7 +463,7 @@ const CreateUserModal: React.FC<{
 };
 
 export const UsersView: React.FC<Props> = ({
-  me, users, invites, canManageAll = true, onSetRole, onSetDisabled, onSetAllowProfit, onSetHourlyRate, onInvite, onDeleteInvite, onCreateUser,
+  me, users, invites, canManageAll = true, onSetRole, onSetDisabled, onSetAllowProfit, onChangeRate, onSetPayGroup, payCycle = 'biweekly', nextBoundaryISO = '', onInvite, onDeleteInvite, onCreateUser,
   onSetPin, onSetKioskPin, onClearKioskPin, onCreateKioskDevice, onRevokeKioskDevice,
   canManageSecurity, autoLockMinutes, onSetAutoLockMinutes, onResetPassword,
   staffNotes = [], canManageStaffNotes = false, onAddStaffNote, onDeleteStaffNote,
@@ -611,8 +717,19 @@ export const UsersView: React.FC<Props> = ({
                     <input type="checkbox" checked={!!u.allowProfit} onChange={e => onSetAllowProfit(u.id, e.target.checked)} className="rounded" /> <Eye className="w-3.5 h-3.5" /> Financials
                   </label>
                 )}
-                {canManageAll && onSetHourlyRate && (
-                  <RateInput rate={u.hourlyRate} onCommit={r => onSetHourlyRate(u.id, r)} />
+                {canManageAll && onChangeRate && (
+                  <RateControl user={u} defaultEffectiveFrom={nextBoundaryISO}
+                    onChange={(rate, from) => onChangeRate(u.id, rate, from)} />
+                )}
+                {/* Pay groups only do anything on a bi-weekly cycle — on a
+                    weekly one both groups land on the same boundaries, so the
+                    control is hidden rather than left on screen doing nothing. */}
+                {canManageAll && onSetPayGroup && payGroupsApply(payCycle) && (
+                  <PayGroupControl user={u} nextBoundaryISO={nextBoundaryISO}
+                    onChange={(g, from) => onSetPayGroup(u.id, g, from)} />
+                )}
+                {canManageAll && onSetPayGroup && !payGroupsApply(payCycle) && (
+                  <span className="text-[11px] text-slate-400" title={WEEKLY_GROUPS_NOTE}>No pay groups on a weekly cycle</span>
                 )}
                 {onResetPassword && canResetPasswordFor(me.role, u.role) && (
                   <button onClick={() => setPwTarget(u)}
