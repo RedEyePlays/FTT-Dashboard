@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Wallet, Receipt, Download, Save, AlertTriangle, CheckCircle2, Plus, Trash2, Scale, FileArchive, Truck, DoorOpen, History, LockOpen, Banknote, Pencil, Repeat, SkipForward } from 'lucide-react';
+import { Wallet, Receipt, Download, Save, AlertTriangle, CheckCircle2, Plus, Trash2, Scale, FileArchive, Truck, DoorOpen, History, LockOpen, Banknote, Pencil, Repeat, SkipForward, ClipboardList, Search } from 'lucide-react';
 import { SalesTransaction, CashReconciliation, CashDrawerEntry, InventoryItem, PayPeriodPaid, Settlement, DeviceBuyer, Repair, Customer, AuditEntry, ActivityEntry, TimeEntry, AppUser, Expense, RecurringExpense, ExpensePaymentMethod, RecurringFrequency, RecurringAmountMode, StaffBonus } from '../types';
 import {
   ExpenseCategory, duePeriodsFor, DuePeriod, isVariableRecurring, lastAmountsForRecurring,
@@ -15,6 +15,9 @@ import {
 } from '../domain/reports';
 import { computeAnalytics, presetRange } from '../domain/analytics';
 import { belowFloorSales, belowFloorCountLabel, trimBelowFloorRows } from '../domain/priceFloor';
+import {
+  salesLedger, trimLedger, salesLedgerCsvRows, ledgerSellers, LedgerLineKind, LedgerFilter,
+} from '../domain/salesLedger';
 import { entriesOnDate, workedHours, PaidBreakReasons } from '../domain/timeclock';
 import {
   buildDayLedger, cashOnly, shortfallWalk, rowsForWalkLine, dayLedgerFacts,
@@ -88,10 +91,11 @@ interface Props {
   users: AppUser[];
 }
 
-type TabId = 'history' | 'cash' | 'tax' | 'pnl' | 'expenses' | 'yearend' | 'settlements' | 'belowmin';
+type TabId = 'history' | 'cash' | 'ledger' | 'tax' | 'pnl' | 'expenses' | 'yearend' | 'settlements' | 'belowmin';
 const TABS: { id: TabId; label: string; icon: React.ReactNode }[] = [
   { id: 'history', label: 'Daily History', icon: <History className="w-4 h-4" /> },
   { id: 'cash', label: 'Cash Reconciliation', icon: <Wallet className="w-4 h-4" /> },
+  { id: 'ledger', label: 'Sales Ledger', icon: <ClipboardList className="w-4 h-4" /> },
   { id: 'tax', label: 'Sales Tax', icon: <Receipt className="w-4 h-4" /> },
   { id: 'pnl', label: 'Profit & Loss', icon: <Scale className="w-4 h-4" /> },
   { id: 'expenses', label: 'Expenses', icon: <Banknote className="w-4 h-4" /> },
@@ -183,6 +187,10 @@ export const ReportsView: React.FC<Props> = ({
         />
       )}
       {tab === 'settlements' && tabAllowed('settlements', perms) && <SettlementsTab settlements={settlements} deviceBuyers={deviceBuyers} booksStartDate={booksStartDate} />}
+      {tab === 'ledger' && tabAllowed('ledger', perms) && (
+        <SalesLedgerTab salesTransactions={salesTransactions} inventory={inventory}
+          canViewCost={canViewDetailedProfit} booksStartDate={booksStartDate} />
+      )}
       {tab === 'belowmin' && tabAllowed('belowmin', perms) && <BelowMinimumTab salesTransactions={salesTransactions} canViewCost={canViewDetailedProfit} booksStartDate={booksStartDate} />}
       {tab === 'yearend' && tabAllowed('yearend', perms) && <YearEndTab plInput={plInput} showExpenseCategories={canViewAllExpenses} />}
     </div>
@@ -1479,6 +1487,260 @@ const ExpensesTab: React.FC<{
           onClose={() => setEnteringVariable(null)}
           onConfirm={amount => onGenerateRecurringExpense(enteringVariable.r, enteringVariable.p, amount)}
         />
+      )}
+    </div>
+  );
+};
+
+
+/* ---------------- Sold below minimum ---------------- */
+
+/**
+ * Every sale that went out under the device's minimum price, over a range./* ---------------- Sales Ledger ---------------- */
+
+/**
+ * EVERY SALE, LINE BY LINE — what the accountant asks for and what nothing
+ * here produced. Tax and P&L are totals; this is the detail behind them.
+ *
+ * THE FIGURES COME FROM domain/salesLedger.ts, which walks exactly the
+ * populations the P&L walks and reads tax exactly as recorded, so this tab, the
+ * P&L tab and the Sales Tax tab cannot drift apart. A test pins that.
+ *
+ * WHO SEES WHAT. A manager (reports.profit.summary) gets the dates, items,
+ * customers, sellers, prices, tax and the payment split — everything needed to
+ * explain a day's takings. Cost and profit are REMOVED FROM THE ROWS by
+ * trimLedger, not hidden by this markup, so the CSV cannot leak what the screen
+ * withholds. Only reports.profit.detailed sees them. Employees and technicians
+ * never see the tab at all (tabAllowed gates it on canViewProfit).
+ */
+const KIND_FILTERS: { id: LedgerLineKind; label: string }[] = [
+  { id: 'device', label: 'Devices' },
+  { id: 'accessory', label: 'Accessories' },
+  { id: 'service', label: 'Repairs / services' },
+];
+const PAYMENT_FILTERS: { id: string; label: string }[] = [
+  { id: 'cash', label: 'Cash' },
+  { id: 'card', label: 'Card' },
+  { id: 'mixed', label: 'Mixed' },
+  { id: 'etransfer', label: 'E-Transfer' },
+];
+
+const monthOf = (iso: string) => iso.slice(0, 7);
+const monthBounds = (ym: string): { start: string; end: string } => {
+  const [y, m] = ym.split('-').map(Number);
+  const last = new Date(y, m, 0).getDate();
+  return { start: `${ym}-01`, end: `${ym}-${String(last).padStart(2, '0')}` };
+};
+
+const SalesLedgerTab: React.FC<{
+  salesTransactions: SalesTransaction[];
+  inventory: InventoryItem[];
+  canViewCost: boolean;
+  booksStartDate?: string;
+}> = ({ salesTransactions, inventory, canViewCost, booksStartDate }) => {
+  // Defaults to THIS MONTH, which is what somebody opening the tab wants nine
+  // times out of ten; the custom range is right there for the tenth.
+  const thisMonth = monthOf(todayISO());
+  const [month, setMonth] = useState(thisMonth);
+  const [custom, setCustom] = useState(false);
+  const bounds = monthBounds(month);
+  const [start, setStart] = useState(bounds.start);
+  const [end, setEnd] = useState(bounds.end);
+  const range = custom ? { start, end } : monthBounds(month);
+
+  const [kinds, setKinds] = useState<LedgerLineKind[]>([]);
+  const [methods, setMethods] = useState<string[]>([]);
+  const [soldBy, setSoldBy] = useState('');
+  const [query, setQuery] = useState('');
+
+  const sellers = useMemo(
+    () => ledgerSellers(salesTransactions, range.start, range.end),
+    [salesTransactions, range.start, range.end],
+  );
+
+  const filter: LedgerFilter = {
+    ...(kinds.length ? { kinds } : {}),
+    ...(methods.length ? { paymentMethods: methods } : {}),
+    ...(soldBy ? { soldBy } : {}),
+    ...(query ? { query } : {}),
+  };
+
+  // TRIMMED AT THE DATA LAYER. Everything below — the table and the export —
+  // reads this one already-stripped object.
+  const ledger = useMemo(
+    () => trimLedger(
+      salesLedger({ transactions: salesTransactions, inventory, booksStartDate }, range.start, range.end, filter),
+      canViewCost,
+    ),
+    [salesTransactions, inventory, booksStartDate, range.start, range.end, canViewCost, kinds, methods, soldBy, query],
+  );
+
+  const toggle = <T,>(list: T[], v: T, set: (n: T[]) => void) =>
+    set(list.includes(v) ? list.filter(x => x !== v) : [...list, v]);
+
+  const exportCsv = () => triggerDownload(
+    `sales-ledger_${ledger.start}_${ledger.end}.csv`,
+    toCSV(salesLedgerCsvRows(ledger, canViewCost)),
+    'text/csv;charset=utf-8;',
+  );
+
+  const pill = (active: boolean) =>
+    `px-2.5 py-1 rounded-full text-xs font-medium border ${active
+      ? 'bg-indigo-600 text-white border-indigo-600'
+      : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700'}`;
+
+  return (
+    <div className="space-y-6">
+      <div className={`${card} p-5 space-y-4`}>
+        <div className="flex flex-wrap items-end gap-4">
+          {!custom ? (
+            <div>
+              <label className={label}>Month</label>
+              <input type="month" value={month} onChange={e => setMonth(e.target.value)} className={input} />
+            </div>
+          ) : (
+            <>
+              <div><label className={label}>From</label><input type="date" value={start} onChange={e => setStart(e.target.value)} className={input} /></div>
+              <div><label className={label}>To</label><input type="date" value={end} onChange={e => setEnd(e.target.value)} className={input} /></div>
+            </>
+          )}
+          <button onClick={() => { if (!custom) { setStart(bounds.start); setEnd(bounds.end); } setCustom(c => !c); }}
+            className="px-3 py-2 rounded-lg text-sm bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+            {custom ? 'Use a month' : 'Custom range'}
+          </button>
+          <div className="relative flex-1 min-w-[200px]">
+            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input value={query} onChange={e => setQuery(e.target.value)}
+              placeholder="Search item, SKU, IMEI, customer, seller…"
+              className={`${input} w-full pl-9`} />
+          </div>
+          <button onClick={exportCsv} className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700">
+            <Download className="w-4 h-4" /> Export CSV
+          </button>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-1.5">
+          {KIND_FILTERS.map(k => (
+            <button key={k.id} onClick={() => toggle(kinds, k.id, setKinds)} className={pill(kinds.includes(k.id))}>{k.label}</button>
+          ))}
+          <span className="w-px h-4 bg-slate-200 dark:bg-slate-700 mx-1" />
+          {PAYMENT_FILTERS.map(m => (
+            <button key={m.id} onClick={() => toggle(methods, m.id, setMethods)} className={pill(methods.includes(m.id))}>{m.label}</button>
+          ))}
+          {sellers.length > 0 && (
+            <select value={soldBy} onChange={e => setSoldBy(e.target.value)} className={`${input} ml-1 py-1 text-xs`}>
+              <option value="">Any seller</option>
+              {sellers.map(s => <option key={s.id} value={s.id}>{s.email}</option>)}
+            </select>
+          )}
+          {(kinds.length || methods.length || soldBy || query) ? (
+            <button onClick={() => { setKinds([]); setMethods([]); setSoldBy(''); setQuery(''); }}
+              className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline ml-1">Clear filters</button>
+          ) : null}
+        </div>
+
+        {ledger.clampedToBooksStart && (
+          <p className="text-xs text-amber-700 dark:text-amber-400">Figures start {ledger.start} — the books start date.</p>
+        )}
+      </div>
+
+      {/* Totals */}
+      <div className={`${card} p-5 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3 text-center`}>
+        {[
+          ['Units', String(ledger.totals.units)],
+          ['Revenue', money(ledger.totals.revenue)],
+          ...(canViewCost ? [['Cost', money(ledger.totals.cost ?? 0)], ['Profit', money(ledger.totals.profit ?? 0)]] as [string, string][] : []),
+          ['Tax collected', money(ledger.totals.tax)],
+          ['Cash', money(ledger.totals.cash)],
+          ['Card', money(ledger.totals.card)],
+          ['E-Transfer', money(ledger.totals.etransfer)],
+        ].map(([k, v]) => (
+          <div key={k}>
+            <p className="text-[11px] uppercase tracking-wide text-slate-400">{k}</p>
+            <p className="text-lg font-bold text-slate-900 dark:text-white tabular-nums">{v}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* Rows */}
+      <div className={`${card} overflow-x-auto`}>
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50 dark:bg-slate-800/50 text-[10px] uppercase tracking-wider text-slate-500 dark:text-slate-400">
+            <tr>
+              <th className="text-left px-3 py-2">Date</th>
+              <th className="text-left px-3 py-2">Sale</th>
+              <th className="text-left px-3 py-2">Item</th>
+              <th className="text-left px-3 py-2">SKU / IMEI</th>
+              <th className="text-left px-3 py-2">Customer</th>
+              <th className="text-left px-3 py-2">Sold by</th>
+              <th className="text-right px-3 py-2">Qty</th>
+              <th className="text-right px-3 py-2">Price</th>
+              {canViewCost && <th className="text-right px-3 py-2">Cost</th>}
+              {canViewCost && <th className="text-right px-3 py-2">Profit</th>}
+              <th className="text-right px-3 py-2">Tax</th>
+              <th className="text-right px-3 py-2">Paid</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+            {ledger.rows.length === 0 && (
+              <tr><td colSpan={12} className="text-center text-slate-400 py-10">No sales in this range.</td></tr>
+            )}
+            {ledger.rows.map(r => (
+              <tr key={r.key} className={r.firstOfSale ? '' : 'bg-slate-50/40 dark:bg-slate-800/20'}>
+                <td className="px-3 py-2 text-slate-500 dark:text-slate-400">{r.firstOfSale ? r.date : ''}</td>
+                <td className="px-3 py-2 font-mono text-[11px] text-slate-400">{r.firstOfSale ? r.saleId.slice(0, 8) : ''}</td>
+                <td className="px-3 py-2 text-slate-800 dark:text-slate-100">{r.name}</td>
+                <td className="px-3 py-2 font-mono text-[11px] text-slate-400">{[r.sku, r.imei].filter(Boolean).join(' · ') || '—'}</td>
+                <td className="px-3 py-2 text-slate-500 dark:text-slate-400">{r.firstOfSale ? (r.customerName || '—') : ''}</td>
+                <td className="px-3 py-2 text-slate-500 dark:text-slate-400 text-[11px]">{r.firstOfSale ? (r.soldByEmail || '—') : ''}</td>
+                <td className="px-3 py-2 text-right tabular-nums">{r.quantity}</td>
+                <td className="px-3 py-2 text-right tabular-nums">{money(r.revenue)}</td>
+                {canViewCost && <td className="px-3 py-2 text-right tabular-nums text-slate-500">{money(r.totalCost ?? 0)}</td>}
+                {canViewCost && <td className="px-3 py-2 text-right tabular-nums text-emerald-600 dark:text-emerald-400">{money(r.profit ?? 0)}</td>}
+                {/* Sale-level columns render on the sale's FIRST line — the
+                    tax and the payment split belong to the sale, not to each
+                    line of it, and repeating them would read as double. */}
+                <td className="px-3 py-2 text-right tabular-nums text-slate-500">{r.firstOfSale ? money(r.sale.tax) : ''}</td>
+                <td className="px-3 py-2 text-right text-[11px] text-slate-500 dark:text-slate-400 whitespace-nowrap">
+                  {r.firstOfSale ? (
+                    <>
+                      <span className="font-semibold text-slate-700 dark:text-slate-200">{money(r.sale.totalPaid)}</span>
+                      <span className="block">{[
+                        r.sale.cash >= 0.005 ? `cash ${money(r.sale.cash)}` : null,
+                        r.sale.card >= 0.005 ? `card ${money(r.sale.card)}` : null,
+                        r.sale.etransfer >= 0.005 ? `e-tfr ${money(r.sale.etransfer)}` : null,
+                        r.sale.storeCredit >= 0.005 ? `credit ${money(r.sale.storeCredit)}` : null,
+                      ].filter(Boolean).join(' · ') || r.sale.paymentMethod}</span>
+                      {r.sale.paymentNote && <span className="block italic truncate max-w-[160px]">{r.sale.paymentNote}</span>}
+                    </>
+                  ) : ''}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Voids and returns, in the month they HAPPENED. Their own section, so
+          they can never be mistaken for revenue. */}
+      {ledger.reversalRows.length > 0 && (
+        <div className={`${card} p-5`}>
+          <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200 mb-3 flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-rose-500" /> Voids &amp; returns in this range — {money(ledger.totals.refunds)} refunded
+          </h3>
+          <div className="space-y-1.5">
+            {ledger.reversalRows.map(r => (
+              <div key={r.key} className="flex items-center justify-between gap-3 text-sm border-b border-slate-50 dark:border-slate-800/60 last:border-0 py-1.5">
+                <div className="min-w-0">
+                  <p className="text-slate-700 dark:text-slate-200 truncate">{r.name}</p>
+                  <p className="text-[11px] text-slate-400 truncate">{r.reversal?.label}</p>
+                </div>
+                <span className="font-semibold text-rose-600 dark:text-rose-400 tabular-nums shrink-0">{money(r.revenue)}</span>
+              </div>
+            ))}
+          </div>
+          <p className="text-[11px] text-slate-400 mt-2">Refunds are listed apart from revenue and never netted off it — the original sale stays in its own month.</p>
+        </div>
       )}
     </div>
   );

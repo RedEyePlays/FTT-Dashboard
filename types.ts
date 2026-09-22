@@ -219,6 +219,10 @@ export interface DropOff {
   imei: string;              // IMEI / serial, optional
   sellerName: string;        // marketplace seller name, optional
   sellerContact: string;     // marketplace seller contact, optional
+  // The customer record this seller resolved to, when intake could link one
+  // (domain/sellerLink.ts). Optional and additive: every drop-off taken before
+  // this simply has no link and reads exactly as it did.
+  sellerCustomerId?: string;
   purchasePrice: number;     // what was paid to the seller
   paidBy: PaidBy;            // who funded the purchase: legacy stored value 'runner' = the buyer's own money, 'store' = store cash (buyer owes it back), 'personal' = the owner's own money (buyer still owes it back)
   dropOffFee: number;        // the store's service fee for financing/handling this device — owed BY the buyer TO the store

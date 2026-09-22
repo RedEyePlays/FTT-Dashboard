@@ -29,12 +29,17 @@ import {
 // Lazy: the repair label modal pulls in jsPDF (~390 kB); load it on demand.
 const RepairLabelModal = lazy(() => import('./RepairLabelModal').then(m => ({ default: m.RepairLabelModal })));
 import { CustomerSearchInput } from './CustomerSearchInput';
+import { useSellerLink } from '../hooks/useSellerLink';
+import { CustomerDraft } from '../domain/customers';
 import { toISODate, todayISO } from '../domain/dates';
 
 interface Props {
   repairs: Repair[];
   batches: RepairBatch[];
   customers: Customer[];
+  // Create-and-link a customer inline (App.tsx's handleCreateCustomerInline).
+  // Omit it and a typed customer name stays free text, exactly as before.
+  onCreateCustomer?: (draft: CustomerDraft) => Customer | undefined;
   auditLogs: AuditEntry[];
   canDelete: boolean;
   userId?: string; // signed-in user's uid — scopes the remembered status filter so it never leaks between accounts
@@ -278,7 +283,27 @@ export const RepairsView: React.FC<Props> = (props) => {
   const newDevice = (batchId: string): Repair => ({ id: newId(), repairNumber: '', type: 'wholesale', batchId, createdAt: Date.now(), date: today(), issue: '', repairPrice: 0, status: 'received' });
   const newBatch = (): RepairBatch => ({ id: newId(), batchNumber: '', createdAt: Date.now(), dateReceived: today(), companyName: '', status: 'active', amountPaid: 0 });
 
+  // A retail repair customer typed at the counter has exactly the drop-off
+  // problem: typing a name sets customerName and CLEARS customerId, so a
+  // walk-in never reached the customer database. Same shared path
+  // (domain/sellerLink.ts), same write (handleCreateCustomerInline).
+  const repairCustomerLink = useSellerLink({ customers: props.customers, onCreateCustomer: props.onCreateCustomer });
+
   const saveDrawer = async (form: Repair) => {
+    // Wholesale devices belong to a BATCH's business, not to a walk-in
+    // customer, so they are left alone.
+    if (form.type === 'retail' && (form.customerName || '').trim() && !form.customerId) {
+      return new Promise<void>(resolve => {
+        repairCustomerLink.resolve(
+          { name: form.customerName || '', phone: form.customerPhone, email: form.customerEmail },
+          customerId => { void commitDrawer({ ...form, ...(customerId ? { customerId } : {}) }).then(resolve); },
+        );
+      });
+    }
+    return commitDrawer(form);
+  };
+
+  const commitDrawer = async (form: Repair) => {
     // Keep partsCost in sync with the structured parts breakdown on every save,
     // so analytics/reports read one consistent number.
     let next: Repair = { ...form, partsCost: repairPartsCost(form) };
@@ -523,6 +548,8 @@ export const RepairsView: React.FC<Props> = (props) => {
           onPrintLabel={() => openLabel(drawer.repair)}
           onPrintEstimate={() => { printRepairEstimate(drawer.repair, { storeName: getStoreProfile().storeName }); onPrintAudit('repair', drawer.repair.id, 'estimate'); }} />
       )}
+
+      {repairCustomerLink.prompt}
 
       {/* Batch create/edit form */}
       {batchForm && (

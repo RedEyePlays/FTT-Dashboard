@@ -4,7 +4,9 @@ import {
   CheckCircle, XCircle, Wallet, ClipboardList, FileText, QrCode, Pencil,
   Archive, Search, ChevronDown, ChevronRight,
 } from 'lucide-react';
-import { CashReconciliation, DeviceBuyer, DropOff, DropOffStatus, PaidBy, Settlement, SettlementPaymentMethod } from '../types';
+import { CashReconciliation, Customer, DeviceBuyer, DropOff, DropOffStatus, PaidBy, Settlement, SettlementPaymentMethod } from '../types';
+import { CustomerDraft } from '../domain/customers';
+import { useSellerLink } from '../hooks/useSellerLink';
 import { deviceBuyerOutstanding, settleableDropOffs, settlementTotals, SettlementReviewLine, buildSettlementFromReview, settlementOwedLabel, isLegacySettlement, LEGACY_SETTLEMENT_NOTE, dropOffOwed, PAID_BY_LABEL, groupSettleableByWeek, defaultSettlementWeek, SettlementWeek } from '../domain/dropoffs';
 import { formatPhoneInput } from '../domain/phone';
 import { printSettlementInvoice } from '../services/settlementInvoice';
@@ -39,6 +41,12 @@ interface Props {
   // default, so a caller that forgets to pass it shows no button rather than
   // silently leaking cost figures onto paper.
   canPrintLabels?: boolean;
+  // The customer list + inline creation, so a seller typed at drop-off intake
+  // becomes a customer the same way one typed into Quick Purchase does
+  // (domain/sellerLink.ts). Omit them and the name stays free text, exactly as
+  // it was before.
+  customers?: Customer[];
+  onCreateCustomer?: (draft: CustomerDraft) => Customer | undefined;
 }
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -81,7 +89,7 @@ const STATUS_META: Record<DropOffStatus, { label: string; cls: string }> = {
 
 export const DropOffView: React.FC<Props> = ({
   deviceBuyers, dropOffs, settlements, onDeviceBuyersChange, onDropOffsChange, onSettle,
-  cashReconciliations, canPrintLabels = false,
+  cashReconciliations, canPrintLabels = false, customers = [], onCreateCustomer,
 }) => {
   const [tab, setTab] = useState<'entries' | 'deviceBuyers' | 'settlement' | 'history'>('entries');
 
@@ -118,7 +126,8 @@ export const DropOffView: React.FC<Props> = ({
       </div>
 
       {tab === 'entries' && (
-        <EntriesTab deviceBuyers={deviceBuyers} dropOffs={dropOffs} onDropOffsChange={onDropOffsChange} canPrintLabels={canPrintLabels} />
+        <EntriesTab deviceBuyers={deviceBuyers} dropOffs={dropOffs} onDropOffsChange={onDropOffsChange} canPrintLabels={canPrintLabels}
+          customers={customers} onCreateCustomer={onCreateCustomer} />
       )}
       {tab === 'deviceBuyers' && (
         <DeviceBuyersTab deviceBuyers={deviceBuyers} dropOffs={dropOffs} onDeviceBuyersChange={onDeviceBuyersChange} canPrintLabels={canPrintLabels} />
@@ -139,7 +148,9 @@ const EntriesTab: React.FC<{
   deviceBuyers: DeviceBuyer[]; dropOffs: DropOff[];
   onDropOffsChange: (d: DropOff[]) => void;
   canPrintLabels: boolean;
-}> = ({ deviceBuyers, dropOffs, onDropOffsChange, canPrintLabels }) => {
+  customers: Customer[];
+  onCreateCustomer?: (draft: CustomerDraft) => Customer | undefined;
+}> = ({ deviceBuyers, dropOffs, onDropOffsChange, canPrintLabels, customers, onCreateCustomer }) => {
   const [showForm, setShowForm] = useState(false);
   // Set to the drop-off being edited, or null for the "New Drop-Off" case —
   // the same modal/form serves both, since every field a new entry collects
@@ -173,10 +184,32 @@ const EntriesTab: React.FC<{
 
   const set = <K extends keyof DropOff>(k: K, v: DropOff[K]) => setForm(f => ({ ...f, [k]: v }));
 
+  // The SELLER a drop-off was sourced from is a person the shop may buy from
+  // again, so a typed name becomes a customer on save — the same shared path
+  // Quick Purchase and repair intake use (domain/sellerLink.ts). `sellerContact`
+  // is one free-text box, so it is read as a phone or an email by whether it
+  // contains an '@'; guessing wrong only means no contact match, which falls
+  // through to the ask rather than a wrong link.
+  const sellerLink = useSellerLink({ customers, onCreateCustomer });
+
   const save = () => {
     if (!form.buyerId || !form.item) return;
-    if (editingId) onDropOffsChange(dropOffs.map(d => d.id === editingId ? { ...form, id: editingId } : d));
-    else onDropOffsChange([...dropOffs, form]);
+    const contact = (form.sellerContact || '').trim();
+    sellerLink.resolve(
+      {
+        name: form.sellerName || '',
+        phone: contact.includes('@') ? '' : contact,
+        email: contact.includes('@') ? contact : '',
+        customerId: form.sellerCustomerId,
+      },
+      sellerCustomerId => commit(sellerCustomerId),
+    );
+  };
+
+  const commit = (sellerCustomerId: string | undefined) => {
+    const next: DropOff = { ...form, ...(sellerCustomerId ? { sellerCustomerId } : {}) };
+    if (editingId) onDropOffsChange(dropOffs.map(d => d.id === editingId ? { ...next, id: editingId } : d));
+    else onDropOffsChange([...dropOffs, next]);
     setForm(blank());
     setShowForm(false);
     setEditingId(null);
@@ -300,6 +333,8 @@ const EntriesTab: React.FC<{
           </div>
         ))}
       </div>
+
+      {sellerLink.prompt}
 
       {/* New / edit drop-off modal — same form serves both (see editingId above). */}
       {showForm && (

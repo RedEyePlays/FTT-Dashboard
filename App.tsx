@@ -2638,6 +2638,24 @@ const App: React.FC = () => {
     return result.customer;
   };
 
+  // BACKFILL: link historical purchases whose seller was recorded as text only
+  // to a customer. Owner-only and always explicit — the list is previewed and
+  // each name is chosen (domain/sellerLink.ts). Each item is written
+  // independently so one failure never silently drops the rest.
+  const handleLinkSeller = (items: InventoryItem[], customerId: string) => {
+    if (!uid || !allow('inventory.edit')) return;
+    const customer = customersRef.current.find(c => c.id === customerId);
+    items.forEach(i => {
+      const next: InventoryItem = {
+        ...i,
+        boughtFromCustomerId: customerId,
+        ...(i.boughtFromPhone || !customer?.phone ? {} : { boughtFromPhone: customer.phone }),
+      };
+      saveItem(uid, collectionFor(next), next).catch(() => {});
+    });
+    audit('inventory.link_seller', 'customer', customerId, undefined, { linked: items.length });
+  };
+
   // Customer profile edits (notes / tags / preferred contact / basic fields).
   const handleSaveCustomer = (customer: Customer, prev?: Customer) => {
     if (!uid) return;
@@ -2942,6 +2960,8 @@ const App: React.FC = () => {
           )}
           {view === 'customers' && allow('reports.view') && (
             <CustomersView
+              onCreateCustomer={allow('inventory.edit') ? handleCreateCustomerInline : undefined}
+              onLinkSeller={allow('inventory.edit') ? handleLinkSeller : undefined}
               customers={customers}
               salesTransactions={salesTransactions}
               repairs={repairs}
@@ -2973,6 +2993,7 @@ const App: React.FC = () => {
               repairs={repairs}
               batches={repairBatches}
               customers={customers}
+              onCreateCustomer={allow('repairs.manage') ? handleCreateCustomerInline : undefined}
               auditLogs={auditLogs}
               canDelete={appUser.role === 'owner'}
               userId={appUser.id}

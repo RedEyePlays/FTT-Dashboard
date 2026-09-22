@@ -7,6 +7,7 @@ import { selectOnFocus } from '../hooks/selectOnFocus';
 import { useSubmitGuard } from '../hooks/useSubmitGuard';
 import { ImeiScanner } from './ImeiScanner';
 import { SellerCustomerField } from './SellerCustomerField';
+import { useSellerLink } from '../hooks/useSellerLink';
 import { CustomerDraft } from '../domain/customers';
 
 export interface QuickPurchaseSaveInput {
@@ -61,6 +62,12 @@ export const QuickPurchaseView: React.FC<Props> = ({ inventory, onSave, customer
   // onSave logs a cash-out and creates an inventory record — a double-tap on
   // "Add to Inventory" before the form visibly clears would do both twice.
   const { isSubmitting, run } = useSubmitGuard();
+  // A TYPED SELLER BECOMES A CUSTOMER ON SAVE. Before this, typing a name only
+  // set free text and cleared any link, so nobody who sold the shop a phone at
+  // the counter ever reached the customer database. The write itself is still
+  // App.tsx's handleCreateCustomerInline → resolveCustomerForDraft; this only
+  // decides, and asks when a bare name is ambiguous.
+  const sellerLink = useSellerLink({ customers, onCreateCustomer });
 
   const imeiError = quickPurchaseImeiError(f.imei);
   const normalized = normalizeIdentifier(f.imei || '').normalized;
@@ -76,11 +83,18 @@ export const QuickPurchaseView: React.FC<Props> = ({ inventory, onSave, customer
 
   const save = () => {
     if (!canSave) return;
+    sellerLink.resolve(
+      { name: f.boughtFrom, phone: f.boughtFromPhone, customerId: f.boughtFromCustomerId },
+      boughtFromCustomerId => commit(boughtFromCustomerId),
+    );
+  };
+
+  const commit = (boughtFromCustomerId: string | undefined) => {
     run(() => {
       onSave({
         device: f.device.trim(), imei: f.imei.trim() || undefined, purchaseCost: cost, paidBy: f.paidBy,
         boughtFrom: f.boughtFrom.trim() || undefined,
-        boughtFromCustomerId: f.boughtFromCustomerId,
+        boughtFromCustomerId,
         boughtFromPhone: f.boughtFromPhone,
         storage: f.storage.trim() || undefined, color: f.color.trim() || undefined,
         batteryHealth: f.batteryHealth.trim() || undefined,
@@ -191,6 +205,7 @@ export const QuickPurchaseView: React.FC<Props> = ({ inventory, onSave, customer
           {isSubmitting ? 'Adding…' : 'Add to Inventory'}
         </button>
       </div>
+      {sellerLink.prompt}
       {showImeiScanner && (
         <ImeiScanner
           onScan={(imei) => { set({ imei }); setShowImeiScanner(false); }}

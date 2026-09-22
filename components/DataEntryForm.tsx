@@ -3,6 +3,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { QrCode, Printer, Camera } from 'lucide-react';
 import { InventoryItem, Customer } from '../types';
 import { SellerCustomerField } from './SellerCustomerField';
+import { useSellerLink } from '../hooks/useSellerLink';
 import { CustomerDraft } from '../domain/customers';
 import { QRScanner } from './QRScanner';
 import { QRLabel } from './QRLabel';
@@ -93,14 +94,24 @@ export const DataEntryForm: React.FC<DataEntryFormProps> = ({ initialData, canVi
     }));
   };
 
+  // A typed seller becomes a customer on save — the same shared path Quick
+  // Purchase and the Add Item modal use (domain/sellerLink.ts).
+  const sellerLink = useSellerLink({ customers: customers || [], onCreateCustomer });
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (duplicate) return;
-    const finalItem: InventoryItem = {
-      id: initialData?.id || Date.now().toString() + Math.random().toString(36).substr(2, 5),
-      ...formData,
-    };
-    onSave(finalItem);
+    sellerLink.resolve(
+      { name: formData.boughtFrom || '', phone: formData.boughtFromPhone, customerId: formData.boughtFromCustomerId },
+      boughtFromCustomerId => {
+        const finalItem: InventoryItem = {
+          id: initialData?.id || Date.now().toString() + Math.random().toString(36).substr(2, 5),
+          ...formData,
+          boughtFromCustomerId,
+        };
+        onSave(finalItem);
+      },
+    );
   };
   
   // Blocks entering one physical device twice — reuses the shared identifier
@@ -115,6 +126,7 @@ export const DataEntryForm: React.FC<DataEntryFormProps> = ({ initialData, canVi
   return (
     <div className="max-w-4xl mx-auto p-4 sm:p-6 md:p-8 bg-white dark:bg-slate-900 rounded-2xl shadow-lg">
       <h1 className="text-2xl sm:text-3xl font-bold text-slate-800 dark:text-slate-200 mb-6">{title}</h1>
+      {sellerLink.prompt}
       <form onSubmit={handleSubmit} className="space-y-6">
         
         {/* Purchase Information */}
