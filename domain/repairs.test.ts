@@ -92,6 +92,12 @@ describe('global search', () => {
     expect(matchesRepair(r, 'nokia')).toBe(false);
     expect(matchesRepair(r, '')).toBe(false);
   });
+
+  it('finds a ticket whose stored IMEI is written with spaces or dashes from a plain scan', () => {
+    const spaced = repair({ repairNumber: 'RPR-000043', imei: '35 678901 234000 1' });
+    expect(matchesRepair(spaced, '356789012340001')).toBe(true);
+    expect(matchesRepair(spaced, 'rpr000043')).toBe(true);
+  });
   it('matches batch by number, company, contact, phone, email', () => {
     const b = batch({ batchNumber: 'WB-000007', companyName: 'FixIt Shop', contactPerson: 'Mia', phone: '555-9999', email: 'mia@fixit.com' });
     expect(matchesBatch(b, 'WB-000007')).toBe(true);

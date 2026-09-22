@@ -101,6 +101,16 @@ describe('searchCheckoutInventory', () => {
   it('returns nothing for a blank query', () => {
     expect(searchCheckoutInventory(inv, '   ')).toEqual([]);
   });
+
+  it('finds a device whose stored IMEI has spaces from a plain scan', () => {
+    const spaced = [item({ id: 'sp', kind: 'device', item: 'iPhone 13', sku: 'PHN-009', imei: '35 123456 789012 3' })];
+    expect(searchCheckoutInventory(spaced, '351234567890123').map(i => i.id)).toEqual(['sp']);
+  });
+
+  it('finds a device whose SKU is punctuated differently from the scan', () => {
+    const dashed = [item({ id: 'dd', kind: 'device', item: 'Pixel 7', sku: 'FTT-0142' })];
+    expect(searchCheckoutInventory(dashed, 'ftt0142').map(i => i.id)).toEqual(['dd']);
+  });
 });
 
 describe('void eligibility', () => {

@@ -1,5 +1,6 @@
 import { DeviceStatus, InventoryItem, Repair, RepairBatch, RepairStatus, RepairType, RepairPart } from '../types';
 import { toISODate, clampToBooksStartMs } from './dates';
+import { matchesRepairIdentifier, normalizeForLookup } from './identifierSearch';
 
 // --- Numbering prefixes (reuse the meta.skuCounters mechanism) ---
 export const REPAIR_PREFIX = 'RPR';
@@ -367,6 +368,13 @@ export const computeWarrantyUntil = (completedDate: string, warrantyDays?: numbe
 export const matchesRepair = (r: Repair, q: string): boolean => {
   const s = q.toLowerCase().trim();
   if (!s) return false;
+  // Identifiers compared with separators stripped on both sides, so a scanned
+  // IMEI finds a ticket whose IMEI was typed in with spaces or dashes — the
+  // same comparison Inventory and the POS scan box use
+  // (domain/identifierSearch.ts).
+  if (matchesRepairIdentifier(r, s)) return true;
+  const ns = normalizeForLookup(s);
+  if (ns && normalizeForLookup(r.imei).includes(ns)) return true;
   return [r.id, r.repairNumber, r.customerName, r.customerPhone, r.imei, r.model, r.brand, r.issue]
     .some(v => (v || '').toLowerCase().includes(s));
 };

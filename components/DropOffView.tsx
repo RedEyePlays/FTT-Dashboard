@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import {
   Truck, Users, CalendarCheck, Plus, X, Trash2, Phone, User, Package,
   CheckCircle, XCircle, Wallet, ClipboardList, FileText, QrCode, Pencil,
+  Archive, Search, ChevronDown, ChevronRight,
 } from 'lucide-react';
 import { CashReconciliation, DeviceBuyer, DropOff, DropOffStatus, PaidBy, Settlement, SettlementPaymentMethod } from '../types';
 import { deviceBuyerOutstanding, settleableDropOffs, settlementTotals, SettlementReviewLine, buildSettlementFromReview, settlementOwedLabel, isLegacySettlement, LEGACY_SETTLEMENT_NOTE, dropOffOwed, PAID_BY_LABEL, groupSettleableByWeek, defaultSettlementWeek, SettlementWeek } from '../domain/dropoffs';
@@ -10,6 +11,10 @@ import { printSettlementInvoice } from '../services/settlementInvoice';
 import { dropOffLabelContent, printDropOffLabels } from '../services/dropOffLabel';
 import { selectedLabelMedia } from '../services/labelLayout';
 import { getStoreProfile, getLabelSizes, getLabelSpacing } from './SettingsModal';
+import {
+  ACTIVE_DROPOFF_STATUSES, activeDropOffs, historyDropOffs, groupSettledBySettlement,
+  rejectedHistory, buyerNameFrom, HistoryFilter,
+} from '../domain/dropOffHistory';
 import { SettlementReviewModal } from './SettlementReviewModal';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 import { todayISO, weekEndingSaturday } from '../domain/dates';
@@ -78,7 +83,7 @@ export const DropOffView: React.FC<Props> = ({
   deviceBuyers, dropOffs, settlements, onDeviceBuyersChange, onDropOffsChange, onSettle,
   cashReconciliations, canPrintLabels = false,
 }) => {
-  const [tab, setTab] = useState<'entries' | 'deviceBuyers' | 'settlement'>('entries');
+  const [tab, setTab] = useState<'entries' | 'deviceBuyers' | 'settlement' | 'history'>('entries');
 
   const tabBtn = (id: typeof tab, icon: React.ReactNode, label: string) => (
     <button
@@ -106,6 +111,10 @@ export const DropOffView: React.FC<Props> = ({
         {tabBtn('entries', <Package className="w-4 h-4" />, 'Drop-Offs')}
         {tabBtn('deviceBuyers', <Users className="w-4 h-4" />, 'Device Buyers')}
         {tabBtn('settlement', <CalendarCheck className="w-4 h-4" />, 'Saturday Settlement')}
+        {/* Closed drop-offs live here, not in the working list — see
+            domain/dropOffHistory.ts. Nothing is deleted; this is where it
+            goes to be looked up rather than scrolled past. */}
+        {tabBtn('history', <Archive className="w-4 h-4" />, 'History')}
       </div>
 
       {tab === 'entries' && (
@@ -116,6 +125,9 @@ export const DropOffView: React.FC<Props> = ({
       )}
       {tab === 'settlement' && (
         <SettlementTab deviceBuyers={deviceBuyers} dropOffs={dropOffs} settlements={settlements} onSettle={onSettle} cashReconciliations={cashReconciliations} />
+      )}
+      {tab === 'history' && (
+        <HistoryTab deviceBuyers={deviceBuyers} dropOffs={dropOffs} settlements={settlements} />
       )}
     </div>
   );
@@ -137,6 +149,11 @@ const EntriesTab: React.FC<{
   // transition, so editing an already-accepted drop-off's other fields never
   // double-logs cash — see its comment.
   const [editingId, setEditingId] = useState<string | null>(null);
+  // Only ever an ACTIVE status (or 'all' within them). Settled and rejected
+  // drop-offs are not reachable from here at all — they live in the History
+  // tab (domain/dropOffHistory.ts). Before this the filter defaulted to 'all'
+  // over EVERY status, so closed drop-offs from months back sat in the middle
+  // of the ones still owed for.
   const [filter, setFilter] = useState<DropOffStatus | 'all'>('all');
   // Accept moves real cash (dropOffAcceptDrawerEffect, logged in App.tsx's
   // saveDropOffs) — keyed per-row so a double-tap on one drop-off's Accept
@@ -171,7 +188,9 @@ const EntriesTab: React.FC<{
   const openEdit = (d: DropOff) => { setForm(d); setEditingId(d.id); setShowForm(true); };
 
   const buyerName = (id: string) => deviceBuyers.find(r => r.id === id)?.name || 'Unknown';
-  const shown = filter === 'all' ? dropOffs : dropOffs.filter(d => d.status === filter);
+  const active = activeDropOffs(dropOffs);
+  const shown = filter === 'all' ? active : active.filter(d => d.status === filter);
+  const closedCount = dropOffs.length - active.length;
 
   const inp = 'w-full p-2 bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-md text-sm focus:ring-indigo-500 focus:border-indigo-500';
   const lbl = 'block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1';
@@ -180,10 +199,10 @@ const EntriesTab: React.FC<{
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex gap-1 flex-wrap">
-          {(['all', 'pending', 'accepted', 'rejected', 'paidout', 'settled'] as const).map(s => (
+          {(['all', ...ACTIVE_DROPOFF_STATUSES] as const).map(s => (
             <button key={s} onClick={() => setFilter(s)}
               className={`px-3 py-1 rounded-full text-xs font-medium ${filter === s ? 'bg-indigo-600 text-white' : 'bg-slate-100 dark:bg-slate-800 text-slate-500'}`}>
-              {s === 'all' ? 'All' : STATUS_META[s].label}
+              {s === 'all' ? 'All active' : STATUS_META[s].label}
             </button>
           ))}
         </div>
@@ -200,7 +219,10 @@ const EntriesTab: React.FC<{
       )}
 
       {deviceBuyers.length > 0 && shown.length === 0 && (
-        <div className="text-center text-slate-400 text-sm py-8">No drop-offs to show.</div>
+        <div className="text-center text-slate-400 text-sm py-8">
+          No active drop-offs to show.
+          {closedCount > 0 && <> {closedCount} settled or rejected drop-off{closedCount !== 1 ? 's are' : ' is'} in the History tab.</>}
+        </div>
       )}
 
       <div className="flex flex-col gap-3">
@@ -763,6 +785,167 @@ const SettlementTab: React.FC<{
           onClose={() => setReviewing(false)}
           onConfirm={confirmSettlement}
         />
+      )}
+    </div>
+  );
+};
+
+/* ---------------- History ---------------- */
+
+/**
+ * Closed drop-offs: settled (grouped under the settlement that closed them)
+ * and rejected (their own section).
+ *
+ * A VIEW ONLY. Nothing here writes, deletes or migrates anything — every
+ * drop-off keeps the status it already had; this is just where the ones that
+ * are finished with are shown, so the working list stops growing forever.
+ * Permissions are unchanged: this tab is inside Drop-Offs, so whoever can open
+ * Drop-Offs can open it.
+ */
+const HistoryTab: React.FC<{
+  deviceBuyers: DeviceBuyer[]; dropOffs: DropOff[]; settlements: Settlement[];
+}> = ({ deviceBuyers, dropOffs, settlements }) => {
+  const [query, setQuery] = useState('');
+  const [start, setStart] = useState('');
+  const [end, setEnd] = useState('');
+  const [open, setOpen] = useState<Set<string>>(new Set());
+  const storeName = getStoreProfile().storeName;
+
+  const buyerName = buyerNameFrom(deviceBuyers);
+  const filter: HistoryFilter = { query, start: start || undefined, end: end || undefined };
+  const closed = historyDropOffs(dropOffs);
+  const groups = groupSettledBySettlement(closed, settlements, filter, buyerName);
+  const rejected = rejectedHistory(closed, filter, buyerName);
+
+  const toggle = (id: string) => setOpen(s => {
+    const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n;
+  });
+
+  const inp = 'p-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm';
+
+  if (closed.length === 0) {
+    return <p className="text-slate-400 text-sm text-center py-10">Nothing closed yet — settled and rejected drop-offs appear here.</p>;
+  }
+
+  return (
+    <div className="flex flex-col gap-4">
+      {/* Search by IMEI/serial, device, device buyer, and a date range. The
+          IMEI is compared with separators stripped on both sides (see
+          domain/dropOffHistory.ts's matchesHistoryQuery), so a scan finds a
+          drop-off whose IMEI was typed in with spaces. */}
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="relative flex-1 min-w-[240px]">
+          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+          <input value={query} onChange={e => setQuery(e.target.value)}
+            placeholder="Search IMEI / serial, device, or device buyer…"
+            className={`${inp} w-full pl-9`} />
+        </div>
+        <div>
+          <label className="block text-[11px] text-slate-400 mb-0.5">From</label>
+          <input type="date" value={start} onChange={e => setStart(e.target.value)} className={inp} />
+        </div>
+        <div>
+          <label className="block text-[11px] text-slate-400 mb-0.5">To</label>
+          <input type="date" value={end} onChange={e => setEnd(e.target.value)} className={inp} />
+        </div>
+        {(query || start || end) && (
+          <button onClick={() => { setQuery(''); setStart(''); setEnd(''); }}
+            className="px-3 py-2 rounded-lg text-sm bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">Clear</button>
+        )}
+      </div>
+
+      {groups.length === 0 && rejected.length === 0 && (
+        <p className="text-slate-400 text-sm text-center py-8">Nothing in history matches that search.</p>
+      )}
+
+      {/* Settled, grouped by the settlement that closed them, newest first. */}
+      {groups.length > 0 && (
+        <div className="flex flex-col gap-3">
+          <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-200 flex items-center gap-2">
+            <CalendarCheck className="w-4 h-4 text-emerald-500" /> Settled ({groups.reduce((n, g) => n + g.dropOffs.length, 0)})
+          </h3>
+          {groups.map(g => {
+            const s = g.settlement;
+            const key = g.settlementId || 'unlinked';
+            const isOpen = open.has(key);
+            return (
+              <div key={key} className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl overflow-hidden">
+                <button onClick={() => toggle(key)} className="w-full flex items-start justify-between gap-3 p-4 text-left">
+                  <div className="min-w-0">
+                    <p className="font-semibold text-slate-800 dark:text-slate-100 flex items-center gap-1.5">
+                      {isOpen ? <ChevronDown className="w-4 h-4 text-slate-400" /> : <ChevronRight className="w-4 h-4 text-slate-400" />}
+                      {g.date || 'No date'}
+                      {s?.periodEnd && <span className="text-xs font-normal text-slate-400">· week ending {s.periodEnd}</span>}
+                    </p>
+                    <p className="text-xs text-slate-400 mt-1 pl-6">
+                      {s ? buyerName(s.buyerId) : buyerName(g.dropOffs[0].buyerId)}
+                      {' · '}{g.dropOffs.length} device{g.dropOffs.length !== 1 ? 's' : ''}
+                      {s && <> · {PAYMENT_METHODS.find(m => m.value === (s.paymentMethod || 'cash'))?.label}</>}
+                      {!s && ' · settled before settlements were linked to devices'}
+                    </p>
+                  </div>
+                  {s && (
+                    <span className="font-bold text-emerald-600 shrink-0">
+                      {money(isLegacySettlement(s) ? (s.amountPaid || 0) : (s.amountOwed || 0))}
+                    </span>
+                  )}
+                </button>
+
+                {isOpen && (
+                  <div className="border-t border-slate-100 dark:border-slate-800">
+                    {g.dropOffs.map(d => (
+                      <div key={d.id} className="flex items-center justify-between gap-3 px-4 py-2 text-sm border-b border-slate-50 dark:border-slate-800/60 last:border-0">
+                        <div className="min-w-0">
+                          <p className="text-slate-700 dark:text-slate-200 truncate">{d.item}</p>
+                          <p className="text-[11px] text-slate-400 font-mono truncate">{d.imei || 'No IMEI'}</p>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <p className="text-slate-500 dark:text-slate-400">{money(d.purchasePrice)}</p>
+                          <p className="text-[11px] text-slate-400">dropped {d.dateDropped || '—'} · fee {money(d.dropOffFee)}</p>
+                        </div>
+                      </div>
+                    ))}
+                    {/* The same re-print the Settlement tab's history offers —
+                        one implementation (services/settlementInvoice.ts), so
+                        the slip printed from here is the slip the buyer signed. */}
+                    {s && (
+                      <div className="px-4 py-2">
+                        <button onClick={() => printSettlementInvoice(s, deviceBuyers.find(r => r.id === s.buyerId), dropOffs, { storeName })}
+                          className="flex items-center gap-1 text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:underline">
+                          <FileText className="w-3.5 h-3.5" /> Print Invoice
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Rejected — never settled, so they belong to no settlement. */}
+      {rejected.length > 0 && (
+        <div className="flex flex-col gap-3">
+          <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-200 flex items-center gap-2">
+            <XCircle className="w-4 h-4 text-rose-500" /> Rejected / returned ({rejected.length})
+          </h3>
+          {rejected.map(d => (
+            <div key={d.id} className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="font-semibold text-slate-800 dark:text-slate-100">{d.item}</p>
+                  <p className="text-xs text-slate-400 mt-1">
+                    {buyerName(d.buyerId)} · <span className="font-mono">{d.imei || 'No IMEI'}</span> · {d.dateDropped || 'no date'}
+                    {d.sellerName && ` · seller: ${d.sellerName}`}
+                  </p>
+                  {d.notes && <p className="text-xs text-slate-400 mt-1 italic">{d.notes}</p>}
+                </div>
+                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase shrink-0 ${STATUS_META.rejected.cls}`}>{STATUS_META.rejected.label}</span>
+              </div>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );

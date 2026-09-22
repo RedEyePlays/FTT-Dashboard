@@ -7,6 +7,7 @@ import {
 } from '../domain/repairs';
 import { RepairLabelModal } from './RepairLabelModal';
 import { isPrivateBatch } from '../domain/autoInventory';
+import { matchesRepairIdentifier } from '../domain/identifierSearch';
 import { showsCustomerPayment } from '../domain/repairVisibility';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 import { useConnectionStatus } from '../hooks/useConnectionStatus';
@@ -59,8 +60,10 @@ export const TechRepairsView: React.FC<Props> = ({ repairs, batches, auditLogs, 
   const handleScan = (raw: string) => {
     const v = raw.trim();
     if (!v) return;
-    const hit = repairs.find(r =>
-      r.id === v || r.repairNumber?.toLowerCase() === v.toLowerCase() || (r.imei && r.imei === v));
+    // Identifiers compared with separators stripped on both sides — the raw
+    // `r.imei === v` below this missed any IMEI stored in its grouped form
+    // (domain/identifierSearch.ts).
+    const hit = repairs.find(r => matchesRepairIdentifier(r, v));
     if (hit) { setOpenId(hit.id); setScanMsg(''); setQuery(''); }
     else setScanMsg(`No repair matches “${v}”.`);
   };
