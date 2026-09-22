@@ -3,6 +3,7 @@ import { InventoryItem, ItemKind, DeviceType, SalesTransaction, Customer, Repair
 import { getPOSSettings, getStoreProfile } from '../components/SettingsModal';
 import { newId } from '../domain/ids';
 import { kindOf, getDeviceDisplayName } from '../domain/inventory';
+import { sameIdentifier, matchesRepairIdentifier } from '../domain/identifierSearch';
 import { isZeroPricedDevice as isZeroPricedLine, cartHasZeroPricedDevice, searchCheckoutInventory, salesBalanceOwing, mixedPaymentMismatch as computeMixedPaymentMismatch, taxAppliesForSale, costShareForLine, mixedSaleTax } from '../domain/pos';
 import { hasListedElsewhere } from '../domain/listing';
 import { RepairSalePrefill, repairSalePrefill, isRepairOpen, matchesRepair, openRepairFor } from '../domain/repairs';
@@ -573,8 +574,11 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
   const handleScan = (raw: string) => {
     const v = raw.trim();
     if (!v) return;
-    const q = v.toLowerCase();
-    const eq = (a?: string) => (a || '').toLowerCase() === q;
+    // Identifiers compared with spaces, dashes and other separators stripped on
+    // BOTH sides (domain/identifierSearch.ts) — a lowercase string equality
+    // missed every device whose IMEI was typed in the grouped form printed on
+    // the box, which is how most of them were entered.
+    const eq = (a?: string) => sameIdentifier(a, v);
 
     // Fast path: an exact SKU/IMEI/barcode match adds instantly (real scans).
     const device = inventory.find(i => kindOf(i) === 'device' && !soldIds.has(i.id) && !inCart.has(i.id) && (eq(i.sku) || eq(i.imei)));
@@ -589,7 +593,7 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
     }
 
     // Exact repair match (repair number or device IMEI/serial) adds it instantly.
-    const rep = eligibleRepairs.find(r => eq(r.repairNumber) || eq(r.imei));
+    const rep = eligibleRepairs.find(r => matchesRepairIdentifier(r, v));
     if (rep) { addRepair(rep); return; }
 
     // No exact match: leave the pick-list of substring matches visible (don't

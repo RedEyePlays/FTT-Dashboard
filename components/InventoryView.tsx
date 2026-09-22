@@ -23,6 +23,9 @@ import {
   isDerivedCostColumn, isCostEntryField, costAccessFor, RECORDED_LABEL, stripCostFields,
 } from '../domain/costVisibility';
 import { listedElsewhereTitle } from '../domain/listing';
+import {
+  identifierHits, matchesItemIdentifier, outsideFilterNote, noIdentifierMatchMessage,
+} from '../domain/identifierSearch';
 import { clampWidth, fitWidths } from '../domain/columnLayout';
 import { usePersistedFilter } from '../hooks/usePersistedFilter';
 import { todayISO } from '../domain/dates';
@@ -377,6 +380,12 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
   const matchesQuery = (i: InventoryItem) => {
     const q = query.toLowerCase().trim();
     if (!q) return true;
+    // An IDENTIFIER hit first, compared with separators stripped on both sides
+    // (domain/identifierSearch.ts). A stored IMEI written "35 123456 789012 3"
+    // never matched a scanner's "351234567890123" under plain substring
+    // matching, which is why scans came back "Nothing here" for devices sitting
+    // on the shelf.
+    if (matchesItemIdentifier(i, q)) return true;
     // Include the combined display value so search matches the Item column (and
     // legacy-named rows), alongside the raw brand/model/item fields.
     return [i.sku, i.manufacturerBarcode, i.imei, i.item, i.brand, i.model, getDeviceDisplayName(i)].some(v => (v || '').toLowerCase().includes(q));
@@ -434,6 +443,58 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
   const totalPages = Math.max(1, Math.ceil(activeRows.length / PAGE_SIZE));
   const clampedPage = Math.min(pageNum, totalPages);
   const pageRows = activeRows.slice((clampedPage - 1) * PAGE_SIZE, clampedPage * PAGE_SIZE);
+
+  // --- Scanning an identifier ignores the page and the filters ---------------
+  //
+  // A scan is an unambiguous statement about ONE physical thing: the person
+  // holding the scanner already knows which device they mean. Answering
+  // "Nothing here" because that device is sold, or is an accessory, or because
+  // a status filter this user set weeks ago is still narrow, is the app telling
+  // them something they know to be false.
+  //
+  // So an EXACT normalised identifier match is looked up across the WHOLE
+  // inventory and shown above the table with a note saying where it actually
+  // lives. Partial and name searches are untouched and still respect the page
+  // and the filters — widening those would turn an ordinary search into a
+  // firehose. The persisted filter is not changed either; it just stops hiding
+  // a scanned code (see usePersistedFilter('inv_status_filter') above).
+  const scanHits = useMemo(() => identifierHits(inventory, query), [inventory, query]);
+  const onScreenIds = useMemo(() => new Set(activeRows.map(i => i.id)), [activeRows]);
+  const offScreenHits = scanHits.filter(i => !onScreenIds.has(i.id));
+  // Set only when a scan found nothing at all — never when the table simply has
+  // no rows for the current filter, which is a different thing entirely.
+  const [scanMsg, setScanMsg] = useState<string | null>(null);
+  useEffect(() => { setScanMsg(null); }, [query]);
+
+  // Focus management for the scanner. A wedge scanner types wherever the caret
+  // happens to be; if that is nowhere, the code is simply lost and the person
+  // scans again, harder. So the search box takes focus when Inventory opens and
+  // gets it back after an item opened by a scan is closed. Skipped on mobile,
+  // where focusing an input throws up the on-screen keyboard unasked.
+  const focusSearch = () => searchRef.current?.focus();
+  const openedByScan = useRef(false);
+  useEffect(() => { if (!isMobile) focusSearch(); }, [isMobile]);
+
+  const openItem = (i: InventoryItem, fromScan = false) => {
+    openedByScan.current = fromScan;
+    setExpandItem(i);
+  };
+  const closeItem = () => {
+    setExpandItem(null);
+    if (openedByScan.current && !isMobile) { openedByScan.current = false; focusSearch(); }
+  };
+
+  // Enter is what a scanner sends after the code. Exactly one identifier match
+  // opens that item outright — that is the whole point of scanning. Several
+  // matches are left on screen to choose between, and nothing at all says so in
+  // words rather than showing an empty table.
+  const onSearchEnter = () => {
+    const v = query.trim();
+    if (!v) return;
+    if (scanHits.length === 1) { setScanMsg(null); openItem(scanHits[0], true); return; }
+    if (scanHits.length === 0 && activeRows.length === 0) setScanMsg(noIdentifierMatchMessage(v));
+    else setScanMsg(null);
+  };
 
   // --- actions ---
   const addDeviceRow = async () => {
@@ -599,7 +660,9 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
           <div className="flex flex-wrap items-center gap-2">
             <div className="relative flex-1 min-w-[220px]">
               <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-              <input ref={searchRef} value={query} onChange={e => setQuery(e.target.value)} placeholder="Scan or search by SKU, IMEI, serial, barcode, or name…"
+              <input ref={searchRef} value={query} onChange={e => setQuery(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); onSearchEnter(); } }}
+                placeholder="Scan or search by SKU, IMEI, serial, barcode, or name…"
                 className="w-full pl-9 pr-24 py-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
               <span className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1 text-[11px] text-slate-400"><ScanLine className="w-3.5 h-3.5" /> scanner ready</span>
             </div>
@@ -678,6 +741,36 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
             </button>
           </div>
 
+          {/* Scanned an identifier that this page/filter would have hidden.
+              Shown above the table rather than injected into it: an accessory
+              dropped into the device grid (or vice versa) would be rendered
+              against the wrong columns. */}
+          {offScreenHits.length > 0 && (
+            <div className="flex flex-col gap-2">
+              {offScreenHits.map(i => (
+                <button key={i.id} onClick={() => openItem(i, true)}
+                  className="flex items-center justify-between gap-3 text-left bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg px-3 py-2 hover:border-amber-400">
+                  <span className="min-w-0">
+                    <span className="block text-sm font-medium text-amber-900 dark:text-amber-200 truncate">{getDeviceDisplayName(i)}</span>
+                    <span className="block text-[11px] font-mono text-amber-700 dark:text-amber-400 truncate">{i.sku || i.imei || i.manufacturerBarcode}</span>
+                  </span>
+                  <span className="text-[11px] text-amber-700 dark:text-amber-400 shrink-0">{outsideFilterNote(i, false)}</span>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* A scan that matched nothing anywhere — said in words, because an
+              empty table does not distinguish "no such code" from "not on this
+              page". */}
+          {scanMsg && (
+            <div className="flex items-start gap-2 bg-rose-50 dark:bg-rose-900/20 border border-rose-200 dark:border-rose-800 rounded-lg px-3 py-2 text-sm text-rose-700 dark:text-rose-300">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>{scanMsg}</span>
+              <button onClick={() => setScanMsg(null)} className="ml-auto opacity-70 hover:opacity-100 shrink-0"><X className="w-3.5 h-3.5" /></button>
+            </div>
+          )}
+
           {/* Bulk action bar (desktop) */}
           {selected.size > 0 && (
             <div className="hidden md:flex flex-col gap-2">
@@ -728,7 +821,7 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
                 ? <EmptyState icon={<Boxes className="w-6 h-6" />} title="Nothing here" hint="Try a different search or filter." />
                 : pageRows.map(i => (
                   <InvCard key={i.id} item={i} canViewCost={canViewCost} selectMode={selectMode} selected={selected.has(i.id)}
-                    onToggleSel={() => toggleSel(i.id)} onOpen={() => setExpandItem(i)} onLabel={() => setLabelItem(i)}
+                    onToggleSel={() => toggleSel(i.id)} onOpen={() => openItem(i)} onLabel={() => setLabelItem(i)}
                     onUpdate={onUpdate} onDelete={onDelete} onDuplicate={duplicate} onHistory={mode => setHistoryItem({ item: i, mode })}
                     linkedRepair={linkedRepairOf(i.id)} openRepair={openRepairOf(i.id)} onCreateRepair={onCreateRepair} onOpenRepair={onOpenRepair} />
                 ))}
@@ -740,7 +833,7 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
             <div className="flex-1 overflow-auto min-w-0">
               <Sheet title={activeTitle} total={activeRows.length} cols={visCols(activeKind, activeCols)} rows={pageRows} canViewCost={canViewCost}
                 sort={sort} onSort={onSortToggle} selected={selected} onToggleSel={toggleSel} onToggleAll={toggleSelAll}
-                onUpdate={onUpdate} onDelete={onDelete} onDuplicate={duplicate} onExpand={setExpandItem} onLabel={setLabelItem}
+                onUpdate={onUpdate} onDelete={onDelete} onDuplicate={duplicate} onExpand={(it: InventoryItem) => openItem(it)} onLabel={setLabelItem}
                 onHistory={(it, mode) => setHistoryItem({ item: it, mode })}
                 linkedRepairOf={linkedRepairOf} onCreateRepair={onCreateRepair} onOpenRepair={onOpenRepair} openRepairOf={openRepairOf}
                 widths={colW[activeKind]} onResize={(key, w) => setColumnWidth(activeKind, key, w)} onResetWidth={(key) => resetColumnWidth(activeKind, key)}
@@ -840,7 +933,7 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
         </div>
       </ResponsiveDialog>
 
-      {expandItem && <ItemFormModal initial={expandItem} canViewCost={canViewCost} deviceBuyers={deviceBuyers} onSave={onSave} onGenerateSku={onGenerateSku} onClose={() => setExpandItem(null)}
+      {expandItem && <ItemFormModal initial={expandItem} canViewCost={canViewCost} deviceBuyers={deviceBuyers} onSave={onSave} onGenerateSku={onGenerateSku} onClose={closeItem}
         linkedRepair={linkedRepairOf(expandItem.id)}
         onCreateRepair={onCreateRepair ? () => { onCreateRepair(expandItem); setExpandItem(null); } : undefined}
         onOpenRepair={onOpenRepair ? (id: string) => { onOpenRepair(id); setExpandItem(null); } : undefined}

@@ -1,6 +1,7 @@
 import { InventoryItem, Repair, RepairBatch, Customer, SalesTransaction, AppUser, ViewState } from '../types';
 import { kindOf } from './inventory';
 import { isRepairOpen, REPAIR_STATUS_LABEL } from './repairs';
+import { normalizeForLookup } from './identifierSearch';
 
 // Pure, ranked global search over the collections already held in memory (the
 // app subscribes to them via realtime listeners), so a search performs ZERO
@@ -73,10 +74,23 @@ function digitScore(value: string | undefined, qDigits: string): number {
   return 0;
 }
 const best = (...scores: number[]) => Math.max(0, ...scores);
+// A scanned identifier, compared with spaces/dashes stripped on BOTH sides
+// (domain/identifierSearch.ts). Scores as an exact hit, because that is what it
+// is: fieldScore alone would miss an IMEI stored in its grouped form entirely.
+function idScoreNormalized(value: string | undefined, qNorm: string): number {
+  if (!qNorm) return 0;
+  const v = normalizeForLookup(value);
+  if (!v) return 0;
+  if (v === qNorm) return 1000;
+  if (v.startsWith(qNorm)) return 700;
+  if (v.includes(qNorm)) return 400;
+  return 0;
+}
 
 export function globalSearch(raw: string, data: SearchData, opts: SearchOpts): { groups: SearchGroup[]; total: number } {
   const q = norm(raw);
   const qd = digits(raw);
+  const qn = normalizeForLookup(raw);
   const limit = opts.limitPerGroup ?? 6;
   const groups: SearchGroup[] = [];
   if (q.length < MIN_QUERY) return { groups, total: 0 };
@@ -95,7 +109,10 @@ export function globalSearch(raw: string, data: SearchData, opts: SearchOpts): {
   // Inventory — SKU / IMEI / serial / barcode / brand / model / name / storage / color.
   push('inventory', 'Inventory', data.inventory.map(i => {
     const name = i.item || [i.brand, i.model].filter(Boolean).join(' ') || 'Item';
-    const idScore = best(fieldScore(i.sku, q), fieldScore(i.imei, q), fieldScore(i.manufacturerBarcode, q));
+    const idScore = best(
+      fieldScore(i.sku, q), fieldScore(i.imei, q), fieldScore(i.manufacturerBarcode, q),
+      idScoreNormalized(i.sku, qn), idScoreNormalized(i.imei, qn), idScoreNormalized(i.manufacturerBarcode, qn),
+    );
     const textScore = best(fieldScore(name, q), fieldScore(i.brand, q), fieldScore(i.model, q), fieldScore(i.storage, q), fieldScore(i.color, q));
     let score = best(idScore, textScore);
     if (score && kindOf(i) === 'device' && !i.soldDate && i.deviceStatus !== 'sold') score += 30; // in-stock bonus
@@ -110,7 +127,10 @@ export function globalSearch(raw: string, data: SearchData, opts: SearchOpts): {
   // Repairs — repair #, customer, phone, email, device, IMEI/serial, issue.
   push('repair', 'Repair Tickets', data.repairs.map(r => {
     const device = [r.brand, r.model].filter(Boolean).join(' ') || r.deviceType || 'Device';
-    const idScore = best(fieldScore(r.repairNumber, q), fieldScore(r.id, q), fieldScore(r.imei, q), digitScore(r.customerPhone, qd));
+    const idScore = best(
+      fieldScore(r.repairNumber, q), fieldScore(r.id, q), fieldScore(r.imei, q), digitScore(r.customerPhone, qd),
+      idScoreNormalized(r.repairNumber, qn), idScoreNormalized(r.imei, qn),
+    );
     const textScore = best(fieldScore(r.customerName, q), fieldScore(r.customerEmail, q), fieldScore(device, q), fieldScore(r.issue, q));
     let score = best(idScore, textScore);
     if (score && isRepairOpen(r)) score += 40; // active repairs first

@@ -1,6 +1,7 @@
 import { InventoryItem, SalesTransaction, ListingPlatform, RefundPaidFrom, RefundSplit } from '../types';
 import { kindOf } from './inventory';
 import { DrawerEffect } from './dropoffs';
+import { matchesItemIdentifier } from './identifierSearch';
 
 // Shared POS constants/helpers. Extracted from CartSaleView so the platform-fee
 // list has a single home and can be unit-tested and reused by future POS views.
@@ -140,7 +141,11 @@ export const searchCheckoutInventory = (
   if (!q) return [];
   const exclude = opts?.excludeIds ?? new Set<string>();
   const limit = opts?.limit ?? 6;
+  // An exact IDENTIFIER match wins regardless of how the stored value was
+  // punctuated — a SKU written "FTT-0142" is found by a scanner's "FTT0142"
+  // (domain/identifierSearch.ts, the same comparison Inventory uses).
   const hit = (i: InventoryItem) =>
+    matchesItemIdentifier(i, q) ||
     [i.item, i.brand, i.model, i.sku, i.imei, i.manufacturerBarcode]
       .some(v => (v || '').toLowerCase().includes(q));
   const sellable = (i: InventoryItem) =>
