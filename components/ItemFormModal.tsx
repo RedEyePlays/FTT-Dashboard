@@ -8,11 +8,13 @@ import { useSellerLink } from '../hooks/useSellerLink';
 import { CustomerDraft } from '../domain/customers';
 import { LinkedNotes } from './LinkedNotes';
 import { DevicePhotos } from './DevicePhotos';
+import { ListingModal } from './ListingModal';
+import { deviceFacts, ListingOptions } from '../domain/listingCopy';
 import { damagePhotoPrompt, wantsDamagePhoto } from '../domain/devicePhotos';
 import { REPAIR_STATUS_LABEL } from '../domain/repairs';
 import { LISTING_PLATFORMS } from '../domain/listing';
 import { findDuplicateDevice } from '../domain/autoInventory';
-import { AlertTriangle } from 'lucide-react';
+import { AlertTriangle, Sparkles } from 'lucide-react';
 import { ImeiScanner } from './ImeiScanner';
 import { Wrench } from 'lucide-react';
 import { useEscapeKey } from '../hooks/useEscapeKey';
@@ -60,6 +62,8 @@ interface Props {
   /** Needed to file an uploaded photo under the right workspace. */
   workspaceId?: string;
   currentUserId?: string;
+  /** settings.operations.deviceWarrantyDays — what a generated advert promises. */
+  deviceWarrantyDays?: number;
   /** Ask the Cloud Function for a stock photo for this brand/model. */
   onFindStockPhoto?: (item: InventoryItem) => Promise<boolean>;
 }
@@ -117,8 +121,9 @@ const CostField: React.FC<{
   return <Field label={label} value={value} onChange={onChange} type="number" onFocus={onFocus} />;
 };
 
-export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, canViewCost = false, deviceBuyers, onSave, onGenerateSku, onClose, linkedRepair, onCreateRepair, onOpenRepair, inventory = [], customers, onCreateCustomer, notes, noteRole, onOpenNote, onOpenDuplicate, workspaceId, currentUserId, onFindStockPhoto }) => {
+export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, canViewCost = false, deviceBuyers, onSave, onGenerateSku, onClose, linkedRepair, onCreateRepair, onOpenRepair, inventory = [], customers, onCreateCustomer, notes, noteRole, onOpenNote, onOpenDuplicate, workspaceId, currentUserId, onFindStockPhoto, deviceWarrantyDays }) => {
   const [findingStock, setFindingStock] = useState(false);
+  const [listingOpen, setListingOpen] = useState(false);
   // The device document is updated by the Cloud Function, so the new photo
   // arrives on the next subscription tick rather than from here.
   const findStock = async () => {
@@ -494,6 +499,22 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, canViewCo
             </div>
           )}
 
+          {/* WRITE THE ADVERT. Only on a saved device — the facts are read off
+              the record, and an unsaved draft is not one yet. */}
+          {kind === 'device' && initial && (
+            <div className="pt-3 border-t border-slate-100 dark:border-slate-800">
+              <button type="button" onClick={() => setListingOpen(true)}
+                className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:border-indigo-400">
+                <Sparkles className="w-4 h-4 text-indigo-500" /> Generate listing
+              </button>
+              {f.lastListing && (
+                <p className="text-[11px] text-slate-400 mt-1">
+                  Last written {new Date(f.lastListing.generatedAt).toLocaleDateString()} — open to copy or rewrite it.
+                </p>
+              )}
+            </div>
+          )}
+
           {initial && <LinkedNotes notes={notes} role={noteRole} linkType="inventory" linkId={f.id} onOpenNote={onOpenNote} />}
         </div>
 
@@ -514,6 +535,23 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, canViewCo
           <button onClick={save} disabled={!canSave} className="px-5 py-2 text-sm rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white font-medium">{saving ? 'Saving…' : 'Save'}</button>
         </div>
       </div>
+
+      {listingOpen && (
+        <ListingModal
+          isBuild={false}
+          hasShareLink={false}
+          saved={f.lastListing}
+          onSave={lastListing => set('lastListing', lastListing)}
+          onClose={() => setListingOpen(false)}
+          // THE FACTS, built from an allow-list (domain/listingCopy.ts) — the
+          // model never sees the inventory row, so the cost, the seller and the
+          // IMEI on it cannot travel with the request.
+          facts={(options: ListingOptions) => deviceFacts(
+            { ...f, kind } as InventoryItem,
+            { warrantyDays: deviceWarrantyDays ?? 90, options },
+          )}
+        />
+      )}
 
       {sellerLink.prompt}
       {showImeiScanner && (

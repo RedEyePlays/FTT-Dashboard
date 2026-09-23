@@ -42,6 +42,23 @@ export interface PublicPhoto {
   credit?: string;
 }
 
+/**
+ * ONE LINE OF THE PERFORMANCE BLOCK.
+ *
+ * ALWAYS A RANGE AND ALWAYS WITH ITS SETTINGS. A bare "160 fps" is a promise;
+ * "120–160 fps at 1080p, High" is a description. `measured` marks a figure the
+ * shop took on this actual machine, which is a stronger claim and so is
+ * labelled rather than blended in with the estimates.
+ */
+export interface PublicPerformance {
+  game: string;
+  resolution: string;
+  preset: string;
+  fpsLow: number;
+  fpsHigh: number;
+  measured?: true;
+}
+
 export interface PublicBuild {
   found: true;
   name: string;
@@ -62,6 +79,12 @@ export interface PublicBuild {
   saving?: number;
   /** What the shop warrants the machine for. */
   warrantyDays: number;
+  /**
+   * Expected performance, from the shop's reviewed per-GPU table plus anything
+   * measured on this machine. EMPTY when the card has no reviewed rows — the
+   * page then omits the section entirely rather than improvising one.
+   */
+  performance: PublicPerformance[];
   shopName: string;
   shopPhone?: string;
   shopAddress?: string;
@@ -79,8 +102,12 @@ export type PublicBuildResult = PublicBuild | { found: false };
  */
 export const PUBLIC_BUILD_KEYS = [
   'found', 'name', 'photo', 'status', 'parts', 'price', 'retailTotal', 'retailComplete',
-  'storeTotal', 'storeName', 'saving', 'warrantyDays',
+  'storeTotal', 'storeName', 'saving', 'warrantyDays', 'performance',
   'shopName', 'shopPhone', 'shopAddress', 'shopEmail',
+] as const;
+
+export const PUBLIC_PERFORMANCE_KEYS = [
+  'game', 'resolution', 'preset', 'fpsLow', 'fpsHigh', 'measured',
 ] as const;
 
 export const PUBLIC_PART_KEYS = [
@@ -158,6 +185,93 @@ export function shareVisible(build: Record<string, unknown>, nowMs: number): boo
   return nowMs - soldAt <= SOLD_GRACE_DAYS * 86400000;
 }
 
+/**
+ * The shop's reviewed frame-rate table, as stored in settings.
+ *
+ * Mirrors domain/gpuPerformance.ts. Read here rather than recomputed: the
+ * public page must show the same figures the shop approved, not a fresh
+ * opinion — that is the entire reason the table exists.
+ */
+export interface GpuRow {
+  gpuModel?: unknown;
+  game?: unknown;
+  resolution?: unknown;
+  preset?: unknown;
+  fpsLow?: unknown;
+  fpsHigh?: unknown;
+}
+
+const normalizeGpu = (name: string): string =>
+  name
+    .toLowerCase()
+    .replace(/\b(gigabyte|asus|msi|zotac|evga|sapphire|xfx|powercolor|pny|inno3d|palit|gainward)\b/g, '')
+    .replace(/\b(windforce|gaming|oc|ventus|tuf|rog|strix|eagle|aero|trinity|twin|dual|edition|founders|fe)\b/g, '')
+    .replace(/\b\d+\s*gb\b/g, '')
+    .replace(/\b(gddr\d x?|graphics card|gpu)\b/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+
+const gpuMatches = (tableModel: string, buildPart: string): boolean => {
+  const a = normalizeGpu(tableModel), b = normalizeGpu(buildPart);
+  if (!a || !b) return false;
+  return a === b || b.includes(a) || a.includes(b);
+};
+
+/**
+ * The public performance block: the table's rows for this build's card, with
+ * anything measured on THIS machine replacing the matching estimate.
+ *
+ * A measurement is one number, so it is shown as a range of itself — every
+ * figure on the page then has the same shape, and a bare number cannot sit
+ * among ranges looking like a guarantee.
+ */
+export function publicPerformance(
+  build: Record<string, unknown>,
+  table: GpuRow[],
+): PublicPerformance[] {
+  const parts = Array.isArray(build.parts) ? (build.parts as Record<string, unknown>[]) : [];
+  const gpu = str(parts.find(p => str(p.category) === 'GPU')?.name);
+  const out: PublicPerformance[] = [];
+
+  if (gpu) {
+    for (const row of table || []) {
+      const model = str(row.gpuModel);
+      const game = str(row.game);
+      const resolution = str(row.resolution);
+      const preset = str(row.preset);
+      const low = pos(row.fpsLow);
+      const high = pos(row.fpsHigh);
+      if (!model || !game || !resolution || !preset || low == null || high == null) continue;
+      if (!gpuMatches(model, gpu)) continue;
+      if (out.some(x => x.game === game && x.resolution === resolution)) continue;
+      out.push({
+        game, resolution, preset,
+        fpsLow: Math.round(Math.min(low, high)),
+        fpsHigh: Math.round(Math.max(low, high)),
+      });
+    }
+  }
+
+  const measured = Array.isArray(build.measuredFps) ? (build.measuredFps as Record<string, unknown>[]) : [];
+  for (const m of measured) {
+    const game = str(m.game);
+    const resolution = str(m.resolution);
+    const preset = str(m.preset);
+    const fps = pos(m.fps);
+    if (!game || !resolution || fps == null) continue;
+    // WHO measured it is the shop's business, not the buyer's — the name and
+    // the timestamp are deliberately not carried.
+    const line: PublicPerformance = {
+      game, resolution, preset: preset || 'Tested settings',
+      fpsLow: Math.round(fps), fpsHigh: Math.round(fps), measured: true,
+    };
+    const at = out.findIndex(x => x.game === game && x.resolution === resolution);
+    if (at >= 0) out[at] = line; else out.push(line);
+  }
+
+  return out;
+}
+
 export interface ShopProfile {
   name?: unknown;
   phone?: unknown;
@@ -165,6 +279,8 @@ export interface ShopProfile {
   email?: unknown;
   /** settings.operations.deviceWarrantyDays — what the shop warrants a machine for. */
   warrantyDays?: unknown;
+  /** settings.operations.gpuPerformance — the reviewed frame-rate table. */
+  gpuPerformance?: unknown;
 }
 
 /**
@@ -255,6 +371,10 @@ export function toPublicBuild(
     parts,
     retailComplete,
     warrantyDays: typeof shop.warrantyDays === 'number' && shop.warrantyDays > 0 ? Math.round(shop.warrantyDays) : 0,
+    performance: publicPerformance(
+      build,
+      Array.isArray(shop.gpuPerformance) ? (shop.gpuPerformance as GpuRow[]) : [],
+    ),
     shopName: str(shop.name) || 'Our shop',
   };
 

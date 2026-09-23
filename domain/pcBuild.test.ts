@@ -6,6 +6,7 @@ import {
   partsCost, partsEditable, pcPartPickerSearchUrl, retailAgeDays, retailAsOfLabel,
   retailComparison, specsLine, splitBuilds, buildSearchText,
   partComparisonPrice, partStoreName,
+  duplicateBuild, duplicateName, priceChangeWarning, depositOnBuild,
 } from './pcBuild';
 import { profitAndLoss } from './reports';
 import { buildSearchable, queryWords, matchesWords } from './itemSearch';
@@ -419,5 +420,218 @@ describe('"build it yourself at <store>"', () => {
     expect(partStoreName(part({}), b)).toBe(store);
     expect(partStoreName(part({ altStoreName: 'Memory Express' }), b)).toBe('Memory Express');
     expect(partStoreName(part({}), build({}))).toBe('');
+  });
+});
+
+/* ---------------- Duplicating a build ---------------- */
+
+describe('duplicateName', () => {
+  it('suffixes the original', () => {
+    expect(duplicateName('REAPER Gaming PC')).toBe('REAPER Gaming PC copy');
+  });
+
+  it('counts instead of stacking the word — a batch of the same spec is normal', () => {
+    expect(duplicateName('REAPER Gaming PC copy')).toBe('REAPER Gaming PC copy 2');
+    expect(duplicateName('REAPER Gaming PC copy 2')).toBe('REAPER Gaming PC copy 3');
+    expect(duplicateName('REAPER Gaming PC copy 9')).toBe('REAPER Gaming PC copy 10');
+  });
+
+  it('never returns an empty name', () => {
+    expect(duplicateName('')).toBe('Build copy');
+    expect(duplicateName('   ')).toBe('Build copy');
+  });
+});
+
+describe('duplicateBuild', () => {
+  const original = (): PcBuild => ({
+    id: 'b1',
+    name: 'REAPER Gaming PC',
+    kind: 'shelf',
+    status: 'ready',
+    targetPrice: 1800,
+    comparisonStore: 'Canada Computers',
+    notes: 'waiting on the GPU',
+    customerId: 'c1',
+    customerName: 'Dana Wu',
+    customerPhone: '416-555-0100',
+    quotePrice: 1750,
+    inventoryId: 'inv-1',
+    sku: 'FTT-0000777',
+    saleId: 'sale-1',
+    finishedAt: 1,
+    shareToken: 'kadamuze',
+    shareCreatedAt: 1,
+    shareCreatedBy: 'u1',
+    duplicatedFrom: 'b0',
+    labour: [{ id: 'l1', userId: 'u1', userEmail: 'sam@shop.test', hours: 4, rate: 17, date: '2026-09-01', loggedAt: 1 }],
+    parts: [{
+      id: 'p1', category: 'GPU', name: 'RTX 4070 Windforce', cost: 503,
+      condition: 'used', source: 'facebook',
+      sourceUrl: 'https://facebook.com/marketplace/item/123',
+      serial: 'GPU-SERIAL-2211', mfrWarrantyUntil: '2029-01-01',
+      retailPrice: 900, retailSource: 'Newegg', retailCheckedAt: '2026-09-01',
+      altStorePrice: 940, altStoreName: 'Canada Computers',
+      pcpartpickerUrl: 'https://ca.pcpartpicker.com/product/abc',
+    }],
+    createdBy: 'u-old', createdByEmail: 'old@shop.test', createdAt: 1, updatedAt: 2,
+  });
+
+  const dup = (over: Partial<PcBuild> = {}) => duplicateBuild({
+    source: { ...original(), ...over },
+    id: 'b2', partId: i => `np${i}`,
+    createdBy: 'u-new', createdByEmail: 'new@shop.test', now: 5000,
+  });
+
+  it('carries the recipe: name, kind, price, store, notes and every part', () => {
+    const d = dup();
+    expect(d.name).toBe('REAPER Gaming PC copy');
+    expect(d.kind).toBe('shelf');
+    expect(d.targetPrice).toBe(1800);
+    expect(d.comparisonStore).toBe('Canada Computers');
+    expect(d.notes).toBe('waiting on the GPU');
+    expect(d.parts).toHaveLength(1);
+    expect(d.parts[0]).toMatchObject({
+      category: 'GPU', name: 'RTX 4070 Windforce', condition: 'used', source: 'facebook',
+      retailPrice: 900, retailSource: 'Newegg', altStorePrice: 940,
+      altStoreName: 'Canada Computers', pcpartpickerUrl: 'https://ca.pcpartpicker.com/product/abc',
+    });
+  });
+
+  it('starts at planning with no labour — nobody has touched this machine', () => {
+    const d = dup();
+    expect(d.status).toBe('planning');
+    expect(d.labour).toEqual([]);
+  });
+
+  it('NEVER copies a serial or a maker warranty — those identify the other machine', () => {
+    // A copied serial would put one physical part in two builds, attach a
+    // manufacturer's warranty to hardware that does not exist, and break the
+    // warranty lookup. This is the copy that would cause real damage.
+    const d = dup();
+    expect(d.parts[0].serial).toBeUndefined();
+    expect(d.parts[0].mfrWarrantyUntil).toBeUndefined();
+    expect(d.parts[0].sourceUrl).toBeUndefined();
+  });
+
+  it('carries no commercial history at all', () => {
+    const d = dup() as unknown as Record<string, unknown>;
+    for (const field of [
+      'customerId', 'customerName', 'customerPhone', 'inventoryId', 'sku',
+      'saleId', 'finishedAt', 'shareToken', 'shareCreatedAt', 'shareCreatedBy',
+    ]) {
+      expect({ field, value: d[field] }).toEqual({ field, value: undefined });
+    }
+  });
+
+  it('copies part COSTS but flags them as estimates from a copy', () => {
+    const d = dup();
+    expect(d.parts[0].cost).toBe(503);
+    expect(d.parts[0].costFromCopy).toBe(true);
+  });
+
+  it('does not flag a part that had no cost to copy', () => {
+    const d = dup({ parts: [{ id: 'p1', category: 'CPU', name: 'Ryzen 5', cost: 0, condition: 'new', source: 'retail' }] });
+    expect(d.parts[0].costFromCopy).toBeUndefined();
+  });
+
+  it('gives every part a NEW id, and the build a new id and owner', () => {
+    const d = dup();
+    expect(d.id).toBe('b2');
+    expect(d.parts[0].id).toBe('np0');
+    expect(d.createdBy).toBe('u-new');
+    expect(d.createdByEmail).toBe('new@shop.test');
+    expect(d.createdAt).toBe(5000);
+  });
+
+  it('records where the recipe came from, for the audit trail', () => {
+    // Not the source's own duplicatedFrom — this copy came from b1.
+    expect(dup().duplicatedFrom).toBe('b1');
+  });
+
+  it('carries the quote rather than the target on a customer order', () => {
+    const d = dup({ kind: 'customer' });
+    expect(d.kind).toBe('customer');
+    expect(d.quotePrice).toBe(1750);
+    // …but not the customer it was for.
+    expect(d.customerId).toBeUndefined();
+  });
+
+  it('leaves the original completely untouched', () => {
+    const before = original();
+    const source = original();
+    duplicateBuild({ source, id: 'b2', partId: i => `np${i}`, createdBy: 'u', createdByEmail: 'e', now: 1 });
+    expect(source).toEqual(before);
+  });
+});
+
+/* ---------------- Changing the price after a deposit ---------------- */
+
+describe('priceChangeWarning', () => {
+  const shelf = { kind: 'shelf' as const, targetPrice: 1800 };
+  const order = { kind: 'customer' as const, quotePrice: 1500 };
+
+  it('says nothing about a shelf build — that price is the shop talking to itself', () => {
+    expect(priceChangeWarning(shelf, 1900, 500)).toBeNull();
+  });
+
+  it('says nothing when no deposit has been taken', () => {
+    expect(priceChangeWarning(order, 1600, 0)).toBeNull();
+  });
+
+  it('warns when a quote changes after a deposit, with both balances', () => {
+    const w = priceChangeWarning(order, 1600, 375)!;
+    expect(w).toMatchObject({ from: 1500, to: 1600, deposit: 375, balanceBefore: 1125, balanceAfter: 1225 });
+    expect(w.message).toContain('$375.00 deposit');
+    expect(w.message).toContain('$1125.00');
+    expect(w.message).toContain('$1225.00');
+  });
+
+  it('says plainly that the deposit itself is not touched', () => {
+    expect(priceChangeWarning(order, 1600, 375)!.message).toMatch(/deposit itself is not touched/i);
+  });
+
+  it('says nothing when the quote has not actually changed', () => {
+    expect(priceChangeWarning(order, 1500, 375)).toBeNull();
+  });
+
+  it('handles a first quote set after a deposit', () => {
+    const w = priceChangeWarning({ kind: 'customer' }, 1200, 200)!;
+    expect(w.from).toBeNull();
+    expect(w.balanceAfter).toBe(1000);
+  });
+
+  it('never reports a negative balance', () => {
+    // A quote dropped below what has been paid means a refund conversation,
+    // not a negative number on a screen.
+    expect(priceChangeWarning(order, 100, 375)!.balanceAfter).toBe(0);
+  });
+});
+
+describe('depositOnBuild', () => {
+  const sale = (inventoryId: string, over: Record<string, unknown> = {}) => ({
+    totalPaid: 1500, deposit: 375, balanceOwing: 1125, balancePayments: [],
+    lines: [{ inventoryId }], ...over,
+  }) as never;
+
+  it('is zero for a build with no device yet — nothing can have been paid', () => {
+    expect(depositOnBuild({}, [sale('inv-1')])).toBe(0);
+  });
+
+  it('reads what a layaway has collected on this build’s device', () => {
+    expect(depositOnBuild({ inventoryId: 'inv-1' }, [sale('inv-1')])).toBe(375);
+  });
+
+  it('counts balance payments taken since, not just the original deposit', () => {
+    const s = sale('inv-1', { balancePayments: [{ amount: 200 }, { amount: 125 }] });
+    expect(depositOnBuild({ inventoryId: 'inv-1' }, [s])).toBe(700);
+  });
+
+  it('ignores sales for other devices', () => {
+    expect(depositOnBuild({ inventoryId: 'inv-1' }, [sale('inv-2')])).toBe(0);
+  });
+
+  it('counts a fully-paid sale at its total, not at its frozen deposit', () => {
+    const paid = sale('inv-1', { balanceOwing: 0, totalPaid: 1500 });
+    expect(depositOnBuild({ inventoryId: 'inv-1' }, [paid])).toBe(1500);
   });
 });

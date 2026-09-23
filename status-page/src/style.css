@@ -276,6 +276,32 @@ body {
 
 .b-card.is-sold::before { background: linear-gradient(180deg, #94a3b8, #64748b); }
 
+/* Expected performance: a range, its settings, and a flag on anything the shop
+   measured itself. */
+.b-perf { list-style: none; margin: 0.5rem 0 0; padding: 0; }
+.b-perf-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.4rem 0;
+  border-bottom: 1px solid var(--card-border);
+}
+.b-perf-row:last-child { border-bottom: 0; }
+.b-perf-game { font-weight: 600; min-width: 0; }
+.b-perf-set { display: block; font-size: 0.72rem; font-weight: 400; color: var(--muted); }
+.b-perf-fps { font-weight: 800; white-space: nowrap; }
+.b-perf-tested {
+  display: inline-block;
+  margin-left: 0.35rem;
+  font-size: 0.62rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #047857;
+}
+.b-perf-note { margin: 0.5rem 0 0; font-size: 0.7rem; color: var(--muted); }
+
 /* The machine itself, above everything else: a listing opened on a phone is
    scrolled, and a photo is what stops the scroll. */
 .b-photo {

@@ -3,7 +3,7 @@ import {
   Store, Building2, Wrench, ShoppingCart, Percent, Tag, Contact, LayoutDashboard,
   Palette, ShieldCheck, DatabaseBackup, Info, Save, RotateCcw, Check, Lock, Plus, Trash2,
   Download, RefreshCw, Loader2, CalendarClock, SlidersHorizontal, Copy, DollarSign, Archive, ArchiveRestore, Star,
-  Monitor, ExternalLink, AlertTriangle,
+  Monitor, ExternalLink, AlertTriangle, Gauge,
 } from 'lucide-react';
 import { Role, Permission, BreakReason } from '../types';
 import {
@@ -23,6 +23,7 @@ import { STATUS_PAGE_ORIGIN } from '../domain/statusLink';
 import { useIsMobile } from '../hooks/useMediaQuery';
 import { SettingsSection, SettingsCard, SettingsToggle, SettingsSelect, SettingsTextField } from './settingsPrimitives';
 import { selectOnFocus } from '../hooks/selectOnFocus';
+import { GpuPerformanceSettings } from './GpuPerformanceSettings';
 import { DeviceMode, REGISTER_IDLE_SECONDS, REGISTER_IDLE_MIN_SECONDS, REGISTER_IDLE_MAX_SECONDS } from '../domain/registerMode';
 import { readDeviceMode, writeDeviceMode } from '../services/registerMode';
 import { BackupFileMeta } from '../services/backupStorage';
@@ -34,7 +35,7 @@ import { BackupFileMeta } from '../services/backupStorage';
 
 type SectionId =
   | 'general' | 'store' | 'repairs' | 'checkout' | 'taxes' | 'labels'
-  | 'customers' | 'operations' | 'kiosk' | 'payroll' | 'expenses' | 'reviews' | 'dashboard' | 'appearance' | 'roles' | 'data' | 'about';
+  | 'customers' | 'operations' | 'kiosk' | 'builds' | 'payroll' | 'expenses' | 'reviews' | 'dashboard' | 'appearance' | 'roles' | 'data' | 'about';
 
 const SECTIONS: { id: SectionId; label: string; icon: React.ReactNode }[] = [
   { id: 'general', label: 'General', icon: <Store className="w-4 h-4" /> },
@@ -46,6 +47,7 @@ const SECTIONS: { id: SectionId; label: string; icon: React.ReactNode }[] = [
   { id: 'customers', label: 'Customers', icon: <Contact className="w-4 h-4" /> },
   { id: 'operations', label: 'Operations', icon: <SlidersHorizontal className="w-4 h-4" /> },
   { id: 'kiosk', label: 'Counter Kiosk', icon: <Monitor className="w-4 h-4" /> },
+  { id: 'builds', label: 'PC Builds', icon: <Gauge className="w-4 h-4" /> },
   { id: 'payroll', label: 'Payroll', icon: <DollarSign className="w-4 h-4" /> },
   { id: 'expenses', label: 'Expense Categories', icon: <Archive className="w-4 h-4" /> },
   { id: 'reviews', label: 'Google Reviews', icon: <Star className="w-4 h-4" /> },
@@ -174,6 +176,7 @@ export const SettingsView: React.FC<Props> = ({ settings, onSave, canManage, rol
             {active === 'customers' && <CustomersSection draft={draft} patch={patch} />}
             {active === 'operations' && <OperationsSection draft={draft} patch={patch} confirmPaidBreakChange={confirmPaidBreakChange} canManage={canManage} />}
             {active === 'kiosk' && <KioskSection draft={draft} patch={patch} />}
+            {active === 'builds' && <BuildsSection draft={draft} patch={patch} />}
             {active === 'payroll' && <PayrollSection draft={draft} patch={patch} />}
             {active === 'expenses' && <ExpenseCategoriesSection draft={draft} patch={patch} />}
             {active === 'reviews' && <ReviewsSection draft={draft} patch={patch} />}
@@ -644,6 +647,22 @@ const KioskSection: React.FC<{ draft: AppSettings; patch: PatchFn }> = ({ draft,
     </SettingsSection>
   );
 };
+
+/**
+ * PC BUILDS — the labour rate lives under Operations with the other money
+ * defaults; what lives here is the thing that needs a screen of its own: the
+ * per-GPU frame-rate table every build's performance section reads from.
+ */
+const BuildsSection: React.FC<{ draft: AppSettings; patch: PatchFn }> = ({ draft, patch }) => (
+  <SettingsSection title="PC Builds"
+    description="What each graphics card actually runs at. One table for the shop, so every build with the same card quotes the same figures — rather than a fresh guess per advert, which is how two of your own ads end up disagreeing.">
+    <SettingsCard>
+      <GpuPerformanceSettings
+        rows={draft.operations.gpuPerformance || []}
+        onChange={gpuPerformance => patch('operations', { gpuPerformance })} />
+    </SettingsCard>
+  </SettingsSection>
+);
 
 const PayrollSection: React.FC<{ draft: AppSettings; patch: PatchFn }> = ({ draft, patch }) => (
   <SettingsSection title="Payroll" description="Pay period schedule used for the Time Clock payroll summary. Changing this only affects periods going forward — already-paid periods keep their original dates and amounts.">

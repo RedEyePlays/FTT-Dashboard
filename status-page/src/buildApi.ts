@@ -34,6 +34,16 @@ export interface PublicPhoto {
   credit?: string;
 }
 
+export interface PublicPerformance {
+  game: string;
+  resolution: string;
+  preset: string;
+  fpsLow: number;
+  fpsHigh: number;
+  /** True only where the shop measured it on this machine. */
+  measured?: true;
+}
+
 export interface PublicBuild {
   found: true;
   name: string;
@@ -47,6 +57,8 @@ export interface PublicBuild {
   storeName?: string;
   saving?: number;
   warrantyDays: number;
+  /** Empty when the card has no reviewed figures — the section is then omitted. */
+  performance?: PublicPerformance[];
   shopName: string;
   shopPhone?: string;
   shopAddress?: string;

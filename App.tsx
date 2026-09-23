@@ -50,7 +50,6 @@ import { attributeDrawerEntry, stampNewEntries } from './domain/dayLedger';
 import { CrashReport, crashActivityLine, crashId } from './domain/crashReport';
 import { isCostEntry, isCostEntryField, costAccessFor } from './domain/costVisibility';
 import { dbErrorHeading, sectionUnavailableNotice } from './domain/subscriptionAccess';
-import { STATUS_PAGE_ORIGIN } from './domain/statusLink';
 import { TechScreen, techScreenFor } from './domain/techShell';
 import { floorFor, buildBelowFloorSaleAudit, targetBelowFloor, TARGET_BELOW_FLOOR_NOTE, belowFloorSales } from './domain/priceFloor';
 import { paidBreakChangeImpact, paidBreakChangeMessage, paidBreakChangeAudit, sameReasons } from './domain/paidBreakChange';
@@ -2893,6 +2892,28 @@ const App: React.FC = () => {
    * and the ordinary layaway flow does the rest (deposit, balance, completion,
    * and — through the existing refund flow — a cancellation).
    */
+  /**
+   * Start a new build from an existing one's recipe.
+   *
+   * The COPY is made in the view (it needs fresh ids); this writes it and
+   * records where it came from. Audited as a create with the source id on it,
+   * so a build full of copied costs can be traced back to the receipts they
+   * were estimated from.
+   */
+  const handleDuplicateBuild = async (source: PcBuild, copy: PcBuild) => {
+    if (!uid || !allow('builds.manage')) return;
+    try {
+      await saveItemSettled(uid, 'pcBuilds', copy);
+    } catch (e) {
+      writeFailed('The duplicated build', e, 'Nothing was created.');
+      return;
+    }
+    audit('build.create', 'pcBuild', copy.id, undefined, {
+      name: copy.name, kind: copy.kind, duplicatedFrom: source.id, parts: copy.parts.length,
+    });
+    logActivity(`Duplicated PC build "${source.name}" as "${copy.name}"`);
+  };
+
   const handleTakeDeposit = async (build: PcBuild) => {
     if (!allow('sales.complete')) return;
     const id = build.inventoryId || await handleFinishBuild(build, build.name);
@@ -3101,12 +3122,18 @@ const App: React.FC = () => {
               currentUserEmail={appUser.email}
               labourRate={settings.operations.buildLabourRate ?? 15}
               warrantyDays={settings.operations.deviceWarrantyDays ?? 90}
-              statusHost={STATUS_PAGE_ORIGIN}
               // Photographing the finished machine happens on the build, but
               // the photos belong to the DEVICE the build became — one picture
               // then serves the spec sheet, the share link and the kiosk alike.
               workspaceId={workspaceId}
               onSaveDevice={allow('inventory.edit') ? handleSaveItem : undefined}
+              // Read-only, and only to work out what has been collected against
+              // a customer order — see domain/pcBuild.ts's depositOnBuild.
+              sales={salesTransactions}
+              onDuplicate={handleDuplicateBuild}
+              // The shop's reviewed per-GPU frame-rate table (Settings → PC
+              // Builds). A build whose card is not in it shows no figures.
+              gpuTable={settings.operations.gpuPerformance}
               onSave={handleSaveBuild}
               onFinishBuild={handleFinishBuild}
               unavailableNotice={refusedCollections.includes('pcBuilds') ? sectionUnavailableNotice('PC Builds') : undefined}
@@ -3328,12 +3355,18 @@ const App: React.FC = () => {
               currentUserEmail={appUser.email}
               labourRate={settings.operations.buildLabourRate ?? 15}
               warrantyDays={settings.operations.deviceWarrantyDays ?? 90}
-              statusHost={STATUS_PAGE_ORIGIN}
               // Photographing the finished machine happens on the build, but
               // the photos belong to the DEVICE the build became — one picture
               // then serves the spec sheet, the share link and the kiosk alike.
               workspaceId={workspaceId}
               onSaveDevice={allow('inventory.edit') ? handleSaveItem : undefined}
+              // Read-only, and only to work out what has been collected against
+              // a customer order — see domain/pcBuild.ts's depositOnBuild.
+              sales={salesTransactions}
+              onDuplicate={handleDuplicateBuild}
+              // The shop's reviewed per-GPU frame-rate table (Settings → PC
+              // Builds). A build whose card is not in it shows no figures.
+              gpuTable={settings.operations.gpuPerformance}
               onSave={handleSaveBuild}
               onDelete={appUser.role === 'owner' ? handleDeleteBuild : undefined}
               onFinishBuild={handleFinishBuild}
@@ -3362,6 +3395,7 @@ const App: React.FC = () => {
               onFindStockPhoto={allow('inventory.edit')
                 ? (item) => findDevicePhoto(item.id, item.brand || '', item.model || '')
                 : undefined}
+              deviceWarrantyDays={settings.operations.deviceWarrantyDays}
               deviceBuyers={deviceBuyers}
               customers={customers}
               onCreateCustomer={allow('inventory.add') ? handleCreateCustomerInline : undefined}

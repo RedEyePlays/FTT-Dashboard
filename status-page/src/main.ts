@@ -13,19 +13,28 @@ const app = document.getElementById('app')!;
 /**
  * THE ROUTE. This one static bundle serves three public things:
  *   /                   the repair-status form (unchanged)
- *   /build/<token>      a PC build listing, for Marketplace posts
+ *   /b/<code>           a PC build listing — the SHORT route, what goes in ads
+ *   /build/<token>      the same listing, the original route, still resolving
  *   /showroom/<token>   the counter kiosk
  *
- * A token is 26 lowercase alphanumeric characters from a CSPRNG
- * (domain/buildShare.ts). Anything else is not a near miss, so it falls
- * through to the repair form rather than being probed against the server.
+ * TWO ROUTES TO ONE PAGE, DELIBERATELY. New links are `/b/kadamuze`: eight
+ * readable letters somebody types off a Marketplace description, where links
+ * are not clickable. The old `/build/<26 characters>` route stays because
+ * those links are in adverts that are already up, and quietly breaking them
+ * would be the worst possible way to ship a nicer URL.
+ *
+ * A reference is lowercase alphanumeric, 4–64 long — the same cheap filter the
+ * callable applies (functions/src/buildLookup.ts). Anything else falls through
+ * to the repair form rather than being probed against the server.
  */
-const tokenFromPath = (pathname: string, prefix: string): string | null => {
-  const m = new RegExp(`^/${prefix}/([^/?#]+)/?$`).exec(pathname);
+const REF_RE = /^[a-z0-9]{4,64}$/;
+
+const tokenFromPath = (pathname: string, ...prefixes: string[]): string | null => {
+  const m = new RegExp(`^/(?:${prefixes.join('|')})/([^/?#]+)/?$`).exec(pathname);
   if (!m) return null;
   let token: string;
   try { token = decodeURIComponent(m[1]); } catch { return null; }
-  return /^[a-z0-9]{22,64}$/.test(token) ? token : null;
+  return REF_RE.test(token) ? token : null;
 };
 
 const escapeHtml = (s: string): string =>
@@ -163,7 +172,7 @@ async function onSubmit(e: Event) {
 // Marketplace post and a kiosk on the counter have nothing to do with a
 // repair-status form.
 const path = window.location.pathname;
-const buildToken = tokenFromPath(path, 'build');
+const buildToken = tokenFromPath(path, 'b', 'build');
 const showroomToken = tokenFromPath(path, 'showroom');
 if (buildToken) {
   void renderBuildPage(app, buildToken);

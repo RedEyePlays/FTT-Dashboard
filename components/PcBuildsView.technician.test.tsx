@@ -248,8 +248,15 @@ describe('a technician sees the real numbers on a build', () => {
   });
 
   it('still shows the price, which was never the problem', () => {
+    // The Target tile is now an editable field rather than a rendered figure,
+    // so the price lives in the input's value — a technician can both see it
+    // and set it, which is the same rule as every other number on this screen.
     const m = open();
-    expect(m.text()).toContain('$1200.00');
+    const price = Array.from(m.host.querySelectorAll('input[type="number"]'))
+      .find(i => (i as HTMLInputElement).placeholder === '—') as HTMLInputElement;
+    expect(price).toBeTruthy();
+    expect(price.value).toBe('1200');
+    expect(price.disabled).toBe(false);
     m.unmount();
   });
 

@@ -8,6 +8,15 @@ import { isoDateToMs } from './dates';
  * showing the specs, the price and what the same parts cost new elsewhere — so
  * a buyer sees the value without phoning.
  *
+ * NEW LINKS ARE NO LONGER MINTED HERE. A share reference is now the short
+ * readable code in domain/shareCode.ts ("kadamuze"), because these get typed
+ * by hand off a Marketplace description. This module keeps the LONG token —
+ * every link already in an advert is one of these and must go on resolving,
+ * and the counter kiosk still uses `newShareToken` for a credential nobody
+ * reads aloud. `isShareToken` below therefore still means exactly what it
+ * says: is this one of the long ones. For "could this be any kind of share
+ * reference", see domain/shareLink.ts's isShareRef.
+ *
  * LINK-ONLY, BY DESIGN. There is no index and no way to browse: the only way
  * to reach a build is to hold its token. That puts the whole weight of access
  * control on the token being unguessable, which is why it is generated from a

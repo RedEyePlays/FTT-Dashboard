@@ -83,6 +83,8 @@ export interface InventoryItem {
   // moment the item sells in-store (see hooks/useCheckout.ts's handleCheckout)
   // since it's no longer available anywhere at that point.
   listedPlatforms?: ListingPlatform[];
+  /** The last generated advert for this device. A draft — see SavedListing. */
+  lastListing?: SavedListing;
 
   // --- Auto-inventory (domain/autoInventory.ts) ---
   // Normalized identity used for IMEI/serial matching — always kept in sync
@@ -1336,6 +1338,16 @@ export interface BuildPart {
   name: string;
   /** Typed by the user. No stock tracking — see the note above. */
   cost: number;
+  /**
+   * This cost came from DUPLICATING another build, not from a receipt.
+   *
+   * What the shop paid last time is the best estimate of what it will pay this
+   * time, so a duplicate carries the costs across rather than starting at zero
+   * and showing a fictional profit. The flag is what stops an estimate being
+   * mistaken for a fact: the row says so until somebody types over it, and
+   * typing over it clears the flag (domain/pcBuild.ts).
+   */
+  costFromCopy?: boolean;
   condition: PartCondition;
   source: PartSource;
   /** The listing / order link this part came from. NEVER shown to a customer. */
@@ -1389,6 +1401,33 @@ export interface BuildLabourEntry {
   loggedAt: number;
 }
 
+/**
+ * THE LAST LISTING THE AI WROTE FOR THIS RECORD.
+ *
+ * Kept so navigating away does not lose it and so the same advert can be
+ * re-copied a week later when the shop re-lists the item. It is a DRAFT, never
+ * anything the app posts anywhere — the shop edits it and pastes it itself.
+ */
+export interface SavedListing {
+  title: string;
+  description: string;
+  platform: string;
+  length: string;
+  generatedAt: number;
+}
+
+export interface MeasuredFps {
+  id: string;
+  game: string;
+  resolution: string;
+  preset: string;
+  fps: number;
+  /** An fps figure is a claim, so it has an author. */
+  measuredBy: string;
+  measuredByEmail?: string;
+  measuredAt: number;
+}
+
 export interface PcBuild {
   id: string;
   name: string;
@@ -1410,7 +1449,25 @@ export interface PcBuild {
    * retail total.
    */
   comparisonStore?: string;
+  /**
+   * The shop's own notes on this build — "waiting on the GPU", "customer wants
+   * white cables". INTERNAL. Never on the display card, never on the public
+   * listing, and not on the customer spec sheet either (domain/buildSheet.ts).
+   */
   notes?: string;
+  /** The build this one was duplicated from. Recorded for the audit trail. */
+  duplicatedFrom?: string;
+  /**
+   * FRAME RATES THE SHOP MEASURED ON THIS MACHINE, during the Testing stage.
+   *
+   * Per build, never in the GPU table (domain/gpuPerformance.ts): it is a fact
+   * about this computer, not about the model of card. A measurement replaces
+   * the table's estimate for this build and is labelled "tested in-shop" —
+   * which is a stronger thing to be able to say, and is true.
+   */
+  measuredFps?: MeasuredFps[];
+  /** The last generated advert for this build. A draft — see SavedListing. */
+  lastListing?: SavedListing;
   /** Set when a shelf build is finished and becomes an inventory device. */
   inventoryId?: string;
   /** The device's SKU, allocated at the moment the build was finished. */

@@ -179,12 +179,27 @@ export interface DisplayCard {
   /** The headline grid: one row per category that has a part. */
   specs: { category: PartCategory; name: string; condition: string | null }[];
   warrantyBadge: string | null;
+  /**
+   * Expected performance, at most a few lines — a shelf card is read from
+   * across the room, so this is the two or three games that sell the machine,
+   * not the whole table. Empty when the card has no reviewed figures.
+   */
+  performance: { game: string; detail: string; fps: string; measured: boolean }[];
   shopName: string;
   shopPhone: string;
 }
 
+/** How many performance lines fit on a card before it stops being readable. */
+export const CARD_PERFORMANCE_LINES = 3;
+
 export interface CardInput {
   build: PcBuild;
+  /**
+   * Already resolved by the caller (domain/gpuPerformance.ts's performanceFor),
+   * because this module knows nothing about the shop's settings and a printed
+   * card must show the same figures as the screen it was printed from.
+   */
+  performance?: { game: string; resolution: string; preset: string; fpsLow: number; fpsHigh: number; measured: boolean }[];
   price?: number | null;
   warrantyDays: number;
   shopName: string;
@@ -263,6 +278,18 @@ export const displayCard = (input: CardInput): DisplayCard => {
       })
       .filter((s): s is { category: PartCategory; name: string; condition: string | null } => s !== null),
     warrantyBadge: input.warrantyDays > 0 ? `${input.warrantyDays}-day warranty` : null,
+    // 1080p first, because that is what most buyers are on, and only the first
+    // few — a card read from across the room cannot carry twelve lines.
+    performance: (input.performance || [])
+      .filter(p => p.fpsLow > 0 && p.fpsHigh > 0)
+      .sort((a, b) => (a.resolution === b.resolution ? 0 : a.resolution === '1080p' ? -1 : 1))
+      .slice(0, CARD_PERFORMANCE_LINES)
+      .map(p => ({
+        game: p.game,
+        detail: `${p.resolution} · ${p.preset}`,
+        fps: p.fpsLow === p.fpsHigh ? `${p.fpsLow} fps` : `${p.fpsLow}–${p.fpsHigh} fps`,
+        measured: p.measured,
+      })),
     shopName: input.shopName,
     shopPhone: input.shopPhone,
   };
