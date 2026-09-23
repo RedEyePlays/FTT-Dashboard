@@ -147,6 +147,8 @@ describe('can()', () => {
   it('technician is repair-scoped and profit-free', () => {
     // Can do the repair work…
     expect(can('technician', 'repairs.tech')).toBe(true);
+    // …and PC builds, which is the one general-shop permission they hold.
+    expect(can('technician', 'builds.manage')).toBe(true);
     // …but not full repair management, financials, inventory, users, or settings.
     expect(can('technician', 'repairs.manage')).toBe(false);
     expect(can('technician', 'reports.profit.summary')).toBe(false);
@@ -277,5 +279,58 @@ describe('can()', () => {
     // Neither profit permission is baked into the role list itself.
     expect(ROLE_PERMISSIONS.employee).not.toContain('reports.profit.summary');
     expect(ROLE_PERMISSIONS.employee).not.toContain('reports.profit.detailed');
+  });
+});
+
+/**
+ * 'builds.manage' — the PC builds section's own permission.
+ *
+ * It shipped gated on 'inventory.add', which technicians do not hold, so the
+ * people who actually build the machines could not open the section. This
+ * block pins both halves of the fix: that they can now, and that it did not
+ * quietly widen anything else.
+ */
+describe('builds.manage', () => {
+  it('every human role holds it — a technician included', () => {
+    for (const role of ['owner', 'manager', 'employee', 'technician'] as const) {
+      expect({ role, can: can(role, 'builds.manage') }).toEqual({ role, can: true });
+    }
+  });
+
+  it('A KIOSK STILL HAS NOTHING', () => {
+    expect(can('kiosk', 'builds.manage')).toBe(false);
+    // It holds no permission at all, which is the property this role exists for.
+    expect(ROLE_PERMISSIONS.kiosk).toEqual([]);
+  });
+
+  it('is NOT inventory.add — a technician still has no general inventory access', () => {
+    expect(can('technician', 'builds.manage')).toBe(true);
+    expect(can('technician', 'inventory.add')).toBe(false);
+    expect(can('technician', 'inventory.edit')).toBe(false);
+    expect(can('technician', 'inventory.delete')).toBe(false);
+  });
+
+  it('grants a technician NOTHING ELSE they did not already have', () => {
+    // The whole technician set, pinned. Adding to it must be deliberate.
+    expect([...ROLE_PERMISSIONS.technician].sort())
+      .toEqual(['builds.manage', 'repairs.tech', 'timeclock.use']);
+  });
+
+  it('does not make a technician financial — costs stay a separate decision', () => {
+    // They may ENTER a part cost (write-only, "Recorded" afterwards — that is a
+    // UI rule, not a permission). READING costs and margins is unchanged.
+    expect(can('technician', 'reports.profit.detailed')).toBe(false);
+    expect(can('technician', 'reports.profit.summary')).toBe(false);
+    // And not even the per-user Financials override reaches a technician.
+    expect(can('technician', 'reports.profit.detailed', { allowProfit: true })).toBe(false);
+    expect(can('technician', 'reports.profit.summary', { allowProfit: true })).toBe(false);
+  });
+
+  it('a technician still cannot reach Reports, Quick Sale or anything else', () => {
+    // The screens whose nav gates are next to the PC Builds one.
+    for (const p of ['reports.view', 'sales.complete', 'cash.log', 'cash.reconcile',
+      'dropoffs.manage', 'closeout.view', 'audit.view', 'settings.manage'] as const) {
+      expect({ p, can: can('technician', p) }).toEqual({ p, can: false });
+    }
   });
 });

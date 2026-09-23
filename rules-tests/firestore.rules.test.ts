@@ -362,6 +362,78 @@ describe('employee operational permissions (granted)', () => {
     }));
   });
 
+  /**
+   * A TECHNICIAN BUILDS THE MACHINES.
+   *
+   * The feature shipped gated on isStaffOf / 'inventory.add', neither of which
+   * a technician holds — so the staff it exists for could not create or edit a
+   * build at all. 'builds.manage' (canBuildOf here) is its own permission, held
+   * by every human role.
+   */
+  it('TECHNICIAN can create a build, add a costed part and log labour', async () => {
+    await assertSucceeds(setDoc(doc(asTech(), 'user_data', WORKSPACE, 'pcBuilds', 'pc-tech'), {
+      id: 'pc-tech', name: 'Bench Build', kind: 'shelf', status: 'planning',
+      parts: [], labour: [], createdBy: 'tech-uid', createdByEmail: 'tech@shop.test',
+      createdAt: Date.now(), updatedAt: Date.now(),
+    }));
+    // Parts with costs, labour, status and a price — the full feature.
+    await assertSucceeds(setDoc(doc(asTech(), 'user_data', WORKSPACE, 'pcBuilds', 'pc-tech'), {
+      status: 'assembling',
+      parts: [{ id: 'p1', category: 'CPU', name: 'Ryzen 7', cost: 400, condition: 'new', source: 'retail' }],
+      labour: [{ id: 'l1', userId: 'tech-uid', userEmail: 'tech@shop.test', hours: 3, date: '2026-09-23', rate: 15, loggedAt: Date.now() }],
+      targetPrice: 1200,
+    }, { merge: true }));
+  });
+
+  it('TECHNICIAN can finish a build: the device it became, and a SKU for it', async () => {
+    // The device a build becomes — the ONE inventory doc a technician may create.
+    await assertSucceeds(setDoc(doc(asTech(), 'user_data', WORKSPACE, 'inventory', 'build-dev-1'), {
+      id: 'build-dev-1', kind: 'device', sku: 'FTT-0000501', pcBuildId: 'pc-tech',
+      deviceType: 'Desktop PC', brand: 'Custom', item: 'Custom PC', imei: '',
+      date: '2026-09-23', boughtFrom: '', purchaseCost: 400, repairCost: 0,
+      soldDate: '', soldTo: '', salePrice: 0, deviceStatus: 'ready', notes: '',
+    }));
+    // And the SKU counter that numbered it.
+    await assertSucceeds(setDoc(doc(asTech(), 'user_data', WORKSPACE, 'meta', 'app'),
+      { skuCounters: { FTT: 501 } }, { merge: true }));
+  });
+
+  it('but that is the ONLY inventory a technician may touch', async () => {
+    // No pcBuildId — ordinary stock, denied.
+    await assertFails(setDoc(doc(asTech(), 'user_data', WORKSPACE, 'inventory', 'plain-1'), {
+      id: 'plain-1', kind: 'device', sku: 'FTT-0000502', deviceType: 'Phone',
+      item: 'iPhone 15', imei: '', date: '2026-09-23', boughtFrom: '',
+      purchaseCost: 700, repairCost: 0, soldDate: '', soldTo: '', salePrice: 0, notes: '',
+    }));
+    // A pcBuildId pasted onto a phone does not make it a build device.
+    await assertFails(setDoc(doc(asTech(), 'user_data', WORKSPACE, 'inventory', 'plain-2'), {
+      id: 'plain-2', kind: 'device', sku: 'FTT-0000503', pcBuildId: 'pc-tech',
+      deviceType: 'Phone', item: 'iPhone 15', imei: '', date: '2026-09-23', boughtFrom: '',
+      purchaseCost: 700, repairCost: 0, soldDate: '', soldTo: '', salePrice: 0, notes: '',
+    }));
+    // Nor a build device booked as already sold.
+    await assertFails(setDoc(doc(asTech(), 'user_data', WORKSPACE, 'inventory', 'plain-3'), {
+      id: 'plain-3', kind: 'device', sku: 'FTT-0000504', pcBuildId: 'pc-tech',
+      deviceType: 'Desktop PC', item: 'Custom PC', imei: '', date: '2026-09-23', boughtFrom: '',
+      purchaseCost: 400, repairCost: 0, soldDate: '2026-09-23', soldTo: 'Ali', salePrice: 1200, notes: '',
+    }));
+    // No accessories, and no UPDATING an existing device.
+    await assertFails(setDoc(doc(asTech(), 'user_data', WORKSPACE, 'accessories', 'acc-tech'), {
+      id: 'acc-tech', kind: 'accessory', item: 'Case', quantity: 5, costPerUnit: 2, sellingPrice: 10,
+    }));
+    await assertFails(setDoc(doc(asTech(), 'user_data', WORKSPACE, 'inventory', 'build-dev-1'),
+      { targetSalePrice: 99 }, { merge: true }));
+  });
+
+  it('and the SKU counter grant does not open the meta doc', async () => {
+    // settings stays owner-only, including alongside a legitimate counter write.
+    await assertFails(setDoc(doc(asTech(), 'user_data', WORKSPACE, 'meta', 'app'),
+      { settings: { shopName: 'Hacked' } }, { merge: true }));
+    await assertFails(setDoc(doc(asTech(), 'user_data', WORKSPACE, 'meta', 'app'),
+      { skuCounters: { FTT: 999 }, settings: { shopName: 'Hacked' } }, { merge: true }));
+  });
+
+
   it('only the OWNER can delete a build — it carries part costs and labour history', async () => {
     const { deleteDoc } = await import('firebase/firestore');
     await assertFails(deleteDoc(doc(asEmployee(), 'user_data', WORKSPACE, 'pcBuilds', 'pc1')));

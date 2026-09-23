@@ -596,6 +596,7 @@ const PERM_ROWS: { perm: Permission; label: string }[] = [
   { perm: 'cash.reconcile', label: 'Reconcile the cash drawer' },
   { perm: 'repairs.tech', label: 'Work on repairs' },
   { perm: 'repairs.manage', label: 'Manage repairs' },
+  { perm: 'builds.manage', label: 'Custom PC builds' },
   { perm: 'reports.view', label: 'View reports' },
   { perm: 'reports.profit.summary', label: 'See profit summary (period totals)' },
   { perm: 'reports.profit.detailed', label: 'See detailed profit (full history & costs)' },

@@ -4,6 +4,7 @@ import { Role, Permission } from '../types';
 const ALL: Permission[] = [
   'inventory.add', 'inventory.edit', 'inventory.delete',
   'sales.complete', 'sales.void', 'sales.return', 'dropoffs.manage', 'repairs.manage', 'repairs.tech', 'repairs.performance',
+  'builds.manage',
   'cash.log', 'cash.reconcile',
   'reports.view', 'reports.profit.summary', 'reports.profit.detailed',
   'users.manage', 'users.tech', 'users.pin', 'security.manage', 'timeclock.use', 'payroll.manage', 'closeout.view',
@@ -16,6 +17,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   manager: [
     'inventory.add', 'inventory.edit',
     'sales.complete', 'sales.void', 'sales.return', 'dropoffs.manage', 'repairs.manage', 'repairs.tech', 'repairs.performance',
+    'builds.manage',
     'cash.log', 'cash.reconcile',
     'reports.view', 'audit.view', 'users.tech', 'users.pin', 'security.manage',
     'timeclock.use', 'payroll.manage', 'closeout.view',
@@ -47,13 +49,27 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     'inventory.add', 'inventory.edit',
     'sales.complete', 'sales.void', 'sales.return', 'dropoffs.manage',
     'repairs.manage', 'repairs.tech', 'reports.view',
+    'builds.manage',
     'cash.log',        // log a cash in/out / withdrawal at the register
     'cash.reconcile',  // count and close the drawer at end of shift
     'timeclock.use',
   ],
   // Technicians get a repair-only, profit-free experience — but still clock in.
+  //
+  // AND PC BUILDS, in full. 'builds.manage' is the one general-shop permission
+  // a technician holds, because a technician is usually the person actually
+  // building the machine. The feature was first shipped gated on
+  // 'inventory.add', which a technician does not hold — so the staff it exists
+  // for could not open it. Note this is 'builds.manage' and NOT 'inventory.add':
+  // a technician still has no general inventory access, and finishing a build
+  // authorises exactly one device — the one that build became (firestore.rules).
+  //
+  // Still profit-free: they may ENTER a part cost and see "Recorded"
+  // afterwards, like any non-financial role, but reading costs and margins
+  // remains reports.profit.detailed, per person.
   technician: [
     'repairs.tech', 'timeclock.use',
+    'builds.manage',
   ],
   // A KIOSK IS A DEVICE, NOT A PERSON. The shared iPad by the door holds NO
   // permissions at all — deliberately empty, not "employee minus a few".

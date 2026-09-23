@@ -515,6 +515,26 @@ export type Permission =
   | 'repairs.manage'  // full repair management: create/delete, price, batches, customer
   | 'repairs.tech'    // technician-scoped: view + update repair work fields & status
   | 'repairs.performance' // view per-technician repair performance (owner + manager)
+  /**
+   * Custom PC builds (domain/pcBuild.ts) — the whole section.
+   *
+   * ITS OWN PERMISSION, held by EVERY human role including technicians. It
+   * deliberately does not piggy-back on inventory.add: technicians do not hold
+   * that, and technicians are usually the people actually building the
+   * machines, so gating builds behind it locked out exactly the staff the
+   * feature is for.
+   *
+   * It covers the full feature — create a build, add and edit parts, enter
+   * part costs, log labour, move status, set the target/quote price, print the
+   * spec sheet and the display card, and FINISH a shelf build (which creates
+   * the inventory device for that build, and only that device — see
+   * firestore.rules).
+   *
+   * What it does NOT grant: reading cost figures. That stays
+   * reports.profit.detailed, per person, exactly as before. Entering a cost
+   * and reading the shop's margins are different decisions.
+   */
+  | 'builds.manage'
   | 'reports.view'
   | 'reports.profit.summary'    // period totals (Dashboard revenue/profit cards) — manager default
   | 'reports.profit.detailed'   // full historical breakdowns + per-record cost/profit — owner default
