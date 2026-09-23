@@ -100,9 +100,9 @@ const toMessages = (turns: AiTurn[]): Anthropic.MessageParam[] =>
 /**
  * Server tools a task opted into.
  *
- * Nothing sets `tools` today. When the retail-price lookup lands it will pass
- * `{ kind: "webSearch" }` and this is the only place that needs to know what
- * that means for Claude.
+ * `{ kind: "webSearch" }` is the only one, and gpuPerformance is the only op
+ * that sets it. This is the only place that needs to know what it means for
+ * Claude.
  */
 const toTools = (tools: ServerTool[] | undefined) =>
   (tools ?? []).map(t => ({
@@ -144,20 +144,34 @@ export const createClaudeProvider = (apiKey: string): AiProvider => {
 
     async runStructured(task: StructuredTask): Promise<unknown> {
       return guarded(async () => {
+        const serverTools = toTools(task.tools);
         const response = await client().messages.create({
           model: modelFor("claude", task.tier),
           max_tokens: task.maxTokens,
           ...(task.system ? { system: task.system } : {}),
           messages: toMessages(task.turns),
-          tools: [{
-            name: task.resultName,
-            description: task.resultDescription,
-            // The API validates the arguments against this schema before
-            // returning them. validate.ts still re-checks — see the header.
-            strict: true,
-            input_schema: task.schema as Anthropic.Tool.InputSchema,
-          }],
-          tool_choice: { type: "tool", name: task.resultName },
+          tools: [
+            ...serverTools,
+            {
+              name: task.resultName,
+              description: task.resultDescription,
+              // The API validates the arguments against this schema before
+              // returning them. The task still re-checks afterwards — see the
+              // header, and listingPolicy/gpuPolicy for what a schema cannot say.
+              strict: true,
+              input_schema: task.schema as Anthropic.Tool.InputSchema,
+            },
+          ],
+          // FORCING the extraction tool is right when it is the only tool: it
+          // removes the "model wrote prose instead" failure entirely. It is
+          // WRONG when a server tool is also on the table, because forcing the
+          // answer leaves no turn in which to search — the model would answer
+          // from recall, which is the one thing that op exists to avoid. So
+          // with tools present the choice is auto, and a response that never
+          // calls the extraction tool is treated as a failed request below.
+          tool_choice: serverTools.length
+            ? { type: "auto" }
+            : { type: "tool", name: task.resultName },
         });
         const call = response.content.find(
           (b): b is Anthropic.ToolUseBlock => b.type === "tool_use" && b.name === task.resultName,

@@ -222,6 +222,20 @@ export const cardPrintStyle = (half: boolean, orientation: CardOrientation = 'la
   .badge{background:#eef2ff;color:#3730a3;border:1px solid #c7d2fe;border-radius:999px;
     padding:${half ? '3px 10px' : '6px 16px'};font-size:${half ? '9pt' : '12pt'};font-weight:800}
   .shop{font-size:${half ? '8pt' : '11pt'};color:#64748b;font-weight:600}
+  /* Expected performance: always a range, always with its settings. */
+  .perf{margin:${half ? '4px 0' : '10px 0'};border-top:1px solid #e2e8f0;padding-top:${half ? '4px' : '8px'}}
+  .perf-row{display:flex;align-items:baseline;justify-content:space-between;gap:10px;
+    font-size:${half ? '8.5pt' : '12pt'};padding:1px 0}
+  .perf-game{font-weight:700;min-width:0}
+  .perf-set{font-weight:400;color:#64748b;font-size:${half ? '7pt' : '9pt'}}
+  .perf-fps{font-weight:800;white-space:nowrap}
+  .perf-tested{color:#047857;font-size:${half ? '6.5pt' : '8pt'};text-transform:uppercase;letter-spacing:.05em}
+  .perf-note{font-size:${half ? '6pt' : '7.5pt'};color:#94a3b8;margin-top:2px}
+  /* The share link's QR, in the footer beside the warranty badge. */
+  .qr{display:flex;flex-direction:column;align-items:center;gap:2px;flex-shrink:0;text-align:center}
+  .qr img{width:${half ? '52px' : '86px'};height:${half ? '52px' : '86px'};display:block}
+  .qr-cap{font-size:${half ? '6.5pt' : '8.5pt'};color:#334155;font-weight:700;max-width:${half ? '78px' : '120px'};line-height:1.15}
+  .qr-url{font-size:${half ? '6pt' : '7.5pt'};color:#64748b;font-family:ui-monospace,Menlo,monospace}
   /* The DIY comparison line, quieter than the price and louder than the foot. */
   .diy{font-size:${half ? '9pt' : portrait ? '12pt' : '13pt'};color:#334155;margin-top:6px;font-weight:600}
   .diy b{color:#0f172a}
@@ -230,7 +244,22 @@ export const cardPrintStyle = (half: boolean, orientation: CardOrientation = 'la
 `;
 };
 
-const cardBody = (card: DisplayCard, half: boolean, portrait = false): string => `
+/**
+ * The QR block. A BARE QR GETS IGNORED — on a shelf card, next to a price,
+ * a square of noise with no caption is furniture. The line under it is what
+ * makes somebody lift their phone.
+ */
+const qrBlock = (opts: CardPrintOptions): string => {
+  if (!opts.qrDataUrl) return '';
+  return `
+    <div class="qr">
+      <img src="${esc(opts.qrDataUrl)}" alt="" />
+      <div class="qr-cap">Scan for full specs and photos</div>
+      ${opts.qrLabel ? `<div class="qr-url">${esc(opts.qrLabel)}</div>` : ''}
+    </div>`;
+};
+
+const cardBody = (card: DisplayCard, half: boolean, portrait = false, opts: CardPrintOptions = {}): string => `
   <div class="card">
     <div class="head">
       <h1 class="name">${esc(truncateName(card.name, half ? 34 : portrait ? 34 : 46))}</h1>
@@ -246,6 +275,15 @@ const cardBody = (card: DisplayCard, half: boolean, portrait = false): string =>
           <div class="save">You save ${esc(card.comparison.saving)}</div>` : ''}
       </div>
     </div>
+    ${card.performance.length ? `
+      <div class="perf">
+        ${card.performance.map(p => `
+          <div class="perf-row">
+            <span class="perf-game">${esc(p.game)} <span class="perf-set">${esc(p.detail)}</span></span>
+            <span class="perf-fps">${esc(p.fps)}${p.measured ? ' <span class="perf-tested">tested in-shop</span>' : ''}</span>
+          </div>`).join('')}
+        <div class="perf-note">Estimates based on published benchmarks; actual performance varies with settings and game updates.</div>
+      </div>` : ''}
     <div class="specs">
       ${card.specs.map(s => `
         <div class="spec">
@@ -260,12 +298,26 @@ const cardBody = (card: DisplayCard, half: boolean, portrait = false): string =>
     <div class="foot">
       ${card.warrantyBadge ? `<span class="badge">${esc(card.warrantyBadge)}</span>` : '<span></span>'}
       <span class="shop">${esc(card.shopName)}${card.shopPhone ? ` · ${esc(card.shopPhone)}` : ''}</span>
+      ${qrBlock(opts)}
     </div>
   </div>`;
 
 export interface CardPrintOptions {
   half?: boolean;
   orientation?: CardOrientation;
+  /**
+   * The share link's QR, already rendered to a data URL by the caller.
+   *
+   * Passed IN rather than generated here so this module stays synchronous and
+   * printable from a test — and, more usefully, so the QR can only ever be
+   * the one the caller just derived from the CURRENT code. There is no cached
+   * image anywhere that could outlive a revoked link, which is the failure
+   * worth designing out: a dead QR printed onto a card that then sits on a
+   * shelf for a month.
+   */
+  qrDataUrl?: string;
+  /** The link in the form a customer would type, printed under the QR. */
+  qrLabel?: string;
 }
 
 /** The display card's rendered HTML — exported for the same reason. */
@@ -275,8 +327,8 @@ export const displayCardHtml = (card: DisplayCard, opts: CardPrintOptions = {}):
   // Half-page prints TWO copies to a sheet — the point of the option is to get
   // two cards out of one piece of paper, not a smaller card on a whole one.
   return half
-    ? cardBody(card, true, portrait) + cardBody(card, true, portrait)
-    : cardBody(card, false, portrait);
+    ? cardBody(card, true, portrait, opts) + cardBody(card, true, portrait, opts)
+    : cardBody(card, false, portrait, opts);
 };
 
 export const printDisplayCard = (

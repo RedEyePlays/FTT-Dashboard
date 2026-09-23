@@ -47,6 +47,8 @@ interface Props {
   workspaceId?: string;
   currentUserId?: string;
   onFindStockPhoto?: (item: InventoryItem) => Promise<boolean>;
+  /** settings.operations.deviceWarrantyDays — what a generated advert promises. */
+  deviceWarrantyDays?: number;
   // May return a promise so bulk actions can tell which items in a multi-select
   // action actually succeeded, instead of assuming every write landed.
   onUpdate: (id: string, field: keyof InventoryItem, value: any) => void | Promise<void>;
@@ -345,7 +347,7 @@ const PhotoThumb: React.FC<{ item: InventoryItem; onClick: () => void }> = ({ it
   );
 };
 
-export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activity, auditLogs = [], canViewCost = false, userId, section, onSelectSection, onSave, workspaceId, currentUserId, onFindStockPhoto, onUpdate, onDelete, onGenerateSku, onSeed, repairs = [], customers, onCreateCustomer, onCreateRepair, onOpenRepair, notes, noteRole, onOpenNote }) => {
+export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activity, auditLogs = [], canViewCost = false, userId, section, onSelectSection, onSave, workspaceId, currentUserId, onFindStockPhoto, deviceWarrantyDays, onUpdate, onDelete, onGenerateSku, onSeed, repairs = [], customers, onCreateCustomer, onCreateRepair, onOpenRepair, notes, noteRole, onOpenNote }) => {
   const linkedRepairOf = (id: string): Repair | undefined => linkedRepairFor(id, repairs);
   // Only a STILL-OPEN ticket flags the device as in repair; a completed/picked
   // up/cancelled one leaves the SKU cell exactly as it was.
@@ -705,7 +707,7 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
       onSave={(item) => { onSave(item); setAddKind(null); }}
       onGenerateSku={onGenerateSku}
       onOpenDuplicate={(it) => { setAddKind(null); openItem(it); }}
-      workspaceId={workspaceId} currentUserId={currentUserId} onFindStockPhoto={onFindStockPhoto}
+      workspaceId={workspaceId} currentUserId={currentUserId} onFindStockPhoto={onFindStockPhoto} deviceWarrantyDays={deviceWarrantyDays}
       onClose={() => { setAddKind(null); if (!isMobile) focusSearch(); }} />
   ) : null;
 
@@ -1075,7 +1077,7 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
       )}
 
       {expandItem && <ItemFormModal initial={expandItem} canViewCost={canViewCost} deviceBuyers={deviceBuyers} onSave={onSave} onGenerateSku={onGenerateSku} onClose={closeItem}
-        workspaceId={workspaceId} currentUserId={currentUserId} onFindStockPhoto={onFindStockPhoto}
+        workspaceId={workspaceId} currentUserId={currentUserId} onFindStockPhoto={onFindStockPhoto} deviceWarrantyDays={deviceWarrantyDays}
         linkedRepair={linkedRepairOf(expandItem.id)}
         onCreateRepair={onCreateRepair ? () => { onCreateRepair(expandItem); setExpandItem(null); } : undefined}
         onOpenRepair={onOpenRepair ? (id: string) => { onOpenRepair(id); setExpandItem(null); } : undefined}

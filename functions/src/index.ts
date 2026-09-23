@@ -8,7 +8,7 @@ import { AiRouter, fallbackFromConfig, providerFromConfig } from "./ai/router";
 import { ProviderError, ValidationError } from "./ai/types";
 import {
   ChatTurn, InventoryRow, needsProfitVisibility, runBulkParse, runChat,
-  runImeiExtract, runInsights,
+  runImeiExtract, runInsights, runListing, runGpuPerformance,
 } from "./ai/tasks";
 
 if (!admin.apps.length) admin.initializeApp();
@@ -83,7 +83,11 @@ type AiRequest =
   | { op: "insights"; data: InventoryRow[] }
   | { op: "bulkParse"; text: string }
   | { op: "imeiExtract"; base64Image: string }
-  | { op: "chat"; inventory: InventoryRow[]; history: ChatTurn[] };
+  | { op: "chat"; inventory: InventoryRow[]; history: ChatTurn[] }
+  // The FACTS object is built on the client from an allow-list
+  // (domain/listing.ts) — never an inventory row, never a build document.
+  | { op: "listing"; facts: Record<string, unknown>; platform?: string; length?: string; markUsedParts?: boolean }
+  | { op: "gpuPerformance"; gpuModel: string };
 
 // insights/chat send the full inventory — including purchaseCost, salePrice,
 // repairCost — to the model and can return real profit/margin figures, so they
@@ -134,7 +138,12 @@ function buildRouter(): AiRouter {
  *   - insights:     financial insights markdown from the inventory log
  *   - bulkParse:    parse free text into structured inventory items
  *   - imeiExtract:  read IMEI1/IMEI2/Serial/EID separately from a base64 image
- *   - chat:         conversational assistant over the inventory
+ *   - chat:           conversational assistant over the inventory
+ *   - listing:        a Marketplace title + description, from an allow-listed
+ *                     facts object, checked for invented figures before it is
+ *                     returned (src/ai/listingPolicy.ts)
+ *   - gpuPerformance: proposed fps ranges for one GPU, from published
+ *                     benchmarks via web search, for a human to review
  */
 export const aiGenerate = onCall(
   { secrets: [ANTHROPIC_API_KEY, GEMINI_API_KEY], region: "us-central1" },
@@ -176,6 +185,15 @@ export const aiGenerate = onCall(
           return {
             text: await runChat(router, body.inventory ?? [], body.history ?? []),
           };
+        case "listing":
+          return await runListing(router, {
+            facts: body.facts ?? {},
+            platform: body.platform,
+            length: body.length,
+            markUsedParts: body.markUsedParts === true,
+          });
+        case "gpuPerformance":
+          return await runGpuPerformance(router, body.gpuModel ?? "");
         default:
           throw new HttpsError(
             "invalid-argument",

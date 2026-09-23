@@ -1,5 +1,5 @@
 import { LookupError } from './api';
-import { BuildLookupResult, PublicBuild, PublicPart, lookupBuild } from './buildApi';
+import { BuildLookupResult, PublicBuild, PublicPart, PublicPerformance, lookupBuild } from './buildApi';
 
 /**
  * THE PUBLIC BUILD LISTING.
@@ -93,6 +93,38 @@ function renderPhoto(b: PublicBuild): string {
     </figure>`;
 }
 
+/**
+ * WHAT IT RUNS AT.
+ *
+ * Every figure is a RANGE with its resolution and preset beside it — a bare
+ * "160 fps" is a promise, and this page is read by somebody deciding whether
+ * to drive across town. A row the shop measured on this actual machine says
+ * so, because that is a much stronger claim and it is true.
+ *
+ * A build whose card has no reviewed figures renders NOTHING here. There is no
+ * empty state and no placeholder: the one thing this must never do is make up
+ * a number.
+ */
+function renderPerformance(rows: PublicPerformance[] | undefined): string {
+  if (!rows?.length) return '';
+  return `
+    <h2 class="b-section">Expected performance</h2>
+    <ul class="b-perf">
+      ${rows.map(r => `
+        <li class="b-perf-row">
+          <span class="b-perf-game">
+            ${escapeHtml(r.game)}
+            <span class="b-perf-set">${escapeHtml(r.resolution)} · ${escapeHtml(r.preset)}</span>
+          </span>
+          <span class="b-perf-fps">
+            ${r.fpsLow === r.fpsHigh ? `${r.fpsLow} fps` : `${r.fpsLow}–${r.fpsHigh} fps`}
+            ${r.measured ? '<span class="b-perf-tested">tested in-shop</span>' : ''}
+          </span>
+        </li>`).join('')}
+    </ul>
+    <p class="b-perf-note">Estimates based on published benchmarks; actual performance varies with settings and game updates.</p>`;
+}
+
 function renderPart(p: PublicPart): string {
   // The price line: what it costs new, and at the named store when that is
   // different. Never a cost — the server has no field for one.
@@ -168,6 +200,8 @@ function renderBuild(b: PublicBuild): string {
 
       <h2 class="b-section">What’s in it</h2>
       <ul class="b-parts">${b.parts.map(renderPart).join('')}</ul>
+
+      ${renderPerformance(b.performance)}
 
       ${b.warrantyDays > 0
         ? `<p class="b-shopwarranty"><strong>${b.warrantyDays}-day warranty</strong> from ${escapeHtml(b.shopName)}</p>`

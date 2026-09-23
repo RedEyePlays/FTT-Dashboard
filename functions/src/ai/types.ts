@@ -20,11 +20,11 @@
  *     trigger the fallback. That distinction is the whole reason the two are
  *     separated here rather than folded together.
  *
- * ROOM FOR TOOLS, WITHOUT BUILDING THEM. A "look up retail price" task using
- * Claude's web search is planned for the PC-builds feature. `TextTask.tools`
- * exists so that task can opt in later without reshaping this interface; no op
- * sets it today, and a provider that cannot serve a requested tool says so
- * rather than silently answering without it.
+ * SERVER TOOLS. `tools` on either task kind opts into a provider-run tool
+ * before the answer. One op uses it today: gpuPerformance asks for web search
+ * so its frame-rate ranges come from published benchmarks rather than recall.
+ * A provider that cannot serve a requested tool says so rather than silently
+ * answering without it.
  */
 
 /** Which vendor actually answered. Logged on every call. */
@@ -63,6 +63,16 @@ export interface StructuredTask {
   system?: string;
   turns: AiTurn[];
   maxTokens: number;
+  /**
+   * Server tools the model may use BEFORE it answers.
+   *
+   * The gpuPerformance op sets `{ kind: "webSearch" }` so its figures come
+   * from published benchmarks rather than recall. A provider that cannot serve
+   * a requested tool must REFUSE (see the gemini adapter) rather than answer
+   * without it: an answer that silently came from memory when the whole point
+   * was to look it up is worse than an error, because it looks the same.
+   */
+  tools?: ServerTool[];
   /**
    * The name the provider gives the extraction tool. Part of the prompt the
    * model sees, so it is descriptive rather than generic.

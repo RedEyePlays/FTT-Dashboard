@@ -222,3 +222,48 @@ describe('the machine’s photo', () => {
     expect(app.querySelector('script')).toBeNull();
   });
 });
+
+describe('expected performance', () => {
+  const perf = [
+    { game: 'Fortnite', resolution: '1080p', preset: 'High', fpsLow: 120, fpsHigh: 160 },
+    { game: 'Cyberpunk 2077', resolution: '1440p', preset: 'Ultra', fpsLow: 45, fpsHigh: 62, measured: true as const },
+  ];
+
+  it('shows every figure as a RANGE, with its resolution and preset', async () => {
+    const text = await render({ ...BUILD, performance: perf });
+    expect(text).toContain('Expected performance');
+    expect(text).toContain('Fortnite');
+    expect(text).toContain('120–160 fps');
+    expect(text).toContain('1080p');
+    expect(text).toContain('High');
+  });
+
+  it('flags a figure the shop measured on this machine', async () => {
+    const text = await render({ ...BUILD, performance: perf });
+    expect(text).toContain('tested in-shop');
+  });
+
+  it('carries the caveat under the block', async () => {
+    const text = await render({ ...BUILD, performance: perf });
+    expect(text).toMatch(/Estimates based on published benchmarks/);
+    expect(text).toMatch(/varies with settings and game updates/);
+  });
+
+  it('renders NOTHING when the card has no reviewed figures', async () => {
+    // No heading, no empty state, no placeholder — the one thing this must
+    // never do is make up a number.
+    const text = await render({ ...BUILD, performance: [] });
+    expect(text).not.toContain('Expected performance');
+    const missing = await render(BUILD);
+    expect(missing).not.toContain('Expected performance');
+  });
+
+  it('shows a measured single figure as one number, not a fake range', async () => {
+    const text = await render({
+      ...BUILD,
+      performance: [{ game: 'CS2', resolution: '1080p', preset: 'Competitive', fpsLow: 300, fpsHigh: 300, measured: true as const }],
+    });
+    expect(text).toContain('300 fps');
+    expect(text).not.toContain('300–300');
+  });
+});

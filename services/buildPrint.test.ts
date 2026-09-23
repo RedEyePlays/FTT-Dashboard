@@ -232,3 +232,77 @@ describe('the card prints both ways up', () => {
     }
   });
 });
+
+describe('the QR on the display card', () => {
+  const card = displayCard({
+    build: build(), warrantyDays: 90, shopName: 'FlipThatTech', shopPhone: '416-555-0100',
+  });
+  const QR = 'data:image/png;base64,AAAA';
+
+  it('prints the QR with a caption — a bare QR on a shelf card is furniture', () => {
+    const html = displayCardHtml(card, { qrDataUrl: QR, qrLabel: 'flipthat.tech/b/kadamuze' });
+    expect(html).toContain(QR);
+    expect(html).toContain('Scan for full specs and photos');
+    expect(html).toContain('flipthat.tech/b/kadamuze');
+  });
+
+  it('prints NO QR block at all when the build has no share link', () => {
+    // A square that goes nowhere is worse than no square.
+    const html = displayCardHtml(card, {});
+    expect(html).not.toContain('class="qr"');
+    expect(html).not.toContain('Scan for full specs');
+  });
+
+  it('puts the QR on BOTH copies of a half-page sheet', () => {
+    const html = displayCardHtml(card, { half: true, qrDataUrl: QR });
+    expect(html.split('Scan for full specs and photos')).toHaveLength(3);   // two occurrences
+  });
+
+  it('leaks nothing private alongside it', () => {
+    assertClean(displayCardHtml(card, { qrDataUrl: QR, qrLabel: 'flipthat.tech/b/kadamuze' }));
+  });
+});
+
+describe('performance on the display card', () => {
+  const perf = [
+    { game: 'Fortnite', resolution: '1080p', preset: 'High', fpsLow: 120, fpsHigh: 160, measured: false },
+    { game: 'Cyberpunk 2077', resolution: '1440p', preset: 'Ultra', fpsLow: 45, fpsHigh: 62, measured: true },
+    { game: 'CS2', resolution: '1080p', preset: 'Competitive', fpsLow: 280, fpsHigh: 360, measured: false },
+    { game: 'Warzone', resolution: '1440p', preset: 'High', fpsLow: 90, fpsHigh: 120, measured: false },
+  ];
+  const withPerf = () => displayCard({
+    build: build(), warrantyDays: 90, shopName: 'FlipThatTech', shopPhone: '416-555-0100',
+    performance: perf,
+  });
+
+  it('prints each figure as a range with its settings', () => {
+    const html = displayCardHtml(withPerf());
+    expect(html).toContain('Fortnite');
+    expect(html).toContain('120–160 fps');
+    expect(html).toContain('1080p · High');
+  });
+
+  it('marks what was tested in-shop', () => {
+    expect(displayCardHtml(withPerf())).toContain('tested in-shop');
+  });
+
+  it('keeps the card readable — only the first few lines, 1080p first', () => {
+    const card = withPerf();
+    expect(card.performance).toHaveLength(3);
+    expect(card.performance[0].detail.startsWith('1080p')).toBe(true);
+  });
+
+  it('carries the caveat', () => {
+    expect(displayCardHtml(withPerf())).toContain('Estimates based on published benchmarks');
+  });
+
+  it('prints no performance block at all when there are no figures', () => {
+    const card = displayCard({ build: build(), warrantyDays: 90, shopName: 'FlipThatTech', shopPhone: '' });
+    expect(card.performance).toEqual([]);
+    expect(displayCardHtml(card)).not.toContain('class="perf"');
+  });
+
+  it('leaks nothing private alongside it', () => {
+    assertClean(displayCardHtml(withPerf()));
+  });
+});

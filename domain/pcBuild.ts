@@ -3,6 +3,7 @@ import {
   PartCondition, PartSource, PcBuild,
 } from '../types';
 import { todayISO } from './dates';
+import { totalCollectedSoFar } from './layaway';
 
 /**
  * CUSTOM PC BUILDS — the totals, the labour, and the name.
@@ -449,4 +450,189 @@ export const buildSearchText = (b: PcBuild): string =>
 export const buildKindLabel: Record<BuildKind, string> = {
   shelf: 'Build to sell',
   customer: 'Customer order',
+};
+
+/* ---------------- Duplicating a build ---------------- */
+
+/**
+ * THE SAME SPEC AGAIN.
+ *
+ * The shop builds one machine more than once, and retyping nine parts is the
+ * single biggest cost of starting a build. A duplicate carries the RECIPE and
+ * nothing that belongs to the original machine.
+ *
+ * WHAT COMES ACROSS: the name (suffixed), the kind, the target price, the
+ * comparison store, the notes, and each part's category, model, condition,
+ * source, new price, store price, store name, retail source and PCPartPicker
+ * link. All of that is about a spec, not about an object.
+ *
+ * WHAT DOES NOT, and why each one would be a lie:
+ *   • status — a copy starts at planning; nothing has been ordered yet.
+ *   • labour — nobody has spent an hour on this machine.
+ *   • serials and manufacturer warranty dates — those identify the PHYSICAL
+ *     part in the other machine. Copying a serial would put one part in two
+ *     builds, break the warranty lookup (domain/warranty.ts) and attach a
+ *     maker's warranty to hardware that does not exist yet. This is the one
+ *     that would quietly cause real damage, so it is the one to be sure of.
+ *   • sourceUrl — the order link is a receipt for a purchase already made.
+ *   • customer, deposit, saleId, inventoryId, sku, finishedAt — the original's
+ *     commercial history.
+ *   • shareToken and everything about it — a link points at one machine.
+ *
+ * PART COSTS ARE COPIED, and this is a judgement call: what the shop paid last
+ * time is by far the best estimate of what it will pay this time, and a build
+ * that starts with every cost at zero shows a fictional profit until somebody
+ * fills all nine in. So they come across and each one is FLAGGED
+ * (`costFromCopy`), the row says so, and typing over it clears the flag. The
+ * alternative — a blank, honest, useless form — was rejected deliberately.
+ */
+export interface DuplicateBuildInput {
+  source: PcBuild;
+  /** The new build's id, and one new id per part. Injected: this stays pure. */
+  id: string;
+  partId: (index: number) => string;
+  createdBy: string;
+  createdByEmail: string;
+  now: number;
+  /** Overrides the "… copy" name. */
+  name?: string;
+}
+
+/**
+ * "REAPER Gaming PC" → "REAPER Gaming PC copy" → "… copy 2" → "… copy 3".
+ *
+ * Counts rather than stacking the word: duplicating a duplicate is normal (the
+ * shop builds a batch of the same spec), and "copy copy copy" would be the
+ * name on a printed card.
+ */
+export const duplicateName = (name: string): string => {
+  const base = (name || '').trim() || 'Build';
+  const m = /^(.*?)\s+copy(?:\s+(\d+))?$/i.exec(base);
+  if (!m) return `${base} copy`;
+  const n = m[2] ? parseInt(m[2], 10) : 1;
+  return `${m[1]} copy ${n + 1}`;
+};
+
+export const duplicateBuild = (input: DuplicateBuildInput): PcBuild => {
+  const { source } = input;
+  const parts: BuildPart[] = (source.parts || []).map((p, i) => {
+    const copy: BuildPart = {
+      id: input.partId(i),
+      category: p.category,
+      name: p.name,
+      cost: p.cost || 0,
+      condition: p.condition,
+      source: p.source,
+    };
+    // Everything below is optional on the original too — carried only when it
+    // is actually there, so a duplicate has no empty strings the original
+    // did not have.
+    if (typeof p.retailPrice === 'number') copy.retailPrice = p.retailPrice;
+    if (p.retailSource) copy.retailSource = p.retailSource;
+    if (p.retailCheckedAt) copy.retailCheckedAt = p.retailCheckedAt;
+    if (typeof p.altStorePrice === 'number') copy.altStorePrice = p.altStorePrice;
+    if (p.altStoreName) copy.altStoreName = p.altStoreName;
+    if (p.pcpartpickerUrl) copy.pcpartpickerUrl = p.pcpartpickerUrl;
+    // The flag is only interesting when there is a figure behind it.
+    if ((p.cost || 0) > 0) copy.costFromCopy = true;
+    return copy;
+  });
+
+  const out: PcBuild = {
+    id: input.id,
+    name: input.name?.trim() || duplicateName(source.name),
+    kind: source.kind,
+    status: 'planning',
+    parts,
+    labour: [],
+    createdBy: input.createdBy,
+    createdByEmail: input.createdByEmail,
+    createdAt: input.now,
+    updatedAt: input.now,
+    // Where the recipe came from. Also what the audit entry records, so a
+    // build full of copied costs can be traced back to the one they came from.
+    duplicatedFrom: source.id,
+  };
+  if (typeof source.targetPrice === 'number') out.targetPrice = source.targetPrice;
+  if (typeof source.quotePrice === 'number') out.quotePrice = source.quotePrice;
+  if (source.comparisonStore) out.comparisonStore = source.comparisonStore;
+  if (source.notes) out.notes = source.notes;
+  return out;
+};
+
+/* ---------------- Changing the price after money has moved ---------------- */
+
+/**
+ * Is changing this build's price something the person should be warned about?
+ *
+ * A SHELF build's target price is the shop talking to itself — change it as
+ * often as the parts market does. A CUSTOMER ORDER's quote is a number
+ * somebody has been told, and once a deposit is against it, changing the quote
+ * silently changes what they owe at pickup.
+ *
+ * So: warn, do not block. The quote genuinely does change — a part came in
+ * dearer, the customer added an SSD — and the shop is allowed to say so. What
+ * is not allowed is doing it quietly, or touching the deposit itself: the
+ * deposit is a payment that was taken, it lives in the sale/layaway record,
+ * and nothing on this screen may restate it.
+ */
+export interface PriceChangeWarning {
+  /** What the customer was quoted, and what they would now owe. */
+  from: number | null;
+  to: number;
+  deposit: number;
+  balanceBefore: number | null;
+  balanceAfter: number;
+  message: string;
+}
+
+/**
+ * What has actually been collected against this build so far.
+ *
+ * There is no deposit field on a build and there must not be one: deposits run
+ * through the ordinary layaway flow on the inventory device (see the header),
+ * and a second copy of the number on the build document would be a figure with
+ * no audit trail that drifts the first time a balance payment is taken.
+ *
+ * So it is derived: every sale with a line for this build's device, counted
+ * with the same helper the receipts and refunds use.
+ */
+export const depositOnBuild = (
+  b: Pick<PcBuild, 'inventoryId'>,
+  sales: DepositSale[],
+): number => {
+  if (!b.inventoryId) return 0;
+  const total = (sales || [])
+    .filter(s => (s.lines || []).some(l => l.inventoryId === b.inventoryId))
+    .reduce((n, s) => n + totalCollectedSoFar(s), 0);
+  return round2(total);
+};
+
+export type DepositSale = Parameters<typeof totalCollectedSoFar>[0] & {
+  lines?: { inventoryId?: string }[];
+};
+
+export const priceChangeWarning = (
+  b: Pick<PcBuild, 'kind' | 'targetPrice' | 'quotePrice'>,
+  next: number,
+  deposit: number,
+): PriceChangeWarning | null => {
+  if (b.kind !== 'customer') return null;
+  const paid = Math.max(0, round2(deposit || 0));
+  if (paid <= 0) return null;
+  const from = buildPrice(b);
+  const to = round2(next);
+  if (from != null && from === to) return null;
+  const balanceBefore = from == null ? null : round2(Math.max(0, from - paid));
+  const balanceAfter = round2(Math.max(0, to - paid));
+  return {
+    from, to, deposit: paid, balanceBefore, balanceAfter,
+    message: [
+      `This customer has already paid a $${paid.toFixed(2)} deposit.`,
+      from == null
+        ? `Setting the quote to $${to.toFixed(2)} makes the balance owing $${balanceAfter.toFixed(2)}.`
+        : `Changing the quote from $${from.toFixed(2)} to $${to.toFixed(2)} changes the balance owing from $${balanceBefore!.toFixed(2)} to $${balanceAfter.toFixed(2)}.`,
+      'The deposit itself is not touched — it has been paid and is recorded on the sale.',
+    ].join('\n\n'),
+  };
 };

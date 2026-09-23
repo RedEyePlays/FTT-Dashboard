@@ -99,12 +99,15 @@ describe('mergeSettings', () => {
       repairWarrantyDays: 30,
       repairPrices: [],
       tradeInRanges: [],
+      // The per-GPU frame-rate table (domain/gpuPerformance.ts). Empty until
+      // an owner fills a card in and confirms it.
+      gpuPerformance: [],
     });
   });
 
   it('merges a partial operations patch over the defaults', () => {
     const o = mergeSettings({ operations: { voidWindowDays: 3, returnRestockingFeePercent: 15 } as any }).operations;
-    expect(o).toEqual({ openingFloatDefault: 0, voidWindowDays: 3, returnRestockingFeePercent: 15, agingInventoryDays: 30, autoLockMinutes: 4, staleLayawayDays: 60, booksStartDate: '', paidBreakReasons: [], deviceWarrantyDays: 90, accessoryWarrantyDays: 0, buildLabourRate: 15, repairWarrantyDays: 30, repairPrices: [], tradeInRanges: [] });
+    expect(o).toEqual({ openingFloatDefault: 0, voidWindowDays: 3, returnRestockingFeePercent: 15, agingInventoryDays: 30, autoLockMinutes: 4, staleLayawayDays: 60, booksStartDate: '', paidBreakReasons: [], deviceWarrantyDays: 90, accessoryWarrantyDays: 0, buildLabourRate: 15, repairWarrantyDays: 30, repairPrices: [], tradeInRanges: [], gpuPerformance: [] });
   });
 });
 

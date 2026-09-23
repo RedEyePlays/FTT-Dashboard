@@ -5,6 +5,7 @@ import {
   PUBLIC_BUILD_KEYS,
   PUBLIC_PART_KEYS,
   PUBLIC_PHOTO_KEYS,
+  PUBLIC_PERFORMANCE_KEYS,
   PublicBuild,
   shareVisible,
   toPublicBuild,
@@ -110,6 +111,14 @@ function assertOnlyAllowedKeys(value: PublicBuild): void {
       (PUBLIC_BUILD_KEYS as readonly string[]).includes(key),
       `public build carries an un-allow-listed key: ${key}`,
     );
+  }
+  for (const row of value.performance || []) {
+    for (const key of Object.keys(row)) {
+      assert.ok(
+        (PUBLIC_PERFORMANCE_KEYS as readonly string[]).includes(key),
+        `public performance row carries an un-allow-listed key: ${key}`,
+      );
+    }
   }
   if (value.photo) {
     for (const key of Object.keys(value.photo)) {
@@ -340,4 +349,87 @@ test("the DEVICE document does not leak through the photo it supplied", () => {
 test("a photo row with no url is ignored rather than rendering a broken image", () => {
   const b = build({}, SHOP, device([{ id: "x", kind: "real", url: "" }]));
   assert.equal(b.photo, undefined);
+});
+
+
+/* ---------------- Expected performance ---------------- */
+
+const GPU_TABLE = [
+  { gpuModel: "RTX 4070", game: "Fortnite", resolution: "1080p", preset: "High", fpsLow: 120, fpsHigh: 160 },
+  { gpuModel: "RTX 4070", game: "Fortnite", resolution: "1440p", preset: "High", fpsLow: 90, fpsHigh: 120 },
+  { gpuModel: "RTX 5090", game: "Warzone", resolution: "1080p", preset: "Ultra", fpsLow: 200, fpsHigh: 260 },
+];
+
+const withTable = (over: Record<string, unknown> = {}): PublicBuild =>
+  toPublicBuild(stored(over), { ...SHOP, gpuPerformance: GPU_TABLE }, NOW);
+
+test("the page shows the shop's REVIEWED figures for this build's card", () => {
+  const b = withTable();
+  assert.equal(b.performance.length, 2);
+  assert.ok(b.performance.every(p => p.game === "Fortnite"));
+  assert.deepEqual(b.performance[0], { game: "Fortnite", resolution: "1080p", preset: "High", fpsLow: 120, fpsHigh: 160 });
+  assertOnlyAllowedKeys(b);
+});
+
+test("a card with no rows shows NOTHING rather than an improvised figure", () => {
+  const b = toPublicBuild(
+    stored({ parts: [{ id: "p1", category: "GPU", name: "RX 9070 XT", condition: "new" }] }),
+    { ...SHOP, gpuPerformance: GPU_TABLE }, NOW,
+  );
+  assert.deepEqual(b.performance, []);
+});
+
+test("a shop with no table at all shows nothing, and does not break the listing", () => {
+  const b = build();
+  assert.deepEqual(b.performance, []);
+  assert.equal(b.name, "Starter Gaming PC");
+});
+
+test("a MEASURED figure replaces the estimate and is flagged", () => {
+  const b = withTable({
+    measuredFps: [{
+      id: "m1", game: "Fortnite", resolution: "1080p", preset: "High", fps: 142,
+      measuredBy: "u1", measuredByEmail: "sam@shop.test", measuredAt: 1,
+    }],
+  });
+  const row = b.performance.find(p => p.resolution === "1080p")!;
+  assert.equal(row.fpsLow, 142);
+  assert.equal(row.fpsHigh, 142);
+  assert.equal(row.measured, true);
+  // The 1440p estimate is untouched.
+  assert.equal(b.performance.find(p => p.resolution === "1440p")!.measured, undefined);
+});
+
+test("WHO measured it never leaves the building", () => {
+  const b = withTable({
+    measuredFps: [{
+      id: "m1", game: "CS2", resolution: "1080p", preset: "Competitive", fps: 300,
+      measuredBy: "tech-uid", measuredByEmail: "sam@shop.test", measuredAt: 1,
+    }],
+  });
+  assertOnlyAllowedKeys(b);
+  const json = JSON.stringify(b);
+  assert.ok(!json.includes("sam@shop.test"));
+  assert.ok(!json.includes("tech-uid"));
+});
+
+test("a reversed or unusable row is put right or dropped, never rendered as-is", () => {
+  const b = toPublicBuild(stored(), {
+    ...SHOP,
+    gpuPerformance: [
+      { gpuModel: "RTX 4070", game: "Fortnite", resolution: "1080p", preset: "High", fpsLow: 160, fpsHigh: 120 },
+      { gpuModel: "RTX 4070", game: "CS2", resolution: "1080p", preset: "High", fpsLow: 0, fpsHigh: 0 },
+      { gpuModel: "RTX 4070", game: "Warzone", resolution: "1080p", fpsLow: 90, fpsHigh: 120 },
+    ],
+  }, NOW);
+  assert.equal(b.performance.length, 1);
+  assert.deepEqual(b.performance[0], { game: "Fortnite", resolution: "1080p", preset: "High", fpsLow: 120, fpsHigh: 160 });
+});
+
+test("the card is matched through the board partner and the memory size", () => {
+  const b = toPublicBuild(
+    stored({ parts: [{ id: "p1", category: "GPU", name: "ASUS TUF Gaming GeForce RTX 4070 12GB", condition: "new" }] }),
+    { ...SHOP, gpuPerformance: GPU_TABLE }, NOW,
+  );
+  assert.equal(b.performance.length, 2);
 });

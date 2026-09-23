@@ -2,6 +2,7 @@ import { ViewState, RepairStatus, RecurringFrequency, BreakReason } from '../typ
 import { REPAIR_STATUSES } from './repairs';
 import { PayCycle, PAY_PERIOD_ANCHOR } from './timeclock';
 import { ExpenseCategory, DEFAULT_EXPENSE_CATEGORIES } from './expenses';
+import { GpuPerformanceRow } from './gpuPerformance';
 
 // Central, owner-configurable business settings. Persisted in Firestore (the
 // workspace meta doc) so the shop can be configured without code changes.
@@ -191,6 +192,14 @@ export interface AppSettings {
     repairWarrantyDays?: number;
     /** TRADE-IN RANGES — what the shop pays. Never a firm number. */
     tradeInRanges?: TradeInRange[];
+    /**
+     * EXPECTED GAME PERFORMANCE, PER GPU (domain/gpuPerformance.ts).
+     *
+     * One table for the whole shop, filled a card at a time and confirmed by a
+     * human, so every build with the same card quotes the same figures. The AI
+     * only proposes; nothing reaches this list without the owner pressing save.
+     */
+    gpuPerformance?: GpuPerformanceRow[];
     openingFloatDefault: number;       // default opening cash float pre-filled on the reconciliation screen
     voidWindowDays: number;            // how many days after a sale it can still be voided (0 = same day only)
     returnRestockingFeePercent: number;// default restocking fee % pre-filled when processing a return (0 = none)
@@ -290,7 +299,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   dashboard: { widgets: Object.fromEntries(DASHBOARD_WIDGETS.map(w => [w, true])), landingView: 'dashboard', analyticsRange: 'today' },
   appearance: { theme: 'system' },
   backups: { enabled: false, frequency: 'daily', retention: 14 },
-  operations: { openingFloatDefault: 0, voidWindowDays: 0, returnRestockingFeePercent: 0, agingInventoryDays: 30, staleLayawayDays: 60, autoLockMinutes: 4, booksStartDate: '', paidBreakReasons: [], deviceWarrantyDays: 90, accessoryWarrantyDays: 0, buildLabourRate: 15, repairWarrantyDays: 30, repairPrices: [], tradeInRanges: [] },
+  operations: { gpuPerformance: [], openingFloatDefault: 0, voidWindowDays: 0, returnRestockingFeePercent: 0, agingInventoryDays: 30, staleLayawayDays: 60, autoLockMinutes: 4, booksStartDate: '', paidBreakReasons: [], deviceWarrantyDays: 90, accessoryWarrantyDays: 0, buildLabourRate: 15, repairWarrantyDays: 30, repairPrices: [], tradeInRanges: [] },
   payroll: { cycle: 'biweekly', anchorISO: PAY_PERIOD_ANCHOR },
   expenses: { categories: DEFAULT_EXPENSE_CATEGORIES },
   reviews: {
@@ -322,6 +331,7 @@ export function mergeSettings(partial?: DeepPartial<AppSettings>): AppSettings {
       // DeepPartial row is not a usable RepairPrice/TradeInRange.
       repairPrices: (partial.operations?.repairPrices as RepairPrice[] | undefined) ?? d.operations.repairPrices,
       tradeInRanges: (partial.operations?.tradeInRanges as TradeInRange[] | undefined) ?? d.operations.tradeInRanges,
+      gpuPerformance: (partial.operations?.gpuPerformance as GpuPerformanceRow[] | undefined) ?? d.operations.gpuPerformance,
     },
     payroll: { ...d.payroll, ...partial.payroll },
     expenses: {

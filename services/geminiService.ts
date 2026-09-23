@@ -110,3 +110,76 @@ export const generateChatResponse = async (
   const { text } = (result.data ?? {}) as { text?: string };
   return text || "I'm having trouble analyzing that right now.";
 };
+
+/* ---------------- Listing copy (domain/listingCopy.ts) ---------------- */
+
+export interface GeneratedListing {
+  title: string;
+  description: string;
+}
+
+/**
+ * One Marketplace listing, from an allow-listed FACTS object.
+ *
+ * The caller builds the facts (domain/listingCopy.ts) — this never touches an
+ * inventory row or a build document, so there is no path by which a cost, a
+ * customer or a serial could travel with the request.
+ *
+ * ERRORS ARE THROWN, NOT SWALLOWED. Unlike getFinancialInsights, a listing
+ * that quietly comes back empty would leave somebody staring at a blank box
+ * with no idea whether to wait; and the server has already retried once
+ * (functions/src/ai/tasks.ts) before it gives up.
+ */
+export const generateListing = async (
+  facts: Record<string, unknown>,
+  opts: { platform: string; length: string; markUsedParts: boolean },
+): Promise<GeneratedListing> => {
+  assertOnline();
+  const result = await aiGenerate({
+    op: "listing",
+    facts,
+    platform: opts.platform,
+    length: opts.length,
+    markUsedParts: opts.markUsedParts,
+  });
+  const data = (result.data ?? {}) as Partial<GeneratedListing>;
+  const title = (data.title || "").trim();
+  const description = (data.description || "").trim();
+  if (!title || !description) throw new Error("The AI returned an empty listing.");
+  return { title, description };
+};
+
+/* ---------------- GPU performance (domain/gpuPerformance.ts) ---------------- */
+
+export interface GpuPerformanceProposal {
+  gpuModel: string;
+  rows: {
+    game: string;
+    resolution: string;
+    preset: string;
+    fpsLow: number;
+    fpsHigh: number;
+  }[];
+  sources: string[];
+}
+
+/**
+ * Proposed frame-rate ranges for ONE graphics card, from published benchmarks.
+ *
+ * NOTHING IS SAVED BY THIS CALL. What comes back is a proposal for the owner
+ * to edit and confirm in Settings; the write happens there, with `source: 'ai'`
+ * and the date stamped on.
+ */
+export const proposeGpuPerformance = async (gpuModel: string): Promise<GpuPerformanceProposal> => {
+  assertOnline();
+  const result = await aiGenerate({ op: "gpuPerformance", gpuModel });
+  const data = (result.data ?? {}) as Partial<GpuPerformanceProposal>;
+  if (!Array.isArray(data.rows) || data.rows.length === 0) {
+    throw new Error("The AI returned no usable figures for that card.");
+  }
+  return {
+    gpuModel: (data.gpuModel || gpuModel).trim(),
+    rows: data.rows,
+    sources: Array.isArray(data.sources) ? data.sources : [],
+  };
+};

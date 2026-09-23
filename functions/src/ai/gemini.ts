@@ -1,7 +1,7 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { modelFor } from "./models";
 import {
-  AiProvider, AiTurn, JsonSchema, ProviderError, StructuredTask, TextTask,
+  AiProvider, AiTurn, JsonSchema, ProviderError, ServerTool, StructuredTask, TextTask,
 } from "./types";
 
 /**
@@ -89,6 +89,27 @@ const toContents = (turns: AiTurn[]) =>
     ],
   }));
 
+/**
+ * REFUSE, DO NOT SILENTLY ANSWER WITHOUT THE TOOL.
+ *
+ * This adapter does not wire up Gemini's search grounding. A task that asked
+ * for web search and got an answer from the model's memory instead would look
+ * exactly like one that worked — and the op that asks for it (gpuPerformance)
+ * exists precisely because recalled benchmark figures are the problem.
+ *
+ * Thrown as a ProviderError so it reads as "this provider could not serve the
+ * request", which is what it is. It also means the ROUTER's normal behaviour
+ * applies: with Claude as the fallback, a Gemini-primary deployment still gets
+ * its searched answer from the provider that can do it.
+ */
+const refuseUnsupportedTools = (tools: ServerTool[] | undefined): void => {
+  if (!tools?.length) return;
+  throw new ProviderError(
+    "gemini", "unknown",
+    `Gemini adapter cannot serve the requested server tool (${tools.map(t => t.kind).join(", ")})`,
+  );
+};
+
 export const createGeminiProvider = (apiKey: string): AiProvider => {
   const client = () => {
     if (!apiKey) throw new ProviderError("gemini", "missing_key", "GEMINI_API_KEY is not set");
@@ -99,6 +120,7 @@ export const createGeminiProvider = (apiKey: string): AiProvider => {
     name: "gemini",
 
     async runText(task: TextTask): Promise<string> {
+      refuseUnsupportedTools(task.tools);
       return guarded(async () => {
         const response = await client().models.generateContent({
           model: modelFor("gemini", task.tier),
@@ -110,6 +132,7 @@ export const createGeminiProvider = (apiKey: string): AiProvider => {
     },
 
     async runStructured(task: StructuredTask): Promise<unknown> {
+      refuseUnsupportedTools(task.tools);
       return guarded(async () => {
         const response = await client().models.generateContent({
           model: modelFor("gemini", task.tier),
