@@ -533,7 +533,7 @@ const App: React.FC = () => {
     p.push({ id: 'pos', label: 'Checkout', keywords: 'sell quick sale pos sales', view: 'pos' });
     if (allow('inventory.add')) p.push({ id: 'quickpurchase', label: 'Quick Purchase', keywords: 'buy purchase device counter cash', view: 'quickpurchase' });
     if (allow('repairs.tech')) p.push({ id: 'repairs', label: 'Repairs', keywords: 'tickets', view: 'repairs' });
-    if (allow('inventory.add')) p.push({ id: 'pcbuilds', label: 'PC Builds', keywords: 'custom pc desktop computer build parts gaming', view: 'pcbuilds' });
+    if (allow('builds.manage')) p.push({ id: 'pcbuilds', label: 'PC Builds', keywords: 'custom pc desktop computer build parts gaming', view: 'pcbuilds' });
     if (allow('timeclock.use')) p.push({ id: 'timeclock', label: 'Time Clock', keywords: 'clock in out hours shift break payroll pay', view: 'timeclock' });
     if (allow('closeout.view')) p.push({ id: 'closeout', label: 'Close Out', keywords: 'end of day summary lock up reconcile', view: 'closeout' });
     if (allow('reports.view')) p.push({ id: 'customers', label: 'Customers', keywords: 'crm clients', view: 'customers' });
@@ -2780,10 +2780,13 @@ const App: React.FC = () => {
   };
 
   // ---- CUSTOM PC BUILDS ----------------------------------------------------
-  // Permissions follow inventory: a build IS stock being assembled, so whoever
-  // may add a device may run a build, and only an owner may delete one.
+  // 'builds.manage' — the section's OWN permission, held by every human role
+  // INCLUDING technicians, who are usually the people actually building the
+  // machines. It deliberately does not piggy-back on 'inventory.add', which
+  // technicians do not hold: gating builds behind it locked out exactly the
+  // staff the feature is for. Only an owner may delete a build.
   const handleSaveBuild = async (build: PcBuild, prev?: PcBuild) => {
-    if (!uid || !allow('inventory.add')) return;
+    if (!uid || !allow('builds.manage')) return;
     const next: PcBuild = { ...build, updatedAt: Date.now() };
     try {
       await saveItemSettled(uid, 'pcBuilds', next);
@@ -2822,7 +2825,11 @@ const App: React.FC = () => {
    * blank SKU.
    */
   const handleFinishBuild = async (build: PcBuild, itemName: string): Promise<string | undefined> => {
-    if (!uid || !allow('inventory.add')) return undefined;
+    // 'builds.manage', not 'inventory.add'. This creates an inventory device,
+    // but ONLY the one this build became — firestore.rules authorises a
+    // technician for exactly that device (it must carry a pcBuildId and be
+    // unsold) and for nothing else in inventory.
+    if (!uid || !allow('builds.manage')) return undefined;
     if (build.inventoryId) return build.inventoryId; // already finished — never a second device
     const sku = await handleGenerateSku('device', 'Desktop PC');
     const item = buildToInventoryItem({ build, sku, itemId: newId(), today: todayISO(), itemName });
@@ -3208,7 +3215,7 @@ const App: React.FC = () => {
               ) : undefined}
             />
           )}
-          {view === 'pcbuilds' && allow('inventory.add') && (
+          {view === 'pcbuilds' && allow('builds.manage') && (
             <PcBuildsView
               builds={pcBuilds}
               inventory={data}

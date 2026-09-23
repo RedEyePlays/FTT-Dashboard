@@ -386,3 +386,33 @@ describe('a kiosk write may only GROW the breaks list', () => {
     await assertSucceeds(updateDoc(doc(asOwner(), 'user_data', WORKSPACE, 'timeEntries', 'employee-open'), { breaks: [twoBreaks[0]] }));
   });
 });
+
+/**
+ * PC BUILDS gave technicians a new permission ('builds.manage') and a narrow
+ * inventory-create grant to go with it. A kiosk is a DEVICE, not a person: it
+ * holds no permissions at all, and must pick up nothing from either.
+ */
+describe('a kiosk gets nothing from the PC builds grants', () => {
+  it('cannot read or write a build', async () => {
+    await assertFails(getDoc(doc(asKiosk(), 'user_data', WORKSPACE, 'pcBuilds', 'pc1')));
+    await assertFails(setDoc(doc(asKiosk(), 'user_data', WORKSPACE, 'pcBuilds', 'pc-kiosk'), {
+      id: 'pc-kiosk', name: 'Nope', kind: 'shelf', status: 'planning', parts: [], labour: [],
+      createdBy: 'kiosk-uid', createdByEmail: 'kiosk@shop.test',
+      createdAt: Date.now(), updatedAt: Date.now(),
+    }));
+  });
+
+  it('cannot create the build device, even shaped exactly right', async () => {
+    await assertFails(setDoc(doc(asKiosk(), 'user_data', WORKSPACE, 'inventory', 'kiosk-dev'), {
+      id: 'kiosk-dev', kind: 'device', sku: 'FTT-0000900', pcBuildId: 'pc1',
+      deviceType: 'Desktop PC', brand: 'Custom', item: 'Custom PC', imei: '',
+      date: '2026-09-23', boughtFrom: '', purchaseCost: 0, repairCost: 0,
+      soldDate: '', soldTo: '', salePrice: 0, deviceStatus: 'ready', notes: '',
+    }));
+  });
+
+  it('cannot advance the SKU counters', async () => {
+    await assertFails(setDoc(doc(asKiosk(), 'user_data', WORKSPACE, 'meta', 'app'),
+      { skuCounters: { FTT: 999 } }, { merge: true }));
+  });
+});

@@ -72,6 +72,41 @@ service cloud.firestore {
     // which has its own, tighter conditions.
     function isSelfServiceStaffOf(ws) { return activeMemberOf(ws) && !isManagerUp(ws); }
 
+    // CUSTOM PC BUILDS — 'builds.manage' in services/rbac.ts, held by EVERY
+    // human role, technicians included. It is the one general-shop permission
+    // a technician has, because a technician is usually the person actually
+    // building the machine. (activeMemberOf already excludes the kiosk, which
+    // holds nothing.)
+    //
+    // Named rather than written inline as activeMemberOf so this and rbac.ts
+    // can be read against each other, and so the two can diverge later without
+    // hunting for every place that assumed they were the same.
+    function canBuildOf(ws) { return activeMemberOf(ws); }
+
+    // The ONE inventory document a technician may create: the device a
+    // finished PC build becomes (App.tsx's handleFinishBuild, via
+    // domain/pcBuild.ts's buildToInventoryItem).
+    //
+    // Deliberately narrow. A technician holds no general inventory access, so
+    // this must not become a way to write arbitrary stock: the record has to
+    // carry a non-empty pcBuildId, be a Desktop PC, and be unsold. Create
+    // only — a technician may not UPDATE an inventory document afterwards,
+    // which is also why nothing in the builds UI writes to one.
+    function techBuildDeviceOk() {
+      return request.resource.data.get('pcBuildId', '') is string
+          && request.resource.data.get('pcBuildId', '').size() > 0
+          && request.resource.data.get('deviceType', '') == 'Desktop PC'
+          && request.resource.data.get('soldDate', '') == ''
+          && request.resource.data.get('salePrice', 0) == 0;
+    }
+
+    // A SKU for that device. Counters live on the workspace meta doc, and a
+    // technician may advance them and touch NOTHING else on it — in
+    // particular not `settings`, which stays owner-only below.
+    function techSkuCounterUpdateOk() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['skuCounters']);
+    }
+
     // A kiosk punch may only ever touch TODAY's shift. Nobody fixes their
     // hours at the iPad: a yesterday entry is a correction, and corrections
     // are the owner/manager's job on a real screen with an audit trail.
@@ -182,10 +217,18 @@ service cloud.firestore {
       allow write: if isStaffOf(ws) || request.auth.uid == ws;
 
       // Inventory & accessories: staff (non-technician) create/update; only the
-      // owner may delete. Technicians have no inventory write access at all.
+      // owner may delete.
+      //
+      // ONE exception for technicians, and only on inventory: finishing a PC
+      // build creates the device that build became, and a technician holds
+      // 'builds.manage' without 'inventory.add'. techBuildDeviceOk() pins that
+      // to a create of an unsold Desktop PC carrying a pcBuildId — a
+      // technician still cannot create ordinary stock, cannot update any
+      // inventory document, and has no write access to accessories at all.
       match /inventory/{id} {
         allow read: if activeMemberOf(ws);
-        allow create, update: if isStaffOf(ws);
+        allow create: if isStaffOf(ws) || (isTechOf(ws) && techBuildDeviceOk());
+        allow update: if isStaffOf(ws);
         allow delete: if isOwnerOf(ws);
       }
       match /accessories/{id} {
@@ -491,9 +534,18 @@ service cloud.firestore {
       // is a UI boundary (domain/costVisibility.ts), exactly as it already is
       // for inventory purchaseCost — this rule is not the thing enforcing it,
       // and pretending otherwise would be worse than saying so.
+      // Custom PC builds. create/update is canBuildOf — NOT isStaffOf, which
+      // excludes technicians. Shipping it as isStaffOf meant the technicians
+      // who build the machines could not create or edit a build at all.
+      //
+      // NOTE these rules cannot hide individual FIELDS on a read: a build
+      // document carries part costs, and any member who may read the
+      // collection can read them. Cost masking (domain/costVisibility.ts) is a
+      // UI boundary, not a security one, and is described as such here so
+      // nobody reads this block as promising more than it does.
       match /pcBuilds/{id} {
         allow read: if activeMemberOf(ws);
-        allow create, update: if isStaffOf(ws);
+        allow create, update: if canBuildOf(ws);
         allow delete: if isOwnerOf(ws);
       }
 
@@ -510,7 +562,10 @@ service cloud.firestore {
       match /meta/{id} {
         allow read: if activeMemberOf(ws);
         allow create: if isStaffOf(ws) && (isOwnerOf(ws) || !request.resource.data.keys().hasAny(['settings']));
-        allow update: if isStaffOf(ws) && (isOwnerOf(ws) || !request.resource.data.diff(resource.data).affectedKeys().hasAny(['settings']));
+        allow update: if (isStaffOf(ws) && (isOwnerOf(ws) || !request.resource.data.diff(resource.data).affectedKeys().hasAny(['settings'])))
+                         // A technician finishing a build needs a SKU, and the
+                         // counters live here. That one field and nothing else.
+                         || (isTechOf(ws) && techSkuCounterUpdateOk());
         allow delete: if isOwnerOf(ws);
       }
 

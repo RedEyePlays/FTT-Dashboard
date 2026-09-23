@@ -72,8 +72,9 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     { key: 'grid', label: 'Inventory', icon: <Table className="w-4 h-4" />, view: 'grid', show: true },
     { key: 'repairs', label: 'Repairs', icon: <Wrench className="w-4 h-4" />, view: 'repairs', show: allow('repairs.tech') },
     // Beside Repairs and Inventory: a build is bench work that becomes stock,
-    // so it belongs where staff already look for both.
-    { key: 'pcbuilds', label: 'PC Builds', icon: <Cpu className="w-4 h-4" />, view: 'pcbuilds', show: allow('inventory.add') },
+    // so it belongs where staff already look for both. Gated on its OWN
+    // permission — a technician holds 'builds.manage' but not 'inventory.add'.
+    { key: 'pcbuilds', label: 'PC Builds', icon: <Cpu className="w-4 h-4" />, view: 'pcbuilds', show: allow('builds.manage') },
     { key: 'customers', label: 'Customers', icon: <Contact className="w-4 h-4" />, view: 'customers', show: allow('reports.view') },
     { key: 'pos', label: 'Quick Sale', icon: <ShoppingCart className="w-4 h-4" />, view: 'pos', show: true },
     { key: 'quickpurchase', label: 'Quick Purchase', icon: <ShoppingBag className="w-4 h-4" />, view: 'quickpurchase', show: allow('inventory.add') },
