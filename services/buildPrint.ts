@@ -1,4 +1,4 @@
-import { CustomerSheet, DisplayCard, truncateName } from '../domain/buildSheet';
+import { CardOrientation, CustomerSheet, DisplayCard, cardOrientation, truncateName } from '../domain/buildSheet';
 import { PRINT_PREVIEW_BAR_HTML, PRINT_PREVIEW_BAR_STYLE } from './printPreview';
 
 /**
@@ -151,11 +151,25 @@ const icon = (category: string): string =>
  * Half-page halves the page box and scales the type down with it, so two cards
  * print to a sheet and each still reads across a room.
  */
-const CARD_STYLE = (half: boolean) => `
+/**
+ * The display card's sheet.
+ *
+ * BOTH ORIENTATIONS ARE REAL LAYOUTS, not one design squeezed into the other
+ * frame. Landscape is wide, so the spec grid runs two-up beside a large price
+ * block. Portrait is tall and narrow, so the head stacks (name over price,
+ * centred) and the specs run as a single column — a two-column grid at 7.5in
+ * wide would clip every part name.
+ */
+export const cardPrintStyle = (half: boolean, orientation: CardOrientation = 'landscape') => {
+  const portrait = orientation === 'portrait';
+  // A half-page card is half the SHEET, whichever way up that sheet is.
+  const w = portrait ? '7.5in' : '10in';
+  const h = portrait ? (half ? '5in' : '10in') : (half ? '3.6in' : '7.5in');
+  return `
   *{box-sizing:border-box}
   body{margin:0;font-family:-apple-system,'Inter',Segoe UI,Arial,sans-serif;background:#fff;color:#0f172a;
     -webkit-print-color-adjust:exact;print-color-adjust:exact}
-  .card{width:${half ? '10in' : '10in'};height:${half ? '3.6in' : '7.5in'};
+  .card{width:${w};height:${h};
     padding:${half ? '0.28in 0.4in' : '0.45in 0.6in'};display:flex;flex-direction:column;
     border:1px solid #e2e8f0;border-radius:${half ? '10px' : '16px'};overflow:hidden;
     background:linear-gradient(135deg,#ffffff 0%,#f8fafc 100%);position:relative}
@@ -165,17 +179,22 @@ const CARD_STYLE = (half: boolean) => `
      on an office printer. */
   .card:before{content:'';position:absolute;left:0;top:0;bottom:0;width:${half ? '6px' : '10px'};
     background:linear-gradient(180deg,#4f46e5,#7c3aed)}
-  .head{display:flex;align-items:flex-start;justify-content:space-between;gap:24px}
-  .name{font-size:${half ? '22pt' : '34pt'};font-weight:800;letter-spacing:-0.025em;line-height:1.05;margin:0;
-    max-width:60%}
-  .price-wrap{text-align:right;flex-shrink:0}
+  /* PORTRAIT stacks the head and centres it; there is no room beside a
+     56pt price on a 7.5in sheet. */
+  .head{display:flex;align-items:${portrait ? 'center' : 'flex-start'};
+    ${portrait ? 'flex-direction:column;text-align:center;' : ''}
+    justify-content:space-between;gap:${portrait ? '6px' : '24px'}}
+  .name{font-size:${half ? '22pt' : portrait ? '30pt' : '34pt'};font-weight:800;letter-spacing:-0.025em;
+    line-height:1.05;margin:0;max-width:${portrait ? '100%' : '60%'}}
+  .price-wrap{text-align:${portrait ? 'center' : 'right'};flex-shrink:0}
   .price{font-size:${half ? '34pt' : '56pt'};font-weight:900;letter-spacing:-0.04em;line-height:1;
     color:#4f46e5;margin:0}
   .was{font-size:${half ? '9pt' : '12pt'};color:#64748b;margin-top:4px}
   .was s{opacity:.75}
   .save{display:inline-block;margin-top:5px;background:#dcfce7;color:#14532d;border:1px solid #86efac;
     border-radius:999px;padding:${half ? '2px 9px' : '4px 13px'};font-size:${half ? '9pt' : '12pt'};font-weight:800}
-  .specs{flex:1;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
+  /* One column in portrait: two columns at this width clips every part name. */
+  .specs{flex:1;display:grid;grid-template-columns:repeat(${portrait ? 1 : 2},minmax(0,1fr));
     gap:${half ? '6px 22px' : '14px 40px'};align-content:center;margin:${half ? '10px 0' : '22px 0'}}
   .spec{display:flex;align-items:center;gap:${half ? '8px' : '13px'};min-width:0}
   .icn{width:${half ? '17px' : '27px'};height:${half ? '17px' : '27px'};color:#4f46e5;flex-shrink:0}
@@ -193,17 +212,26 @@ const CARD_STYLE = (half: boolean) => `
   .badge{background:#eef2ff;color:#3730a3;border:1px solid #c7d2fe;border-radius:999px;
     padding:${half ? '3px 10px' : '6px 16px'};font-size:${half ? '9pt' : '12pt'};font-weight:800}
   .shop{font-size:${half ? '8pt' : '11pt'};color:#64748b;font-weight:600}
-  @page{size:letter landscape;margin:${half ? '0.3in' : '0.4in'}}
+  /* The DIY comparison line, quieter than the price and louder than the foot. */
+  .diy{font-size:${half ? '9pt' : portrait ? '12pt' : '13pt'};color:#334155;margin-top:6px;font-weight:600}
+  .diy b{color:#0f172a}
+  @page{size:letter ${portrait ? 'portrait' : 'landscape'};margin:${half ? '0.3in' : '0.4in'}}
   @media print{ .card{break-inside:avoid;page-break-inside:avoid} }
 `;
+};
 
-const cardBody = (card: DisplayCard, half: boolean): string => `
+const cardBody = (card: DisplayCard, half: boolean, portrait = false): string => `
   <div class="card">
     <div class="head">
-      <h1 class="name">${esc(truncateName(card.name, half ? 34 : 46))}</h1>
+      <h1 class="name">${esc(truncateName(card.name, half ? 34 : portrait ? 34 : 46))}</h1>
       <div class="price-wrap">
         <p class="price">${esc(card.priceLabel)}</p>
-        ${card.comparison ? `
+        ${/* The DIY line is the argument the shop wants to make, so it wins
+              over the plain retail strike-through when both are available. */''}
+        ${card.diyComparison ? `
+          <div class="diy">Build it yourself${card.diyComparison.store ? ` at ${esc(card.diyComparison.store)}` : ''}: <b>${esc(card.diyComparison.total)}</b></div>
+          ${card.diyComparison.saving ? `<div class="save">You save ${esc(card.diyComparison.saving)}</div>` : ''}`
+          : card.comparison ? `
           <div class="was">Parts at retail <s>${esc(card.comparison.retailTotal)}</s></div>
           <div class="save">You save ${esc(card.comparison.saving)}</div>` : ''}
       </div>
@@ -214,7 +242,7 @@ const cardBody = (card: DisplayCard, half: boolean): string => `
           ${icon(s.category)}
           <div class="spec-text">
             <div class="spec-cat">${esc(s.category)}</div>
-            <div class="spec-name" title="${esc(s.name)}">${esc(truncateName(s.name, half ? 26 : 34))}</div>
+            <div class="spec-name" title="${esc(s.name)}">${esc(truncateName(s.name, half ? 26 : portrait ? 30 : 34))}</div>
             ${s.condition ? `<span class="cond">${esc(s.condition)}</span>` : ''}
           </div>
         </div>`).join('')}
@@ -225,15 +253,27 @@ const cardBody = (card: DisplayCard, half: boolean): string => `
     </div>
   </div>`;
 
+export interface CardPrintOptions {
+  half?: boolean;
+  orientation?: CardOrientation;
+}
+
 /** The display card's rendered HTML — exported for the same reason. */
-export const displayCardHtml = (card: DisplayCard, opts: { half?: boolean } = {}): string => {
+export const displayCardHtml = (card: DisplayCard, opts: CardPrintOptions = {}): string => {
   const half = !!opts.half;
+  const portrait = cardOrientation(opts.orientation) === 'portrait';
   // Half-page prints TWO copies to a sheet — the point of the option is to get
   // two cards out of one piece of paper, not a smaller card on a whole one.
-  return half ? cardBody(card, true) + cardBody(card, true) : cardBody(card, false);
+  return half
+    ? cardBody(card, true, portrait) + cardBody(card, true, portrait)
+    : cardBody(card, false, portrait);
 };
 
 export const printDisplayCard = (
   card: DisplayCard,
-  opts: { half?: boolean } = {},
-): void => openPrintWindow(`${card.name} — display card`, CARD_STYLE(!!opts.half), displayCardHtml(card, opts));
+  opts: CardPrintOptions = {},
+): void => openPrintWindow(
+  `${card.name} — display card`,
+  cardPrintStyle(!!opts.half, cardOrientation(opts.orientation)),
+  displayCardHtml(card, opts),
+);

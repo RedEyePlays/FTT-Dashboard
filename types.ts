@@ -1324,6 +1324,19 @@ export interface BuildPart {
   retailCheckedAt?: string;    // YYYY-MM-DD, local
   /** The exact PCPartPicker product link, pasted once found. */
   pcpartpickerUrl?: string;
+  /**
+   * WHAT A CUSTOMER WOULD PAY FOR THIS PART AT A NAMED STORE.
+   *
+   * The argument the shop actually wants to make is not "these parts retail
+   * for X" but "you would pay X at Canada Computers to build this yourself".
+   * So it is a price AND a shop name, kept separate from `retailPrice`, which
+   * stays the generic new price and the fallback when this is not set.
+   *
+   * COMPARISON ONLY. Nothing here touches cost, profit or margin — see
+   * domain/pcBuild.ts's buildTotals, where it is summed on its own.
+   */
+  altStorePrice?: number;
+  altStoreName?: string;
 }
 
 export interface BuildLabourEntry {
@@ -1356,6 +1369,13 @@ export interface PcBuild {
   customerId?: string;
   customerName?: string;
   customerPhone?: string;
+  /**
+   * The store this build is compared against ("Canada Computers"), typed once
+   * and used as the default for each part's altStoreName so it is not retyped
+   * nine times. Optional — without it the comparison falls back to the plain
+   * retail total.
+   */
+  comparisonStore?: string;
   notes?: string;
   /** Set when a shelf build is finished and becomes an inventory device. */
   inventoryId?: string;

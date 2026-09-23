@@ -14,7 +14,10 @@ import {
   isBuildFinished, nextStatus, partsEditable, PARTS_LOCKED_NOTE, pcPartPickerSearchUrl,
   retailAgeDays, retailAsOfLabel, RETAIL_STALE_DAYS, splitBuilds,
 } from '../domain/pcBuild';
-import { canHaveDisplayCard, customerSheet, displayCard } from '../domain/buildSheet';
+import {
+  CARD_ORIENTATIONS, CardOrientation, DEFAULT_CARD_ORIENTATION, canHaveDisplayCard,
+  cardOrientation, customerSheet, displayCard,
+} from '../domain/buildSheet';
 import { buildSearchable, matchesWords, queryWords } from '../domain/itemSearch';
 import { printBuildSheet, printDisplayCard } from '../services/buildPrint';
 import { getStoreProfile } from './SettingsModal';
@@ -23,6 +26,8 @@ import { useSellerLink } from '../hooks/useSellerLink';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 import { useSubmitGuard } from '../hooks/useSubmitGuard';
 import { todayISO } from '../domain/dates';
+import { useFieldDraft } from '../hooks/useFieldDraft';
+import { numericDraft } from '../domain/fieldDraft';
 
 /**
  * CUSTOM PC BUILDS.
@@ -377,7 +382,7 @@ const BuildDetail: React.FC<{
       <div className="flex items-center gap-2 flex-wrap">
         <button onClick={onBack} className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500"><ArrowLeft className="w-4 h-4" /></button>
         <div className="flex-1 min-w-0">
-          <input value={build.name} onChange={e => patch({ name: e.target.value })}
+          <DraftInput value={build.name} recordKey={build.id} onCommit={name => patch({ name })}
             className="text-xl font-bold bg-transparent text-slate-900 dark:text-white w-full outline-none" />
           <p className="text-xs text-slate-400">
             {buildKindLabel[build.kind]}{build.customerName ? ` · ${build.customerName}` : ''}
@@ -416,19 +421,51 @@ const BuildDetail: React.FC<{
         </p>
       )}
 
-      {/* Totals */}
+      {/* TOTALS — ours against theirs, without anyone doing the arithmetic. */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        {[
-          ['Parts', money(totals.partsCost)],
-          ['Labour', `${money(totals.labourCost)} · ${totals.labourHours}h`],
-          ['Total cost', money(totals.totalCost)],
-          [build.kind === 'customer' ? 'Quote' : 'Target', totals.price != null ? money(totals.price) : '—'],
-        ].map(([k, v]) => (
-          <div key={k} className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-3">
-            <p className="text-[11px] uppercase tracking-wide text-slate-400">{k}</p>
-            <p className="text-lg font-bold text-slate-900 dark:text-white">{v}</p>
-          </div>
-        ))}
+        <Tile label="Our cost" value={money(totals.totalCost)}
+          note={`${money(totals.partsCost)} parts + ${money(totals.labourCost)} labour`} />
+
+        {/* A partial retail total is a real figure as far as it goes, but it is
+            NOT the retail price of this machine — so it is labelled as partial
+            rather than presented as the whole. */}
+        <Tile label="Retail" value={totals.retailTotal > 0 ? money(totals.retailTotal) : '—'}
+          note={totals.partCount === 0
+            ? 'No parts yet'
+            : `${totals.retailPriced} of ${totals.partCount} priced`}
+          warn={!totals.retailComplete && totals.retailPriced > 0} />
+
+        {/* The saving is shown ONLY when every part is priced: a saving built
+            from some of the parts is a different number wearing the same
+            label, and nobody reading it can tell. */}
+        {totals.altStoreTotal != null ? (
+          <Tile label={`At ${totals.altStoreName}`} value={money(totals.altStoreTotal)}
+            note={totals.altFallbackCount > 0
+              ? `${totals.altFallbackCount} part${totals.altFallbackCount === 1 ? '' : 's'} use the new price`
+              : 'Every part priced at that store'} />
+        ) : (
+          <Tile label="You save" value={totals.retailSaving != null ? money(totals.retailSaving) : '—'}
+            note={totals.retailSaving != null ? 'Retail − our cost' : 'Price every part to compare'} />
+        )}
+
+        <Tile label={build.kind === 'customer' ? 'Quote' : 'Target'}
+          value={totals.price != null ? money(totals.price) : '—'} />
+      </div>
+
+      {/* The saving keeps its own line when the store tile took its slot. */}
+      {totals.altStoreTotal != null && totals.retailSaving != null && (
+        <p className="text-sm text-slate-600 dark:text-slate-300">
+          Retail {money(totals.retailTotal)} — you save <b className="text-emerald-600">{money(totals.retailSaving)}</b> against our cost.
+        </p>
+      )}
+
+      {/* Typed once here, and the default for every part's own store. */}
+      <div className="flex flex-wrap items-center gap-2">
+        <label className="text-xs text-slate-500 dark:text-slate-400 shrink-0">Compare against</label>
+        <DraftInput value={build.comparisonStore || ''} recordKey={build.id}
+          onCommit={comparisonStore => patch({ comparisonStore })}
+          placeholder="e.g. Canada Computers — sets the default store for every part"
+          className={`${input} max-w-sm`} />
       </div>
       {totals.profit != null && (
         <p className="text-sm text-slate-600 dark:text-slate-300">
@@ -456,7 +493,7 @@ const BuildDetail: React.FC<{
           </p>
         )}
         {(build.parts || []).map(p => (
-          <PartRow key={p.id} part={p} editable={editable}
+          <PartRow key={p.id} part={p} editable={editable} buildStore={build.comparisonStore}
             onChange={x => setPart(p.id, x)} onRemove={() => removePart(p.id)} />
         ))}
       </div>
@@ -512,6 +549,69 @@ const BuildDetail: React.FC<{
 
 /* ---------------- One part ---------------- */
 
+/** One totals tile: a label, the figure, and a line saying where it came from. */
+const Tile: React.FC<{ label: string; value: string; note?: string; warn?: boolean }> = ({ label, value, note, warn }) => (
+  <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-3">
+    <p className="text-[11px] uppercase tracking-wide text-slate-400">{label}</p>
+    <p className="text-lg font-bold text-slate-900 dark:text-white">{value}</p>
+    {note && (
+      <p className={`text-[11px] mt-0.5 ${warn ? 'text-amber-600 dark:text-amber-400 font-medium' : 'text-slate-400'}`}>
+        {warn ? `Partial — ${note}` : note}
+      </p>
+    )}
+  </div>
+);
+
+/**
+ * A FIELD THAT DOES NOT LOSE THE CARET.
+ *
+ * Every input on this screen used to be controlled straight off the saved
+ * build, and every keystroke wrote to Firestore. The subscription echoed the
+ * document back, the input re-rendered with the round-tripped string, and the
+ * browser put the caret at the END — so correcting one letter in the middle of
+ * a part name meant retyping the rest of it.
+ *
+ * These two wrap hooks/useFieldDraft.ts so the fix is uniform: local draft
+ * while focused, committed on blur or after a short pause, and never
+ * overwritten by an incoming update while somebody is typing in it. As a side
+ * effect the write-per-character is gone, which was real Firestore cost.
+ */
+const DraftInput: React.FC<{
+  value: string;
+  /** The record this field belongs to — a part id. Changing it re-seeds. */
+  recordKey: string;
+  onCommit: (v: string) => void;
+  className?: string;
+  placeholder?: string;
+  title?: string;
+  disabled?: boolean;
+  type?: string;
+  autoFocus?: boolean;
+}> = ({ value, recordKey, onCommit, ...rest }) => {
+  const draft = useFieldDraft(value, recordKey, onCommit);
+  return <input {...rest} {...draft.bind} />;
+};
+
+/** The same, for a number. Blank commits `undefined`, not 0 — see numericDraft. */
+const DraftNumber: React.FC<{
+  value: number | undefined;
+  recordKey: string;
+  onCommit: (v: number | undefined) => void;
+  className?: string;
+  placeholder?: string;
+  title?: string;
+  disabled?: boolean;
+  min?: string;
+  step?: string;
+}> = ({ value, recordKey, onCommit, ...rest }) => {
+  const draft = useFieldDraft(
+    value == null ? '' : String(value),
+    recordKey,
+    (v) => onCommit(numericDraft(v)),
+  );
+  return <input type="number" {...rest} {...draft.bind} />;
+};
+
 /**
  * ONE PART.
  *
@@ -528,9 +628,11 @@ const BuildDetail: React.FC<{
 const PartRow: React.FC<{
   part: BuildPart;
   editable: boolean;
+  /** The build's comparison store, which defaults this part's. */
+  buildStore?: string;
   onChange: (p: Partial<BuildPart>) => void;
   onRemove: () => void;
-}> = ({ part, editable, onChange, onRemove }) => {
+}> = ({ part, editable, buildStore, onChange, onRemove }) => {
   const [expanded, setExpanded] = useState(false);
   const stale = retailAgeDays(part);
   const isStale = stale != null && stale > RETAIL_STALE_DAYS;
@@ -545,24 +647,27 @@ const PartRow: React.FC<{
           className={`${input} w-32 shrink-0`}>
           {PART_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
         </select>
-        <input value={part.name} disabled={!editable} onChange={e => onChange({ name: e.target.value })}
+        <DraftInput value={part.name} recordKey={part.id} disabled={!editable}
+          onCommit={name => onChange({ name })}
           placeholder="Exact model, e.g. RTX 4070 Windforce OC 12GB" className={`${input} flex-1 min-w-[180px]`} />
 
         {/* The two money fields, kept together so they wrap as a pair. */}
         <div className="flex items-start gap-2 shrink-0">
           <div className="w-24">
-            <input type="number" min="0" step="0.01" disabled={!editable} value={part.cost || ''}
-              onChange={e => onChange({ cost: parseFloat(e.target.value) || 0 })}
+            <DraftNumber value={part.cost || undefined} recordKey={part.id} disabled={!editable}
+              min="0" step="0.01" onCommit={v => onChange({ cost: v ?? 0 })}
               placeholder="Cost" title="What the shop paid for this part" className={input} />
             <span className="block text-[10px] text-slate-400 mt-0.5 text-center">Paid</span>
           </div>
           <div className="w-28">
-            <input type="number" min="0" step="0.01" disabled={!editable} value={part.retailPrice ?? ''}
-              onChange={e => onChange({
-                retailPrice: parseFloat(e.target.value) || undefined,
+            <DraftNumber value={part.retailPrice} recordKey={part.id} disabled={!editable}
+              min="0" step="0.01"
+              onCommit={retailPrice => onChange({
+                retailPrice,
                 // A price with no date looks current forever, so the date is
-                // stamped WITH it rather than left to be filled in.
-                retailCheckedAt: todayISO(),
+                // stamped WITH it rather than left to be filled in. Clearing
+                // the price clears the date with it.
+                retailCheckedAt: retailPrice == null ? undefined : todayISO(),
               })}
               placeholder="Retail" title="What it sells for new — used for the customer's value comparison"
               className={input} />
@@ -607,8 +712,8 @@ const PartRow: React.FC<{
           </div>
           <div className="md:col-span-2">
             <label className={label}>Listing / order link</label>
-            <input value={part.sourceUrl || ''} disabled={!editable}
-              onChange={e => onChange({ sourceUrl: e.target.value })} className={input}
+            <DraftInput value={part.sourceUrl || ''} recordKey={part.id} disabled={!editable}
+              onCommit={sourceUrl => onChange({ sourceUrl })} className={input}
               placeholder="https://…" />
           </div>
           <div>
@@ -616,8 +721,8 @@ const PartRow: React.FC<{
                 lookup — a dead GPU and the number on the card is all a
                 customer will have (domain/warranty.ts). */}
             <label className={label}>Serial</label>
-            <input value={part.serial || ''} disabled={!editable}
-              onChange={e => onChange({ serial: e.target.value })} className={input} />
+            <DraftInput value={part.serial || ''} recordKey={part.id} disabled={!editable}
+              onCommit={serial => onChange({ serial })} className={input} />
           </div>
           <div>
             <label className={label}>Manufacturer warranty until</label>
@@ -626,8 +731,8 @@ const PartRow: React.FC<{
           </div>
           <div>
             <label className={label}>PCPartPicker product link</label>
-            <input value={part.pcpartpickerUrl || ''} disabled={!editable}
-              onChange={e => onChange({ pcpartpickerUrl: e.target.value })} className={input}
+            <DraftInput value={part.pcpartpickerUrl || ''} recordKey={part.id} disabled={!editable}
+              onCommit={pcpartpickerUrl => onChange({ pcpartpickerUrl })} className={input}
               placeholder="Paste the exact product link" />
           </div>
           <div>
@@ -636,8 +741,8 @@ const PartRow: React.FC<{
                 not the price. */}
             <label className={label}>Retail source</label>
             <div className="flex gap-2">
-              <input value={part.retailSource || ''} disabled={!editable}
-                onChange={e => onChange({ retailSource: e.target.value })} className={input}
+              <DraftInput value={part.retailSource || ''} recordKey={part.id} disabled={!editable}
+                onCommit={retailSource => onChange({ retailSource })} className={input}
                 placeholder="e.g. Canada Computers" />
               {/* ─────────────────────────────────────────────────────────────
                   UNIMPLEMENTED — "Look up retail price" goes here.
@@ -660,6 +765,25 @@ const PartRow: React.FC<{
               </p>
             )}
           </div>
+          {/* WHAT A CUSTOMER WOULD PAY AT A NAMED STORE. The argument the shop
+              makes is not "these parts retail for X" but "you would pay X at
+              Canada Computers to build this yourself". Comparison only — it
+              never touches cost, profit or margin. */}
+          <div>
+            <label className={label}>Price at {buildStore || 'comparison store'}</label>
+            <DraftNumber value={part.altStorePrice} recordKey={part.id} disabled={!editable}
+              min="0" step="0.01" onCommit={altStorePrice => onChange({ altStorePrice })}
+              className={input} placeholder="0.00" />
+            <p className="text-[11px] text-slate-400 mt-1">
+              {part.altStorePrice == null ? 'Falls back to the new price above.' : 'Used in the “build it yourself” total.'}
+            </p>
+          </div>
+          <div>
+            <label className={label}>Store for this part</label>
+            <DraftInput value={part.altStoreName || ''} recordKey={part.id} disabled={!editable}
+              onCommit={altStoreName => onChange({ altStoreName })} className={input}
+              placeholder={buildStore || 'e.g. Canada Computers'} />
+          </div>
         </div>
       )}
     </div>
@@ -673,6 +797,9 @@ const PartRow: React.FC<{
  * for when it is.
  */
 const AI_PRICE_LOOKUP_ENABLED = false;
+
+/** Where the remembered print orientation lives. Per device, not per user. */
+const CARD_ORIENTATION_KEY = 'ftt_card_orientation_v1';
 
 /* ---------------- Labour ---------------- */
 
@@ -748,12 +875,24 @@ const CardPreview: React.FC<{
   const [half, setHalf] = useState(false);
   const [showComparison, setShowComparison] = useState(true);
   const [showConditions, setShowConditions] = useState(true);
+  const [showStoreName, setShowStoreName] = useState(true);
+  // A shop prints the same way every time, so the choice is remembered per
+  // device. Read through cardOrientation, which copes with whatever is
+  // actually in localStorage — it survives a cleared or blocked store.
+  const [orientation, setOrientation] = useState<CardOrientation>(() => {
+    try { return cardOrientation(localStorage.getItem(CARD_ORIENTATION_KEY)); }
+    catch { return DEFAULT_CARD_ORIENTATION; }
+  });
+  const chooseOrientation = (o: CardOrientation) => {
+    setOrientation(o);
+    try { localStorage.setItem(CARD_ORIENTATION_KEY, o); } catch { /* private window */ }
+  };
   useEscapeKey(onClose);
 
   const card = displayCard({
     build, price: devicePrice, warrantyDays,
     shopName: store.storeName, shopPhone: (store as { phone?: string }).phone || '',
-    showComparison, showConditions,
+    showComparison, showConditions, showStoreName,
   });
 
   return (
@@ -771,7 +910,16 @@ const CardPreview: React.FC<{
             <p className="text-lg font-extrabold text-slate-900 dark:text-white leading-tight truncate">{card.name}</p>
             <div className="text-right shrink-0">
               <p className="text-2xl font-black text-indigo-600 dark:text-indigo-400 leading-none">{card.priceLabel}</p>
-              {card.comparison && (
+              {card.diyComparison ? (
+                <>
+                  <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1">
+                    Build it yourself{card.diyComparison.store ? ` at ${card.diyComparison.store}` : ''}: <b>{card.diyComparison.total}</b>
+                  </p>
+                  {card.diyComparison.saving && (
+                    <p className="text-[11px] text-emerald-700 dark:text-emerald-400 font-bold">You save {card.diyComparison.saving}</p>
+                  )}
+                </>
+              ) : card.comparison && (
                 <p className="text-[11px] text-emerald-700 dark:text-emerald-400 font-bold mt-1">You save {card.comparison.saving}</p>
               )}
             </div>
@@ -790,26 +938,46 @@ const CardPreview: React.FC<{
           )}
         </div>
 
+        {/* Chosen BEFORE printing — both are real layouts, not one design
+            squeezed into the other frame (services/buildPrint.ts). */}
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-slate-600 dark:text-slate-300">Print</span>
+          <div className="flex rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden">
+            {CARD_ORIENTATIONS.map(o => (
+              <button key={o} onClick={() => chooseOrientation(o)}
+                className={`px-3 py-1.5 text-xs font-semibold capitalize ${
+                  orientation === o
+                    ? 'bg-indigo-600 text-white'
+                    : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700'}`}>
+                {o}
+              </button>
+            ))}
+          </div>
+        </div>
+
         <div className="space-y-1.5 text-sm">
           {([
             ['Half page (two per sheet)', half, setHalf],
-            ['Show the retail comparison', showComparison, setShowComparison],
+            ['Show the price comparison', showComparison, setShowComparison],
+            ...(card.diyComparison || build.comparisonStore
+              ? [['Name the store on the card', showStoreName, setShowStoreName] as [string, boolean, (v: boolean) => void]]
+              : []),
             ['Show condition badges', showConditions, setShowConditions],
           ] as [string, boolean, (v: boolean) => void][]).map(([text, value, set]) => (
             <label key={text} className="flex items-center gap-2 text-slate-600 dark:text-slate-300 cursor-pointer">
               <input type="checkbox" checked={value} onChange={e => set(e.target.checked)} className="rounded" /> {text}
             </label>
           ))}
-          {!card.comparison && showComparison && (
+          {!card.comparison && !card.diyComparison && showComparison && (
             <p className="text-[11px] text-amber-600 dark:text-amber-400">
-              No comparison shown: every part needs a retail price, or the total would understate the machine.
+              No comparison shown: every part needs a price, or the total would understate the machine.
             </p>
           )}
         </div>
 
         <div className="flex justify-end gap-2">
           <button onClick={onClose} className="px-4 py-2 text-sm rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">Close</button>
-          <button onClick={() => printDisplayCard(card, { half })}
+          <button onClick={() => printDisplayCard(card, { half, orientation })}
             className="flex items-center gap-2 px-4 py-2 text-sm rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-medium">
             <Printer className="w-4 h-4" /> Print
           </button>
