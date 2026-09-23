@@ -50,6 +50,7 @@ import { attributeDrawerEntry, stampNewEntries } from './domain/dayLedger';
 import { CrashReport, crashActivityLine, crashId } from './domain/crashReport';
 import { isCostEntry, isCostEntryField, costAccessFor } from './domain/costVisibility';
 import { dbErrorHeading, sectionUnavailableNotice } from './domain/subscriptionAccess';
+import { TechScreen, techScreenFor } from './domain/techShell';
 import { floorFor, buildBelowFloorSaleAudit, targetBelowFloor, TARGET_BELOW_FLOOR_NOTE, belowFloorSales } from './domain/priceFloor';
 import { paidBreakChangeImpact, paidBreakChangeMessage, paidBreakChangeAudit, sameReasons } from './domain/paidBreakChange';
 import { buildKioskClockIn, buildKioskClockOut, buildKioskStartBreak, buildKioskEndBreak, validateKioskWrite } from './domain/kiosk';
@@ -165,6 +166,19 @@ const App: React.FC = () => {
 
   // --- UI STATE ---
   const [view, setView] = useState<ViewState>('dashboard');
+  /**
+   * The technician shell's own screen.
+   *
+   * Technicians do NOT go through the main shell or its navigation — they get
+   * a focused screen, by the owner's decision. That shell used to be hard-wired
+   * to the repairs view, which made 'builds.manage' a permission they held and
+   * could never reach: there was no route to PC Builds from anywhere in it.
+   *
+   * EXACTLY TWO VALUES. Every other view stays unreachable for this role, and
+   * the setter below clamps anything else back to 'repairs' rather than
+   * trusting the caller.
+   */
+  const [techView, setTechView] = useState<TechScreen>('repairs');
   // Load the deferred collections (time entries, pay periods, cash
   // reconciliations, drop-offs, settlements) the first time the user opens a view
   // that needs them. Idempotent; once enabled it stays for the session.
@@ -2984,14 +2998,28 @@ const App: React.FC = () => {
     );
   }
 
-  // --- Technician: simplified, repair-only experience (same workspace) ---
+  // --- Technician: simplified two-screen experience (same workspace) ---
+  //
+  // My Repairs (default, unchanged) and PC Builds. No general navigation: the
+  // header renders ONE button that swaps between them, and `goTech` below is
+  // the only way to move, clamping anything that is not 'pcbuilds' back to the
+  // repairs screen. A technician cannot reach Inventory, Reports, Customers,
+  // Settings or any other view by any route — there is no route.
   if (appUser.role === 'technician') {
+    const canBuild = allow('builds.manage');
+    // domain/techShell.ts is the ONLY way to move between the two screens, and
+    // it is a whitelist: anything that is not the builds screen lands on
+    // repairs. The header's brand button also routes through it.
+    const goTech = (v: ViewState) => setTechView(techScreenFor(v, canBuild));
+    // Applied on render too, so revoking the permission while the builds
+    // screen is open falls back to repairs rather than leaving it up.
+    const techScreen = techScreenFor(techView, canBuild);
     return (
       <div className="min-h-screen bg-slate-50/50 dark:bg-slate-950 pb-10 flex flex-col transition-colors duration-200">
         <AppHeader
           isTech
-          view="repairs"
-          onNavigate={navigate}
+          view={techScreen}
+          onNavigate={goTech}
           allow={allow}
           userEmail={appUser.email}
           userRole={appUser.role}
@@ -3008,15 +3036,50 @@ const App: React.FC = () => {
         onSwitchUser={switchingAvailable(deviceMode) ? () => { setSwitching(true); setAppLocked(true); } : undefined}
         />
         <main className="mx-auto px-4 sm:px-6 lg:px-8 py-8 flex-1 w-full max-w-6xl">
-          <ErrorBoundary variant="route" label="Repairs" onCrash={handleCrash} userEmail={appUser?.email}>
-          <TechRepairsView
-            repairs={repairs}
-            batches={repairBatches}
-            auditLogs={auditLogs}
-            onTechUpdate={handleTechUpdateRepair}
-            onPrintAudit={handleRepairPrintAudit}
-          />
-          </ErrorBoundary>
+          {techScreen === 'repairs' ? (
+            <ErrorBoundary variant="route" label="Repairs" onCrash={handleCrash} userEmail={appUser?.email}>
+            <TechRepairsView
+              repairs={repairs}
+              batches={repairBatches}
+              auditLogs={auditLogs}
+              onTechUpdate={handleTechUpdateRepair}
+              onPrintAudit={handleRepairPrintAudit}
+            />
+            </ErrorBoundary>
+          ) : (
+            <ErrorBoundary variant="route" label="PC Builds" onCrash={handleCrash} userEmail={appUser?.email}>
+            <Suspense fallback={<LoadingSkeleton message="Loading PC Builds…" />}>
+            {/*
+              * THE SAME PcBuildsView the rest of the shop uses — not a reduced
+              * copy. A technician gets the whole feature: create, parts with
+              * costs, the PCPartPicker look-up, retail price with its source
+              * and date, labour, status, price, both printed pieces, and
+              * finishing a shelf build into inventory.
+              *
+              * The handlers a technician has no permission for are simply not
+              * passed, so the actions do not exist for them rather than
+              * failing on click:
+              *   onDelete          owner only
+              *   onTakeDeposit     needs sales.complete
+              *   onCreateCustomer  customers are isStaffOf-write in the rules
+              *   onOpenInventoryItem  would navigate to a view they cannot reach
+              */}
+            <PcBuildsView
+              builds={pcBuilds}
+              inventory={data}
+              customers={customers}
+              canViewCost={allow('reports.profit.detailed')}
+              currentUserId={appUser.id}
+              currentUserEmail={appUser.email}
+              labourRate={settings.operations.buildLabourRate ?? 15}
+              warrantyDays={settings.operations.deviceWarrantyDays ?? 90}
+              onSave={handleSaveBuild}
+              onFinishBuild={handleFinishBuild}
+              unavailableNotice={refusedCollections.includes('pcBuilds') ? sectionUnavailableNotice('PC Builds') : undefined}
+            />
+            </Suspense>
+            </ErrorBoundary>
+          )}
         </main>
       </div>
     );

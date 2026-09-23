@@ -219,9 +219,29 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
         </button>
 
         {isTech ? (
-          // Technician: repair-only header.
+          /*
+           * Technician: a focused shell with exactly TWO screens, and one
+           * button to move between them — deliberately not a nav and not a tab
+           * bar. Everything else stays unreachable for this role.
+           *
+           * Without this button 'builds.manage' was a permission a technician
+           * held and could never use: the shell is hard-wired to the repairs
+           * screen, so there was no route to PC Builds from anywhere.
+           *
+           * The label and icon name the DESTINATION, so the button reads as an
+           * action from either side rather than as a tab that might already be
+           * selected. `view` here is the shell's own local state, clamped by
+           * App.tsx to these two values.
+           */
           <nav className="ml-auto flex items-center gap-1 sm:gap-2">
-            <NavButton active icon={<Wrench className="w-4 h-4" />} label="Repairs" onClick={() => onNavigate('repairs')} />
+            {allow('builds.manage') ? (
+              view === 'pcbuilds'
+                ? <NavButton active={false} icon={<Wrench className="w-4 h-4" />} label="My Repairs" onClick={() => onNavigate('repairs')} />
+                : <NavButton active={false} icon={<Cpu className="w-4 h-4" />} label="PC Builds" onClick={() => onNavigate('pcbuilds')} />
+            ) : (
+              // No builds permission: exactly the header this role had before.
+              <NavButton active icon={<Wrench className="w-4 h-4" />} label="Repairs" onClick={() => onNavigate('repairs')} />
+            )}
             {ProfileMenu}
           </nav>
         ) : (
