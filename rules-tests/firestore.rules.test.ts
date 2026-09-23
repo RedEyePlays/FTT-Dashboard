@@ -398,6 +398,37 @@ describe('employee operational permissions (granted)', () => {
       { skuCounters: { FTT: 501 } }, { merge: true }));
   });
 
+  /**
+   * The finish sequence a technician actually performs, IN ORDER — the check
+   * that the whole chain works rather than each grant in isolation. A denial
+   * at any step would leave a build marked finished against a device that does
+   * not exist, or a device with no SKU.
+   */
+  it('END TO END: a technician finishes a build, in the order the app does it', async () => {
+    // 1. The build exists and is ready (created by the technician earlier).
+    await assertSucceeds(setDoc(doc(asTech(), 'user_data', WORKSPACE, 'pcBuilds', 'pc-e2e'), {
+      id: 'pc-e2e', name: 'Bench Build', kind: 'shelf', status: 'ready',
+      parts: [{ id: 'p1', category: 'CPU', name: 'Ryzen 7', cost: 400, condition: 'new', source: 'retail' }],
+      labour: [], createdBy: 'tech-uid', createdByEmail: 'tech@shop.test',
+      targetPrice: 1200, createdAt: Date.now(), updatedAt: Date.now(),
+    }));
+    // 2. handleGenerateSku → allocateSku advances the counter on the meta doc.
+    await assertSucceeds(setDoc(doc(asTech(), 'user_data', WORKSPACE, 'meta', 'app'),
+      { skuCounters: { FTT: 777 } }, { merge: true }));
+    // 3. The device the build became (domain/pcBuild.ts's buildToInventoryItem).
+    await assertSucceeds(setDoc(doc(asTech(), 'user_data', WORKSPACE, 'inventory', 'dev-e2e'), {
+      id: 'dev-e2e', kind: 'device', sku: 'FTT-0000777', pcBuildId: 'pc-e2e',
+      deviceType: 'Desktop PC', brand: 'Custom', item: 'Custom PC · Ryzen 7',
+      model: 'Ryzen 7', imei: '', date: '2026-09-23', boughtFrom: '',
+      purchaseCost: 400, repairCost: 0, soldDate: '', soldTo: '', salePrice: 0,
+      condition: 'New', purchaseSource: 'Built in-house', targetSalePrice: 1200,
+      deviceStatus: 'ready', notes: '',
+    }));
+    // 4. The build is linked back to it and stamped finished.
+    await assertSucceeds(setDoc(doc(asTech(), 'user_data', WORKSPACE, 'pcBuilds', 'pc-e2e'),
+      { inventoryId: 'dev-e2e', sku: 'FTT-0000777', finishedAt: Date.now() }, { merge: true }));
+  });
+
   it('but that is the ONLY inventory a technician may touch', async () => {
     // No pcBuildId — ordinary stock, denied.
     await assertFails(setDoc(doc(asTech(), 'user_data', WORKSPACE, 'inventory', 'plain-1'), {
