@@ -5,6 +5,7 @@ import {
   generatedItemName, isBackwards, isBuildFinished, isSellable, labourCost, nextStatus,
   partsCost, partsEditable, pcPartPickerSearchUrl, retailAgeDays, retailAsOfLabel,
   retailComparison, specsLine, splitBuilds, buildSearchText,
+  partComparisonPrice, partStoreName,
 } from './pcBuild';
 import { profitAndLoss } from './reports';
 import { buildSearchable, queryWords, matchesWords } from './itemSearch';
@@ -282,5 +283,141 @@ describe('search uses the shared matcher', () => {
       expect({ q, hit: matchesWords(s, queryWords(q)) }).toEqual({ q, hit: true });
     }
     expect(matchesWords(s, queryWords('macbook'))).toBe(false);
+  });
+});
+
+/**
+ * OUR COST vs RETAIL vs "BUILD IT YOURSELF AT <STORE>".
+ *
+ * The two numbers the owner wants without doing arithmetic, plus the argument
+ * the shop actually makes to a customer — which is not "these parts retail for
+ * X" but "you would pay X at Canada Computers to build this yourself".
+ */
+describe('build totals: ours, retail, and the comparison store', () => {
+  const PARTS = [
+    part({ id: 'p1', cost: 400, retailPrice: 480 }),
+    part({ id: 'p2', cost: 500, retailPrice: 700 }),
+    part({ id: 'p3', cost: 80, retailPrice: 120 }),
+  ];
+
+  it('OUR COST is parts plus labour, and says which is which', () => {
+    const t = buildTotals(build({ parts: PARTS, labour: [labour({ hours: 3, rate: 15 })] }));
+    expect(t.partsCost).toBe(980);
+    expect(t.labourCost).toBe(45);
+    expect(t.totalCost).toBe(1025);
+  });
+
+  it('RETAIL counts how many parts are priced, out of how many there are', () => {
+    const t = buildTotals(build({ parts: PARTS }));
+    expect(t.retailTotal).toBe(1300);
+    expect(t.retailPriced).toBe(3);
+    expect(t.partCount).toBe(3);
+    expect(t.retailComplete).toBe(true);
+  });
+
+  it('a PARTIAL retail total is still summed, but never called complete', () => {
+    // The screen labels it partial; the figure itself is real as far as it goes.
+    const t = buildTotals(build({ parts: [...PARTS, part({ id: 'p4', cost: 90 })] }));
+    expect(t.retailPriced).toBe(3);
+    expect(t.partCount).toBe(4);
+    expect(t.retailComplete).toBe(false);
+    expect(t.retailTotal).toBe(1300);
+  });
+
+  it('THE SAVING IS NULL until every part is priced', () => {
+    // A saving from three parts out of four is a different number wearing the
+    // same label, and nobody reading it can tell.
+    const whole = buildTotals(build({ parts: PARTS, labour: [labour({ hours: 3, rate: 15 })] }));
+    expect(whole.retailSaving).toBe(275);   // 1300 − 1025
+
+    const partial = buildTotals(build({ parts: [...PARTS, part({ id: 'p4', cost: 90 })] }));
+    expect(partial.retailSaving).toBeNull();
+  });
+
+  it('an empty build claims nothing', () => {
+    const t = buildTotals(build({ parts: [] }));
+    expect(t.retailComplete).toBe(false);
+    expect(t.retailSaving).toBeNull();
+    expect(t.partCount).toBe(0);
+  });
+});
+
+describe('"build it yourself at <store>"', () => {
+  const store = 'Canada Computers';
+
+  it('sums the store prices when every part has one', () => {
+    const t = buildTotals(build({
+      comparisonStore: store,
+      parts: [
+        part({ id: 'p1', cost: 400, retailPrice: 480, altStorePrice: 510 }),
+        part({ id: 'p2', cost: 500, retailPrice: 700, altStorePrice: 740 }),
+      ],
+    }));
+    expect(t.altStoreName).toBe(store);
+    expect(t.altStoreTotal).toBe(1250);
+    expect(t.altFallbackCount).toBe(0);
+    expect(t.altComplete).toBe(true);
+  });
+
+  it('FALLS BACK to the new price for parts with no store price, and says how many', () => {
+    // Skipping them would understate the comparison — the exact thing this
+    // figure exists to be honest about.
+    const t = buildTotals(build({
+      comparisonStore: store,
+      parts: [
+        part({ id: 'p1', cost: 400, retailPrice: 480, altStorePrice: 510 }),
+        part({ id: 'p2', cost: 500, retailPrice: 700 }),
+        part({ id: 'p3', cost: 80, retailPrice: 120 }),
+      ],
+    }));
+    expect(t.altStoreTotal).toBe(1330);     // 510 + 700 + 120
+    expect(t.altFallbackCount).toBe(2);
+    expect(t.altComplete).toBe(true);
+  });
+
+  it('gives no total at all when a part has neither price', () => {
+    const t = buildTotals(build({
+      comparisonStore: store,
+      parts: [part({ id: 'p1', cost: 400, altStorePrice: 510 }), part({ id: 'p2', cost: 500 })],
+    }));
+    expect(t.altComplete).toBe(false);
+    expect(t.altStoreTotal).toBeNull();
+  });
+
+  it('is absent entirely when no store is set', () => {
+    const t = buildTotals(build({ parts: [part({ cost: 400, retailPrice: 480, altStorePrice: 510 })] }));
+    expect(t.altStoreName).toBeNull();
+    expect(t.altStoreTotal).toBeNull();
+    expect(t.altFallbackCount).toBe(0);
+  });
+
+  it('NEVER touches cost, profit or margin', () => {
+    // Comparison prices are an argument, not an accounting figure.
+    const plain = build({ parts: [part({ cost: 400, retailPrice: 480 })], targetPrice: 900 });
+    const compared = build({
+      parts: [part({ cost: 400, retailPrice: 480, altStorePrice: 9999 })],
+      comparisonStore: store, targetPrice: 900,
+    });
+    const a = buildTotals(plain);
+    const b = buildTotals(compared);
+    expect(b.partsCost).toBe(a.partsCost);
+    expect(b.totalCost).toBe(a.totalCost);
+    expect(b.profit).toBe(a.profit);
+    expect(b.marginPercent).toBe(a.marginPercent);
+  });
+
+  it('a part is priced at its own store price, else its new price', () => {
+    expect(partComparisonPrice(part({ retailPrice: 480, altStorePrice: 510 }))).toBe(510);
+    expect(partComparisonPrice(part({ retailPrice: 480 }))).toBe(480);
+    expect(partComparisonPrice(part({}))).toBeUndefined();
+    // Zero is not a price anyone charges; treat it as absent rather than free.
+    expect(partComparisonPrice(part({ retailPrice: 480, altStorePrice: 0 }))).toBe(480);
+  });
+
+  it("a part's store defaults to the build's, so it is typed once", () => {
+    const b = build({ comparisonStore: store });
+    expect(partStoreName(part({}), b)).toBe(store);
+    expect(partStoreName(part({ altStoreName: 'Memory Express' }), b)).toBe('Memory Express');
+    expect(partStoreName(part({}), build({}))).toBe('');
   });
 });

@@ -50,6 +50,16 @@ const click = (el: Element) => {
   act(() => { el.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
 };
 
+/**
+ * Text and number fields now hold a local draft and commit on blur, so the
+ * caret survives mid-word editing (hooks/useFieldDraft.ts). React delegates
+ * onBlur to focusout, so a bare 'blur' event would never reach the handler.
+ */
+const blur = (el: HTMLInputElement) => {
+  act(() => { el.dispatchEvent(new FocusEvent('focusout', { bubbles: true })); });
+};
+const setAndCommit = (el: HTMLInputElement, value: string) => { setValue(el, value); blur(el); };
+
 const button = (host: HTMLElement, re: RegExp): HTMLButtonElement =>
   [...host.querySelectorAll('button')].find(b => re.test(b.textContent || ''))! as HTMLButtonElement;
 
@@ -121,7 +131,7 @@ describe('and gets the whole feature', () => {
       .find(i => (i as HTMLInputElement).placeholder === 'Cost') as HTMLInputElement;
     expect(costField).toBeTruthy();       // enterable, not locked
     expect(costField.disabled).toBe(false);
-    setValue(costField, '400');
+    setAndCommit(costField, '400');
 
     const withCost = onSave.mock.calls.at(-1)![0] as PcBuild;
     expect(withCost.parts[0].cost).toBe(400);
@@ -160,7 +170,7 @@ describe('and gets the whole feature', () => {
     click(button(m.host, /Bench Build/));
 
     const nameField = m.host.querySelector('input[value="Bench Build"]') as HTMLInputElement;
-    setValue(nameField, 'Starter Gaming PC');
+    setAndCommit(nameField, 'Starter Gaming PC');
     expect((onSave.mock.calls.at(-1)![0] as PcBuild).name).toBe('Starter Gaming PC');
 
     expect(button(m.host, /Spec sheet/)).toBeTruthy();
@@ -216,7 +226,7 @@ describe('a technician sees the real numbers on a build', () => {
     const costField = [...m.host.querySelectorAll('input')]
       .find(i => (i as HTMLInputElement).placeholder === 'Cost') as HTMLInputElement;
     expect(costField.disabled).toBe(false);       // not locked once set
-    setValue(costField, '385');
+    setAndCommit(costField, '385');
     expect((onSave.mock.calls.at(-1)![0] as PcBuild).parts[0].cost).toBe(385);
     m.unmount();
   });

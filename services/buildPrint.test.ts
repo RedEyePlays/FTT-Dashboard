@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { BuildPart, PcBuild } from '../types';
 import { customerSheet, displayCard } from '../domain/buildSheet';
-import { buildSheetHtml, displayCardHtml } from './buildPrint';
+import { buildSheetHtml, cardPrintStyle, displayCardHtml } from './buildPrint';
 
 /**
  * THE RENDERED OUTPUT, not the data behind it.
@@ -121,5 +121,81 @@ describe('the printed display card', () => {
       showComparison: false, showConditions: false,
     });
     assertClean(displayCardHtml(plain));
+  });
+});
+
+/**
+ * ORIENTATION AND THE COMPARISON LINE, against the real HTML.
+ *
+ * The leak rule applies to every variant, not just the default one — a new
+ * print path is a new place a cost could reach the paper.
+ */
+describe('the card prints both ways up', () => {
+  // 510 + 740 + 130 + 130 = $1,510 at the store, against a $1,200 price.
+  const ALT = [510, 740, 130, 130];
+  const card = (over: Record<string, unknown> = {}) => displayCard({
+    build: build({
+      comparisonStore: 'Canada Computers',
+      parts: PARTS.map((p, i) => ({ ...p, altStorePrice: ALT[i] })),
+    }),
+    warrantyDays: 90, shopName: 'FlipThatTech', shopPhone: '416-555-0100', ...over,
+  });
+
+  it('sets the page orientation it was asked for', () => {
+    // The page box is what actually decides which way the paper comes out.
+    expect(cardPrintStyle(false, 'landscape')).toContain('size:letter landscape');
+    expect(cardPrintStyle(false, 'portrait')).toContain('size:letter portrait');
+    expect(cardPrintStyle(false)).toContain('size:letter landscape');
+  });
+
+  it('LAYS PORTRAIT OUT DIFFERENTLY — not the landscape design squeezed in', () => {
+    const land = cardPrintStyle(false, 'landscape');
+    const port = cardPrintStyle(false, 'portrait');
+    // A single spec column, because two at 7.5in clips every part name.
+    expect(port).toContain('grid-template-columns:repeat(1,');
+    expect(land).toContain('grid-template-columns:repeat(2,');
+    // And a stacked head rather than name-beside-price.
+    expect(port).toContain('flex-direction:column');
+    expect(port).toContain('width:7.5in');
+    expect(land).toContain('width:10in');
+  });
+
+  it('still prints TWO copies per sheet on half-page, in either orientation', () => {
+    for (const orientation of ['landscape', 'portrait'] as const) {
+      const one = displayCardHtml(card(), { orientation }).split('Starter Gaming PC').length - 1;
+      const two = displayCardHtml(card(), { orientation, half: true }).split('Starter Gaming PC').length - 1;
+      expect({ orientation, two }).toEqual({ orientation, two: one * 2 });
+    }
+  });
+
+  it('prints the DIY comparison, preferring it over the plain retail line', () => {
+    const html = displayCardHtml(card());
+    expect(html).toContain('Build it yourself at Canada Computers');
+    expect(html).toContain('$1,510.00');
+    // The strike-through retail line steps aside; two comparisons is noise.
+    expect(html).not.toContain('Parts at retail');
+  });
+
+  it('drops the store NAME when the preview says so, keeping the figure', () => {
+    const html = displayCardHtml(card({ showStoreName: false }));
+    expect(html).toContain('Build it yourself:');
+    expect(html).not.toContain('Canada Computers');
+    expect(html).toContain('$1,510.00');
+  });
+
+  it('falls back to the plain retail line with no comparison store', () => {
+    const html = displayCardHtml(displayCard({
+      build: build(), warrantyDays: 90, shopName: 'FlipThatTech', shopPhone: 'p',
+    }));
+    expect(html).toContain('Parts at retail');
+    expect(html).not.toContain('Build it yourself');
+  });
+
+  it('LEAKS NOTHING in any orientation, half-page or whole', () => {
+    for (const orientation of ['landscape', 'portrait'] as const) {
+      for (const half of [false, true]) {
+        assertClean(displayCardHtml(card(), { orientation, half }));
+      }
+    }
   });
 });

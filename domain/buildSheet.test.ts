@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { BuildPart, PcBuild } from '../types';
 import {
-  CARD_CATEGORIES, PRIVATE_PART_FIELDS, canHaveDisplayCard, customerPart,
-  customerParts, customerSheet, displayCard, truncateName,
+  CARD_CATEGORIES, CARD_ORIENTATIONS, PRIVATE_PART_FIELDS, canHaveDisplayCard,
+  cardOrientation, customerPart, customerParts, customerSheet, displayCard, truncateName,
 } from './buildSheet';
 
 // Costs are deliberately odd numbers that cannot appear inside any public
@@ -237,5 +237,82 @@ describe('long part names truncate gracefully', () => {
     const card = displayCard({ build: longBuild, warrantyDays: 90, shopName: 'F', shopPhone: 'p' });
     expect(card.specs[0].name).toBe(LONG);
     expect(truncateName(card.specs[0].name).length).toBeLessThanOrEqual(43);
+  });
+});
+
+/**
+ * "BUILD IT YOURSELF AT CANADA COMPUTERS: $1,330."
+ *
+ * The argument the shop actually makes. It is a number a customer can check,
+ * so it must never be a partial total wearing a complete label.
+ */
+describe('the DIY comparison on the card', () => {
+  const priced = (over: Partial<PcBuild> = {}) => build({
+    targetPrice: 1200, comparisonStore: 'Canada Computers',
+    parts: [
+      part({ id: 'p1', category: 'CPU', name: 'Ryzen 7', cost: 407, retailPrice: 480, altStorePrice: 510 }),
+      // Retail above the asking price, so the plain retail line is available
+      // too — both comparisons can then be checked independently.
+      part({ id: 'p2', category: 'GPU', name: 'RTX 4070', cost: 503, retailPrice: 900, altStorePrice: 740 }),
+    ],
+    ...over,
+  });
+  const card = (b: PcBuild, over: Record<string, unknown> = {}) =>
+    displayCard({ build: b, warrantyDays: 90, shopName: 'FlipThatTech', shopPhone: 'p', ...over });
+
+  it('names the store, the total and the saving', () => {
+    const c = card(priced());
+    expect(c.diyComparison).toEqual({ store: 'Canada Computers', total: '$1,250.00', saving: '$50.00' });
+    // The plain retail line stands alongside it; the renderer prefers the DIY
+    // one, which services/buildPrint.test.ts checks against the real HTML.
+    expect(c.comparison).toEqual({ retailTotal: '$1,380.00', saving: '$180.00' });
+  });
+
+  it('is ABSENT when a part has no price at that store and none to fall back on', () => {
+    const c = card(priced({
+      parts: [
+        part({ id: 'p1', cost: 407, retailPrice: 480, altStorePrice: 510 }),
+        part({ id: 'p2', cost: 503 }),
+      ],
+    }));
+    expect(c.diyComparison).toBeNull();
+  });
+
+  it('is absent when no comparison store is set — the retail line carries on', () => {
+    const c = card(priced({ comparisonStore: undefined }));
+    expect(c.diyComparison).toBeNull();
+    expect(c.comparison).not.toBeNull();
+  });
+
+  it('omits an UNFLATTERING saving rather than printing a negative one', () => {
+    const c = card(priced({ targetPrice: 1400 }));
+    expect(c.diyComparison?.total).toBe('$1,250.00');
+    expect(c.diyComparison?.saving).toBeNull();
+  });
+
+  it('honours the preview toggles: the comparison off, or the name off', () => {
+    expect(card(priced(), { showComparison: false }).diyComparison).toBeNull();
+    const noName = card(priced(), { showStoreName: false });
+    expect(noName.diyComparison).toEqual({ store: '', total: '$1,250.00', saving: '$50.00' });
+  });
+
+  it('LEAKS NOTHING — same rule as everything else on this card', () => {
+    assertNothingPrivate(card(priced()), [407, 503, 910, 17, 4]);
+  });
+});
+
+describe('card orientation', () => {
+  it('is landscape or portrait, and landscape is the default', () => {
+    expect(CARD_ORIENTATIONS).toEqual(['landscape', 'portrait']);
+    expect(cardOrientation(undefined)).toBe('landscape');
+    expect(cardOrientation('landscape')).toBe('landscape');
+    expect(cardOrientation('portrait')).toBe('portrait');
+  });
+
+  it('a stored value that means nothing falls back rather than breaking the print', () => {
+    // It comes out of localStorage, so it can be anything at all.
+    for (const v of ['', 'sideways', null, 7, {}]) {
+      expect({ v, o: cardOrientation(v) }).toEqual({ v, o: 'landscape' });
+    }
   });
 });

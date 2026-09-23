@@ -133,6 +133,18 @@ export interface DisplayCard {
   priceLabel: string;
   /** Null unless EVERY part has a retail price — see pcBuild.ts's retailComparison. */
   comparison: { retailTotal: string; saving: string } | null;
+  /**
+   * "Build it yourself at Canada Computers: $1,330".
+   *
+   * The comparison the shop actually wants to make. Present only when a store
+   * is set on the build AND every part has a price there (or a new price to
+   * fall back on) — otherwise it would be an understated total presented as a
+   * complete one. Falls back to the plain retail line above when absent.
+   *
+   * `store` is separated from the figure so the preview can drop the NAME and
+   * keep the number, for a shop that would rather not print a competitor's.
+   */
+  diyComparison: { store: string; total: string; saving: string | null } | null;
   /** The headline grid: one row per category that has a part. */
   specs: { category: PartCategory; name: string; condition: string | null }[];
   warrantyBadge: string | null;
@@ -149,7 +161,24 @@ export interface CardInput {
   /** The preview toggles — the owner may want a cleaner card. */
   showComparison?: boolean;
   showConditions?: boolean;
+  /** Print the comparison figure without naming the store. */
+  showStoreName?: boolean;
 }
+
+/**
+ * WHICH WAY UP THE CARD PRINTS.
+ *
+ * Both are real layouts, not one design squeezed into the other frame: a
+ * landscape card runs the specs beside the price, a portrait card stacks them.
+ * Remembered per device, because a shop prints the same way every time.
+ */
+export type CardOrientation = 'landscape' | 'portrait';
+export const CARD_ORIENTATIONS: CardOrientation[] = ['landscape', 'portrait'];
+export const DEFAULT_CARD_ORIENTATION: CardOrientation = 'landscape';
+
+/** Accepts anything (a stored string, a stale value) and gives a real one. */
+export const cardOrientation = (v: unknown): CardOrientation =>
+  v === 'portrait' ? 'portrait' : DEFAULT_CARD_ORIENTATION;
 
 /** The categories the card shows, in reading order. */
 export const CARD_CATEGORIES: PartCategory[] = ['CPU', 'GPU', 'RAM', 'Storage', 'PSU', 'Case'];
@@ -160,7 +189,23 @@ export const displayCard = (input: CardInput): DisplayCard => {
   const { build } = input;
   const totals = buildTotals(build);
   const price = input.price != null && input.price > 0 ? input.price : totals.price;
-  const comparison = input.showComparison === false ? null : retailComparison(build, price);
+  const showComparison = input.showComparison !== false;
+  const comparison = showComparison ? retailComparison(build, price) : null;
+
+  // "Build it yourself at <store>". Only when the store is set and the total
+  // is complete — a partial total presented as the price of the whole machine
+  // is the one misleading thing this card could do with a number.
+  const diyComparison = showComparison && totals.altStoreName && totals.altStoreTotal != null
+    ? {
+      store: input.showStoreName === false ? '' : totals.altStoreName,
+      total: money(totals.altStoreTotal),
+      // Only a saving that flatters, and only against a real price — the same
+      // rule retailComparison follows.
+      saving: price != null && totals.altStoreTotal - price > 0
+        ? money(Math.round((totals.altStoreTotal - price) * 100) / 100)
+        : null,
+    }
+    : null;
 
   return {
     name: build.name || generatedItemName(build.parts || []),
@@ -169,6 +214,7 @@ export const displayCard = (input: CardInput): DisplayCard => {
     comparison: comparison
       ? { retailTotal: money(comparison.retailTotal), saving: money(comparison.saving) }
       : null,
+    diyComparison,
     specs: CARD_CATEGORIES
       .map(category => {
         const part = (build.parts || []).find(p => p.category === category);

@@ -114,7 +114,43 @@ export interface BuildTotals {
   /** Σ retailPrice, and whether EVERY part has one — see retailComparison. */
   retailTotal: number;
   retailComplete: boolean;
+  /** How many parts carry a new price, out of how many there are. */
+  retailPriced: number;
+  partCount: number;
+  /**
+   * retailTotal − totalCost, and ONLY when every part is priced.
+   *
+   * A saving computed from seven parts out of nine is not a smaller saving,
+   * it is a different number wearing the same label — and nobody reading it
+   * can tell. Null is the honest answer until the last price is in.
+   */
+  retailSaving: number | null;
+  /**
+   * "AT CANADA COMPUTERS": what the customer would pay to build this
+   * themselves at the named store. Null when no store is set on the build.
+   *
+   * Parts without an altStorePrice FALL BACK to their own new price, because a
+   * total that silently skipped them would understate the comparison — the
+   * thing this exists to be honest about. `altFallbackCount` says how many did,
+   * so the screen can admit it.
+   */
+  altStoreName: string | null;
+  altStoreTotal: number | null;
+  altFallbackCount: number;
+  /** Priced one way or another — the alt total means nothing without it. */
+  altComplete: boolean;
 }
+
+/** A part's price at the comparison store, falling back to its new price. */
+export const partComparisonPrice = (p: BuildPart): number | undefined => {
+  if (typeof p.altStorePrice === 'number' && p.altStorePrice > 0) return p.altStorePrice;
+  if (typeof p.retailPrice === 'number' && p.retailPrice > 0) return p.retailPrice;
+  return undefined;
+};
+
+/** The store a part is compared at: its own, else the build's. */
+export const partStoreName = (p: BuildPart, build: Pick<PcBuild, 'comparisonStore'>): string =>
+  (p.altStoreName || build.comparisonStore || '').trim();
 
 export const partsCost = (parts: BuildPart[]): number =>
   round2(parts.reduce((n, p) => n + (p.cost || 0), 0));
@@ -144,7 +180,15 @@ export const buildTotals = (b: PcBuild): BuildTotals => {
   const labour = labourCost(b.labour || []);
   const totalCost = round2(parts + labour);
   const price = buildPrice(b);
-  const withRetail = (b.parts || []).filter(p => typeof p.retailPrice === 'number' && p.retailPrice > 0);
+  const all = b.parts || [];
+  const withRetail = all.filter(p => typeof p.retailPrice === 'number' && p.retailPrice > 0);
+  const retailTotal = round2(withRetail.reduce((n, p) => n + (p.retailPrice || 0), 0));
+  const retailComplete = all.length > 0 && withRetail.length === all.length;
+  // The comparison store, and what this build would cost a customer there.
+  const store = (b.comparisonStore || '').trim();
+  const comparisonPrices = all.map(partComparisonPrice);
+  const altComplete = all.length > 0 && comparisonPrices.every(p => p != null);
+  const altTotal = round2(comparisonPrices.reduce<number>((n, p) => n + (p || 0), 0));
   return {
     partsCost: parts,
     labourHours: labourHours(b.labour || []),
@@ -153,10 +197,17 @@ export const buildTotals = (b: PcBuild): BuildTotals => {
     price,
     profit: price == null ? null : round2(price - totalCost),
     marginPercent: price == null || price <= 0 ? null : round2(((price - totalCost) / price) * 100),
-    retailTotal: round2(withRetail.reduce((n, p) => n + (p.retailPrice || 0), 0)),
+    retailTotal,
     // EVERY part must have a retail price for the comparison to mean anything —
     // see retailComparison.
-    retailComplete: (b.parts || []).length > 0 && withRetail.length === (b.parts || []).length,
+    retailComplete,
+    retailPriced: withRetail.length,
+    partCount: all.length,
+    retailSaving: retailComplete ? round2(retailTotal - totalCost) : null,
+    altStoreName: store || null,
+    altStoreTotal: store && altComplete ? altTotal : null,
+    altFallbackCount: store ? all.filter(p => p.altStorePrice == null && p.retailPrice != null).length : 0,
+    altComplete,
   };
 };
 
