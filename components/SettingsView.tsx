@@ -9,7 +9,9 @@ import { Role, Permission, BreakReason } from '../types';
 import {
   AppSettings, ThemeMode, PaymentMethodKey, CURRENCIES, TIME_ZONES,
   DASHBOARD_WIDGETS, STATUS_COLOR_OPTIONS, LabelSize, mergeLabelSizes, RepairPrice, TradeInRange,
+  DEFAULT_DAILY_AI_CALLS, MIN_DAILY_AI_CALLS, MAX_DAILY_AI_CALLS,
 } from '../domain/settings';
+import { AiUsagePanel } from './AiUsagePanel';
 import { newShareToken } from '../domain/buildShare';
 import { kioskUrl, TRADE_IN_CONDITIONS } from '../domain/showroom';
 import { PayCycle, PAY_CYCLE_LABEL, BREAK_REASONS } from '../domain/timeclock';
@@ -87,9 +89,11 @@ interface Props {
   // number that changes what people are paid. Returning false leaves the
   // setting alone. Omitted (e.g. in tests) means no confirm.
   confirmPaidBreakChange?: (next: BreakReason[]) => boolean;
+  /** Needed to read this workspace's AI usage counters (owner-only). */
+  workspaceId?: string;
 }
 
-export const SettingsView: React.FC<Props> = ({ settings, onSave, canManage, role, appVersion = '1.0.0', backupSlot, loadBackupHistory, onDownloadBackup, confirmPaidBreakChange }) => {
+export const SettingsView: React.FC<Props> = ({ settings, onSave, canManage, role, appVersion = '1.0.0', backupSlot, loadBackupHistory, onDownloadBackup, confirmPaidBreakChange, workspaceId }) => {
   const isMobile = useIsMobile();
   const [active, setActive] = useState<SectionId>('general');
   const [draft, setDraft] = useState<AppSettings>(settings);
@@ -174,7 +178,7 @@ export const SettingsView: React.FC<Props> = ({ settings, onSave, canManage, rol
             {active === 'taxes' && <TaxesSection draft={draft} patch={patch} />}
             {active === 'labels' && <LabelsSection draft={draft} patch={patch} />}
             {active === 'customers' && <CustomersSection draft={draft} patch={patch} />}
-            {active === 'operations' && <OperationsSection draft={draft} patch={patch} confirmPaidBreakChange={confirmPaidBreakChange} canManage={canManage} />}
+            {active === 'operations' && <OperationsSection draft={draft} patch={patch} confirmPaidBreakChange={confirmPaidBreakChange} canManage={canManage} workspaceId={workspaceId} />}
             {active === 'kiosk' && <KioskSection draft={draft} patch={patch} />}
             {active === 'builds' && <BuildsSection draft={draft} patch={patch} />}
             {active === 'payroll' && <PayrollSection draft={draft} patch={patch} />}
@@ -412,7 +416,7 @@ const CustomersSection: React.FC<{ draft: AppSettings; patch: PatchFn }> = ({ dr
   </SettingsSection>
 );
 
-const OperationsSection: React.FC<{ draft: AppSettings; patch: PatchFn; confirmPaidBreakChange?: (next: BreakReason[]) => boolean; canManage?: boolean }> = ({ draft, patch, confirmPaidBreakChange, canManage = false }) => (
+const OperationsSection: React.FC<{ draft: AppSettings; patch: PatchFn; confirmPaidBreakChange?: (next: BreakReason[]) => boolean; canManage?: boolean; workspaceId?: string }> = ({ draft, patch, confirmPaidBreakChange, canManage = false, workspaceId }) => (
   <SettingsSection title="Operations" description="Defaults and windows for the cash drawer, sale reversals and inventory alerts.">
     <SettingsCard>
       <SettingsTextField label="Default opening cash float ($)" type="number" min={0} step={0.01}
@@ -458,6 +462,15 @@ const OperationsSection: React.FC<{ draft: AppSettings; patch: PatchFn; confirmP
         hint="Default warranty on accessories. Can be changed per sale. 0 = sold as-is."
         value={draft.operations.accessoryWarrantyDays ?? 0}
         onChange={v => patch('operations', { accessoryWarrantyDays: Math.max(0, Math.round(parseFloat(v) || 0)) })} />
+      {/* THE AI SPENDING LIMIT. Enforced server-side — the client's copy of
+          this number decides nothing (functions/src/ai/usage.ts). */}
+      <SettingsTextField label="Daily AI request limit" type="number" min={MIN_DAILY_AI_CALLS} max={MAX_DAILY_AI_CALLS} step={10}
+        hint="How many AI requests this shop may make in a day — the assistant, listing writer, bulk entry and IMEI scanning together. Enforced on the server, so a runaway loop stops here rather than on next month's bill. Resets at midnight UTC."
+        value={draft.operations.aiDailyCallCap ?? DEFAULT_DAILY_AI_CALLS}
+        onChange={v => patch('operations', {
+          aiDailyCallCap: Math.min(MAX_DAILY_AI_CALLS, Math.max(MIN_DAILY_AI_CALLS, Math.round(parseFloat(v) || DEFAULT_DAILY_AI_CALLS))),
+        })} />
+      {canManage && <AiUsagePanel workspaceId={workspaceId} cap={draft.operations.aiDailyCallCap ?? DEFAULT_DAILY_AI_CALLS} />}
       <SettingsTextField label="PC build labour rate ($/hr)" type="number" min={0} step={0.01}
         hint="Pre-filled when logging hours on a custom PC build. The rate is snapshotted onto each entry, so a later change never restates hours already logged."
         value={draft.operations.buildLabourRate ?? 15}
