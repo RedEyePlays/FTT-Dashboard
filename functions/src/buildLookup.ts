@@ -72,6 +72,28 @@ async function shopProfileFor(workspacePath: string): Promise<ShopProfile> {
   }
 }
 
+/**
+ * The inventory device a finished build became — read ONLY for its photos.
+ *
+ * The whole document is fetched (Firestore has no field projection here) but
+ * nothing of it reaches the public object except what publicPhoto() builds,
+ * and that is an allow-list of four keys. Any failure is swallowed: a listing
+ * without a picture is a worse listing, not a broken one.
+ */
+async function finishedDeviceFor(
+  workspacePath: string,
+  inventoryId: unknown,
+): Promise<Record<string, unknown> | undefined> {
+  const id = typeof inventoryId === "string" ? inventoryId.trim() : "";
+  if (!id) return undefined;
+  try {
+    const snap = await admin.firestore().doc(`${workspacePath}/inventory/${id}`).get();
+    return snap.exists ? (snap.data() as Record<string, unknown>) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export const buildShareLookup = onCall(
   { region: "us-central1" },
   async (request: CallableRequest<LookupRequest>): Promise<PublicBuildResult> => {
@@ -120,8 +142,13 @@ export const buildShareLookup = onCall(
     // user_data/{workspaceId}/pcBuilds/{id} → user_data/{workspaceId}
     const workspacePath = doc.ref.parent.parent?.path;
     const shop = workspacePath ? await shopProfileFor(workspacePath) : {};
+    // The finished machine's photos live on the inventory device the build
+    // became, so the listing needs that one extra read. A build that was never
+    // finished simply has no device and no photo — which is not an error, and
+    // must not take the listing down.
+    const device = workspacePath ? await finishedDeviceFor(workspacePath, build.inventoryId) : undefined;
 
-    const value: PublicBuildResult = toPublicBuild(build, shop, now);
+    const value: PublicBuildResult = toPublicBuild(build, shop, now, device);
     CACHE.set(token, { at: now, value });
     if (CACHE.size > 2000) CACHE.clear();
     return value;

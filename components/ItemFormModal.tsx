@@ -7,6 +7,8 @@ import { SellerCustomerField } from './SellerCustomerField';
 import { useSellerLink } from '../hooks/useSellerLink';
 import { CustomerDraft } from '../domain/customers';
 import { LinkedNotes } from './LinkedNotes';
+import { DevicePhotos } from './DevicePhotos';
+import { damagePhotoPrompt, wantsDamagePhoto } from '../domain/devicePhotos';
 import { REPAIR_STATUS_LABEL } from '../domain/repairs';
 import { LISTING_PLATFORMS } from '../domain/listing';
 import { findDuplicateDevice } from '../domain/autoInventory';
@@ -55,6 +57,11 @@ interface Props {
   // inventory" is one click from the record rather than an instruction to go
   // and find it.
   onOpenDuplicate?: (item: InventoryItem) => void;
+  /** Needed to file an uploaded photo under the right workspace. */
+  workspaceId?: string;
+  currentUserId?: string;
+  /** Ask the Cloud Function for a stock photo for this brand/model. */
+  onFindStockPhoto?: (item: InventoryItem) => Promise<boolean>;
 }
 
 const DEVICE_TYPES: DeviceType[] = ['Phone', 'Tablet', 'Laptop', 'Console', 'Watch', 'Desktop PC', 'Other'];
@@ -110,7 +117,15 @@ const CostField: React.FC<{
   return <Field label={label} value={value} onChange={onChange} type="number" onFocus={onFocus} />;
 };
 
-export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, canViewCost = false, deviceBuyers, onSave, onGenerateSku, onClose, linkedRepair, onCreateRepair, onOpenRepair, inventory = [], customers, onCreateCustomer, notes, noteRole, onOpenNote, onOpenDuplicate }) => {
+export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, canViewCost = false, deviceBuyers, onSave, onGenerateSku, onClose, linkedRepair, onCreateRepair, onOpenRepair, inventory = [], customers, onCreateCustomer, notes, noteRole, onOpenNote, onOpenDuplicate, workspaceId, currentUserId, onFindStockPhoto }) => {
+  const [findingStock, setFindingStock] = useState(false);
+  // The device document is updated by the Cloud Function, so the new photo
+  // arrives on the next subscription tick rather than from here.
+  const findStock = async () => {
+    if (!onFindStockPhoto) return;
+    setFindingStock(true);
+    try { await onFindStockPhoto(f); } finally { setFindingStock(false); }
+  };
   const [kind, setKind] = useState<ItemKind>(initial?.kind ?? initialKind ?? 'device');
   const [f, setF] = useState<InventoryItem>(() => initial ?? {
     id: uid(), kind: initialKind ?? 'device', sku: '', manufacturerBarcode: '',
@@ -453,6 +468,28 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, canViewCo
                 </div>
               ) : (
                 <p className="text-xs text-slate-400">No repair ticket linked. Create one to track internal refurb work by a technician.</p>
+              )}
+            </div>
+          )}
+
+          {/* PHOTOS. Only on a saved device: an upload needs an item id to
+              file itself under, and an unsaved draft has none yet. */}
+          {kind === 'device' && initial && workspaceId && (
+            <div className="pt-3 border-t border-slate-100 dark:border-slate-800">
+              <DevicePhotos
+                workspaceId={workspaceId}
+                itemId={f.id}
+                photos={f.photos}
+                currentUserId={currentUserId || ''}
+                onChange={photos => set('photos', photos)}
+                onFindStockPhoto={onFindStockPhoto ? () => { void findStock(); } : undefined}
+                findingStock={findingStock}
+              />
+              {/* A NUDGE, never a block — the device saves either way. */}
+              {wantsDamagePhoto({ ...f, kind }) && (
+                <p className="mt-2 text-[11px] text-amber-600 dark:text-amber-400">
+                  {damagePhotoPrompt(f.condition || '')}
+                </p>
               )}
             </div>
           )}

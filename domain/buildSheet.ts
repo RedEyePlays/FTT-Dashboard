@@ -1,8 +1,9 @@
-import { BuildPart, PcBuild, PartCategory } from '../types';
+import { BuildPart, PcBuild, PartCategory, DevicePhoto } from '../types';
 import {
   CONDITION_LABEL, buildTotals, generatedItemName, retailComparison,
   retailAsOfLabel, specsLine,
 } from './pcBuild';
+import { mainPhoto } from './devicePhotos';
 
 /**
  * WHAT A CUSTOMER IS ALLOWED TO SEE.
@@ -74,6 +75,19 @@ export interface CustomerSheet {
   /** Customer order: the quote, what has been paid, what is left. */
   order: { quote: number; deposit: number; balance: number } | null;
   price: number | null;
+  /**
+   * A picture of the machine, when the shop has one. Only the three fields a
+   * printed page can use — a photo record also carries who took it and when,
+   * and neither belongs on a customer's document.
+   */
+  photo: SheetPhoto | null;
+}
+
+export interface SheetPhoto {
+  url: string;
+  /** Labelled on the page when true, exactly as on the public listing. */
+  stock: boolean;
+  credit: string | null;
 }
 
 export interface SheetInput {
@@ -83,10 +97,26 @@ export interface SheetInput {
   deposit?: number;
   /** Overrides the build's own price — e.g. the device's price once it exists. */
   price?: number | null;
+  /**
+   * The finished device's photos (domain/devicePhotos.ts). Photos live on the
+   * DEVICE a finished build becomes, not on the build, so the caller hands
+   * them in rather than this module reaching into inventory.
+   */
+  photos?: DevicePhoto[];
 }
 
 const money = (n: number): string =>
   `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+/**
+ * The one photo a printed sheet uses: the same choice the app and the public
+ * listing make (a real photo beats a stock one), reduced to what paper needs.
+ */
+export const sheetPhoto = (photos?: DevicePhoto[]): SheetPhoto | null => {
+  const p = mainPhoto(photos);
+  if (!p?.url) return null;
+  return { url: p.url, stock: p.kind === 'stock', credit: p.credit || null };
+};
 
 export const customerSheet = (input: SheetInput): CustomerSheet => {
   const { build } = input;
@@ -114,6 +144,7 @@ export const customerSheet = (input: SheetInput): CustomerSheet => {
       : null,
     order,
     price: price ?? null,
+    photo: sheetPhoto(input.photos),
   };
 };
 

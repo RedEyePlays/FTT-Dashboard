@@ -26,9 +26,18 @@ export interface PublicPart {
   storeName?: string;
 }
 
+export interface PublicPhoto {
+  url: string;
+  thumbUrl?: string;
+  /** True only for a catalogue image — the page must label it as one. */
+  stock?: true;
+  credit?: string;
+}
+
 export interface PublicBuild {
   found: true;
   name: string;
+  photo?: PublicPhoto;
   status: string;              // 'Available' | 'Sold'
   parts: PublicPart[];
   price?: number;

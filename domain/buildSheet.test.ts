@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { BuildPart, PcBuild } from '../types';
 import {
   CARD_CATEGORIES, CARD_ORIENTATIONS, PRIVATE_PART_FIELDS, canHaveDisplayCard,
-  cardOrientation, customerPart, customerParts, customerSheet, displayCard, truncateName,
+  cardOrientation, customerPart, customerParts, customerSheet, displayCard, sheetPhoto, truncateName,
 } from './buildSheet';
 
 // Costs are deliberately odd numbers that cannot appear inside any public
@@ -314,5 +314,30 @@ describe('card orientation', () => {
     for (const v of ['', 'sideways', null, 7, {}]) {
       expect({ v, o: cardOrientation(v) }).toEqual({ v, o: 'landscape' });
     }
+  });
+});
+
+describe('sheetPhoto', () => {
+  const real = { id: 'ph1', url: 'https://cdn.test/real.jpg', kind: 'real' as const, addedBy: 'u1', addedAt: 1 };
+  const stock = { id: 'ph0', url: 'https://cdn.test/stock.jpg', kind: 'stock' as const, credit: 'Jane Doe, CC BY-SA 4.0', sourceUrl: 'https://commons.wikimedia.org/x', addedBy: 'system', addedAt: 1 };
+
+  it('is null when the shop has no photo', () => {
+    expect(sheetPhoto()).toBeNull();
+    expect(sheetPhoto([])).toBeNull();
+  });
+
+  it('prefers a REAL photo over a stock one, wherever it sits in the list', () => {
+    expect(sheetPhoto([stock, real])?.url).toBe('https://cdn.test/real.jpg');
+    expect(sheetPhoto([stock, real])?.stock).toBe(false);
+  });
+
+  it('flags a stock photo and keeps its credit', () => {
+    const p = sheetPhoto([stock]);
+    expect(p).toEqual({ url: 'https://cdn.test/stock.jpg', stock: true, credit: 'Jane Doe, CC BY-SA 4.0' });
+  });
+
+  it('carries nothing about who took it or where it came from', () => {
+    const p = sheetPhoto([real]) as unknown as Record<string, unknown>;
+    expect(Object.keys(p).sort()).toEqual(['credit', 'stock', 'url']);
   });
 });

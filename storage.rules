@@ -2,16 +2,76 @@ rules_version = '2';
 
 // Cloud Storage rules for FlipThatTech.
 //
-// Automated backups live at backups/{workspaceId}/{file}. A workspace is owned
-// by the user whose uid == workspaceId, so only that owner may read (download)
-// their backups. Clients never write or delete here — the scheduledBackups Cloud
-// Function does that with Admin credentials (which bypass these rules), including
-// retention deletes. Everything else is denied by default.
+// Two prefixes exist, and they have OPPOSITE read rules on purpose. Read the
+// comment on each before adding a third.
 service firebase.storage {
   match /b/{bucket}/o {
+
+    // The signed-in user's own profile document, used to check role and
+    // workspace. Mirrors firestore.rules' me()/myRole()/myWorkspace().
+    function me() {
+      return firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data;
+    }
+    function activeMemberOf(ws) {
+      return request.auth != null
+        && me().get('disabled', false) != true
+        && me().workspaceId == ws
+        && me().role != 'kiosk';
+    }
+    // Owner / manager / employee / technician — everyone who works here.
+    // Mirrors firestore.rules' isStaffOf EXCEPT that technicians are included:
+    // a technician photographs the bench work they are doing, and a photo is
+    // not a financial record.
+    function isStaffOf(ws) { return activeMemberOf(ws); }
+
+    // --- BACKUPS: OWNER ONLY -------------------------------------------------
+    //
+    // Automated backups live at backups/{workspaceId}/{file}. A workspace is
+    // owned by the user whose uid == workspaceId, so only that owner may read
+    // (download) their backups. Clients never write or delete here — the
+    // scheduledBackups Cloud Function does that with Admin credentials (which
+    // bypass these rules), including retention deletes.
+    //
+    // NOTHING about the public prefix below changes this. A backup contains the
+    // whole shop; it stays owner-only.
     match /backups/{workspaceId}/{fileName} {
       allow read: if request.auth != null && request.auth.uid == workspaceId;
       allow write: if false;
+    }
+
+    // --- DEVICE PHOTOS: PUBLICLY READABLE, DELIBERATELY ----------------------
+    //
+    // deviceImages/{workspaceId}/{itemId}/{fileName}
+    //
+    // READ IS PUBLIC — no auth at all — AND THAT IS THE POINT. These images are
+    // shown on surfaces that have no login and must never have one: the
+    // counter kiosk (a tablet a customer picks up), the PC-build share links
+    // pasted into Facebook Marketplace, and the printed spec sheet. A signed
+    // URL would expire and break a Marketplace post weeks later; requiring auth
+    // would mean signing an account into a public tablet, which is exactly what
+    // the kiosk design refuses to do.
+    //
+    // What that costs: anybody who guesses or is given the URL can view the
+    // image. That is acceptable because the ONLY thing stored here is a photo
+    // of a device that is for sale — a picture the shop is actively trying to
+    // show people. It is not acceptable for anything else, so:
+    //
+    //   NEVER PUT ANYTHING BUT DEVICE PHOTOS UNDER THIS PREFIX.
+    //
+    // No receipts, no ID scans, no backups, no customer documents. If a new
+    // kind of file needs storing, give it its own prefix with its own rule
+    // rather than reusing this one because the upload code already works.
+    //
+    // WRITE is staff of that workspace only, capped at 5 MB, and must be an
+    // image. The client already resizes to ~1600px / ~80% JPEG before
+    // uploading (services/imageResize.ts), so anything near the cap is either
+    // a bug or somebody bypassing the app.
+    match /deviceImages/{workspaceId}/{itemId}/{fileName} {
+      allow read: if true;
+      allow write: if isStaffOf(workspaceId)
+                   && request.resource.size < 5 * 1024 * 1024
+                   && request.resource.contentType.matches('image/.*');
+      allow delete: if isStaffOf(workspaceId);
     }
   }
 }

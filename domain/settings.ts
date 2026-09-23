@@ -56,6 +56,43 @@ export function mergeLabelSizes(custom?: LabelSize[] | null): LabelSize[] {
   return [...builtIns, ...extra];
 }
 
+/**
+ * ONE LINE OF THE REPAIR PRICE LIST.
+ *
+ * `fromPrice` marks a STARTING price, shown as "from $189". An unusual job —
+ * a phone that has been opened before, a screen that takes the frame with it —
+ * costs more, and a flat number on a public screen becomes a promise the shop
+ * did not mean to make.
+ */
+export interface RepairPrice {
+  id: string;
+  deviceModel: string;
+  /** "Screen", "Battery", "Back glass", "Charging port". Free text. */
+  repairType: string;
+  price: number;
+  fromPrice?: boolean;
+  /** "Same day", "2–3 days". Free text, because every shop says it differently. */
+  turnaround?: string;
+  active: boolean;
+}
+
+/**
+ * WHAT THE SHOP PAYS FOR A DEVICE, AS A RANGE.
+ *
+ * A range, never a number: battery health, a swollen battery and a past repair
+ * all move it, and none of them can be seen from a tablet. The kiosk says so
+ * unmissably — the screen must not be quotable against the shop.
+ */
+export interface TradeInRange {
+  id: string;
+  deviceModel: string;
+  /** Plain words, matching the kiosk's condition wording. */
+  condition: string;
+  lowPrice: number;
+  highPrice: number;
+  active: boolean;
+}
+
 export interface AppSettings {
   general: {
     storeName: string;
@@ -136,6 +173,24 @@ export interface AppSettings {
     retention: number;                 // how many past automated backups to keep (older ones auto-deleted)
   };
   operations: {
+    /**
+     * THE COUNTER KIOSK's link. An unguessable token (domain/buildShare.ts's
+     * generator) that identifies the workspace to the showroom callable. The
+     * tablet has no account signed into it and holds no credential — the token
+     * is the whole of it, which is why it is long and revocable.
+     */
+    kioskToken?: string;
+    kioskTokenCreatedAt?: number;
+    /**
+     * THE REPAIR PRICE LIST. There was none: repairs were priced per ticket,
+     * so the kiosk had nothing to show and staff quoting somebody had nothing
+     * to read off. Owner-editable.
+     */
+    repairPrices?: RepairPrice[];
+    /** What the shop warrants its repair work for, shown beside the list. */
+    repairWarrantyDays?: number;
+    /** TRADE-IN RANGES — what the shop pays. Never a firm number. */
+    tradeInRanges?: TradeInRange[];
     openingFloatDefault: number;       // default opening cash float pre-filled on the reconciliation screen
     voidWindowDays: number;            // how many days after a sale it can still be voided (0 = same day only)
     returnRestockingFeePercent: number;// default restocking fee % pre-filled when processing a return (0 = none)
@@ -235,7 +290,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   dashboard: { widgets: Object.fromEntries(DASHBOARD_WIDGETS.map(w => [w, true])), landingView: 'dashboard', analyticsRange: 'today' },
   appearance: { theme: 'system' },
   backups: { enabled: false, frequency: 'daily', retention: 14 },
-  operations: { openingFloatDefault: 0, voidWindowDays: 0, returnRestockingFeePercent: 0, agingInventoryDays: 30, staleLayawayDays: 60, autoLockMinutes: 4, booksStartDate: '', paidBreakReasons: [], deviceWarrantyDays: 90, accessoryWarrantyDays: 0, buildLabourRate: 15 },
+  operations: { openingFloatDefault: 0, voidWindowDays: 0, returnRestockingFeePercent: 0, agingInventoryDays: 30, staleLayawayDays: 60, autoLockMinutes: 4, booksStartDate: '', paidBreakReasons: [], deviceWarrantyDays: 90, accessoryWarrantyDays: 0, buildLabourRate: 15, repairWarrantyDays: 30, repairPrices: [], tradeInRanges: [] },
   payroll: { cycle: 'biweekly', anchorISO: PAY_PERIOD_ANCHOR },
   expenses: { categories: DEFAULT_EXPENSE_CATEGORIES },
   reviews: {
@@ -261,7 +316,13 @@ export function mergeSettings(partial?: DeepPartial<AppSettings>): AppSettings {
     dashboard: { ...d.dashboard, ...partial.dashboard, widgets: { ...d.dashboard.widgets, ...partial.dashboard?.widgets } },
     appearance: { ...d.appearance, ...partial.appearance },
     backups: { ...d.backups, ...partial.backups },
-    operations: { ...d.operations, ...partial.operations },
+    operations: {
+      ...d.operations, ...partial.operations,
+      // Lists are replaced wholesale, like every other list above: a
+      // DeepPartial row is not a usable RepairPrice/TradeInRange.
+      repairPrices: (partial.operations?.repairPrices as RepairPrice[] | undefined) ?? d.operations.repairPrices,
+      tradeInRanges: (partial.operations?.tradeInRanges as TradeInRange[] | undefined) ?? d.operations.tradeInRanges,
+    },
     payroll: { ...d.payroll, ...partial.payroll },
     expenses: {
       ...d.expenses, ...partial.expenses,

@@ -94,12 +94,17 @@ describe('mergeSettings', () => {
       accessoryWarrantyDays: 0,
       // What an hour of PC-build labour is costed at (domain/pcBuild.ts).
       buildLabourRate: 15,
+      // The counter kiosk's repair price list and trade-in ranges, both empty
+      // until an owner fills them in — an empty section simply does not show.
+      repairWarrantyDays: 30,
+      repairPrices: [],
+      tradeInRanges: [],
     });
   });
 
   it('merges a partial operations patch over the defaults', () => {
     const o = mergeSettings({ operations: { voidWindowDays: 3, returnRestockingFeePercent: 15 } as any }).operations;
-    expect(o).toEqual({ openingFloatDefault: 0, voidWindowDays: 3, returnRestockingFeePercent: 15, agingInventoryDays: 30, autoLockMinutes: 4, staleLayawayDays: 60, booksStartDate: '', paidBreakReasons: [], deviceWarrantyDays: 90, accessoryWarrantyDays: 0, buildLabourRate: 15 });
+    expect(o).toEqual({ openingFloatDefault: 0, voidWindowDays: 3, returnRestockingFeePercent: 15, agingInventoryDays: 30, autoLockMinutes: 4, staleLayawayDays: 60, booksStartDate: '', paidBreakReasons: [], deviceWarrantyDays: 90, accessoryWarrantyDays: 0, buildLabourRate: 15, repairWarrantyDays: 30, repairPrices: [], tradeInRanges: [] });
   });
 });
 

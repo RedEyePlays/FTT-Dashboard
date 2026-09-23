@@ -24,6 +24,17 @@ export { repairStatusLookup } from "./repairLookup";
 // built from an allow-list (publicBuildPolicy.ts), never the stored document.
 export { buildShareLookup } from "./buildLookup";
 
+// Automatic stock device photos from Wikimedia Commons. Every licence and
+// match decision is in commonsPolicy.ts and fails closed — a wrong photo is
+// worse than no photo, and an unlicensed one is worse than both.
+export { autoDevicePhoto, findDevicePhoto } from "./deviceImage";
+
+// The counter kiosk's listing. No account is signed into the tablet: it is
+// identified by an unguessable token, and everything returned is built from
+// an allow-list (showroomPolicy.ts). Assume the tablet is picked up by
+// somebody who would like to know what the shop paid.
+export { showroomLookup } from "./showroomLookup";
+
 // The only write path a technician has for completedAt/warrantyUntil now
 // that firestore.rules excludes them from direct client writes (see repairs.ts).
 export { techUpdateRepair } from "./repairs";
