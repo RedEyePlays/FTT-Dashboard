@@ -3064,11 +3064,20 @@ const App: React.FC = () => {
               *   onCreateCustomer  customers are isStaffOf-write in the rules
               *   onOpenInventoryItem  would navigate to a view they cannot reach
               */}
+            {/*
+              * NO COST PROP. Costs on a build are visible and editable to
+              * anyone who can open one, and this view renders only behind
+              * allow('builds.manage') — so "can open a build" and "can see its
+              * costs" are the same question and there is nothing to pass.
+              *
+              * This is scoped to builds ONLY. Inventory costs, Reports, the
+              * Sales Ledger, the Money Trail, dashboard profit and the
+              * per-user Financials toggle all keep reports.profit.detailed.
+              */}
             <PcBuildsView
               builds={pcBuilds}
               inventory={data}
               customers={customers}
-              canViewCost={allow('reports.profit.detailed')}
               currentUserId={appUser.id}
               currentUserEmail={appUser.email}
               labourRate={settings.operations.buildLabourRate ?? 15}
@@ -3283,7 +3292,6 @@ const App: React.FC = () => {
               builds={pcBuilds}
               inventory={data}
               customers={customers}
-              canViewCost={allow('reports.profit.detailed')}
               currentUserId={appUser.id}
               currentUserEmail={appUser.email}
               labourRate={settings.operations.buildLabourRate ?? 15}

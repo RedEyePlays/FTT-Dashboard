@@ -58,12 +58,11 @@ const inputAfterLabel = (host: HTMLElement, label: string): HTMLInputElement => 
   return el!.parentElement!.querySelector('input')!;
 };
 
-/** A technician's props: they hold builds.manage, but never cost visibility. */
+/** A technician's props. There is no cost flag: opening a build IS the grant. */
 const techProps = (builds: PcBuild[], over: Record<string, unknown> = {}) => ({
   builds,
   inventory: [],
   customers: [],
-  canViewCost: false,            // reports.profit.detailed — technicians never have it
   currentUserId: 'tech-uid',
   currentUserEmail: 'tech@shop.test',
   labourRate: 15,
@@ -181,32 +180,96 @@ describe('and gets the whole feature', () => {
   });
 });
 
-describe('without becoming financial', () => {
-  it('a recorded cost reads back as "Recorded", never as a figure', () => {
+/**
+ * WHOEVER CAN WORK ON A BUILD SEES EVERYTHING ON IT.
+ *
+ * This used to assert the opposite: a technician typed a part cost once and
+ * then saw the word "Recorded", locked, with the Parts and Total cost tiles
+ * reading "Recorded" too. That hid the numbers from the person who had just
+ * gone out and bought the parts — they could not check or correct their own
+ * entry. The owner's decision reversed it.
+ *
+ * The boundary is this screen and nothing beyond it — see
+ * PcBuildsView.costScope.test.tsx.
+ */
+describe('a technician sees the real numbers on a build', () => {
+  const open = () => {
     const m = mount(<PcBuildsView {...techProps([ready()])} />);
     click(button(m.host, /Bench Build/));
+    return m;
+  };
 
-    // The $400 part cost is not on the page in any form.
-    expect(m.text()).toContain(RECORDED_LABEL);
-    expect(m.text()).not.toContain('$400.00');
-    // Nor the totals, profit or margin that reading costs would give.
-    expect(m.text()).not.toMatch(/Profit \$/);
-    expect(m.text()).not.toMatch(/margin/i);
+  it('shows the part cost as a FIGURE, not as "Recorded"', () => {
+    const m = open();
+    expect(m.text()).not.toContain(RECORDED_LABEL);
+    const costField = [...m.host.querySelectorAll('input')]
+      .find(i => (i as HTMLInputElement).placeholder === 'Cost') as HTMLInputElement;
+    expect(costField.value).toBe('400');
     m.unmount();
   });
 
-  it('but the PRICE is theirs to set and to see — a price is not a cost', () => {
-    const m = mount(<PcBuildsView {...techProps([ready()])} />);
+  it('LETS THEM CORRECT IT AFTER IT IS SET — the whole complaint', () => {
+    const onSave = vi.fn();
+    const m = mount(<PcBuildsView {...techProps([ready()], { onSave })} />);
     click(button(m.host, /Bench Build/));
+
+    const costField = [...m.host.querySelectorAll('input')]
+      .find(i => (i as HTMLInputElement).placeholder === 'Cost') as HTMLInputElement;
+    expect(costField.disabled).toBe(false);       // not locked once set
+    setValue(costField, '385');
+    expect((onSave.mock.calls.at(-1)![0] as PcBuild).parts[0].cost).toBe(385);
+    m.unmount();
+  });
+
+  it('shows Parts, Labour and Total cost as real numbers', () => {
+    const m = open();
+    expect(m.text()).toContain('$400.00');       // Parts and Total cost
+    expect(m.text()).not.toContain(RECORDED_LABEL);
+    m.unmount();
+  });
+
+  it('shows the margin against the target, and the labour rate', () => {
+    const m = open();
+    expect(m.text()).toMatch(/Profit/);
+    expect(m.text()).toMatch(/margin/i);
+    expect(m.text()).toContain('$15.00/hr');
+    m.unmount();
+  });
+
+  it('still shows the price, which was never the problem', () => {
+    const m = open();
     expect(m.text()).toContain('$1200.00');
     m.unmount();
   });
 
-  it('an owner, by contrast, sees the figures', () => {
-    const m = mount(<PcBuildsView {...techProps([ready()], { canViewCost: true })} />);
+  it('shows RETAIL PRICE on the row itself, no "More" needed', () => {
+    const m = mount(<PcBuildsView {...techProps([ready({
+      parts: [{ id: 'p1', category: 'GPU', name: 'RTX 4070', cost: 500, condition: 'new',
+        source: 'retail', retailPrice: 700, retailCheckedAt: '2026-09-20' }],
+    })])} />);
     click(button(m.host, /Bench Build/));
+
+    const retail = [...m.host.querySelectorAll('input')]
+      .find(i => (i as HTMLInputElement).placeholder === 'Retail') as HTMLInputElement;
+    expect(retail).toBeTruthy();
+    expect(retail.value).toBe('700');
+    expect(retail.disabled).toBe(false);
+    // The date travels with it, quietly — a stale price must look stale.
+    expect(m.text()).toContain('2026-09-20');
+    m.unmount();
+  });
+
+  it('LOCKS a SOLD build for everyone — that lock is about the record, not the viewer', () => {
+    const m = mount(<PcBuildsView {...techProps([ready({ status: 'sold' })])} />);
+    click(button(m.host, /Completed/));   // a sold build leaves the working list
+    click(button(m.host, /Bench Build/));
+
+    const costField = [...m.host.querySelectorAll('input')]
+      .find(i => (i as HTMLInputElement).placeholder === 'Cost') as HTMLInputElement;
+    expect(costField.disabled).toBe(true);
+    // …but the figure is still readable. Locked is not hidden.
+    expect(costField.value).toBe('400');
     expect(m.text()).toContain('$400.00');
-    expect(m.text()).toMatch(/Profit/);
     m.unmount();
   });
 });
