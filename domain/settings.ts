@@ -4,6 +4,15 @@ import { PayCycle, PAY_PERIOD_ANCHOR } from './timeclock';
 import { ExpenseCategory, DEFAULT_EXPENSE_CATEGORIES } from './expenses';
 import { GpuPerformanceRow } from './gpuPerformance';
 
+/**
+ * The default daily AI cap, mirrored from functions/src/ai/usagePolicy.ts —
+ * the server's copy is the one that is enforced, and it clamps whatever is
+ * stored here into a range regardless of what the client writes.
+ */
+export const DEFAULT_DAILY_AI_CALLS = 200;
+export const MIN_DAILY_AI_CALLS = 10;
+export const MAX_DAILY_AI_CALLS = 5_000;
+
 // Central, owner-configurable business settings. Persisted in Firestore (the
 // workspace meta doc) so the shop can be configured without code changes.
 // `mergeSettings` layers a stored partial over the defaults, so new fields are
@@ -200,6 +209,15 @@ export interface AppSettings {
      * only proposes; nothing reaches this list without the owner pressing save.
      */
     gpuPerformance?: GpuPerformanceRow[];
+    /**
+     * HOW MANY AI REQUESTS THE WORKSPACE MAY MAKE IN A DAY.
+     *
+     * Enforced server-side (functions/src/ai/usage.ts) — a client-side cap is
+     * a suggestion. This is the thing that stops a runaway loop costing the
+     * shop money overnight, so it is never off: the callable clamps whatever
+     * is stored here into a sane range rather than trusting it.
+     */
+    aiDailyCallCap?: number;
     openingFloatDefault: number;       // default opening cash float pre-filled on the reconciliation screen
     voidWindowDays: number;            // how many days after a sale it can still be voided (0 = same day only)
     returnRestockingFeePercent: number;// default restocking fee % pre-filled when processing a return (0 = none)
@@ -299,7 +317,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   dashboard: { widgets: Object.fromEntries(DASHBOARD_WIDGETS.map(w => [w, true])), landingView: 'dashboard', analyticsRange: 'today' },
   appearance: { theme: 'system' },
   backups: { enabled: false, frequency: 'daily', retention: 14 },
-  operations: { gpuPerformance: [], openingFloatDefault: 0, voidWindowDays: 0, returnRestockingFeePercent: 0, agingInventoryDays: 30, staleLayawayDays: 60, autoLockMinutes: 4, booksStartDate: '', paidBreakReasons: [], deviceWarrantyDays: 90, accessoryWarrantyDays: 0, buildLabourRate: 15, repairWarrantyDays: 30, repairPrices: [], tradeInRanges: [] },
+  operations: { gpuPerformance: [], aiDailyCallCap: DEFAULT_DAILY_AI_CALLS, openingFloatDefault: 0, voidWindowDays: 0, returnRestockingFeePercent: 0, agingInventoryDays: 30, staleLayawayDays: 60, autoLockMinutes: 4, booksStartDate: '', paidBreakReasons: [], deviceWarrantyDays: 90, accessoryWarrantyDays: 0, buildLabourRate: 15, repairWarrantyDays: 30, repairPrices: [], tradeInRanges: [] },
   payroll: { cycle: 'biweekly', anchorISO: PAY_PERIOD_ANCHOR },
   expenses: { categories: DEFAULT_EXPENSE_CATEGORIES },
   reviews: {

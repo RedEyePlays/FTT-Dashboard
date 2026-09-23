@@ -2,8 +2,9 @@ rules_version = '2';
 
 // Cloud Storage rules for FlipThatTech.
 //
-// Two prefixes exist, and they have OPPOSITE read rules on purpose. Read the
-// comment on each before adding a third.
+// Three prefixes exist, and they have OPPOSITE read rules on purpose:
+// backups are owner-only, AI chat attachments are one-user-only, and device
+// photos are public. Read the comment on each before adding a fourth.
 service firebase.storage {
   match /b/{bucket}/o {
 
@@ -66,6 +67,34 @@ service firebase.storage {
     // image. The client already resizes to ~1600px / ~80% JPEG before
     // uploading (services/imageResize.ts), so anything near the cap is either
     // a bug or somebody bypassing the app.
+    // --- AI CHAT ATTACHMENTS: ONE PERSON'S, PRIVATE -------------------------
+    //
+    // aiAttachments/{uid}/{chatId}/{fileName}
+    //
+    // The OPPOSITE of the device photos below, and the difference matters: a
+    // device photo is a picture the shop is trying to show people, while these
+    // are supplier invoices, price lists and spreadsheets somebody attached to
+    // a private conversation. Read and write are the owning user and NOBODY
+    // else — not their manager, not the workspace owner.
+    //
+    // They are deleted when the chat is (services/aiChats.ts), which is why
+    // delete is allowed to the same single user.
+    //
+    // The 8 MB cap and the type list mirror
+    // functions/src/ai/attachmentPolicy.ts. The callable's copy is the rule —
+    // it is what the model is actually handed — and this is the second gate,
+    // on the stored copy.
+    match /aiAttachments/{uid}/{chatId}/{fileName} {
+      allow read, delete: if request.auth != null && request.auth.uid == uid;
+      allow write: if request.auth != null
+                   && request.auth.uid == uid
+                   && request.resource.size < 8 * 1024 * 1024
+                   && (request.resource.contentType.matches('image/.*')
+                       || request.resource.contentType.matches('text/.*')
+                       || request.resource.contentType == 'application/pdf'
+                       || request.resource.contentType == 'application/csv');
+    }
+
     match /deviceImages/{workspaceId}/{itemId}/{fileName} {
       allow read: if true;
       allow write: if isStaffOf(workspaceId)

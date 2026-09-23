@@ -7,6 +7,15 @@ import {
   AiProvider, ProviderError, ProviderName, StructuredTask, TextTask, ValidationError,
 } from "./types";
 import { classifyClaudeError } from "./claude";
+
+/** The chat op's input, with only what a given test cares about set. */
+const chatInput = (over: Partial<ChatInput> = {}): ChatInput => ({
+  context: "BUSINESS SUMMARY\n  Devices in stock: 3",
+  history: [{ role: "user", parts: [{ text: "hi" }] }],
+  viewer: { canSeeMoney: true, canSeePayroll: true },
+  shopName: "FlipThatTech",
+  ...over,
+});
 import { classifyGeminiError, toGeminiSchema } from "./gemini";
 import { MODELS, modelFor } from "./models";
 import {
@@ -14,7 +23,7 @@ import {
 } from "./schemas";
 import {
   EMPTY_IMEI_RESULT, PROFIT_GATED_OPS, needsProfitVisibility,
-  runBulkParse, runChat, runImeiExtract, runInsights, toTurns,
+  ChatInput, runBulkParse, runChat, runImeiExtract, runInsights, toTurns,
 } from "./tasks";
 import { hasProfitVisibility } from "../permissions";
 
@@ -78,7 +87,7 @@ test("insights and chat fall back to a sentence rather than an empty string", as
   const router = new AiRouter({ primary: fakeProvider("claude", { text: "" }), log: () => {} });
   assert.equal(await runInsights(router, []), "No insights generated.");
   assert.equal(
-    await runChat(router, [], [{ role: "user", parts: [{ text: "hi" }] }]),
+    (await runChat(router, chatInput())).text,
     "I'm having trouble analyzing that right now.",
   );
 });
@@ -264,7 +273,9 @@ test("with the fallback off, a failure surfaces immediately", async () => {
 test("the log names the op, the provider, whether it fell back, and a duration — and no user data", async () => {
   const { entries, log } = collect();
   const router = new AiRouter({ primary: fakeProvider("claude", { text: "x" }), log });
-  await runChat(router, [{ item: "SECRET PHONE", purchaseCost: 999 }], [{ role: "user", parts: [{ text: "hi" }] }]);
+  // The CONTEXT is what carries shop data now — the log must still name none
+  // of it. (It cannot: the router logs the op, not the request.)
+  await runChat(router, chatInput({ context: "DEVICE — SECRET PHONE\n  cost $999.00" }));
 
   assert.equal(entries.length, 1);
   const entry = entries[0];
@@ -339,7 +350,7 @@ test("insights and chat use the reasoning tier; the extractors use fast", async 
   const claude = fakeProvider("claude", { text: "x", structured: { items: [], imei1: "", imei2: "", serial: "", eid: "" } });
   const router = new AiRouter({ primary: claude, log: () => {} });
   await runInsights(router, []);
-  await runChat(router, [], [{ role: "user", parts: [{ text: "hi" }] }]);
+  await runChat(router, chatInput());
   await runBulkParse(router, "x", "2026-03-01");
   await runImeiExtract(router, "AAAA");
   assert.deepEqual(claude.calls.text.map(t => t.tier), ["reasoning", "reasoning"]);
@@ -380,7 +391,7 @@ test("a task can opt into a server tool; no op does today", async () => {
   const claude = fakeProvider("claude", { text: "x", structured: { items: [] } });
   const router = new AiRouter({ primary: claude, log: () => {} });
   await runInsights(router, []);
-  await runChat(router, [], [{ role: "user", parts: [{ text: "hi" }] }]);
+  await runChat(router, chatInput());
   await runBulkParse(router, "x", "2026-03-01");
   assert.ok(claude.calls.text.every(t => t.tools === undefined));
 

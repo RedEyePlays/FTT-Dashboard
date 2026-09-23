@@ -212,13 +212,10 @@ const App: React.FC = () => {
   // board knows which page to select on arrival.
   const [focusNoteId, setFocusNoteId] = useState<string | undefined>(undefined);
 
-  // AI Chat State (Shared between Sidebar and Tab)
-  const [aiMessages, setAiMessages] = useState<ChatMessage[]>([{
-      id: 'welcome',
-      role: 'model',
-      text: "Hello! I'm your inventory assistant. Ask me about your profits, sales trends, or help writing listings!",
-      timestamp: new Date()
-  }]);
+  // The assistant's conversations are stored PER USER in Firestore now
+  // (services/aiChats.ts), not held here — a refresh used to lose the thread,
+  // and there was only ever one of them. The sidebar and the tab render the
+  // same component and therefore share the same saved chats.
   const [isAiSidebarOpen, setIsAiSidebarOpen] = useState(false);
 
   const [editingItem, setEditingItem] = useState<InventoryItem | undefined>(undefined);
@@ -3478,11 +3475,7 @@ const App: React.FC = () => {
           )}
           {view === 'ai' && (
             allow('reports.profit.summary')
-              ? <AIChatView
-                  inventory={data}
-                  messages={aiMessages}
-                  onUpdateMessages={setAiMessages}
-                />
+              ? <AIChatView userId={appUser.id} />
               : <div className="text-center text-slate-400 py-20">The AI Assistant is restricted to accounts with profit visibility.</div>
           )}
           {view === 'users' && allow('users.tech') && (
@@ -3573,6 +3566,7 @@ const App: React.FC = () => {
               confirmPaidBreakChange={confirmPaidBreakChange}
               canManage={allow('settings.manage')}
               role={appUser.role}
+              workspaceId={workspaceId}
               loadBackupHistory={appUser.role === 'owner' && workspaceId ? () => import('./services/backupStorage').then(m => m.listWorkspaceBackups(workspaceId)) : undefined}
               onDownloadBackup={(path) => { import('./services/backupStorage').then(m => m.getBackupDownloadUrl(path)).then(url => window.open(url, '_blank', 'noopener')).catch(() => {}); }}
               backupSlot={
@@ -3606,9 +3600,7 @@ const App: React.FC = () => {
           <div className="fixed inset-y-0 right-0 w-full sm:w-96 bg-white dark:bg-slate-900 shadow-2xl z-[50] animate-slideInRight flex flex-col border-l border-slate-200 dark:border-slate-800">
              <Suspense fallback={<ViewLoader />}>
                <AIChatView
-                  inventory={data}
-                  messages={aiMessages}
-                  onUpdateMessages={setAiMessages}
+                  userId={appUser.id}
                   variant="sidebar"
                   onClose={() => setIsAiSidebarOpen(false)}
                />

@@ -5,6 +5,13 @@ import {
   validateBulkParse, validateImeiExtract,
 } from "./schemas";
 import { AiTurn, ValidationError } from "./types";
+import { Viewer } from "./retrievalPolicy";
+import { ChatTurn as PolicyTurn, chatSystemPrompt, trimHistory, toTurns } from "./chatPolicy";
+
+// Re-exported because router.test.ts and the callable both reach for it here;
+// the implementation lives in chatPolicy.ts with the rest of the trimming.
+export { toTurns };
+import { PreparedAttachment } from "./attachmentPolicy";
 import {
   LISTING_SCHEMA, ListingRequest, ListingResult, checkOutput,
   listingSystemPrompt, listingUserPrompt, parseListing,
@@ -63,10 +70,8 @@ export interface InventoryRow {
   soldDate?: string;
 }
 
-export interface ChatTurn {
-  role: string;
-  parts: { text: string }[];
-}
+/** The client's history shape, unchanged — see chatPolicy.ts's toTurns. */
+export type ChatTurn = PolicyTurn;
 
 const userTurn = (text: string): AiTurn[] => [{ role: "user", text }];
 
@@ -180,67 +185,108 @@ export const runImeiExtract = async (
 
 /* ---------------- chat ---------------- */
 
+export interface ChatInput {
+  /** The retrieved, redacted context block (src/ai/context.ts). */
+  context: string;
+  history: ChatTurn[];
+  viewer: Viewer;
+  shopName: string;
+  /** Files attached to THIS message, already checked and prepared. */
+  attachments?: PreparedAttachment[];
+  /** One-line summaries of files attached EARLIER in this conversation. */
+  attachmentSummaries?: string[];
+}
+
+export interface ChatOutput {
+  text: string;
+  /** Surfaced in the UI so a trimmed conversation says so. */
+  notices: string[];
+  /** Roughly what this cost, for the usage meter. */
+  approxInputChars: number;
+}
+
+/**
+ * THE ASSISTANT, NO LONGER HOLDING THE WHOLE SHOP.
+ *
+ * What changed, and why it is the whole point of this file now:
+ *
+ *   BEFORE  the system prompt contained `JSON.stringify(inventory)` — every
+ *           row, every field, on every turn of every conversation.
+ *   NOW     it contains a business summary and the handful of records the
+ *           question actually refers to, rendered as a timeline, redacted for
+ *           this particular caller.
+ *
+ * The history is trimmed rather than resent whole (chatPolicy.ts), and an
+ * attachment is sent ONCE — later turns carry a one-line summary of it.
+ */
 export const runChat = async (
   router: AiRouter,
-  inventory: InventoryRow[],
-  history: ChatTurn[],
-): Promise<string> => {
-  const soldItems = inventory.filter(i => i.soldDate);
-  const stockItems = inventory.filter(i => !i.soldDate);
-  const totalProfit = soldItems.reduce(
-    (acc, i) => acc + ((i.salePrice ?? 0) - (i.purchaseCost ?? 0) - (i.repairCost ?? 0)),
-    0,
-  );
+  input: ChatInput,
+): Promise<ChatOutput> => {
+  const trimmed = trimHistory(toTurns(input.history));
+  const notices: string[] = [];
+  if (trimmed.dropped > 0) {
+    notices.push(
+      `This conversation is long, so the earliest ${trimmed.dropped} message${trimmed.dropped === 1 ? " was" : "s were"} summarised rather than resent in full.`,
+    );
+  }
 
-  const system = `
-        You are an expert business analyst and assistant for a reselling business called "FlipThatTech".
+  const system = chatSystemPrompt({
+    shopName: input.shopName,
+    context: input.context,
+    viewer: input.viewer,
+    ...(input.attachmentSummaries?.length ? { attachmentSummaries: input.attachmentSummaries } : {}),
+  });
 
-        CURRENT BUSINESS CONTEXT:
-        - Total Items Tracked: ${inventory.length}
-        - Items In Stock: ${stockItems.length}
-        - Items Sold: ${soldItems.length}
-        - Total All-Time Profit: $${totalProfit.toFixed(2)}
+  const turns: AiTurn[] = [];
+  // The summary of what was dropped goes FIRST, as its own user turn, so the
+  // model sees the thread before the surviving messages.
+  if (trimmed.summary) turns.push({ role: "user", text: trimmed.summary });
+  for (const t of trimmed.turns) turns.push({ role: t.role, text: t.text });
 
-        FULL INVENTORY DATA (JSON):
-        ${JSON.stringify(inventory)}
-
-        INSTRUCTIONS:
-        1. Answer questions based specifically on the inventory data provided above.
-        2. If asked to write a listing, use the details from the inventory item (Model, Specs, Condition Notes) to write a compelling sales description.
-        3. If asked about financial performance, calculate metrics dynamically from the JSON data.
-        4. Keep answers professional but conversational. Use Markdown for formatting tables or lists.
-        5. If the user asks about an item not in the list, politely inform them you don't see it in the database.
-      `;
+  // Attachments ride on the LAST user turn, which is the message they were
+  // attached to.
+  const attachments = input.attachments || [];
+  if (attachments.length > 0) {
+    const last = turns[turns.length - 1];
+    const textual = attachments.filter(a => a.text != null);
+    const binary = attachments.filter(a => a.base64 != null);
+    if (last && last.role === "user") {
+      // A spreadsheet is TEXT, never a picture of a spreadsheet — see
+      // attachmentPolicy.ts.
+      for (const a of textual) {
+        last.text += `\n\nATTACHED FILE: ${a.name}\n${a.text}`;
+        if (a.truncated) last.text += `\n(only the first part of this file was sent)`;
+      }
+      // One image per turn is what every provider's turn shape supports here;
+      // the rest are named so the model knows they exist and can ask.
+      const first = binary[0];
+      if (first?.base64 && first.mediaType?.startsWith("image/")) {
+        last.image = {
+          base64: first.base64,
+          mediaType: first.mediaType as "image/jpeg" | "image/png" | "image/webp" | "image/gif",
+        };
+      }
+      const unsent = binary.slice(first?.mediaType?.startsWith("image/") ? 1 : 0);
+      if (unsent.length > 0) {
+        last.text += `\n\n(Also attached, not readable in this message: ${unsent.map(a => a.name).join(", ")})`;
+        notices.push(`${unsent.length} attachment${unsent.length === 1 ? "" : "s"} could not be read directly — ask about ${unsent.length === 1 ? "it" : "them"} one at a time.`);
+      }
+    }
+  }
 
   const text = await router.runText("chat", {
     tier: "reasoning",
     maxTokens: MAX_TOKENS.reasoning,
     system,
-    turns: toTurns(history),
+    turns,
   });
-  return text || "I'm having trouble analyzing that right now.";
-};
 
-/**
- * The client's history format (Gemini's, from when this was Gemini-only) →
- * provider-neutral turns.
- *
- * The client still sends `{ role: "model" | "user", parts: [{ text }] }`
- * because THAT SHAPE IS PART OF THE CONTRACT — changing it would mean changing
- * the client, which this work is explicitly not doing. So the translation
- * happens here. A leading assistant turn is dropped: every provider requires
- * the conversation to start with the user, and a stray greeting at the front is
- * the one thing that would make an otherwise fine history rejected outright.
- */
-export const toTurns = (history: ChatTurn[]): AiTurn[] => {
-  const turns: AiTurn[] = history
-    .map(h => ({
-      role: (h.role === "model" || h.role === "assistant" ? "assistant" : "user") as AiTurn["role"],
-      text: (h.parts || []).map(p => p?.text || "").join("").trim(),
-    }))
-    .filter(t => t.text.length > 0);
-  while (turns.length > 0 && turns[0].role === "assistant") turns.shift();
-  return turns;
+  return {
+    text: text || "I'm having trouble analyzing that right now.",
+    notices,
+    approxInputChars: system.length + turns.reduce((n, t) => n + t.text.length, 0),
+  };
 };
 
 /* ---------------- listing ---------------- */

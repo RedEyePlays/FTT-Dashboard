@@ -93,22 +93,65 @@ export const extractImeiFromImage = async (base64Image: string): Promise<Extract
 };
 
 /**
- * Conversational assistant over the inventory. `messages` is the running list of
- * chat messages (the UI-only 'welcome' message is stripped here). Returns the
- * assistant's reply text.
+ * The assistant.
+ *
+ * THE INVENTORY IS NO LONGER SENT. It used to go in full, on every message of
+ * every conversation — the client serialised the whole shop and the prompt
+ * pasted it in. The server now RETRIEVES the records the question refers to
+ * (functions/src/ai/context.ts), so what leaves the browser is the
+ * conversation and the files attached to this message, and nothing else.
  */
+export interface ChatAttachmentPayload {
+  name: string;
+  mimeType: string;
+  sizeBytes: number;
+  /** Text for a CSV or a text file; base64 for a PDF or an image. */
+  data: string;
+}
+
+export interface ChatReply {
+  text: string;
+  /** Shown in the UI — e.g. that a long conversation was trimmed. */
+  notices: string[];
+  /** What actually answered, from server config. Never a hardcoded label. */
+  model?: string;
+  provider?: string;
+  /** How many records the retrieval step looked at, for the footer. */
+  recordsUsed?: number;
+  /** One line per file sent, reused on later turns instead of the file. */
+  attachmentSummaries?: string[];
+  usage?: { used: number; cap: number; day: string };
+}
+
 export const generateChatResponse = async (
-  inventory: InventoryItem[],
-  messages: ChatMessage[]
-): Promise<string> => {
+  messages: ChatMessage[],
+  opts: {
+    attachments?: ChatAttachmentPayload[];
+    /** Summaries of files attached EARLIER in this conversation. */
+    attachmentSummaries?: string[];
+  } = {},
+): Promise<ChatReply> => {
   assertOnline();
   const history: ChatTurn[] = messages
     .filter((m) => m.id !== "welcome")
     .map((m) => ({ role: m.role, parts: [{ text: m.text }] }));
 
-  const result = await aiGenerate({ op: "chat", inventory, history });
-  const { text } = (result.data ?? {}) as { text?: string };
-  return text || "I'm having trouble analyzing that right now.";
+  const result = await aiGenerate({
+    op: "chat",
+    history,
+    ...(opts.attachments?.length ? { attachments: opts.attachments } : {}),
+    ...(opts.attachmentSummaries?.length ? { attachmentSummaries: opts.attachmentSummaries } : {}),
+  });
+  const data = (result.data ?? {}) as Partial<ChatReply>;
+  return {
+    text: data.text || "I'm having trouble analyzing that right now.",
+    notices: Array.isArray(data.notices) ? data.notices : [],
+    ...(data.model ? { model: data.model } : {}),
+    ...(data.provider ? { provider: data.provider } : {}),
+    ...(typeof data.recordsUsed === "number" ? { recordsUsed: data.recordsUsed } : {}),
+    ...(Array.isArray(data.attachmentSummaries) ? { attachmentSummaries: data.attachmentSummaries } : {}),
+    ...(data.usage ? { usage: data.usage } : {}),
+  };
 };
 
 /* ---------------- Listing copy (domain/listingCopy.ts) ---------------- */

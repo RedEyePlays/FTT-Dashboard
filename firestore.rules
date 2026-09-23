@@ -724,6 +724,46 @@ service cloud.firestore {
       allow delete: if hasProfile() && myRole() == 'owner' && resource.data.workspaceId == myWorkspace();
     }
 
+    // ---- The assistant's saved conversations ----
+    //
+    // users/{uid}/aiChats/{chatId} — ONE PERSON'S, AND NO EXCEPTIONS.
+    //
+    // Every other collection in this file is shared shop data with a role
+    // model over it. This one is not: a saved chat is somebody working
+    // something out, half-finished questions and all. So the rule is the
+    // simplest one in the file, and deliberately so:
+    //
+    //   the signed-in user, on their own path. Nothing else.
+    //
+    // THERE IS NO OWNER OVERRIDE. An owner reads every sale, every cost and
+    // every audit entry in their workspace — and still cannot read a
+    // manager's chat. That is not an oversight to be fixed later; it is the
+    // decision. If the shop ever needs an owner to see these, it needs to be
+    // a visible feature with the staff told about it, not a rule quietly
+    // widened here.
+    //
+    // Messages live INSIDE the chat document (services/aiChats.ts), so
+    // deleting the chat deletes them — there is no subcollection to orphan.
+    match /users/{uid}/aiChats/{chatId} {
+      allow read, write: if signedIn() && request.auth.uid == uid;
+    }
+
+    // ---- AI usage counters ----
+    //
+    // user_data/{workspaceId}/aiUsage/{YYYY-MM-DD}: one counter document per
+    // day — how many calls, broken down by op, plus rough token totals.
+    //
+    // WRITTEN ONLY BY THE CALLABLE (Admin SDK, which bypasses these rules).
+    // A client that could increment its own meter could also decrement it,
+    // and a spending limit somebody can edit is not a limit.
+    //
+    // Read is OWNER ONLY: it is the shop's spending, and it is the owner who
+    // sets the cap in Settings.
+    match /user_data/{workspaceId}/aiUsage/{day} {
+      allow read: if isOwnerOf(workspaceId);
+      allow write: if false;
+    }
+
     // ---- Invites ----
     match /workspaceInvites/{email} {
       // The invited user may read their own invite (to claim it); owners and

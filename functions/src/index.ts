@@ -10,6 +10,14 @@ import {
   ChatTurn, InventoryRow, needsProfitVisibility, runBulkParse, runChat,
   runImeiExtract, runInsights, runListing, runGpuPerformance,
 } from "./ai/tasks";
+import { Viewer } from "./ai/retrievalPolicy";
+import { retrieveContext } from "./ai/context";
+import {
+  AttachmentInput, PreparedAttachment, checkAttachment, prepareAttachment,
+} from "./ai/attachmentPolicy";
+import { capStateFor, recordUsage } from "./ai/usage";
+import { capMessage, estimateTokens, overCap, usageDay } from "./ai/usagePolicy";
+import { modelFor } from "./ai/models";
 
 if (!admin.apps.length) admin.initializeApp();
 
@@ -83,7 +91,19 @@ type AiRequest =
   | { op: "insights"; data: InventoryRow[] }
   | { op: "bulkParse"; text: string }
   | { op: "imeiExtract"; base64Image: string }
-  | { op: "chat"; inventory: InventoryRow[]; history: ChatTurn[] }
+  // NO INVENTORY. The client sends the QUESTION and the conversation; the
+  // server retrieves what the question refers to (src/ai/context.ts). The old
+  // shape sent every row of the shop's inventory on every single turn.
+  | {
+    op: "chat";
+    history: ChatTurn[];
+    /** Files attached to THIS message only. Never resent on later turns. */
+    attachments?: AttachmentInput[];
+    /** One-liners for files attached earlier in this conversation. */
+    attachmentSummaries?: string[];
+    /** Legacy field from the previous shape. Ignored — see above. */
+    inventory?: InventoryRow[];
+  }
   // The FACTS object is built on the client from an allow-list
   // (domain/listing.ts) — never an inventory row, never a build document.
   | { op: "listing"; facts: Record<string, unknown>; platform?: string; length?: string; markUsedParts?: boolean }
@@ -100,14 +120,100 @@ type AiRequest =
 // so a permission refusal can never be mistaken for a provider failure and can
 // never trigger the fallback.
 async function requireProfitVisibility(uid: string): Promise<void> {
-  const snap = await admin.firestore().collection("users").doc(uid).get();
-  const data = snap.data() as { role?: Role; disabled?: boolean; allowProfit?: boolean } | undefined;
-  if (!data || data.disabled || !hasProfitVisibility(data.role, data.allowProfit)) {
+  const caller = await loadCaller(uid);
+  if (!caller.viewer.canSeeMoney) {
     throw new HttpsError(
       "permission-denied",
       "This AI feature surfaces profit/margin figures your account doesn't have access to."
     );
   }
+}
+
+/**
+ * WHO IS ASKING, AND WHAT THEY MAY BE TOLD.
+ *
+ * Read from the caller's OWN user document, never from anything the client
+ * sent — the workspace a request reads from is not the client's to choose.
+ *
+ * Two separate visibilities, because they are two separate doors:
+ *   • money  — reports.profit.*, gating cost, margin and profit;
+ *   • payroll — payroll.manage (owner and manager), gating wages and hours.
+ * A manager without the Financials override passes the chat's own gate and
+ * must STILL not be handed a purchase cost by the assistant, which is what
+ * the per-field stripping in retrievalPolicy.ts is for.
+ */
+interface Caller {
+  workspaceId: string;
+  role: Role | undefined;
+  viewer: Viewer;
+}
+
+async function loadCaller(uid: string): Promise<Caller> {
+  const snap = await admin.firestore().collection("users").doc(uid).get();
+  const data = snap.data() as {
+    role?: Role; disabled?: boolean; allowProfit?: boolean; workspaceId?: string;
+  } | undefined;
+  if (!data || data.disabled) {
+    return { workspaceId: "", role: undefined, viewer: { canSeeMoney: false, canSeePayroll: false } };
+  }
+  return {
+    workspaceId: typeof data.workspaceId === "string" ? data.workspaceId : "",
+    role: data.role,
+    viewer: {
+      canSeeMoney: hasProfitVisibility(data.role, data.allowProfit),
+      // Mirrors services/rbac.ts: payroll.manage is owner and manager only,
+      // and the allowProfit override does NOT grant it.
+      canSeePayroll: data.role === "owner" || data.role === "manager",
+    },
+  };
+}
+
+/**
+ * A rough input size for ops that do not report their own.
+ *
+ * The request body is what was sent, so its length is the honest stand-in.
+ * Never LOGGED — only measured, and only as a character count.
+ */
+function approxRequestChars(body: AiRequest): number {
+  try { return JSON.stringify(body).length; } catch { return 0; }
+}
+
+/** The last thing the user actually asked — what retrieval plans against. */
+function lastUserText(history: ChatTurn[]): string {
+  for (let i = history.length - 1; i >= 0; i--) {
+    const h = history[i];
+    if (h?.role === "user") return (h.parts || []).map(p => p?.text || "").join(" ").trim();
+  }
+  return "";
+}
+
+/** The shop's own name, for the prompt. Best effort — never fails the call. */
+async function shopNameFor(ws: string): Promise<string> {
+  try {
+    const snap = await admin.firestore().doc(`user_data/${ws}/meta/app`).get();
+    const settings = (snap.data() as Record<string, unknown> | undefined)?.settings as Record<string, unknown> | undefined;
+    const general = (settings?.general || {}) as Record<string, unknown>;
+    const name = general.storeName;
+    return typeof name === "string" && name.trim() ? name.trim() : "the shop";
+  } catch {
+    return "the shop";
+  }
+}
+
+/**
+ * Check and prepare the files attached to this message.
+ *
+ * REJECTED LOUDLY, not skipped: somebody who attached a 30 MB video and got a
+ * normal-looking answer would reasonably believe it had been read.
+ */
+function prepareAttachments(inputs: AttachmentInput[] | undefined): PreparedAttachment[] {
+  const out: PreparedAttachment[] = [];
+  (inputs || []).forEach((a, i) => {
+    const check = checkAttachment(a, i);
+    if (!check.ok) throw new HttpsError("invalid-argument", `${a?.name || "That file"}: ${check.message}`);
+    out.push(prepareAttachment(a, check.kind));
+  });
+  return out;
 }
 
 /** Build the router for this invocation from the configured provider + keys. */
@@ -167,39 +273,109 @@ export const aiGenerate = onCall(
       await requireProfitVisibility(request.auth.uid);
     }
 
+    // THE DAILY CAP APPLIES TO EVERY OP, not just the chat. A listing writer
+    // stuck in a retry loop spends the shop's money exactly as fast as a
+    // conversation does, and a cap with a hole in it is a cap nobody can rely
+    // on. Checked once, here, before any provider is built.
+    const caller = await loadCaller(request.auth.uid);
+    const cap = caller.workspaceId
+      ? await capStateFor(caller.workspaceId, Date.now())
+      : null;
+    if (cap && overCap(cap)) throw new HttpsError("resource-exhausted", capMessage(cap));
+
     const router = buildRouter();
+    const provider = providerFromConfig(AI_PROVIDER.value());
+    const startedAt = Date.now();
+    /** Rough sizes for the meter, filled in by whichever branch ran. */
+    let meter: { inputChars: number; outputChars: number } | null = null;
+    const meterFor = (inputChars: number, outputChars: number) => {
+      meter = { inputChars, outputChars };
+    };
 
     try {
-      switch (body.op) {
-        case "insights":
-          return { text: await runInsights(router, body.data ?? []) };
-        case "bulkParse":
-          return {
-            items: await runBulkParse(
-              router, body.text ?? "", new Date().toISOString().split("T")[0]
-            ),
-          };
-        case "imeiExtract":
-          return await runImeiExtract(router, body.base64Image ?? "");
-        case "chat":
-          return {
-            text: await runChat(router, body.inventory ?? [], body.history ?? []),
-          };
-        case "listing":
-          return await runListing(router, {
-            facts: body.facts ?? {},
-            platform: body.platform,
-            length: body.length,
-            markUsedParts: body.markUsedParts === true,
-          });
-        case "gpuPerformance":
-          return await runGpuPerformance(router, body.gpuModel ?? "");
-        default:
-          throw new HttpsError(
-            "invalid-argument",
-            `Unknown op: ${(body as { op: string }).op}`
-          );
+      const result = await (async () => {
+        switch (body.op) {
+          case "insights":
+            return { text: await runInsights(router, body.data ?? []) };
+          case "bulkParse":
+            return {
+              items: await runBulkParse(
+                router, body.text ?? "", new Date().toISOString().split("T")[0]
+              ),
+            };
+          case "imeiExtract":
+            return await runImeiExtract(router, body.base64Image ?? "");
+          case "chat": {
+            if (!caller.workspaceId) {
+              throw new HttpsError("permission-denied", "Your account is not attached to a workspace.");
+            }
+            const attachments = prepareAttachments(body.attachments);
+            const question = lastUserText(body.history ?? []);
+            const today = new Date().toISOString().split("T")[0];
+
+            // RETRIEVAL, server-side, before the model is called at all.
+            const retrieved = await retrieveContext(
+              caller.workspaceId, question, caller.viewer, today,
+            );
+
+            const chat = await runChat(router, {
+              context: retrieved.text,
+              history: body.history ?? [],
+              viewer: caller.viewer,
+              shopName: await shopNameFor(caller.workspaceId),
+              attachments,
+              ...(body.attachmentSummaries?.length ? { attachmentSummaries: body.attachmentSummaries } : {}),
+            });
+
+            meterFor(chat.approxInputChars, chat.text.length);
+
+            return {
+              text: chat.text,
+              notices: chat.notices,
+              // WHAT ACTUALLY ANSWERED, from server config — the header used to
+              // read "Gemini 2.5 Flash" regardless, which is how somebody
+              // debugs the wrong model for an hour.
+              provider,
+              model: modelFor(provider, "reasoning"),
+              recordsUsed: retrieved.records,
+              attachmentSummaries: attachments.map(a => a.summary),
+              usage: { used: (cap?.used ?? 0) + 1, cap: cap?.cap ?? 0, day: usageDay(Date.now()) },
+            };
+          }
+          case "listing":
+            return await runListing(router, {
+              facts: body.facts ?? {},
+              platform: body.platform,
+              length: body.length,
+              markUsedParts: body.markUsedParts === true,
+            });
+          case "gpuPerformance":
+            return await runGpuPerformance(router, body.gpuModel ?? "");
+          default:
+            throw new HttpsError(
+              "invalid-argument",
+              `Unknown op: ${(body as { op: string }).op}`
+            );
+        }
+      })();
+
+      // ONE meter for every op, written after the provider answered — a call
+      // that failed because a vendor was down cost the shop nothing and must
+      // not count against its limit.
+      if (caller.workspaceId) {
+        const m = meter as { inputChars: number; outputChars: number } | null;
+        await recordUsage(caller.workspaceId, {
+          op: body.op,
+          provider,
+          model: modelFor(provider, body.op === "bulkParse" || body.op === "imeiExtract" ? "fast" : "reasoning"),
+          inputTokens: estimateTokens("x".repeat(m?.inputChars ?? approxRequestChars(body))),
+          outputTokens: estimateTokens("x".repeat(m?.outputChars ?? JSON.stringify(result ?? "").length)),
+          ms: Date.now() - startedAt,
+          uid: request.auth.uid,
+          at: Date.now(),
+        });
       }
+      return result;
     } catch (e) {
       // A permission refusal (and every other HttpsError) passes straight
       // through — it is already the right error with the right message.
