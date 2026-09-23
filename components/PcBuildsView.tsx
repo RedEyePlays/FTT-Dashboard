@@ -15,7 +15,6 @@ import {
   retailAgeDays, retailAsOfLabel, RETAIL_STALE_DAYS, splitBuilds,
 } from '../domain/pcBuild';
 import { canHaveDisplayCard, customerSheet, displayCard } from '../domain/buildSheet';
-import { costAccessFor, RECORDED_LABEL } from '../domain/costVisibility';
 import { buildSearchable, matchesWords, queryWords } from '../domain/itemSearch';
 import { printBuildSheet, printDisplayCard } from '../services/buildPrint';
 import { getStoreProfile } from './SettingsModal';
@@ -32,17 +31,31 @@ import { todayISO } from '../domain/dates';
  * a batch's device list do — finished work leaves the working list rather than
  * accumulating in it. Search is the shared multi-word matcher.
  *
- * COST VISIBILITY follows the existing rules exactly (domain/costVisibility.ts):
- * staff may ENTER a part cost and then see "Recorded" rather than the figure,
- * and the totals, profit and margin are owner-only. A build is full of cost
- * data, so this is the screen where getting that wrong would matter most.
+ * COSTS ARE VISIBLE AND EDITABLE TO ANYONE WHO CAN OPEN A BUILD.
+ *
+ * This screen used to apply the write-only masking (domain/costVisibility.ts):
+ * a cost was typed once, replaced by the word "Recorded" and locked. On a
+ * technician's account that hid the numbers from the person who had just gone
+ * out and bought the parts — they could not check or correct their own entry,
+ * and the Parts / Total cost tiles read "Recorded" as well.
+ *
+ * The owner's decision is that whoever can work on a build sees everything on
+ * that build. So there is NO cost masking in this file at all, and no flag to
+ * reintroduce one: both shells render this view only behind
+ * allow('builds.manage'), which makes "can open a build" and "can see its
+ * costs" the same question.
+ *
+ * THE BOUNDARY IS THIS SCREEN. It grants nothing anywhere else — inventory
+ * costs, Reports, the Sales Ledger, the Money Trail, dashboard profit and the
+ * per-user Financials (allowProfit) toggle all keep their own rules, and a
+ * technician still sees no cost on a device outside a build and no figure for
+ * what the shop makes overall. See components/PcBuildsView.costScope.test.tsx.
  */
 
 interface Props {
   builds: PcBuild[];
   inventory: InventoryItem[];
   customers: Customer[];
-  canViewCost: boolean;
   currentUserId: string;
   currentUserEmail: string;
   /** settings.operations.buildLabourRate. */
@@ -82,7 +95,7 @@ const STATUS_CLS: Record<BuildStatus, string> = {
 };
 
 export const PcBuildsView: React.FC<Props> = ({
-  builds, inventory, customers, canViewCost, currentUserId, currentUserEmail,
+  builds, inventory, customers, currentUserId, currentUserEmail,
   labourRate, warrantyDays, onSave, onDelete, onFinishBuild, onTakeDeposit,
   onCreateCustomer, onOpenInventoryItem, unavailableNotice,
 }) => {
@@ -107,7 +120,7 @@ export const PcBuildsView: React.FC<Props> = ({
   if (open) {
     return (
       <BuildDetail
-        build={open} inventory={inventory} customers={customers} canViewCost={canViewCost}
+        build={open} inventory={inventory} customers={customers}
         currentUserId={currentUserId} currentUserEmail={currentUserEmail}
         labourRate={labourRate} warrantyDays={warrantyDays}
         onBack={() => setOpenId(null)} onSave={onSave}
@@ -182,11 +195,9 @@ export const PcBuildsView: React.FC<Props> = ({
                       {t.labourHours > 0 ? ` · ${t.labourHours}h` : ''}
                     </p>
                   </div>
-                  {/* The price is not a cost figure — everyone sees it. The
-                      cost, profit and margin beside it are owner-only. */}
                   <div className="text-right shrink-0">
                     {t.price != null && <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">{money(t.price)}</p>}
-                    {canViewCost && t.profit != null && (
+                    {t.profit != null && (
                       <p className={`text-[11px] ${t.profit >= 0 ? 'text-emerald-600' : 'text-rose-500'}`}>{money(t.profit)} profit</p>
                     )}
                   </div>
@@ -302,7 +313,6 @@ const BuildDetail: React.FC<{
   build: PcBuild;
   inventory: InventoryItem[];
   customers: Customer[];
-  canViewCost: boolean;
   currentUserId: string;
   currentUserEmail: string;
   labourRate: number;
@@ -315,7 +325,7 @@ const BuildDetail: React.FC<{
   onCreateCustomer?: (draft: CustomerDraft) => Customer | undefined;
   onOpenInventoryItem?: (id: string) => void;
 }> = ({
-  build, inventory, canViewCost, currentUserId, currentUserEmail, labourRate,
+  build, inventory, currentUserId, currentUserEmail, labourRate,
   warrantyDays, onBack, onSave, onDelete, onFinishBuild, onTakeDeposit, onOpenInventoryItem,
 }) => {
   const totals = buildTotals(build);
@@ -409,9 +419,9 @@ const BuildDetail: React.FC<{
       {/* Totals */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {[
-          ['Parts', canViewCost ? money(totals.partsCost) : RECORDED_LABEL],
-          ['Labour', canViewCost ? `${money(totals.labourCost)} · ${totals.labourHours}h` : `${totals.labourHours}h`],
-          ['Total cost', canViewCost ? money(totals.totalCost) : RECORDED_LABEL],
+          ['Parts', money(totals.partsCost)],
+          ['Labour', `${money(totals.labourCost)} · ${totals.labourHours}h`],
+          ['Total cost', money(totals.totalCost)],
           [build.kind === 'customer' ? 'Quote' : 'Target', totals.price != null ? money(totals.price) : '—'],
         ].map(([k, v]) => (
           <div key={k} className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-3">
@@ -420,7 +430,7 @@ const BuildDetail: React.FC<{
           </div>
         ))}
       </div>
-      {canViewCost && totals.profit != null && (
+      {totals.profit != null && (
         <p className="text-sm text-slate-600 dark:text-slate-300">
           Profit <b className={totals.profit >= 0 ? 'text-emerald-600' : 'text-rose-500'}>{money(totals.profit)}</b>
           {totals.marginPercent != null && <> · margin <b>{totals.marginPercent.toFixed(1)}%</b></>}
@@ -446,13 +456,13 @@ const BuildDetail: React.FC<{
           </p>
         )}
         {(build.parts || []).map(p => (
-          <PartRow key={p.id} part={p} canViewCost={canViewCost} editable={editable}
+          <PartRow key={p.id} part={p} editable={editable}
             onChange={x => setPart(p.id, x)} onRemove={() => removePart(p.id)} />
         ))}
       </div>
 
       {/* Labour */}
-      <LabourPanel build={build} canViewCost={canViewCost} labourRate={labourRate} onLog={logLabour} />
+      <LabourPanel build={build} labourRate={labourRate} onLog={logLabour} />
 
       {/* Actions */}
       <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 dark:border-slate-800 pt-4">
@@ -502,20 +512,34 @@ const BuildDetail: React.FC<{
 
 /* ---------------- One part ---------------- */
 
+/**
+ * ONE PART.
+ *
+ * WHAT WAS PAID and WHAT IT SELLS FOR NEW are the two numbers the person
+ * buying the parts is actually working with, so both sit on the row itself,
+ * side by side, always editable. Retail used to be buried behind "More", and
+ * the cost was typed once and then locked behind the word "Recorded" — so the
+ * builder could not check or correct their own entry.
+ *
+ * "More" keeps everything that is reference rather than working data: source,
+ * the listing/order link, serial, manufacturer warranty, the PCPartPicker
+ * product link, and the retail source that goes with the retail price.
+ */
 const PartRow: React.FC<{
   part: BuildPart;
-  canViewCost: boolean;
   editable: boolean;
   onChange: (p: Partial<BuildPart>) => void;
   onRemove: () => void;
-}> = ({ part, canViewCost, editable, onChange, onRemove }) => {
+}> = ({ part, editable, onChange, onRemove }) => {
   const [expanded, setExpanded] = useState(false);
-  const costAccess = costAccessFor(canViewCost, part.cost);
   const stale = retailAgeDays(part);
+  const isStale = stale != null && stale > RETAIL_STALE_DAYS;
 
   return (
     <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-3">
-      <div className="flex flex-wrap items-center gap-2">
+      {/* flex-wrap throughout, and every fixed-width control is shrink-0 with
+          a wrapping group — the row reflows on a phone instead of overflowing. */}
+      <div className="flex flex-wrap items-start gap-2">
         <select value={part.category} disabled={!editable}
           onChange={e => onChange({ category: e.target.value as PartCategory })}
           className={`${input} w-32 shrink-0`}>
@@ -524,15 +548,34 @@ const PartRow: React.FC<{
         <input value={part.name} disabled={!editable} onChange={e => onChange({ name: e.target.value })}
           placeholder="Exact model, e.g. RTX 4070 Windforce OC 12GB" className={`${input} flex-1 min-w-[180px]`} />
 
-        {/* COST: staff may ENTER one and then see "Recorded" — the existing
-            write-only rule (domain/costVisibility.ts), unchanged. */}
-        {costAccess === 'locked' ? (
-          <div className="w-24 p-2 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-400 italic text-sm text-center select-none">{RECORDED_LABEL}</div>
-        ) : (
-          <input type="number" min="0" step="0.01" disabled={!editable} value={part.cost || ''}
-            onChange={e => onChange({ cost: parseFloat(e.target.value) || 0 })}
-            placeholder="Cost" className={`${input} w-24 shrink-0`} />
-        )}
+        {/* The two money fields, kept together so they wrap as a pair. */}
+        <div className="flex items-start gap-2 shrink-0">
+          <div className="w-24">
+            <input type="number" min="0" step="0.01" disabled={!editable} value={part.cost || ''}
+              onChange={e => onChange({ cost: parseFloat(e.target.value) || 0 })}
+              placeholder="Cost" title="What the shop paid for this part" className={input} />
+            <span className="block text-[10px] text-slate-400 mt-0.5 text-center">Paid</span>
+          </div>
+          <div className="w-28">
+            <input type="number" min="0" step="0.01" disabled={!editable} value={part.retailPrice ?? ''}
+              onChange={e => onChange({
+                retailPrice: parseFloat(e.target.value) || undefined,
+                // A price with no date looks current forever, so the date is
+                // stamped WITH it rather than left to be filled in.
+                retailCheckedAt: todayISO(),
+              })}
+              placeholder="Retail" title="What it sells for new — used for the customer's value comparison"
+              className={input} />
+            {/* The date is the quiet part: a stale retail price must LOOK
+                stale, or the comparison on the customer's card is fiction. */}
+            <span className={`block text-[10px] mt-0.5 text-center truncate ${isStale ? 'text-amber-600 dark:text-amber-400 font-medium' : 'text-slate-400'}`}
+              title={part.retailPrice != null ? retailAsOfLabel(part) : undefined}>
+              {part.retailPrice == null
+                ? 'New price'
+                : isStale ? `${stale}d old` : (part.retailCheckedAt || 'no date')}
+            </span>
+          </div>
+        </div>
 
         <select value={part.condition} disabled={!editable}
           onChange={e => onChange({ condition: e.target.value as PartCondition })}
@@ -540,15 +583,17 @@ const PartRow: React.FC<{
           {(Object.keys(CONDITION_LABEL) as PartCondition[]).map(c => <option key={c} value={c}>{CONDITION_LABEL[c]}</option>)}
         </select>
 
-        <a href={pcPartPickerSearchUrl(part.name)} target="_blank" rel="noreferrer"
-          title="Search PCPartPicker (Canada) for this part"
-          className="flex items-center gap-1 px-2 py-2 rounded-lg text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:underline shrink-0">
-          <ExternalLink className="w-3.5 h-3.5" /> Look up
-        </a>
-        <button onClick={() => setExpanded(x => !x)} className="text-xs text-slate-500 hover:text-indigo-600 px-2 shrink-0">
-          {expanded ? 'Less' : 'More'}
-        </button>
-        {editable && <button onClick={onRemove} className="p-1 text-slate-400 hover:text-rose-500 shrink-0"><Trash2 className="w-4 h-4" /></button>}
+        <div className="flex items-center gap-1 shrink-0">
+          <a href={pcPartPickerSearchUrl(part.name)} target="_blank" rel="noreferrer"
+            title="Search PCPartPicker (Canada) for this part"
+            className="flex items-center gap-1 px-2 py-2 rounded-lg text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:underline">
+            <ExternalLink className="w-3.5 h-3.5" /> Look up
+          </a>
+          <button onClick={() => setExpanded(x => !x)} className="text-xs text-slate-500 hover:text-indigo-600 px-2">
+            {expanded ? 'Less' : 'More'}
+          </button>
+          {editable && <button onClick={onRemove} className="p-1 text-slate-400 hover:text-rose-500"><Trash2 className="w-4 h-4" /></button>}
+        </div>
       </div>
 
       {expanded && (
@@ -586,15 +631,14 @@ const PartRow: React.FC<{
               placeholder="Paste the exact product link" />
           </div>
           <div>
-            <label className={label}>Retail price (new)</label>
+            {/* The retail PRICE is on the row itself; what stays here is where
+                it came from and when it was checked — reference for the price,
+                not the price. */}
+            <label className={label}>Retail source</label>
             <div className="flex gap-2">
-              <input type="number" min="0" step="0.01" value={part.retailPrice ?? ''} disabled={!editable}
-                onChange={e => onChange({
-                  retailPrice: parseFloat(e.target.value) || undefined,
-                  // A price with no date looks current forever, so the date is
-                  // stamped WITH it rather than left to be filled in.
-                  retailCheckedAt: todayISO(),
-                })} className={input} placeholder="0.00" />
+              <input value={part.retailSource || ''} disabled={!editable}
+                onChange={e => onChange({ retailSource: e.target.value })} className={input}
+                placeholder="e.g. Canada Computers" />
               {/* ─────────────────────────────────────────────────────────────
                   UNIMPLEMENTED — "Look up retail price" goes here.
                   The AI price lookup (Claude web search) arrives with the
@@ -610,17 +654,11 @@ const PartRow: React.FC<{
               )}
             </div>
             {part.retailPrice != null && (
-              <p className={`text-[11px] mt-1 ${stale != null && stale > RETAIL_STALE_DAYS ? 'text-amber-600 dark:text-amber-400' : 'text-slate-400'}`}>
+              <p className={`text-[11px] mt-1 ${isStale ? 'text-amber-600 dark:text-amber-400' : 'text-slate-400'}`}>
                 {retailAsOfLabel(part)}
-                {stale != null && stale > RETAIL_STALE_DAYS && ` — ${stale} days old`}
+                {isStale && ` — ${stale} days old`}
               </p>
             )}
-          </div>
-          <div>
-            <label className={label}>Retail source</label>
-            <input value={part.retailSource || ''} disabled={!editable}
-              onChange={e => onChange({ retailSource: e.target.value })} className={input}
-              placeholder="e.g. Canada Computers" />
           </div>
         </div>
       )}
@@ -640,10 +678,9 @@ const AI_PRICE_LOOKUP_ENABLED = false;
 
 const LabourPanel: React.FC<{
   build: PcBuild;
-  canViewCost: boolean;
   labourRate: number;
   onLog: (hours: number, note: string) => void;
-}> = ({ build, canViewCost, labourRate, onLog }) => {
+}> = ({ build, labourRate, onLog }) => {
   const [hours, setHours] = useState('');
   const [note, setNote] = useState('');
   const entries = build.labour || [];
@@ -683,13 +720,13 @@ const LabourPanel: React.FC<{
                 {l.userEmail} · {l.date}{l.note ? ` · ${l.note}` : ''}
               </span>
               <span className="text-slate-500 shrink-0">
-                {l.hours}h{canViewCost ? ` · ${money(l.hours * l.rate)}` : ''}
+                {l.hours}h · {money(l.hours * l.rate)}
               </span>
             </div>
           ))}
         </div>
       )}
-      {canViewCost && (
+      {(
         <p className="text-[11px] text-slate-400 mt-2">
           Costed at ${labourRate.toFixed(2)}/hr, snapshotted when logged — changing the rate later never reprices past entries.
         </p>
