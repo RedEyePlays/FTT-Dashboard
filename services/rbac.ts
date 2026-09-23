@@ -15,7 +15,13 @@ const ALL: Permission[] = [
 export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   owner: ALL,
   manager: [
-    'inventory.add', 'inventory.edit',
+    // DELETE IS THE OWNER'S EXPLICIT DECISION. A manager runs the shop floor:
+    // they already add and edit stock, and the thing they could not do was
+    // remove a row typed in twice or a device that never existed. The
+    // oversight is the audit entry — inventory.delete writes the whole item
+    // (SKU, cost, price) into auditLogs before the row goes, and auditLogs is
+    // append-only (firestore.rules), so a deleted device stays traceable.
+    'inventory.add', 'inventory.edit', 'inventory.delete',
     'sales.complete', 'sales.void', 'sales.return', 'dropoffs.manage', 'repairs.manage', 'repairs.tech', 'repairs.performance',
     'builds.manage',
     'cash.log', 'cash.reconcile',

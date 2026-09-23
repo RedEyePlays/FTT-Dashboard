@@ -19,9 +19,18 @@ describe('can()', () => {
   it('manager lacks owner-only permissions', () => {
     expect(can('manager', 'inventory.edit')).toBe(true);
     expect(can('manager', 'users.manage')).toBe(false);
-    expect(can('manager', 'inventory.delete')).toBe(false);
     expect(can('manager', 'backup.export')).toBe(false);
     expect(can('manager', 'settings.manage')).toBe(false);
+  });
+
+  it('A MANAGER MAY DELETE INVENTORY — the owner\'s decision', () => {
+    // They already add and edit stock; what they could not do was remove a row
+    // typed in twice. The oversight is the audit entry, not the block.
+    expect(can('manager', 'inventory.delete')).toBe(true);
+    // And it stops there: it is a manager-up permission, not an operational one.
+    expect(can('employee', 'inventory.delete')).toBe(false);
+    expect(can('technician', 'inventory.delete')).toBe(false);
+    expect(can('kiosk', 'inventory.delete')).toBe(false);
   });
 
   it('profit summary (period totals) is an owner + manager default; employees need the override', () => {
