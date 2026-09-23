@@ -1,5 +1,6 @@
 import './style.css';
 import { lookupRepairStatus, LookupError, RepairStatusResult } from './api';
+import { renderBuildPage } from './build';
 
 // A fully standalone public page: check a repair's status with a ticket number
 // plus the name or last-4 phone on the ticket. No login, no navigation, no
@@ -7,6 +8,23 @@ import { lookupRepairStatus, LookupError, RepairStatusResult } from './api';
 // ever talks to the one public Cloud Function (see api.ts).
 
 const app = document.getElementById('app')!;
+
+/**
+ * THE ROUTE. This one static bundle serves two public things:
+ *   /                 the repair-status form (unchanged)
+ *   /build/<token>    a PC build listing, for Marketplace posts
+ *
+ * A token is 26 lowercase alphanumeric characters from a CSPRNG
+ * (domain/buildShare.ts). Anything else is not a near miss, so it falls
+ * through to the repair form rather than being probed against the server.
+ */
+const buildTokenFromPath = (pathname: string): string | null => {
+  const m = /^\/build\/([^/?#]+)\/?$/.exec(pathname);
+  if (!m) return null;
+  let token: string;
+  try { token = decodeURIComponent(m[1]); } catch { return null; }
+  return /^[a-z0-9]{22,64}$/.test(token) ? token : null;
+};
 
 const escapeHtml = (s: string): string =>
   s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));
@@ -107,7 +125,14 @@ function wireUp() {
 function reset() {
   result = null;
   error = null;
+  // One bundle, two pages. The build listing takes over entirely when the path
+// names one — no repair form, no shared chrome.
+const buildToken = buildTokenFromPath(window.location.pathname);
+if (buildToken) {
+  void renderBuildPage(app, buildToken);
+} else {
   render();
+}
 }
 
 async function onSubmit(e: Event) {
@@ -120,13 +145,27 @@ async function onSubmit(e: Event) {
 
   if (!ticket.trim() || identifier.trim().length < 3) {
     error = 'Enter your ticket number and the name or phone on the ticket.';
-    render();
+    // One bundle, two pages. The build listing takes over entirely when the path
+// names one — no repair form, no shared chrome.
+const buildToken = buildTokenFromPath(window.location.pathname);
+if (buildToken) {
+  void renderBuildPage(app, buildToken);
+} else {
+  render();
+}
     return;
   }
 
   loading = true;
   error = null;
+  // One bundle, two pages. The build listing takes over entirely when the path
+// names one — no repair form, no shared chrome.
+const buildToken = buildTokenFromPath(window.location.pathname);
+if (buildToken) {
+  void renderBuildPage(app, buildToken);
+} else {
   render();
+}
 
   try {
     result = await lookupRepairStatus(ticket, identifier);
@@ -134,8 +173,22 @@ async function onSubmit(e: Event) {
     error = errorMessage(err);
   } finally {
     loading = false;
-    render();
+    // One bundle, two pages. The build listing takes over entirely when the path
+// names one — no repair form, no shared chrome.
+const buildToken = buildTokenFromPath(window.location.pathname);
+if (buildToken) {
+  void renderBuildPage(app, buildToken);
+} else {
+  render();
+}
   }
 }
 
-render();
+// One bundle, two pages. The build listing takes over entirely when the path
+// names one — no repair form, no shared chrome.
+const buildToken = buildTokenFromPath(window.location.pathname);
+if (buildToken) {
+  void renderBuildPage(app, buildToken);
+} else {
+  render();
+}

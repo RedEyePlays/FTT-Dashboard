@@ -237,3 +237,229 @@ body {
 .link-btn:hover {
   text-decoration: underline;
 }
+
+/* ===========================================================================
+   THE PUBLIC BUILD LISTING (/build/<token>)
+   ---------------------------------------------------------------------------
+   The display card's sibling (services/buildPrint.ts): the same accent bar,
+   the same enormous price, the same spec list. Mobile first — this is opened
+   from a Marketplace post on a phone — and it reuses the tokens above, so it
+   follows the visitor's light/dark preference like the rest of the page.
+   =========================================================================== */
+
+.build-page {
+  width: 100%;
+  max-width: 34rem;
+  margin: 0 auto;
+  padding: 1rem 1rem 3rem;
+}
+
+.b-card {
+  position: relative;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 1rem;
+  box-shadow: 0 1px 3px var(--card-shadow);
+  padding: 1.5rem 1.25rem 1.25rem;
+  overflow: hidden;
+}
+
+/* The accent bar the printed card uses, for the same reason: it reads as the
+   shop's piece without costing a full-bleed colour. */
+.b-card::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 6px;
+  background: linear-gradient(180deg, #4f46e5, #7c3aed);
+}
+
+.b-card.is-sold::before { background: linear-gradient(180deg, #94a3b8, #64748b); }
+
+.b-head { text-align: center; }
+
+.b-avail-flag, .b-sold-flag {
+  display: inline-block;
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+}
+.b-avail-flag { background: var(--pill-ready-bg); color: var(--pill-ready-text); }
+.b-sold-flag { background: var(--pill-none-bg); color: var(--pill-none-text); }
+
+.b-name {
+  font-size: 1.5rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  margin: 0.6rem 0 0;
+  color: var(--text);
+}
+
+/* The loudest thing on the page, by a distance. */
+.b-price {
+  font-size: 3rem;
+  font-weight: 900;
+  letter-spacing: -0.04em;
+  line-height: 1;
+  color: var(--accent);
+  margin: 0.5rem 0 0;
+}
+.is-sold .b-price { color: var(--text-muted); text-decoration: line-through; }
+
+.b-compare { margin-top: 0.75rem; }
+.b-compare-line { font-size: 0.95rem; color: var(--text-muted); margin: 0; }
+.b-compare-line strong { color: var(--text); }
+.b-compare-partial { font-size: 0.85rem; color: var(--text-faint); margin: 0; }
+
+.b-save {
+  display: inline-block;
+  margin: 0.45rem 0 0;
+  background: var(--pill-ready-bg);
+  color: var(--pill-ready-text);
+  border-radius: 999px;
+  padding: 0.25rem 0.8rem;
+  font-size: 0.9rem;
+  font-weight: 800;
+}
+
+.b-sold-note {
+  margin: 1.1rem 0 0;
+  padding: 0.7rem 0.85rem;
+  background: var(--pill-none-bg);
+  color: var(--pill-none-text);
+  border-radius: 0.6rem;
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.b-section {
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin: 1.6rem 0 0.5rem;
+}
+
+.b-parts { list-style: none; margin: 0; padding: 0; }
+
+.b-part {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.25rem 0.75rem;
+  padding: 0.7rem 0;
+  border-bottom: 1px solid var(--card-border);
+}
+.b-part:last-child { border-bottom: 0; }
+
+.b-part-main { min-width: 0; flex: 1 1 60%; }
+.b-part-cat {
+  display: block;
+  font-size: 0.65rem;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.b-part-name {
+  display: block;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1.3;
+}
+
+.b-part-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.5rem;
+  font-size: 0.78rem;
+}
+
+.b-cond {
+  background: #fef3c7;
+  color: #78350f;
+  border-radius: 0.3rem;
+  padding: 0.1rem 0.4rem;
+  font-weight: 700;
+}
+.b-cond-new { background: var(--pill-ready-bg); color: var(--pill-ready-text); }
+.b-warranty { color: var(--text-muted); }
+.b-part-price { color: var(--text-faint); }
+
+.b-shopwarranty {
+  margin: 1.4rem 0 0;
+  padding: 0.7rem 0.85rem;
+  background: var(--pill-progress-bg);
+  color: var(--pill-progress-text);
+  border-radius: 0.6rem;
+  font-size: 0.9rem;
+  text-align: center;
+}
+
+.b-foot {
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--card-border);
+  text-align: center;
+}
+.b-shop { font-weight: 800; color: var(--text); margin: 0; }
+.b-addr { font-size: 0.85rem; color: var(--text-muted); margin: 0.2rem 0 0; }
+
+.b-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.9rem;
+}
+.b-action {
+  flex: 1 1 10rem;
+  display: block;
+  padding: 0.8rem 1rem;
+  border-radius: 0.6rem;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 700;
+  text-decoration: none;
+  /* A 44px target: this is tapped with a thumb, from Marketplace. */
+  min-height: 44px;
+}
+.b-action:hover { background: var(--accent-hover); }
+.b-action-alt {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--input-border);
+}
+.b-action-alt:hover { background: var(--pill-none-bg); }
+
+.b-missing { text-align: center; }
+.b-missing-note { color: var(--text-muted); line-height: 1.6; margin: 0.75rem 0 0; }
+.b-loading { text-align: center; color: var(--text-muted); }
+
+@media (min-width: 40rem) {
+  .build-page { padding-top: 2.5rem; }
+  .b-card { padding: 2rem 1.75rem 1.5rem; }
+  .b-name { font-size: 1.85rem; }
+  .b-price { font-size: 3.75rem; }
+}
+
+/* Printing a listing: drop the tap targets and the accent fill, keep the
+   substance. The card should read as cleanly on paper as on a phone. */
+@media print {
+  .build-page { max-width: none; padding: 0; }
+  .b-card {
+    border: 1px solid #cbd5e1;
+    box-shadow: none;
+    break-inside: avoid;
+  }
+  .b-card::before { background: #4f46e5 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .b-actions { display: none; }
+  .b-price { color: #4f46e5 !important; }
+}

@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import {
   Cpu, Plus, Search, Trash2, X, ArrowRight, ArrowLeft, Printer, CreditCard,
   ExternalLink, Clock, FileText, AlertTriangle, Sparkles, CheckCircle2,
+  Link as LinkIcon, Copy, Check,
 } from 'lucide-react';
 import {
   BuildKind, BuildPart, BuildStatus, Customer, InventoryItem, PartCategory,
@@ -26,6 +27,7 @@ import { useSellerLink } from '../hooks/useSellerLink';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 import { useSubmitGuard } from '../hooks/useSubmitGuard';
 import { todayISO } from '../domain/dates';
+import { SOLD_LINK_GRACE_DAYS, newShareToken, shareState, shareUrl } from '../domain/buildShare';
 import { useFieldDraft } from '../hooks/useFieldDraft';
 import { numericDraft } from '../domain/fieldDraft';
 
@@ -69,6 +71,11 @@ interface Props {
   warrantyDays: number;
   onSave: (build: PcBuild, prev?: PcBuild) => void;
   onDelete?: (id: string) => void;
+  /**
+   * Where the public build page lives (the status-page hosting site). Share
+   * links are <statusHost>/build/<token>.
+   */
+  statusHost: string;
   /** Finish a shelf build: allocates a SKU and creates the inventory device. */
   onFinishBuild: (build: PcBuild, itemName: string) => unknown | Promise<unknown>;
   /** Open the till with this build as the item, for a customer deposit. */
@@ -101,7 +108,7 @@ const STATUS_CLS: Record<BuildStatus, string> = {
 
 export const PcBuildsView: React.FC<Props> = ({
   builds, inventory, customers, currentUserId, currentUserEmail,
-  labourRate, warrantyDays, onSave, onDelete, onFinishBuild, onTakeDeposit,
+  labourRate, warrantyDays, statusHost, onSave, onDelete, onFinishBuild, onTakeDeposit,
   onCreateCustomer, onOpenInventoryItem, unavailableNotice,
 }) => {
   const [view, setView] = useState<'active' | 'completed'>('active');
@@ -127,7 +134,7 @@ export const PcBuildsView: React.FC<Props> = ({
       <BuildDetail
         build={open} inventory={inventory} customers={customers}
         currentUserId={currentUserId} currentUserEmail={currentUserEmail}
-        labourRate={labourRate} warrantyDays={warrantyDays}
+        labourRate={labourRate} warrantyDays={warrantyDays} statusHost={statusHost}
         onBack={() => setOpenId(null)} onSave={onSave}
         onDelete={onDelete ? () => { onDelete(open.id); setOpenId(null); } : undefined}
         onFinishBuild={onFinishBuild} onTakeDeposit={onTakeDeposit}
@@ -322,6 +329,7 @@ const BuildDetail: React.FC<{
   currentUserEmail: string;
   labourRate: number;
   warrantyDays: number;
+  statusHost: string;
   onBack: () => void;
   onSave: (b: PcBuild, prev?: PcBuild) => void;
   onDelete?: () => void;
@@ -330,7 +338,7 @@ const BuildDetail: React.FC<{
   onCreateCustomer?: (draft: CustomerDraft) => Customer | undefined;
   onOpenInventoryItem?: (id: string) => void;
 }> = ({
-  build, inventory, currentUserId, currentUserEmail, labourRate,
+  build, inventory, currentUserId, currentUserEmail, labourRate, statusHost,
   warrantyDays, onBack, onSave, onDelete, onFinishBuild, onTakeDeposit, onOpenInventoryItem,
 }) => {
   const totals = buildTotals(build);
@@ -500,6 +508,9 @@ const BuildDetail: React.FC<{
 
       {/* Labour */}
       <LabourPanel build={build} labourRate={labourRate} onLog={logLabour} />
+
+      {/* THE PUBLIC LINK. One per build, for a Marketplace post. */}
+      {canHaveDisplayCard(build) && <SharePanel build={build} onSave={onSave} statusHost={statusHost} />}
 
       {/* Actions */}
       <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 dark:border-slate-800 pt-4">
@@ -863,6 +874,104 @@ const LabourPanel: React.FC<{
 };
 
 /* ---------------- Display card preview ---------------- */
+
+/**
+ * THE SHARE LINK.
+ *
+ * The shop posts builds on Facebook Marketplace and wants one link per build
+ * showing the specs, the price and what the same parts cost new elsewhere — so
+ * a buyer sees the value without phoning.
+ *
+ * LINK-ONLY: there is no index and no way to browse, so holding the token is
+ * the whole of the access check. It is 26 characters from a CSPRNG
+ * (domain/buildShare.ts), and what the page can show is decided server-side
+ * from an allow-list (functions/src/publicBuildPolicy.ts) — the browser never
+ * touches the build document, which carries part costs and serials.
+ */
+const SharePanel: React.FC<{
+  build: PcBuild;
+  statusHost: string;
+  onSave: (b: PcBuild, prev?: PcBuild) => void;
+}> = ({ build, statusHost, onSave }) => {
+  const [copied, setCopied] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const token = build.shareToken;
+  const url = token ? shareUrl(statusHost, token) : '';
+  const state = shareState({ shareToken: token, status: build.status, soldAt: build.finishedAt });
+
+  const mint = (regenerating: boolean) => {
+    if (regenerating && !window.confirm(
+      'Make a new link?\n\nThe current link stops working straight away — anywhere it has been posted, it will show "No longer available".',
+    )) return;
+    try {
+      setError(null);
+      onSave({
+        ...build,
+        shareToken: newShareToken(),
+        shareCreatedAt: Date.now(),
+      }, build);
+    } catch (e) {
+      // newShareToken refuses rather than falling back to Math.random.
+      setError(e instanceof Error ? e.message : 'Could not create a link.');
+    }
+  };
+
+  const stopSharing = () => {
+    if (!window.confirm('Stop sharing?\n\nThe link stops working straight away, wherever it has been posted.')) return;
+    onSave({ ...build, shareToken: undefined, shareCreatedAt: undefined, shareCreatedBy: undefined }, build);
+  };
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setError('Could not copy — select the link and copy it manually.');
+    }
+  };
+
+  if (!token) {
+    return (
+      <div className="border-t border-slate-100 dark:border-slate-800 pt-4">
+        <button onClick={() => mint(false)}
+          className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:border-indigo-400">
+          <LinkIcon className="w-4 h-4" /> Share link
+        </button>
+        <p className="text-[11px] text-slate-400 mt-1.5">
+          Makes a public page for this build — specs, your price and the comparison. Anyone with the link can see it; it is not listed anywhere.
+        </p>
+        {error && <p className="text-[11px] text-rose-600 dark:text-rose-400 mt-1">{error}</p>}
+      </div>
+    );
+  }
+
+  return (
+    <div className="border-t border-slate-100 dark:border-slate-800 pt-4 space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <input readOnly value={url} onFocus={e => e.currentTarget.select()}
+          className={`${input} flex-1 min-w-[220px] font-mono text-xs`} />
+        <button onClick={copy}
+          className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold bg-indigo-600 hover:bg-indigo-700 text-white shrink-0">
+          {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />} {copied ? 'Copied' : 'Copy'}
+        </button>
+      </div>
+      <div className="flex flex-wrap items-center gap-3 text-xs">
+        <button onClick={() => mint(true)} className="text-slate-500 hover:text-indigo-600 underline">New link</button>
+        <button onClick={stopSharing} className="text-slate-500 hover:text-rose-600 underline">Stop sharing</button>
+        {state === 'sold' && (
+          <span className="text-amber-600 dark:text-amber-400">
+            Sold — the link keeps working for {SOLD_LINK_GRACE_DAYS} days, then shows “No longer available”.
+          </span>
+        )}
+        {state === 'expired' && (
+          <span className="text-slate-500">This link has expired and now shows “No longer available”.</span>
+        )}
+      </div>
+      {error && <p className="text-[11px] text-rose-600 dark:text-rose-400">{error}</p>}
+    </div>
+  );
+};
 
 const CardPreview: React.FC<{
   card: ReturnType<typeof displayCard>;

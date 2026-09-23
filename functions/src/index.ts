@@ -19,6 +19,11 @@ export { scheduledBackups } from "./backups";
 // Public, no-auth repair-status lookup for customers (see repairLookup.ts).
 export { repairStatusLookup } from "./repairLookup";
 
+// Public PC-build listing lookup — one link per build for Marketplace posts.
+// Link-only: the token is the whole access check, and what comes back is
+// built from an allow-list (publicBuildPolicy.ts), never the stored document.
+export { buildShareLookup } from "./buildLookup";
+
 // The only write path a technician has for completedAt/warrantyUntil now
 // that firestore.rules excludes them from direct client writes (see repairs.ts).
 export { techUpdateRepair } from "./repairs";

@@ -50,6 +50,7 @@ import { attributeDrawerEntry, stampNewEntries } from './domain/dayLedger';
 import { CrashReport, crashActivityLine, crashId } from './domain/crashReport';
 import { isCostEntry, isCostEntryField, costAccessFor } from './domain/costVisibility';
 import { dbErrorHeading, sectionUnavailableNotice } from './domain/subscriptionAccess';
+import { STATUS_PAGE_ORIGIN } from './domain/statusLink';
 import { TechScreen, techScreenFor } from './domain/techShell';
 import { floorFor, buildBelowFloorSaleAudit, targetBelowFloor, TARGET_BELOW_FLOOR_NOTE, belowFloorSales } from './domain/priceFloor';
 import { paidBreakChangeImpact, paidBreakChangeMessage, paidBreakChangeAudit, sameReasons } from './domain/paidBreakChange';
@@ -2801,7 +2802,11 @@ const App: React.FC = () => {
   // staff the feature is for. Only an owner may delete a build.
   const handleSaveBuild = async (build: PcBuild, prev?: PcBuild) => {
     if (!uid || !allow('builds.manage')) return;
-    const next: PcBuild = { ...build, updatedAt: Date.now() };
+    let next: PcBuild = { ...build, updatedAt: Date.now() };
+    // WHO SHARED IT, from the authenticated user — never from the component.
+    if (next.shareToken && next.shareToken !== prev?.shareToken) {
+      next = { ...next, shareCreatedBy: appUser.id };
+    }
     try {
       await saveItemSettled(uid, 'pcBuilds', next);
     } catch (e) {
@@ -2811,6 +2816,20 @@ const App: React.FC = () => {
     if (!prev) {
       audit('build.create', 'pcBuild', next.id, undefined, { name: next.name, kind: next.kind });
       logActivity(`Started PC build "${next.name}"`);
+    } else if (prev.shareToken !== next.shareToken) {
+      // THE PUBLIC LINK CHANGED. Audited on both edges: minting one puts a
+      // build on the open internet, and clearing or regenerating one takes a
+      // live Marketplace listing down. The TOKEN ITSELF is never written to
+      // the audit log — an audit entry is not a place to keep a credential,
+      // and this one grants access to the page.
+      const action = !next.shareToken ? 'build.share_stop'
+        : prev.shareToken ? 'build.share_regenerate' : 'build.share_start';
+      audit(action, 'pcBuild', next.id, undefined, { name: next.name, at: next.shareCreatedAt });
+      logActivity(
+        action === 'build.share_stop' ? `Stopped sharing PC build "${next.name}"`
+          : action === 'build.share_regenerate' ? `New share link for PC build "${next.name}" — the old one no longer works`
+            : `Shared PC build "${next.name}" with a public link`,
+      );
     } else if (prev.status !== next.status) {
       // Every status change is audited with both ends of the move, so a
       // backwards step is visible afterwards and not only at the confirm.
@@ -3082,6 +3101,7 @@ const App: React.FC = () => {
               currentUserEmail={appUser.email}
               labourRate={settings.operations.buildLabourRate ?? 15}
               warrantyDays={settings.operations.deviceWarrantyDays ?? 90}
+              statusHost={STATUS_PAGE_ORIGIN}
               onSave={handleSaveBuild}
               onFinishBuild={handleFinishBuild}
               unavailableNotice={refusedCollections.includes('pcBuilds') ? sectionUnavailableNotice('PC Builds') : undefined}
@@ -3296,6 +3316,7 @@ const App: React.FC = () => {
               currentUserEmail={appUser.email}
               labourRate={settings.operations.buildLabourRate ?? 15}
               warrantyDays={settings.operations.deviceWarrantyDays ?? 90}
+              statusHost={STATUS_PAGE_ORIGIN}
               onSave={handleSaveBuild}
               onDelete={appUser.role === 'owner' ? handleDeleteBuild : undefined}
               onFinishBuild={handleFinishBuild}
