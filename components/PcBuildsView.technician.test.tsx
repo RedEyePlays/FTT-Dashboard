@@ -77,6 +77,7 @@ const techProps = (builds: PcBuild[], over: Record<string, unknown> = {}) => ({
   currentUserEmail: 'tech@shop.test',
   labourRate: 15,
   warrantyDays: 90,
+  statusHost: 'https://status.shop.test',
   onSave: () => {},
   onFinishBuild: () => {},
   ...over,

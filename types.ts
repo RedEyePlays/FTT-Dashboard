@@ -1382,6 +1382,20 @@ export interface PcBuild {
   /** The device's SKU, allocated at the moment the build was finished. */
   sku?: string;
   finishedAt?: number;
+  /**
+   * THE PUBLIC SHARE LINK.
+   *
+   * 26 characters from a CSPRNG (domain/buildShare.ts). The shop pastes
+   * <status host>/build/<token> into a Facebook Marketplace post; there is no
+   * index and no way to browse, so holding the token IS the access check —
+   * which is why it is long. Clearing it kills the link immediately;
+   * regenerating mints a new one and kills the old.
+   *
+   * Absent on every build that has never been shared.
+   */
+  shareToken?: string;
+  shareCreatedAt?: number;
+  shareCreatedBy?: string;
   /** Set when a customer order takes a deposit / is sold. */
   saleId?: string;
   createdBy: string;

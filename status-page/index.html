@@ -3,8 +3,17 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- LINK-ONLY MEANS LINK-ONLY. This bundle serves the repair-status form
+         and, at /build/<token>, a public PC-build listing. Neither is meant to
+         be found by searching: a build listing is reachable only by holding
+         its token, and an indexed listing would defeat that entirely. -->
     <meta name="robots" content="noindex, nofollow" />
+    <!-- The build page replaces this at runtime with the build's own name and
+         price, along with the Open Graph tags that make the link preview in a
+         Marketplace post or a text message (status-page/src/build.ts). -->
     <title>Repair Status</title>
+    <meta property="og:site_name" content="FlipThatTech" />
+    <meta property="og:type" content="website" />
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>

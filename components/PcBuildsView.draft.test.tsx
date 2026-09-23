@@ -62,6 +62,7 @@ const props = (builds: PcBuild[], onSave: (b: PcBuild) => void) => ({
   builds, inventory: [], customers: [],
   currentUserId: 'u1', currentUserEmail: 'sam@shop.test',
   labourRate: 15, warrantyDays: 90,
+  statusHost: 'https://status.shop.test',
   onSave, onFinishBuild: () => {},
 });
 

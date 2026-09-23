@@ -5,7 +5,21 @@
       "collectionGroup": "repairs",
       "queryScope": "COLLECTION_GROUP",
       "fields": [
-        { "fieldPath": "repairNumber", "order": "ASCENDING" }
+        {
+          "fieldPath": "repairNumber",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "comment": "Collection-group index for the public PC-build listing lookup (buildShareLookup Cloud Function): find a build across all workspaces by its share token.",
+      "collectionGroup": "pcBuilds",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        {
+          "fieldPath": "shareToken",
+          "order": "ASCENDING"
+        }
       ]
     }
   ],

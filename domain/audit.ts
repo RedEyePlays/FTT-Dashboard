@@ -18,6 +18,17 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   'inventory.edit': 'Item edited',
   'inventory.delete': 'Item deleted',
   'accessory.quantity': 'Stock adjusted',
+  // Custom PC builds. These were writing raw action tokens into the log —
+  // 'build.status' shown to a human as "build.status" — since the feature
+  // shipped; the share actions below are new.
+  'build.create': 'PC build started',
+  'build.update': 'PC build edited',
+  'build.status': 'PC build status changed',
+  'build.finish': 'PC build finished — device created',
+  'build.delete': 'PC build deleted',
+  'build.share_start': 'PC build shared with a public link',
+  'build.share_regenerate': 'PC build share link replaced',
+  'build.share_stop': 'PC build sharing stopped',
   // Sales
   'sale.complete': 'Sale completed',
   // Drop-offs

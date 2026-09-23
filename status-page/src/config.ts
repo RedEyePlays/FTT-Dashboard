@@ -7,3 +7,6 @@
 // needed to reach it — no shared config, no shared init.
 export const FUNCTIONS_BASE_URL = 'https://us-central1-ftt-dashboardgit-0945496-a85e0.cloudfunctions.net';
 export const LOOKUP_FUNCTION_NAME = 'repairStatusLookup';
+// The public PC-build listing lookup, reached at /build/<token>. Same project,
+// same region, same reasoning as above.
+export const BUILD_LOOKUP_FUNCTION_NAME = 'buildShareLookup';
