@@ -208,6 +208,39 @@ export async function saveItemSettled(
 export const deleteItem = (uid: string, name: CollName, id: string) =>
   deleteDoc(docRef(uid, name, id));
 
+/**
+ * DELETE A STOCK ROW AND EVERYTHING KEYED TO IT.
+ *
+ * `deleteItem` removes one document. An inventory row is not one document:
+ * a device with an IMEI also owns `inventoryImeiIndex/{normalized}`, which is
+ * what makes that identity unique (see commitAutoInventory above).
+ *
+ * THE PHANTOM: delete the device and leave the index, and the index now points
+ * at a record that does not exist. It is survivable — commitAutoInventory
+ * reclaims a slot whose record is gone — but only through the auto-inventory
+ * transaction, and only later. Until then the workspace carries a claim on an
+ * IMEI that nothing owns, which is exactly the kind of state nobody thinks to
+ * look for when re-adding a phone goes wrong.
+ *
+ * ORDER MATTERS. The index goes FIRST: if that write is refused or fails, the
+ * device is still there and the pair is still consistent. Deleting the device
+ * first and failing on the index is the phantom, created deliberately.
+ *
+ * The index delete is best-effort in one specific sense — a document that is
+ * ALREADY gone is success, because the goal is that it is not there.
+ */
+export async function deleteInventoryItem(
+  uid: string,
+  name: CollName,
+  item: { id: string; imeiNormalized?: string; imei?: string },
+): Promise<void> {
+  const normalized = (item.imeiNormalized || '').trim();
+  if (normalized) {
+    await deleteDoc(doc(db, 'user_data', uid, 'inventoryImeiIndex', normalized));
+  }
+  await deleteDoc(docRef(uid, name, item.id));
+}
+
 // Sync a whole array against a previous array: upsert changed, delete removed.
 export async function syncArray<T extends { id: string }>(uid: string, name: CollName, next: T[], prev: T[]) {
   const batch = writeBatch(db);

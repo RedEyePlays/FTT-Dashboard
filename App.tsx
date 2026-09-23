@@ -70,7 +70,7 @@ import { DeviceMode, autoLockApplies, idleMinutesFor, switchingAvailable } from 
 import { readDeviceMode, writeDeviceMode } from './services/registerMode';
 import { switchUser as callSwitchUser, switchErrorMessage } from './services/switchUserFunctions';
 import {
-  saveMeta, saveItem, saveItemSettled, deleteItem, syncArray, allocateSku,
+  saveMeta, saveItem, saveItemSettled, deleteItem, deleteInventoryItem, syncArray, allocateSku,
   logActivityDoc, commitSale, voidSale, returnSale, collectLayawayBalance, commitCashReconciliation, seedSampleData,
   updateUserDoc, setInvite, deleteInvite,
   logAudit, exportWorkspaceData, recordBackup, saveSettings,
@@ -86,6 +86,7 @@ import { listingPlatformsLabel } from './domain/listing';
 import { describeCallableError } from './domain/callableErrors';
 import { AppSettings } from './domain/settings';
 import { techUpdateRepair, findDevicePhoto } from './services/repairFunctions';
+import { deleteDevicePhotoObjects } from './services/devicePhotoUpload';
 import { setStaffPassword, createStaffUser } from './services/userFunctions';
 import { stampVoid, stampReturn, stampReconcile, stampSettlement, stampDropOffAccept, stampExpense } from './domain/attribution';
 import { useWorkspaceData } from './hooks/useWorkspaceData';
@@ -848,11 +849,45 @@ const App: React.FC = () => {
     setEditingItem(undefined);
   };
 
-  const handleDeleteItem = (id: string) => {
+  /**
+   * DELETE A STOCK ROW, AND EVERYTHING KEYED TO IT.
+   *
+   * Three things happen, in this order, and the order is the point:
+   *
+   *   1. THE AUDIT ENTRY IS WRITTEN FIRST, carrying the whole item as
+   *      `before` — SKU, cost, repair cost, price, IMEI, who bought it. It has
+   *      to be first: after the row is gone there is nothing left to describe
+   *      it, and auditLogs is append-only in firestore.rules, so the entry
+   *      outlives the record it is about. That is what makes a manager's
+   *      delete traceable rather than simply a row that used to be there.
+   *   2. The IMEI index entry and the device document go together
+   *      (services/firestoreDb.ts's deleteInventoryItem), index first, so a
+   *      failure cannot leave a claim on an identity nothing owns.
+   *   3. Its photos are removed from Storage. A device photo outliving its
+   *      device is a file the shop pays for monthly and nobody can reach.
+   *
+   * A failure is SAID OUT LOUD. This used to be fire-and-forget: a rules
+   * rejection — which is exactly what a manager got until this change — left
+   * the row on screen with nothing to explain it, and the natural next move is
+   * to tap delete again.
+   */
+  const handleDeleteItem = async (id: string) => {
     if (!uid || !allow('inventory.delete')) return;
     const target = dataRef.current.find(i => i.id === id);
-    audit('inventory.delete', target ? collectionFor(target) : 'inventory', id, target);
-    deleteItem(uid, target ? collectionFor(target) : 'inventory', id);
+    const collection = target ? collectionFor(target) : 'inventory';
+    audit('inventory.delete', collection, id, target);
+    try {
+      await deleteInventoryItem(uid, collection, target || { id });
+    } catch (e) {
+      writeFailed('The item', e, 'It has not been deleted.');
+      return;
+    }
+    logActivity(`${target?.sku || target?.item || 'Item'} deleted`);
+    // Best effort, and deliberately after the row is gone: a photo that will
+    // not delete must not keep a device the owner asked to remove.
+    for (const photo of target?.photos || []) {
+      deleteDevicePhotoObjects(uid, id, photo).catch(() => { /* orphan file, not a blocked delete */ });
+    }
   };
 
   // Update single field (inline edit). Returns the write's promise so bulk

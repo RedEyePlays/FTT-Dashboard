@@ -514,7 +514,7 @@ describe('employee restrictions that must NOT have widened', () => {
       { pinHash: 'x', pinSalt: 'y', pinIterations: 1, pinUpdatedAt: Date.now(), pinUpdatedBy: 'employee-uid', pinUpdatedByEmail: 'employee@shop.test' }, { merge: true }));
   });
 
-  it('employee cannot delete inventory (inventory.delete stays owner-only)', async () => {
+  it('employee cannot delete inventory (inventory.delete is manager-up)', async () => {
     const { deleteDoc } = await import('firebase/firestore');
     await testEnv.withSecurityRulesDisabled(async (ctx) => {
       await setDoc(doc(ctx.firestore(), 'user_data', WORKSPACE, 'inventory', 'del1'), { sku: 'FTT-9' });

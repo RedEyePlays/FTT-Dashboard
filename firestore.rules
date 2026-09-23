@@ -216,8 +216,25 @@ service cloud.firestore {
       allow read: if activeMemberOf(ws) || request.auth.uid == ws;
       allow write: if isStaffOf(ws) || request.auth.uid == ws;
 
-      // Inventory & accessories: staff (non-technician) create/update; only the
-      // owner may delete.
+      // Inventory & accessories: staff (non-technician) create/update;
+      // MANAGER OR OWNER may delete.
+      //
+      // DELETE WAS isOwnerOf AND SHOULD NOT HAVE BEEN. services/rbac.ts now
+      // grants a manager 'inventory.delete' — the owner's decision — so the
+      // app showed a manager the delete control and the rules refused the
+      // write. A control that is visible and then rejected is worse than no
+      // control: the row is still there, nothing says why, and the natural
+      // next move is to try again.
+      //
+      // isManagerUp() is the helper that already means "manager or owner"
+      // elsewhere in this file (timeEntries, payPeriodApprovals, expenses,
+      // kioskStaff); reused rather than writing the condition out again, so
+      // there is one definition of that tier to read.
+      //
+      // The oversight on a delete is the AUDIT ENTRY, not the block: App.tsx's
+      // handleDeleteItem writes the whole item — SKU, cost, price — into
+      // auditLogs before the row goes, and auditLogs is append-only below, so
+      // a deleted device stays traceable to whoever removed it.
       //
       // ONE exception for technicians, and only on inventory: finishing a PC
       // build creates the device that build became, and a technician holds
@@ -229,22 +246,35 @@ service cloud.firestore {
         allow read: if activeMemberOf(ws);
         allow create: if isStaffOf(ws) || (isTechOf(ws) && techBuildDeviceOk());
         allow update: if isStaffOf(ws);
-        allow delete: if isOwnerOf(ws);
+        allow delete: if isManagerUp(ws);
       }
+      // Accessories move with inventory deliberately: they are the same
+      // collection to the user and the same button on the same screen
+      // (App.tsx's handleDeleteItem routes by collectionFor(item)), so a
+      // manager who can delete a device and not a charging cable would be a
+      // second version of the bug this change fixes.
       match /accessories/{id} {
         allow read: if activeMemberOf(ws);
         allow create, update: if isStaffOf(ws);
-        allow delete: if isOwnerOf(ws);
+        allow delete: if isManagerUp(ws);
       }
       // Auto-inventory identity index (domain/autoInventory.ts /
       // commitAutoInventory): one doc per normalized IMEI/serial, written only
       // from inside that transaction alongside the inventory record it points
-      // at. Same access as inventory itself — staff write, owner-only delete
-      // (matches "never hard-delete inventory records from a ticket action").
+      // at.
+      //
+      // DELETE FOLLOWS INVENTORY DELETE, and it has to. This doc is what makes
+      // an IMEI unique; if a manager could delete the device but not its index
+      // entry, the entry would be left pointing at a record that no longer
+      // exists — a phantom that claims an identity nothing owns. The index is
+      // self-healing (commitAutoInventory reclaims a slot whose record is
+      // gone), but leaving the phantom behind and relying on that is a worse
+      // design than removing it with the device, which is what
+      // services/firestoreDb.ts's deleteInventoryItem now does.
       match /inventoryImeiIndex/{id} {
         allow read: if activeMemberOf(ws);
         allow create, update: if isStaffOf(ws);
-        allow delete: if isOwnerOf(ws);
+        allow delete: if isManagerUp(ws);
       }
 
       // Audit logs are append-only: any active member (incl. technicians) may
