@@ -2,7 +2,7 @@ import {
   SalesTransaction, CashReconciliation, CashDrawerEntry, Expense, Settlement, StaffBonus,
 } from '../types';
 import { impliedRefundSplits } from './pos';
-import { cashCollectedOnTx, expectedEndingCash, sumDrawerEntries, recomputedVariance } from './reports';
+import { cashCollectedOnTx, expectedEndingCash, sumDrawerEntries, sumTillWithdrawals, sumCloseRemovals, recomputedVariance } from './reports';
 
 /**
  * THE DAY MONEY TRAIL.
@@ -396,7 +396,11 @@ export const cashOnly = (rows: LedgerRow[]): LedgerRow[] =>
 
 export type WalkLine =
   | 'openingFloat' | 'cashSales' | 'cashIn' | 'cashOut' | 'withdrawals'
-  | 'expected' | 'counted' | 'variance';
+  | 'expected' | 'counted' | 'variance'
+  // What happened to the counted cash AFTER it was counted. These sit below
+  // the variance rather than inside the sum, because the till was already
+  // counted by then — see domain/reports.ts's sumTillWithdrawals.
+  | 'closeRemoval' | 'leftInDrawer';
 
 export interface WalkStep {
   key: WalkLine;
@@ -433,7 +437,8 @@ export const shortfallWalk = (
   const float = round2(openingFloat ?? recon?.openingFloat ?? 0);
   const cashIn = sumDrawerEntries(recon?.cashIn);
   const cashOut = sumDrawerEntries(recon?.cashOut);
-  const withdrawals = sumDrawerEntries(recon?.withdrawals);
+  const withdrawals = sumTillWithdrawals(recon?.withdrawals);
+  const removedAtClose = sumCloseRemovals(recon?.withdrawals);
   const expected = expectedEndingCash({
     openingFloat: float, cashSales, cashIn, cashOut, withdrawals,
   });
@@ -458,6 +463,15 @@ export const shortfallWalk = (
       amount: round2(variance),
       op: '=',
     });
+    // Where the counted cash went. The walk above still balances to the count
+    // on its own; these two say what happened to it next, so "the drawer was
+    // right and $1,800 went to the bank" is legible instead of silent.
+    if (removedAtClose >= 0.005) {
+      steps.push({ key: 'closeRemoval', label: 'Taken out at close', amount: removedAtClose, op: '−' });
+    }
+    if (recon?.leftInDrawer != null) {
+      steps.push({ key: 'leftInDrawer', label: 'Left in for tomorrow', amount: round2(recon.leftInDrawer), op: '=' });
+    }
   }
   return { steps, expected, counted, variance, counted_: counted != null };
 };
@@ -470,6 +484,8 @@ export const rowsForWalkLine = (rows: LedgerRow[], key: WalkLine): LedgerRow[] =
     case 'cashIn': return rows.filter(r => r.kind === 'cash_in');
     case 'cashOut': return rows.filter(r => r.kind === 'cash_out');
     case 'withdrawals': return rows.filter(r => r.kind === 'withdrawal');
+    case 'closeRemoval':
+    case 'leftInDrawer': return rows.filter(r => r.kind === 'withdrawal' || r.kind === 'drawer_reconcile');
     case 'counted':
     case 'variance': return rows.filter(r => r.kind === 'drawer_reconcile');
     case 'expected':

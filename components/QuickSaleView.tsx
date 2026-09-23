@@ -32,6 +32,8 @@ interface Props {
   // viewer can reconcile (cash.reconcile), so an employee sees Open/In/Out but
   // no close action they don't have permission to complete.
   onCloseDrawer?: () => void;
+  /** Owner-only float correction (App gates it). */
+  onCorrectFloat?: () => void;
   reconciledToday?: boolean;
   onCartDirtyChange?: (dirty: boolean) => void; // reports whether the Quick Sale cart has unsaved items
   // Enables cart auto-save/restore across navigation (hooks/useCheckout.ts),
@@ -48,7 +50,7 @@ interface Props {
 // Quick Sale = the desktop split-screen cart on ≥md, a step-based flow on phones.
 // Both share the same checkout logic (hooks/useCheckout) — no duplicated business
 // logic; only the presentation differs, and only one renders at a time.
-export const QuickSaleView: React.FC<Props> = ({ inventory, customers, repairs, initialCustomer, onConsumeInitial, initialRepair, onConsumeInitialRepair, initialInventoryId, onConsumeInitialInventory, onSellCart, canViewProfit = true, onGenerateSku, cashDrawer, onOpenDrawer, onLogCash, onCloseDrawer, reconciledToday, onCartDirtyChange, persist, floorSettings, warrantySettings }) => {
+export const QuickSaleView: React.FC<Props> = ({ inventory, customers, repairs, initialCustomer, onConsumeInitial, initialRepair, onConsumeInitialRepair, initialInventoryId, onConsumeInitialInventory, onSellCart, canViewProfit = true, onGenerateSku, cashDrawer, onOpenDrawer, onLogCash, onCloseDrawer, onCorrectFloat, reconciledToday, onCartDirtyChange, persist, floorSettings, warrantySettings }) => {
   const isMobile = useIsMobile();
   const common = { inventory, customers, repairs, initialCustomer, onConsumeInitial, initialRepair, onConsumeInitialRepair, initialInventoryId, onConsumeInitialInventory, canViewProfit, onGenerateSku, onDirtyChange: onCartDirtyChange, persist, floorSettings, warrantySettings } as const;
   const checkout = isMobile
@@ -57,7 +59,7 @@ export const QuickSaleView: React.FC<Props> = ({ inventory, customers, repairs, 
   return (
     <div className="flex flex-col gap-4 flex-1 min-h-0">
       {cashDrawer && onOpenDrawer && onLogCash && (
-        <CashDrawerPanel summary={cashDrawer} onOpenDrawer={onOpenDrawer} onLog={onLogCash} onCloseDrawer={onCloseDrawer} reconciledToday={reconciledToday} />
+        <CashDrawerPanel summary={cashDrawer} onOpenDrawer={onOpenDrawer} onLog={onLogCash} onCloseDrawer={onCloseDrawer} reconciledToday={reconciledToday} onCorrectFloat={onCorrectFloat} />
       )}
       {checkout}
     </div>

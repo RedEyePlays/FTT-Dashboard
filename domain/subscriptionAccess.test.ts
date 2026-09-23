@@ -3,7 +3,7 @@ import { Role } from '../types';
 import {
   canSubscribeTo, deferredCollectionsFor, isPermissionDenied, failureAction,
   dbErrorFor, dbErrorHeading, CONNECTION_HEADING, PERMISSION_HEADING,
-  DeferredCollection,
+  DeferredCollection, CORE_COLLECTIONS, isCoreCollection, sectionUnavailableNotice,
 } from './subscriptionAccess';
 
 // THE BUG: opening Drop-Offs, Time Clock or Reports subscribed to ALL the
@@ -111,5 +111,82 @@ describe('the message matches the cause', () => {
 
   it('an error with no message at all still says something', () => {
     expect(dbErrorFor({}).message).toBe('Failed to load data');
+  });
+});
+
+/**
+ * THE SAME BUG, ONE LAYER UP. The day PR #209 shipped, EVERY account got
+ * "You don't have access to that" until firestore.rules were deployed —
+ * because one new collection (pcBuilds) had been subscribed at startup
+ * alongside the core ones, so a denial on a feature nobody was using yet
+ * blanked the till, inventory and repairs too.
+ */
+describe('core vs optional at startup', () => {
+  const DENIED = { code: 'permission-denied', message: 'Missing or insufficient permissions.' };
+
+  it('core is the minimum the app cannot run without — and nothing more', () => {
+    expect(CORE_COLLECTIONS).toEqual(
+      ['inventory', 'accessories', 'salesTransactions', 'customers', 'meta'],
+    );
+  });
+
+  /**
+   * The startup handler's decision, exactly as hooks/useWorkspaceData.ts
+   * makes it: fatal blanks the app, ignore empties one section.
+   */
+  const runStartup = (denied: string[]) => {
+    const subscribed = [
+      'inventory', 'accessories', 'runners', 'customers',
+      'salesTransactions', 'repairs', 'repairBatches', 'pcBuilds', 'activityLog', 'meta',
+    ];
+    let appDown = false;
+    const empty: string[] = [];
+    for (const coll of subscribed) {
+      if (!denied.includes(coll)) continue;
+      if (failureAction(DENIED, !isCoreCollection(coll)) === 'ignore') empty.push(coll);
+      else appDown = true;
+    }
+    return { appDown, empty, works: (c: string) => !appDown && !empty.includes(c) };
+  };
+
+  it('A DENIAL ON pcBuilds LEAVES QUICK SALE, INVENTORY AND REPAIRS WORKING', () => {
+    const r = runStartup(['pcBuilds']);
+    expect(r.appDown).toBe(false);          // this is the regression
+    expect(r.empty).toEqual(['pcBuilds']);  // and only that section is affected
+    // The collections those three screens are actually built from.
+    expect(r.works('salesTransactions')).toBe(true);  // Quick Sale
+    expect(r.works('inventory')).toBe(true);          // Inventory
+    expect(r.works('accessories')).toBe(true);
+    expect(r.works('customers')).toBe(true);
+    expect(r.works('repairs')).toBe(true);            // Repairs
+  });
+
+  it('but losing INVENTORY does take the app down, as it must', () => {
+    expect(runStartup(['inventory']).appDown).toBe(true);
+  });
+
+  it('a new collection is OPTIONAL until someone makes the case', () => {
+    for (const coll of ['pcBuilds', 'repairs', 'repairBatches', 'runners', 'activityLog', 'somethingAddedNextYear']) {
+      expect({ coll, core: isCoreCollection(coll) }).toEqual({ coll, core: false });
+    }
+  });
+
+  it('a denial on a CORE collection is still fatal — there is no app without stock', () => {
+    for (const coll of CORE_COLLECTIONS) {
+      expect({ coll, action: failureAction(DENIED, !isCoreCollection(coll)) })
+        .toEqual({ coll, action: 'fatal' });
+    }
+  });
+
+  it('a CONNECTIVITY failure is fatal even on an optional collection', () => {
+    // Losing the database is not the same as being refused one collection.
+    expect(failureAction({ code: 'unavailable', message: 'client is offline' }, true)).toBe('fatal');
+  });
+
+  it('the section notice names the section and the likely cause', () => {
+    const notice = sectionUnavailableNotice('PC Builds');
+    expect(notice).toContain('PC Builds');
+    expect(notice).toMatch(/deploy database rules/i);
+    expect(notice).toMatch(/Everything else still works/i);
   });
 });

@@ -72,6 +72,48 @@ export const deferredCollectionsFor = (role: Role | undefined): DeferredCollecti
     'payPeriods', 'payPeriodApprovals', 'staffBonuses', 'kioskStaff',
   ] as DeferredCollection[]).filter(c => canSubscribeTo(role, c));
 
+/* ---------------- Core vs optional ---------------- */
+
+/**
+ * THE MINIMUM THE APP CANNOT RUN WITHOUT.
+ *
+ * Everything else is optional: a permission denial on it leaves that section
+ * empty and the rest of the shop working.
+ *
+ * This list is deliberately short, and adding to it should be argued for. The
+ * day PR #209 shipped, every account got "You don't have access to that" until
+ * firestore.rules were deployed — because ONE new collection (pcBuilds) had
+ * been subscribed at startup alongside these, so a denial on a feature nobody
+ * was using yet blanked the till, inventory and repairs too.
+ *
+ *   inventory / accessories — the stock; nothing works without it
+ *   salesTransactions       — every money figure in the app
+ *   customers               — attached to sales, repairs and layaways
+ *   meta                    — settings, SKU counters, notes and tasks
+ *
+ * Repairs is NOT here: the shop can sell and buy without the repairs list, and
+ * a shop that cannot do either is down anyway. Nor is activityLog, which is a
+ * feed. Nor pcBuilds, runners, repairBatches or anything added later by
+ * default — a new collection is optional until someone makes the case.
+ */
+export type CoreCollection =
+  | 'inventory' | 'accessories' | 'salesTransactions' | 'customers' | 'meta';
+
+export const CORE_COLLECTIONS: CoreCollection[] = [
+  'inventory', 'accessories', 'salesTransactions', 'customers', 'meta',
+];
+
+export const isCoreCollection = (name: string): boolean =>
+  (CORE_COLLECTIONS as string[]).includes(name);
+
+/**
+ * The inline notice a section shows when its own data was refused, instead of
+ * the full-screen error. Names the likely cause, because in practice it is
+ * almost always rules that have not been deployed yet.
+ */
+export const sectionUnavailableNotice = (sectionLabel: string): string =>
+  `${sectionLabel} isn't available yet — the owner may need to deploy database rules. Everything else still works.`;
+
 /* ---------------- Classifying a failure ---------------- */
 
 /**

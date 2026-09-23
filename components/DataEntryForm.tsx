@@ -4,6 +4,7 @@ import { QrCode, Printer, Camera } from 'lucide-react';
 import { InventoryItem, Customer } from '../types';
 import { SellerCustomerField } from './SellerCustomerField';
 import { useSellerLink } from '../hooks/useSellerLink';
+import { writeErrorMessage } from '../domain/writeErrors';
 import { CustomerDraft } from '../domain/customers';
 import { QRScanner } from './QRScanner';
 import { QRLabel } from './QRLabel';
@@ -18,7 +19,8 @@ interface DataEntryFormProps {
   // reports.profit.detailed. A RECORDED cost is masked; a blank one stays
   // enterable (domain/costVisibility.ts).
   canViewCost?: boolean;
-  onSave: (item: InventoryItem) => void;
+  /** May be async — the form awaits it and stays put if it rejects. */
+  onSave: (item: InventoryItem) => void | Promise<unknown>;
   onCancel: () => void;
   // Existing inventory, for the duplicate IMEI/serial guard (same check the
   // Inventory item modal, Quick Purchase and auto-inventory all use).
@@ -98,19 +100,33 @@ export const DataEntryForm: React.FC<DataEntryFormProps> = ({ initialData, canVi
   // Purchase and the Add Item modal use (domain/sellerLink.ts).
   const sellerLink = useSellerLink({ customers: customers || [], onCreateCustomer });
 
+  // The caller navigates away on success, which is this form's "saved". So
+  // the save is AWAITED and a failure keeps the form exactly as typed with the
+  // reason on screen, rather than the entry vanishing into a screen change.
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (duplicate) return;
+    if (duplicate || saving) return;
     sellerLink.resolve(
       { name: formData.boughtFrom || '', phone: formData.boughtFromPhone, customerId: formData.boughtFromCustomerId },
-      boughtFromCustomerId => {
+      boughtFromCustomerId => { void (async () => {
         const finalItem: InventoryItem = {
           id: initialData?.id || Date.now().toString() + Math.random().toString(36).substr(2, 5),
           ...formData,
           boughtFromCustomerId,
         };
-        onSave(finalItem);
-      },
+        setSaving(true);
+        setSaveError(null);
+        try {
+          await onSave(finalItem);
+        } catch (err) {
+          setSaveError(writeErrorMessage(err, 'Could not save this item.'));
+        } finally {
+          setSaving(false);
+        }
+      })(); },
     );
   };
   
@@ -232,13 +248,20 @@ export const DataEntryForm: React.FC<DataEntryFormProps> = ({ initialData, canVi
             </div>
         </div>
 
+        {/* NOT SAVED — and the form below is untouched, so nothing is retyped. */}
+        {saveError && (
+          <div className="flex items-start gap-2 bg-rose-50 dark:bg-rose-900/20 border border-rose-200 dark:border-rose-500/30 text-rose-700 dark:text-rose-300 rounded-xl px-4 py-3 text-sm">
+            <span><strong>Not saved.</strong> {saveError} Your entry is still here — fix it and try again.</span>
+          </div>
+        )}
+
         {/* Action Buttons */}
         <div className="flex justify-end gap-4 pt-4">
           <button type="button" onClick={onCancel} className="px-6 py-2 rounded-lg text-slate-700 dark:text-slate-300 bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 font-medium transition-colors">
             Cancel
           </button>
-          <button type="submit" disabled={!!duplicate} className="px-6 py-2 rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-600 disabled:opacity-40 disabled:cursor-not-allowed font-medium transition-colors shadow-sm">
-            Save Item
+          <button type="submit" disabled={!!duplicate || saving} className="px-6 py-2 rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-600 disabled:opacity-40 disabled:cursor-not-allowed font-medium transition-colors shadow-sm">
+            {saving ? 'Saving…' : 'Save Item'}
           </button>
         </div>
       </form>

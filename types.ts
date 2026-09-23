@@ -862,6 +862,24 @@ export interface CashDrawerEntry {
   source?: string;         // the write path (see domain/dayLedger.ts)
   refType?: 'sale' | 'expense' | 'settlement' | 'dropoff' | 'bonus' | 'purchase' | 'layaway' | 'manual';
   refId?: string;          // the underlying record, so the trail can link to it
+  /**
+   * A BOOKKEEPING ENTRY RATHER THAN A TILL MOVEMENT.
+   *
+   * Both kinds are shown in the Money Trail — nothing is invisible — and both
+   * are EXCLUDED from the day's expected-vs-counted arithmetic, for reasons
+   * that differ but land in the same place:
+   *
+   *  - 'closeRemoval': cash taken to the bank / the owner AT CLOSE, after the
+   *    till was counted. It really left, but it left after the count, so it
+   *    cannot be part of what the count was measured against. It is carried
+   *    instead by the next day's opening float (see drawerCarryOver).
+   *  - 'floatCorrection': no cash moved at all. The recorded float was wrong
+   *    and an owner put it right; the entry is the audit record of that.
+   *
+   * Absent on every ordinary entry, and on every entry written before this
+   * existed — so nothing about existing days changes.
+   */
+  adjustment?: 'closeRemoval' | 'floatCorrection';
 }
 
 // A saved daily cash-drawer record (one per calendar day; id === date). It can
@@ -880,6 +898,19 @@ export interface CashReconciliation {
   withdrawals?: CashDrawerEntry[];  // owner pulls / bank deposits
   expectedCash: number;    // computed expected ENDING cash
   countedCash?: number;    // actual counted cash at close (absent until reconciled)
+  /**
+   * How much of the count was LEFT IN the drawer for tomorrow, set at close.
+   *
+   * The rest was taken out, and is recorded as a 'closeRemoval' entry. This is
+   * what the next day opens with — NOT the raw count. Without it every day's
+   * takings rolled into the next day's float and the float snowballed: a phone
+   * shop does not start the morning with $11,865 in the till.
+   *
+   * ABSENT on every day closed before this existed, and those days deliberately
+   * still carry their full count forward, exactly as they did. History does not
+   * shift.
+   */
+  leftInDrawer?: number;
   variance: number;        // countedCash − expectedCash (+ over, − short); 0 until counted
   note?: string;           // explanation of a variance (required when over/short)
   // Start-of-day open (drawer float set explicitly, not silently defaulted).

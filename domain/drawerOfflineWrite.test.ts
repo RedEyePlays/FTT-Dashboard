@@ -73,7 +73,9 @@ describe('rule 2 — undefined becomes a field delete', () => {
     // Without the delete, reopening would silently no-op and the day would
     // stay closed — the bug openDrawerPatch exists to prevent.
     const w = build(openDrawerPatch(200, ACTOR, undefined, NOW));
-    expect(w.clear.sort()).toEqual(['countedCash', 'reconciledAt', 'reconciledBy', 'reconciledByEmail']);
+    // `leftInDrawer` clears with them: re-opening undoes the close, and the
+    // float being set right now IS what is in the drawer.
+    expect(w.clear.sort()).toEqual(['countedCash', 'leftInDrawer', 'reconciledAt', 'reconciledBy', 'reconciledByEmail']);
     expect(w.set.openingFloat).toBe(200);
     expect(w.set.openedAt).toBe(NOW);
   });

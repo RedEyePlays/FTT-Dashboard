@@ -57,6 +57,12 @@ interface Props {
   onTakeDeposit?: (build: PcBuild) => void;
   onCreateCustomer?: (draft: CustomerDraft) => Customer | undefined;
   onOpenInventoryItem?: (id: string) => void;
+  /**
+   * Set when this workspace's pcBuilds subscription was REFUSED (almost always
+   * rules that have not been deployed yet). The section says so itself; the
+   * rest of the app is unaffected — see domain/subscriptionAccess.ts.
+   */
+  unavailableNotice?: string;
 }
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -78,7 +84,7 @@ const STATUS_CLS: Record<BuildStatus, string> = {
 export const PcBuildsView: React.FC<Props> = ({
   builds, inventory, customers, canViewCost, currentUserId, currentUserEmail,
   labourRate, warrantyDays, onSave, onDelete, onFinishBuild, onTakeDeposit,
-  onCreateCustomer, onOpenInventoryItem,
+  onCreateCustomer, onOpenInventoryItem, unavailableNotice,
 }) => {
   const [view, setView] = useState<'active' | 'completed'>('active');
   const [query, setQuery] = useState('');
@@ -114,6 +120,13 @@ export const PcBuildsView: React.FC<Props> = ({
 
   return (
     <div className="flex flex-col gap-4">
+      {/* This section's data was refused. An inline notice, NOT the full-screen
+          error — one missing rule must not take the shop down with it. */}
+      {unavailableNotice && (
+        <div className="flex items-start gap-2 rounded-xl px-4 py-3 text-sm bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-900/40 text-amber-800 dark:text-amber-300">
+          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" /> {unavailableNotice}
+        </div>
+      )}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
           <Cpu className="w-6 h-6 text-indigo-500" /> PC Builds

@@ -18,6 +18,7 @@ import { selectOnFocus } from '../hooks/selectOnFocus';
 import { todayISO } from '../domain/dates';
 import { costAccessFor, RECORDED_LABEL } from '../domain/costVisibility';
 import { normalizeForLookup } from '../domain/identifierSearch';
+import { writeErrorMessage } from '../domain/writeErrors';
 
 interface Props {
   initial?: InventoryItem;
@@ -28,7 +29,8 @@ interface Props {
   // to put the cost in, just not read one back.
   canViewCost?: boolean;
   deviceBuyers: DeviceBuyer[];
-  onSave: (item: InventoryItem) => void;
+  /** May be async — the modal awaits it and stays open if it rejects. */
+  onSave: (item: InventoryItem) => void | Promise<unknown>;
   onGenerateSku: (kind: ItemKind, deviceType?: DeviceType) => Promise<string>;
   onClose: () => void;
   // Internal repair linking (owner/manager). The linked ticket (if any) is shown
@@ -202,10 +204,13 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, canViewCo
       } else {
         item.item = f.item || [f.brand, f.model, f.storage].filter(Boolean).join(' ');
       }
-      onSave(item);
+      // AWAITED. Closing the modal is this screen's "saved" — it must not
+      // happen on a write that hasn't landed. A rejection lands in the catch
+      // below, which keeps the form open with everything still typed in it.
+      await onSave(item);
       onClose();
     } catch (e) {
-      setSaveError(e instanceof Error ? e.message : 'Could not save this item.');
+      setSaveError(writeErrorMessage(e, 'Could not save this item.'));
     } finally {
       setSaving(false);
     }
