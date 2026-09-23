@@ -276,6 +276,25 @@ body {
 
 .b-card.is-sold::before { background: linear-gradient(180deg, #94a3b8, #64748b); }
 
+/* The machine itself, above everything else: a listing opened on a phone is
+   scrolled, and a photo is what stops the scroll. */
+.b-photo {
+  margin: 0 0 1rem;
+  text-align: center;
+}
+.b-photo img {
+  width: 100%;
+  max-height: 22rem;
+  object-fit: contain;
+  border-radius: 0.75rem;
+  background: var(--photo-bg, rgba(148, 163, 184, 0.12));
+}
+.b-photo-note {
+  margin: 0.4rem 0 0;
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
 .b-head { text-align: center; }
 
 .b-avail-flag, .b-sold-flag {
@@ -463,3 +482,173 @@ body {
   .b-actions { display: none; }
   .b-price { color: #4f46e5 !important; }
 }
+
+/* ===========================================================================
+   THE COUNTER KIOSK (/showroom/<token>)
+   ---------------------------------------------------------------------------
+   A tablet on a bright shop counter, picked up by somebody standing up. So:
+   big touch targets (56px+), high contrast, and type that reads at arm's
+   length. Works in portrait and landscape on a cheap 10" tablet.
+   =========================================================================== */
+
+.showroom {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 0 0 2rem;
+  /* A bright counter beats a subtle palette. Favour contrast over elegance. */
+  --k-ink: #0b1120;
+  --k-dim: #475569;
+  --k-line: #cbd5e1;
+  --k-surface: #ffffff;
+  --k-accent: #4338ca;
+  color: var(--k-ink);
+  background: #f8fafc;
+  min-height: 100vh;
+}
+@media (prefers-color-scheme: dark) {
+  .showroom {
+    --k-ink: #f1f5f9;
+    --k-dim: #94a3b8;
+    --k-line: #334155;
+    --k-surface: #0f172a;
+    --k-accent: #818cf8;
+    background: #020617;
+  }
+}
+
+.k-head {
+  display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
+  padding: 1rem 1.25rem;
+  background: var(--k-surface);
+  border-bottom: 2px solid var(--k-line);
+  position: sticky; top: 0; z-index: 5;
+}
+.k-shop { font-size: 1.5rem; font-weight: 800; margin: 0; letter-spacing: -0.02em; }
+
+.k-tabs { display: flex; gap: 0.5rem; margin-left: auto; flex-wrap: wrap; }
+.k-tab, .k-back, .k-chip, .k-pick-btn {
+  min-height: 56px;                        /* a thumb, standing up */
+  padding: 0 1.25rem;
+  border-radius: 0.75rem;
+  border: 2px solid var(--k-line);
+  background: var(--k-surface);
+  color: var(--k-ink);
+  font-size: 1.05rem; font-weight: 700;
+  cursor: pointer;
+}
+.k-tab.is-on, .k-chip.is-on { background: var(--k-accent); border-color: var(--k-accent); color: #fff; }
+.k-back { margin-right: 0.5rem; }
+
+.k-controls {
+  display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;
+  padding: 1rem 1.25rem 0;
+}
+.k-filter { display: flex; align-items: center; gap: 0.75rem; font-size: 1rem; color: var(--k-dim); }
+.k-filter input[type="range"] { width: 12rem; height: 44px; }
+
+.k-section { padding: 1.5rem 1.25rem 0; }
+.k-section-title {
+  font-size: 1.1rem; font-weight: 800; text-transform: uppercase;
+  letter-spacing: 0.08em; color: var(--k-dim); margin: 0 0 0.75rem;
+}
+
+.k-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(13rem, 1fr));
+  gap: 1rem;
+}
+
+.k-card {
+  display: flex; flex-direction: column; text-align: left;
+  background: var(--k-surface);
+  border: 2px solid var(--k-line);
+  border-radius: 1rem;
+  overflow: hidden;
+  cursor: pointer;
+  padding: 0;
+  color: inherit;
+}
+.k-card:active { transform: scale(0.99); }
+.k-card-body { padding: 0.85rem; }
+.k-card-title { font-size: 1.05rem; font-weight: 800; margin: 0; line-height: 1.25; }
+.k-card-sub { font-size: 0.9rem; color: var(--k-dim); margin: 0.15rem 0 0; }
+.k-card-price { font-size: 1.5rem; font-weight: 900; color: var(--k-accent); margin: 0.4rem 0 0; }
+
+.k-photo {
+  aspect-ratio: 1 / 1; background: #e2e8f0; display: flex;
+  align-items: center; justify-content: center; overflow: hidden;
+}
+@media (prefers-color-scheme: dark) { .k-photo { background: #1e293b; } }
+.k-photo img { width: 100%; height: 100%; object-fit: cover; }
+/* An item with no photo still appears — an outline, never a gap. */
+.k-photo-none { font-size: 3rem; color: var(--k-line); }
+
+.k-detail { padding: 1.25rem; max-width: 46rem; margin: 0 auto; }
+.k-detail .k-photo { aspect-ratio: 4 / 3; border-radius: 1rem; border: 2px solid var(--k-line); }
+.k-detail-title { font-size: 1.9rem; font-weight: 800; margin: 1rem 0 0; }
+.k-detail-price { font-size: 3rem; font-weight: 900; color: var(--k-accent); margin: 0.25rem 0 0; }
+.k-stock-note { font-size: 0.8rem; color: var(--k-dim); margin: 0.5rem 0 0; }
+
+.k-compare { font-size: 1.05rem; color: var(--k-dim); margin: 0.75rem 0 0; }
+.k-save {
+  display: inline-block; margin-left: 0.5rem; padding: 0.2rem 0.7rem;
+  border-radius: 999px; background: #dcfce7; color: #14532d; font-weight: 800;
+}
+
+.k-specs { margin: 1.25rem 0 0; display: grid; gap: 0.5rem; }
+.k-spec { display: flex; justify-content: space-between; gap: 1rem; border-bottom: 1px solid var(--k-line); padding-bottom: 0.5rem; }
+.k-spec dt { color: var(--k-dim); font-weight: 600; }
+.k-spec dd { margin: 0; font-weight: 700; text-align: right; }
+
+.k-warranty { margin: 1.25rem 1.25rem 0; padding: 0.85rem 1rem; border-radius: 0.75rem;
+  background: #e0e7ff; color: #3730a3; font-weight: 700; text-align: center; }
+.k-ask { margin: 1rem 0 0; font-size: 1.15rem; text-align: center; color: var(--k-dim); }
+.k-ask strong { color: var(--k-ink); font-family: ui-monospace, monospace; }
+
+.k-rows { display: grid; gap: 0.5rem; }
+.k-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+  background: var(--k-surface); border: 2px solid var(--k-line);
+  border-radius: 0.75rem; padding: 0.9rem 1rem; min-height: 56px;
+}
+.k-row-title { font-size: 1.1rem; font-weight: 700; display: block; }
+.k-row-sub { font-size: 0.9rem; color: var(--k-dim); }
+.k-row-price { font-size: 1.3rem; font-weight: 900; color: var(--k-accent); white-space: nowrap; }
+
+.k-lead { padding: 1.25rem 1.25rem 0; font-size: 1.2rem; color: var(--k-dim); margin: 0; }
+.k-pick { display: grid; grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr)); gap: 0.75rem; padding: 1rem 1.25rem 0; }
+.k-pick-btn { justify-content: center; display: flex; align-items: center; }
+
+.k-quote { padding: 2rem 1.25rem; text-align: center; }
+.k-quote-what { font-size: 1.2rem; color: var(--k-dim); margin: 0; }
+.k-quote-range { font-size: 3.25rem; font-weight: 900; color: var(--k-accent); margin: 0.5rem 0 0; }
+.k-quote-note { font-size: 1.15rem; margin: 0.5rem 0 0; }
+
+.k-caveat { margin: 1.5rem 1.25rem 0; font-size: 0.95rem; color: var(--k-dim); line-height: 1.6; }
+/* The trade-in caveat is not fine print. The screen must not be quotable. */
+.k-caveat-loud {
+  border: 2px solid #f59e0b; background: #fffbeb; color: #78350f;
+  border-radius: 0.75rem; padding: 1rem 1.15rem; font-weight: 700; font-size: 1.05rem;
+}
+@media (prefers-color-scheme: dark) {
+  .k-caveat-loud { background: #422006; color: #fde68a; border-color: #b45309; }
+  .k-save { background: #064e3b; color: #a7f3d0; }
+  .k-warranty { background: #312e81; color: #c7d2fe; }
+}
+
+.k-empty { padding: 3rem 1.25rem; text-align: center; color: var(--k-dim); font-size: 1.1rem; }
+.k-msg { padding: 4rem 1.25rem; text-align: center; color: var(--k-dim); font-size: 1.2rem; }
+.k-foot { padding: 2rem 1.25rem 0; text-align: center; color: var(--k-dim); font-size: 0.85rem; }
+
+/* Idle attract mode: full screen, one device at a time, photo and price. */
+.k-attract {
+  position: fixed; inset: 0; background: var(--k-surface);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 0.5rem; padding: 2rem; text-align: center; z-index: 10;
+}
+.k-attract .k-photo { width: min(60vh, 70vw); aspect-ratio: 1 / 1; border-radius: 1.5rem; }
+.k-attract-title { font-size: 2.5rem; font-weight: 800; margin: 1rem 0 0; }
+.k-attract-price { font-size: 4rem; font-weight: 900; color: var(--k-accent); margin: 0; }
+.k-attract-sub { font-size: 1.2rem; color: var(--k-dim); margin: 0; }
+.k-attract-hint { position: absolute; bottom: 2rem; color: var(--k-dim); font-size: 1rem; }

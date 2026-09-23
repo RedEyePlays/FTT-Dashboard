@@ -23,6 +23,7 @@ import { buildSearchable, matchesWords, queryWords } from '../domain/itemSearch'
 import { printBuildSheet, printDisplayCard } from '../services/buildPrint';
 import { getStoreProfile } from './SettingsModal';
 import { CustomerSearchInput } from './CustomerSearchInput';
+import { DevicePhotos } from './DevicePhotos';
 import { useSellerLink } from '../hooks/useSellerLink';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 import { useSubmitGuard } from '../hooks/useSubmitGuard';
@@ -83,6 +84,17 @@ interface Props {
   onCreateCustomer?: (draft: CustomerDraft) => Customer | undefined;
   onOpenInventoryItem?: (id: string) => void;
   /**
+   * PHOTOS OF THE FINISHED MACHINE.
+   *
+   * They live on the inventory DEVICE a finished shelf build becomes, not on
+   * the build — photograph it once and the spec sheet, the Marketplace link
+   * and the counter kiosk all show the same picture. Omit either of these, or
+   * open a build that has not been finished yet, and the gallery is simply
+   * not offered.
+   */
+  workspaceId?: string;
+  onSaveDevice?: (item: InventoryItem) => void | Promise<unknown>;
+  /**
    * Set when this workspace's pcBuilds subscription was REFUSED (almost always
    * rules that have not been deployed yet). The section says so itself; the
    * rest of the app is unaffected — see domain/subscriptionAccess.ts.
@@ -109,7 +121,7 @@ const STATUS_CLS: Record<BuildStatus, string> = {
 export const PcBuildsView: React.FC<Props> = ({
   builds, inventory, customers, currentUserId, currentUserEmail,
   labourRate, warrantyDays, statusHost, onSave, onDelete, onFinishBuild, onTakeDeposit,
-  onCreateCustomer, onOpenInventoryItem, unavailableNotice,
+  onCreateCustomer, onOpenInventoryItem, workspaceId, onSaveDevice, unavailableNotice,
 }) => {
   const [view, setView] = useState<'active' | 'completed'>('active');
   const [query, setQuery] = useState('');
@@ -139,6 +151,7 @@ export const PcBuildsView: React.FC<Props> = ({
         onDelete={onDelete ? () => { onDelete(open.id); setOpenId(null); } : undefined}
         onFinishBuild={onFinishBuild} onTakeDeposit={onTakeDeposit}
         onCreateCustomer={onCreateCustomer} onOpenInventoryItem={onOpenInventoryItem}
+        workspaceId={workspaceId} onSaveDevice={onSaveDevice}
       />
     );
   }
@@ -337,9 +350,12 @@ const BuildDetail: React.FC<{
   onTakeDeposit?: (b: PcBuild) => void;
   onCreateCustomer?: (draft: CustomerDraft) => Customer | undefined;
   onOpenInventoryItem?: (id: string) => void;
+  workspaceId?: string;
+  onSaveDevice?: (item: InventoryItem) => void | Promise<unknown>;
 }> = ({
   build, inventory, currentUserId, currentUserEmail, labourRate, statusHost,
   warrantyDays, onBack, onSave, onDelete, onFinishBuild, onTakeDeposit, onOpenInventoryItem,
+  workspaceId, onSaveDevice,
 }) => {
   const totals = buildTotals(build);
   const device = build.inventoryId ? inventory.find(i => i.id === build.inventoryId) : undefined;
@@ -379,7 +395,9 @@ const BuildDetail: React.FC<{
     }],
   });
 
-  const sheet = customerSheet({ build, warrantyDays, price: device?.targetSalePrice });
+  // Photos live on the DEVICE a finished build became — photograph the machine
+  // once and it serves the spec sheet, the Marketplace listing and the kiosk.
+  const sheet = customerSheet({ build, warrantyDays, price: device?.targetSalePrice, photos: device?.photos });
   const card = displayCard({
     build, price: device?.targetSalePrice, warrantyDays,
     shopName: store.storeName, shopPhone: (store as { phone?: string }).phone || '',
@@ -508,6 +526,23 @@ const BuildDetail: React.FC<{
 
       {/* Labour */}
       <LabourPanel build={build} labourRate={labourRate} onLog={logLabour} />
+
+      {/* PHOTOS OF THE FINISHED MACHINE — stored on the device, not the build. */}
+      {device && workspaceId && onSaveDevice && (
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-4">
+          <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-1">Photos</h3>
+          <p className="text-xs text-slate-400 mb-3">
+            Of the finished machine. These are what the Marketplace listing, the printed spec sheet and the counter kiosk show.
+          </p>
+          <DevicePhotos
+            workspaceId={workspaceId}
+            itemId={device.id}
+            photos={device.photos}
+            currentUserId={currentUserId}
+            onChange={photos => { void onSaveDevice({ ...device, photos }); }}
+          />
+        </div>
+      )}
 
       {/* THE PUBLIC LINK. One per build, for a Marketplace post. */}
       {canHaveDisplayCard(build) && <SharePanel build={build} onSave={onSave} statusHost={statusHost} />}

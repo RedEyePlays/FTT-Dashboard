@@ -69,6 +69,11 @@ export interface InventoryItem {
   // Absent on every device, which means "use the workspace setting".
   minSalePrice?: number;
   deviceStatus?: DeviceStatus;
+  /**
+   * Photos of this device, main one FIRST. See DevicePhoto: a real photo
+   * outranks an auto-fetched stock one everywhere, and both are kept.
+   */
+  photos?: DevicePhoto[];
   listed?: boolean; // posted for sale (marketplace/storefront) — independent of deviceStatus
   // Which external platform(s) this item is ALSO currently listed on (multiple
   // allowed) — see domain/listing.ts. Distinct from `listed` (a generic
@@ -504,6 +509,35 @@ export interface ActivityEntry {
  * employee-shaped default.
  */
 export type Role = 'owner' | 'manager' | 'employee' | 'technician' | 'kiosk';
+
+/**
+ * A PHOTO OF A DEVICE.
+ *
+ * Two kinds, and the difference matters to a customer:
+ *   'stock' — fetched automatically from Wikimedia Commons for the model. It
+ *             shows what an iPhone 13 Pro looks like, NOT what THIS one looks
+ *             like, so wherever it is shown publicly it is labelled as such
+ *             and carries its licence credit.
+ *   'real'  — taken by staff, of the actual device. Labelled nothing, because
+ *             it needs no caveat.
+ *
+ * ORDER IS MEANING: the first entry is the main photo, and "set as main" moves
+ * it to the front. A real photo always sorts ahead of a stock one
+ * (domain/devicePhotos.ts), so the moment somebody photographs the device the
+ * placeholder drops behind without anybody deciding to remove it.
+ */
+export interface DevicePhoto {
+  id: string;
+  url: string;
+  thumbUrl?: string;
+  kind: 'stock' | 'real';
+  /** Attribution required by the file's licence. Stored WITH the photo. */
+  credit?: string;
+  /** The Commons file page, so the licence can be checked later. */
+  sourceUrl?: string;
+  addedBy: string;
+  addedAt: number;
+}
 
 export type Permission =
   | 'inventory.add' | 'inventory.edit' | 'inventory.delete'

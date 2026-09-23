@@ -86,7 +86,7 @@ import type { QuickPurchaseSaveInput } from './components/QuickPurchaseView';
 import { listingPlatformsLabel } from './domain/listing';
 import { describeCallableError } from './domain/callableErrors';
 import { AppSettings } from './domain/settings';
-import { techUpdateRepair } from './services/repairFunctions';
+import { techUpdateRepair, findDevicePhoto } from './services/repairFunctions';
 import { setStaffPassword, createStaffUser } from './services/userFunctions';
 import { stampVoid, stampReturn, stampReconcile, stampSettlement, stampDropOffAccept, stampExpense } from './domain/attribution';
 import { useWorkspaceData } from './hooks/useWorkspaceData';
@@ -3102,6 +3102,11 @@ const App: React.FC = () => {
               labourRate={settings.operations.buildLabourRate ?? 15}
               warrantyDays={settings.operations.deviceWarrantyDays ?? 90}
               statusHost={STATUS_PAGE_ORIGIN}
+              // Photographing the finished machine happens on the build, but
+              // the photos belong to the DEVICE the build became — one picture
+              // then serves the spec sheet, the share link and the kiosk alike.
+              workspaceId={workspaceId}
+              onSaveDevice={allow('inventory.edit') ? handleSaveItem : undefined}
               onSave={handleSaveBuild}
               onFinishBuild={handleFinishBuild}
               unavailableNotice={refusedCollections.includes('pcBuilds') ? sectionUnavailableNotice('PC Builds') : undefined}
@@ -3296,6 +3301,13 @@ const App: React.FC = () => {
               inventory={data}
               builds={pcBuilds}
               canViewCost={allow('reports.profit.detailed')}
+              // The counter kiosk's repair price list, shown to STAFF too
+              // (Retail Tickets → Price list) so whoever is quoting somebody
+              // at the counter reads the same numbers the customer can see on
+              // the tablet — Settings → Counter Kiosk is the one place it is
+              // edited.
+              repairPrices={settings.operations.repairPrices}
+              repairWarrantyDays={settings.operations.repairWarrantyDays}
               users={workspaceUsers}
               canViewPerformance={allow('repairs.performance')}
               notes={notes}
@@ -3317,6 +3329,11 @@ const App: React.FC = () => {
               labourRate={settings.operations.buildLabourRate ?? 15}
               warrantyDays={settings.operations.deviceWarrantyDays ?? 90}
               statusHost={STATUS_PAGE_ORIGIN}
+              // Photographing the finished machine happens on the build, but
+              // the photos belong to the DEVICE the build became — one picture
+              // then serves the spec sheet, the share link and the kiosk alike.
+              workspaceId={workspaceId}
+              onSaveDevice={allow('inventory.edit') ? handleSaveItem : undefined}
               onSave={handleSaveBuild}
               onDelete={appUser.role === 'owner' ? handleDeleteBuild : undefined}
               onFinishBuild={handleFinishBuild}
@@ -3340,6 +3357,11 @@ const App: React.FC = () => {
           {view === 'grid' && (
             <InventoryView
               inventory={data}
+              workspaceId={workspaceId}
+              currentUserId={appUser.id}
+              onFindStockPhoto={allow('inventory.edit')
+                ? (item) => findDevicePhoto(item.id, item.brand || '', item.model || '')
+                : undefined}
               deviceBuyers={deviceBuyers}
               customers={customers}
               onCreateCustomer={allow('inventory.add') ? handleCreateCustomerInline : undefined}

@@ -29,6 +29,8 @@ import {
 } from '../domain/batchView';
 // Lazy: the repair label modal pulls in jsPDF (~390 kB); load it on demand.
 const RepairLabelModal = lazy(() => import('./RepairLabelModal').then(m => ({ default: m.RepairLabelModal })));
+import { RepairPrice } from '../domain/settings';
+import { groupRepairPrices, repairPriceLabel, searchRepairPrices } from '../domain/showroom';
 import { CustomerSearchInput } from './CustomerSearchInput';
 import { useSellerLink } from '../hooks/useSellerLink';
 import { CustomerDraft } from '../domain/customers';
@@ -78,6 +80,12 @@ interface Props {
   inventory?: InventoryItem[];
   builds?: PcBuild[];
   canViewCost?: boolean;
+  // THE COUNTER PRICE LIST (Settings → Counter Kiosk). The same rows the
+  // public kiosk shows, here so staff quoting a walk-in read the shop's own
+  // numbers instead of guessing — one list, two audiences, no second place to
+  // keep it up to date. Omit it and the button simply isn't offered.
+  repairPrices?: RepairPrice[];
+  repairWarrantyDays?: number;
 }
 
 const DEVICE_TYPES: DeviceType[] = ['Phone', 'Tablet', 'Laptop', 'Console', 'Watch', 'Desktop PC', 'Other'];
@@ -122,6 +130,53 @@ const ACCENTS: Record<string, string> = {
   amber: 'bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400',
   violet: 'bg-violet-100 text-violet-600 dark:bg-violet-900/30 dark:text-violet-400',
 };
+/**
+ * THE COUNTER PRICE LIST.
+ *
+ * What the customer can read off the kiosk, in front of whoever is quoting
+ * them. Read-only on purpose: editing happens in Settings → Counter Kiosk, so
+ * the shop can never end up with a counter price and a kiosk price that
+ * disagree — which is the exact argument this is meant to prevent.
+ */
+const RepairPriceList: React.FC<{ prices: RepairPrice[]; warrantyDays?: number; onClose: () => void }> = ({ prices, warrantyDays, onClose }) => {
+  const [q, setQ] = useState('');
+  const groups = useMemo(() => groupRepairPrices(searchRepairPrices(prices, q)), [prices, q]);
+  return (
+    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-4">
+      <div className="flex items-center gap-2 mb-3">
+        <ScrollText className="w-4 h-4 text-indigo-500 shrink-0" />
+        <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100">Repair price list</h3>
+        <span className="text-xs text-slate-400 hidden sm:inline">Same prices the counter kiosk shows</span>
+        <button onClick={onClose} aria-label="Close price list" className="ml-auto p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"><X className="w-4 h-4" /></button>
+      </div>
+      <input value={q} onChange={e => setQ(e.target.value)} placeholder="Filter by device or repair…" className={`${inputCls} mb-3`} />
+      {groups.length === 0 ? (
+        <p className="text-sm text-slate-400 py-2">Nothing matches “{q}”.</p>
+      ) : (
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {groups.map(g => (
+            <div key={g.deviceModel} className="border border-slate-100 dark:border-slate-800 rounded-lg p-3">
+              <p className="text-sm font-semibold text-slate-800 dark:text-slate-100 mb-1.5">{g.deviceModel}</p>
+              <ul className="space-y-1">
+                {g.rows.map(r => (
+                  <li key={r.id} className="flex items-baseline justify-between gap-2 text-sm">
+                    <span className="text-slate-600 dark:text-slate-300 min-w-0 truncate">
+                      {r.repairType}
+                      {r.turnaround && <span className="text-xs text-slate-400"> · {r.turnaround}</span>}
+                    </span>
+                    <span className="font-semibold text-slate-900 dark:text-white shrink-0">{repairPriceLabel(r)}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+      )}
+      {!!warrantyDays && <p className="text-xs text-slate-400 mt-3">Repair work is warranted for {warrantyDays} days.</p>}
+    </div>
+  );
+};
+
 const SummaryCard: React.FC<{ icon: React.ReactNode; accent: string; label: string; value: number }> = ({ icon, accent, label, value }) => (
   <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-3 flex items-center gap-3">
     <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${ACCENTS[accent] || ACCENTS.blue}`}>{icon}</div>
@@ -147,6 +202,10 @@ export const RepairsView: React.FC<Props> = (props) => {
   // Active default once, then remembers whatever they choose from there.
   const [statusFilter, setStatusFilter] = usePersistedFilter<Filter>('repairs_status_filter_v2', userId, 'active');
   const [drawer, setDrawer] = useState<{ repair: Repair; isNew: boolean } | null>(null);
+  // The counter price list (Settings → Counter Kiosk). Closed by default: it
+  // is a reference for quoting somebody, not part of the ticket list.
+  const [showPrices, setShowPrices] = useState(false);
+  const hasPriceList = (props.repairPrices || []).some(p => p.active !== false);
   const [openBatchId, setOpenBatchId] = useState<string | null>(null);
   const [batchForm, setBatchForm] = useState<{ batch: RepairBatch; isNew: boolean } | null>(null);
   const [labelTarget, setLabelTarget] = useState<{ repair: Repair; context?: { batchNumber?: string; lineNumber?: number; isPrivate?: boolean } } | null>(null);
@@ -344,6 +403,14 @@ export const RepairsView: React.FC<Props> = (props) => {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h2 className="text-2xl font-bold text-slate-900 dark:text-white flex items-center gap-2"><Wrench className="w-6 h-6 text-indigo-500" /> Repairs</h2>
             <div className="flex items-center gap-2">
+              {tab === 'tickets' && hasPriceList && (
+                <button onClick={() => setShowPrices(v => !v)}
+                  className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium border ${showPrices
+                    ? 'bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800'
+                    : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700'}`}>
+                  <ScrollText className="w-4 h-4" /> Price list
+                </button>
+              )}
               {tab === 'tickets' && <button onClick={() => setDrawer({ repair: newRetail(), isNew: true })} className="flex items-center gap-2 px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium"><Plus className="w-4 h-4" /> New Ticket</button>}
               {tab === 'batches' && <button onClick={() => setBatchForm({ batch: newBatch(), isNew: true })} className="flex items-center gap-2 px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium"><Plus className="w-4 h-4" /> New Batch</button>}
             </div>
@@ -371,6 +438,11 @@ export const RepairsView: React.FC<Props> = (props) => {
               </select>
             )}
           </div>
+
+          {/* The counter price list — the same rows the public kiosk shows. */}
+          {tab === 'tickets' && showPrices && hasPriceList && (
+            <RepairPriceList prices={props.repairPrices || []} warrantyDays={props.repairWarrantyDays} onClose={() => setShowPrices(false)} />
+          )}
 
           {/* Quick filters (tickets) */}
           {tab === 'tickets' && (

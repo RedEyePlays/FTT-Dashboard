@@ -61,6 +61,9 @@ const SHEET_STYLE = `
   .value b{font-size:19px}
   .order-row{display:flex;justify-content:space-between;padding:3px 0;font-size:14px}
   .order-row.total{border-top:1px solid #e5e7eb;margin-top:6px;padding-top:8px;font-weight:700}
+  .photo{margin:0 0 16px;text-align:center}
+  .photo img{max-width:100%;max-height:3in;object-fit:contain}
+  .photo figcaption{margin-top:4px;font-size:10px;color:#9ca3af}
   .foot{margin-top:26px;font-size:11px;color:#9ca3af;border-top:1px solid #f3f4f6;padding-top:12px}
   @page{size:letter portrait;margin:0.5in}
 `;
@@ -104,6 +107,13 @@ export const buildSheetHtml = (
 
   return `
     <div class="sheet">
+      ${sheet.photo ? `
+        <figure class="photo">
+          <img src="${esc(sheet.photo.url)}" alt="" />
+          ${sheet.photo.stock
+            ? `<figcaption>Stock photo — actual device may vary${sheet.photo.credit ? ` · ${esc(sheet.photo.credit)}` : ''}</figcaption>`
+            : ''}
+        </figure>` : ''}
       <h1>${esc(sheet.name)}</h1>
       ${sheet.specs ? `<p class="specs">${esc(sheet.specs)}</p>` : ''}
       <div class="warranty">${esc(sheet.warrantyLine)}</div>

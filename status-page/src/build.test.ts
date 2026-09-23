@@ -187,3 +187,38 @@ describe('escaping', () => {
     expect(app.textContent).toContain('<img src=x onerror=alert(1)>');
   });
 });
+
+describe('the machine’s photo', () => {
+  it('is shown, and a REAL photo is captioned nothing', async () => {
+    await render({ ...BUILD, photo: { url: 'https://cdn.test/real.jpg', thumbUrl: 'https://cdn.test/real_thumb.jpg' } });
+    const img = app.querySelector('.b-photo img') as HTMLImageElement | null;
+    expect(img?.getAttribute('src')).toBe('https://cdn.test/real.jpg');
+    expect(app.textContent).not.toContain('Stock photo');
+  });
+
+  it('labels a STOCK photo and keeps its credit — dropping it is a licence breach', async () => {
+    await render({ ...BUILD, photo: { url: 'https://cdn.test/stock.jpg', stock: true, credit: 'Jane Doe, CC BY-SA 4.0' } });
+    expect(app.textContent).toContain('Stock photo — actual device may vary');
+    expect(app.textContent).toContain('Jane Doe, CC BY-SA 4.0');
+  });
+
+  it('renders no photo block at all when the shop has not taken one', async () => {
+    await render(BUILD);
+    expect(app.querySelector('.b-photo')).toBeNull();
+  });
+
+  it('gives a link-preview scraper the full image, not the thumbnail', async () => {
+    // A 400px thumbnail scaled UP in a Messenger card looks like a scam; a
+    // scraper scales the full one down itself.
+    await render({ ...BUILD, photo: { url: 'https://cdn.test/real.jpg', thumbUrl: 'https://cdn.test/real_thumb.jpg' } });
+    expect(document.head.querySelector('meta[property="og:image"]')?.getAttribute('content'))
+      .toBe('https://cdn.test/real.jpg');
+    expect(document.head.querySelector('meta[name="twitter:card"]')?.getAttribute('content'))
+      .toBe('summary_large_image');
+  });
+
+  it('a photo url with markup in it cannot break out of the attribute', async () => {
+    await render({ ...BUILD, photo: { url: '"><script>alert(1)</script>' } });
+    expect(app.querySelector('script')).toBeNull();
+  });
+});

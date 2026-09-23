@@ -3,12 +3,15 @@ import {
   Store, Building2, Wrench, ShoppingCart, Percent, Tag, Contact, LayoutDashboard,
   Palette, ShieldCheck, DatabaseBackup, Info, Save, RotateCcw, Check, Lock, Plus, Trash2,
   Download, RefreshCw, Loader2, CalendarClock, SlidersHorizontal, Copy, DollarSign, Archive, ArchiveRestore, Star,
+  Monitor, ExternalLink, AlertTriangle,
 } from 'lucide-react';
 import { Role, Permission, BreakReason } from '../types';
 import {
   AppSettings, ThemeMode, PaymentMethodKey, CURRENCIES, TIME_ZONES,
-  DASHBOARD_WIDGETS, STATUS_COLOR_OPTIONS, LabelSize, mergeLabelSizes,
+  DASHBOARD_WIDGETS, STATUS_COLOR_OPTIONS, LabelSize, mergeLabelSizes, RepairPrice, TradeInRange,
 } from '../domain/settings';
+import { newShareToken } from '../domain/buildShare';
+import { kioskUrl, TRADE_IN_CONDITIONS } from '../domain/showroom';
 import { PayCycle, PAY_CYCLE_LABEL, BREAK_REASONS } from '../domain/timeclock';
 import { ExpenseCategory } from '../domain/expenses';
 import { newId } from '../domain/ids';
@@ -31,7 +34,7 @@ import { BackupFileMeta } from '../services/backupStorage';
 
 type SectionId =
   | 'general' | 'store' | 'repairs' | 'checkout' | 'taxes' | 'labels'
-  | 'customers' | 'operations' | 'payroll' | 'expenses' | 'reviews' | 'dashboard' | 'appearance' | 'roles' | 'data' | 'about';
+  | 'customers' | 'operations' | 'kiosk' | 'payroll' | 'expenses' | 'reviews' | 'dashboard' | 'appearance' | 'roles' | 'data' | 'about';
 
 const SECTIONS: { id: SectionId; label: string; icon: React.ReactNode }[] = [
   { id: 'general', label: 'General', icon: <Store className="w-4 h-4" /> },
@@ -42,6 +45,7 @@ const SECTIONS: { id: SectionId; label: string; icon: React.ReactNode }[] = [
   { id: 'labels', label: 'Labels & Printing', icon: <Tag className="w-4 h-4" /> },
   { id: 'customers', label: 'Customers', icon: <Contact className="w-4 h-4" /> },
   { id: 'operations', label: 'Operations', icon: <SlidersHorizontal className="w-4 h-4" /> },
+  { id: 'kiosk', label: 'Counter Kiosk', icon: <Monitor className="w-4 h-4" /> },
   { id: 'payroll', label: 'Payroll', icon: <DollarSign className="w-4 h-4" /> },
   { id: 'expenses', label: 'Expense Categories', icon: <Archive className="w-4 h-4" /> },
   { id: 'reviews', label: 'Google Reviews', icon: <Star className="w-4 h-4" /> },
@@ -169,6 +173,7 @@ export const SettingsView: React.FC<Props> = ({ settings, onSave, canManage, rol
             {active === 'labels' && <LabelsSection draft={draft} patch={patch} />}
             {active === 'customers' && <CustomersSection draft={draft} patch={patch} />}
             {active === 'operations' && <OperationsSection draft={draft} patch={patch} confirmPaidBreakChange={confirmPaidBreakChange} canManage={canManage} />}
+            {active === 'kiosk' && <KioskSection draft={draft} patch={patch} />}
             {active === 'payroll' && <PayrollSection draft={draft} patch={patch} />}
             {active === 'expenses' && <ExpenseCategoriesSection draft={draft} patch={patch} />}
             {active === 'reviews' && <ReviewsSection draft={draft} patch={patch} />}
@@ -464,6 +469,181 @@ const OperationsSection: React.FC<{ draft: AppSettings; patch: PatchFn; confirmP
     </SettingsCard>
   </SettingsSection>
 );
+
+/* ----------------------------- Counter Kiosk ----------------------------- */
+
+const rowInputCls =
+  'min-w-0 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-2.5 py-1.5 text-sm ' +
+  'text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500';
+
+/** Move one row of a list up or down; out-of-range moves are no-ops. */
+function moved<T>(list: T[], i: number, dir: -1 | 1): T[] {
+  const j = i + dir;
+  if (j < 0 || j >= list.length) return list;
+  const arr = [...list];
+  [arr[i], arr[j]] = [arr[j], arr[i]];
+  return arr;
+}
+
+const MoveButtons: React.FC<{ i: number; count: number; onMove: (dir: -1 | 1) => void }> = ({ i, count, onMove }) => (
+  <div className="flex flex-col text-slate-300 dark:text-slate-600 shrink-0 leading-none">
+    <button type="button" aria-label="Move up" disabled={i === 0} onClick={() => onMove(-1)} className="hover:text-slate-500 disabled:opacity-30">▲</button>
+    <button type="button" aria-label="Move down" disabled={i === count - 1} onClick={() => onMove(1)} className="hover:text-slate-500 disabled:opacity-30">▼</button>
+  </div>
+);
+
+/**
+ * THE COUNTER KIOSK.
+ *
+ * Everything the tablet by the till shows, and the link that puts it there.
+ * Three things live here because they are one job: the link, the repair price
+ * list and the trade-in ranges. Two of those are ALSO used inside the shop —
+ * the repair prices show on the Repairs screen for staff quoting somebody at
+ * the counter — so they are ordinary settings, not kiosk-only decoration.
+ */
+const KioskSection: React.FC<{ draft: AppSettings; patch: PatchFn }> = ({ draft, patch }) => {
+  const [copied, setCopied] = useState(false);
+  const token = draft.operations.kioskToken || '';
+  const url = token ? kioskUrl(STATUS_PAGE_ORIGIN, token) : '';
+  const prices = draft.operations.repairPrices || [];
+  const ranges = draft.operations.tradeInRanges || [];
+
+  const setPrices = (next: RepairPrice[]) => patch('operations', { repairPrices: next });
+  const setRanges = (next: TradeInRange[]) => patch('operations', { tradeInRanges: next });
+
+  const generate = () => {
+    // Generating a SECOND time is a rotation, not an addition: the tablet
+    // holding the old link stops working the moment this is saved, which is
+    // exactly what "revoke and re-issue" has to mean.
+    if (token && !window.confirm('Generate a new link?\n\nThe tablet is using the current link. A new one stops the old link working as soon as you save, and the tablet will need the new address.')) return;
+    patch('operations', { kioskToken: newShareToken(), kioskTokenCreatedAt: Date.now() });
+    setCopied(false);
+  };
+  const revoke = () => {
+    if (!window.confirm('Turn the kiosk off?\n\nThe link stops working as soon as you save. Nothing else changes — your prices and ranges stay exactly as they are.')) return;
+    patch('operations', { kioskToken: '', kioskTokenCreatedAt: 0 });
+    setCopied(false);
+  };
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(url); setCopied(true); setTimeout(() => setCopied(false), 2000); } catch { /* clipboard blocked — the link is on screen to read */ }
+  };
+
+  const addPrice = () => setPrices([...prices, { id: newId(), deviceModel: '', repairType: '', price: 0, active: true }]);
+  const patchPrice = (id: string, v: Partial<RepairPrice>) => setPrices(prices.map(p => p.id === id ? { ...p, ...v } : p));
+  const addRange = () => setRanges([...ranges, { id: newId(), deviceModel: '', condition: '', lowPrice: 0, highPrice: 0, active: true }]);
+  const patchRange = (id: string, v: Partial<TradeInRange>) => setRanges(ranges.map(r => r.id === id ? { ...r, ...v } : r));
+
+  return (
+    <SettingsSection title="Counter Kiosk" description="A tablet on the counter customers browse themselves: what is in stock, what a repair costs, and what you pay for their old phone. No login, no prices you didn't put here, and nothing internal.">
+      <SettingsCard title="Kiosk link" description="Open this address on the tablet. It needs no account — the link is the whole of it, which is why it is long and why you can replace it at any time.">
+        {token ? (
+          <>
+            <div className="flex items-center gap-2 flex-wrap">
+              <code className="flex-1 min-w-[220px] px-2.5 py-2 bg-slate-100 dark:bg-slate-800 rounded-lg text-xs text-slate-700 dark:text-slate-200 break-all">{url}</code>
+              <button type="button" onClick={copy} className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-indigo-600 hover:bg-indigo-700 text-white">
+                {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />} {copied ? 'Copied' : 'Copy'}
+              </button>
+              <a href={url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300">
+                <ExternalLink className="w-3.5 h-3.5" /> Preview
+              </a>
+            </div>
+            <div className="flex items-center gap-2 mt-3">
+              <button type="button" onClick={generate} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300">
+                <RefreshCw className="w-3.5 h-3.5" /> New link
+              </button>
+              <button type="button" onClick={revoke} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-900/20">
+                <Trash2 className="w-3.5 h-3.5" /> Turn kiosk off
+              </button>
+            </div>
+            <p className="text-xs text-slate-400 dark:text-slate-500 mt-3">
+              Anyone with this link sees the same page the tablet does — in-stock devices with their prices, your repair list and your trade-in ranges. Costs, margins, IMEIs, serials and customer details are never sent to it. Treat the link like the shop's front window: fine in public, but replace it if it ends up somewhere you didn't put it.
+            </p>
+          </>
+        ) : (
+          <div className="flex flex-col items-start gap-3">
+            <p className="text-sm text-slate-500 dark:text-slate-400">The kiosk is off. Generate a link to switch it on.</p>
+            <button type="button" onClick={generate} className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium bg-indigo-600 hover:bg-indigo-700 text-white">
+              <Plus className="w-4 h-4" /> Generate kiosk link
+            </button>
+          </div>
+        )}
+        <p className="text-xs text-amber-600 dark:text-amber-400 mt-3 flex items-start gap-1.5">
+          <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+          Changes here — including the link itself — only take effect once you press Save changes.
+        </p>
+      </SettingsCard>
+
+      <SettingsCard
+        title="Repair prices"
+        description="Shown on the kiosk, grouped by device, AND on the Repairs screen (Retail Tickets → Price list) so staff quoting somebody at the counter read the same numbers. Tick “from” where the price is a starting point — an unusual job costs more, and a flat number on a public screen becomes a promise.">
+        <div className="space-y-2">
+          {prices.map((p, i) => (
+            <div key={p.id} className={`flex items-center gap-2 ${p.active === false ? 'opacity-50' : ''}`}>
+              <MoveButtons i={i} count={prices.length} onMove={dir => setPrices(moved(prices, i, dir))} />
+              <input value={p.deviceModel} placeholder="iPhone 13" onChange={e => patchPrice(p.id, { deviceModel: e.target.value })} className={`${rowInputCls} flex-1`} aria-label="Device model" />
+              <input value={p.repairType} placeholder="Screen" onChange={e => patchPrice(p.id, { repairType: e.target.value })} className={`${rowInputCls} flex-1`} aria-label="Repair type" />
+              <input type="number" min={0} step={0.01} value={p.price} onFocus={selectOnFocus} onChange={e => patchPrice(p.id, { price: Math.max(0, parseFloat(e.target.value) || 0) })} className={`${rowInputCls} w-24`} aria-label="Price" />
+              <label className="flex items-center gap-1 text-xs text-slate-500 dark:text-slate-400 shrink-0" title="Show as “from $X” — a starting price">
+                <input type="checkbox" checked={!!p.fromPrice} onChange={e => patchPrice(p.id, { fromPrice: e.target.checked })} /> from
+              </label>
+              <input value={p.turnaround || ''} placeholder="Same day" onChange={e => patchPrice(p.id, { turnaround: e.target.value })} className={`${rowInputCls} w-28 hidden sm:block`} aria-label="Turnaround" />
+              <button type="button" aria-label={p.active === false ? 'Show on the kiosk' : 'Hide from the kiosk'} title={p.active === false ? 'Hidden — click to show' : 'Showing — click to hide'}
+                onClick={() => patchPrice(p.id, { active: p.active === false })} className="p-1.5 text-slate-400 hover:text-indigo-600 shrink-0">
+                {p.active === false ? <ArchiveRestore className="w-4 h-4" /> : <Archive className="w-4 h-4" />}
+              </button>
+              <button type="button" aria-label="Delete" onClick={() => setPrices(prices.filter(x => x.id !== p.id))} className="p-1.5 text-slate-400 hover:text-rose-600 shrink-0"><Trash2 className="w-4 h-4" /></button>
+            </div>
+          ))}
+          {prices.length === 0 && <p className="text-sm text-slate-400 dark:text-slate-500 py-2">No repair prices yet. The kiosk simply leaves the Repairs section out until there is one.</p>}
+        </div>
+        <button type="button" onClick={addPrice} className="flex items-center gap-1.5 mt-3 px-3 py-1.5 rounded-lg text-xs font-medium bg-indigo-600 hover:bg-indigo-700 text-white"><Plus className="w-3.5 h-3.5" /> Add repair price</button>
+        <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800">
+          <SettingsTextField label="Repair warranty (days)" type="number" min={0} max={3650} step={1}
+            hint="Shown beside the price list on the kiosk. This is the warranty on your repair WORK — device sales have their own under Operations."
+            value={draft.operations.repairWarrantyDays ?? 30}
+            onChange={v => patch('operations', { repairWarrantyDays: Math.max(0, Math.round(parseFloat(v) || 0)) })} />
+        </div>
+      </SettingsCard>
+
+      <SettingsCard
+        title="Trade-in ranges"
+        description="What you pay for a customer's device, as a RANGE. The kiosk never shows a firm number and says plainly that the final offer depends on an inspection — battery health, a past repair and a swollen battery all move it, and none of them can be seen from a tablet.">
+        <datalist id="kiosk-tradein-conditions">
+          {TRADE_IN_CONDITIONS.map(c => <option key={c} value={c} />)}
+        </datalist>
+        <div className="space-y-2">
+          {ranges.map((r, i) => (
+            <div key={r.id} className={`flex items-center gap-2 ${r.active === false ? 'opacity-50' : ''}`}>
+              <MoveButtons i={i} count={ranges.length} onMove={dir => setRanges(moved(ranges, i, dir))} />
+              <input value={r.deviceModel} placeholder="iPhone 13" onChange={e => patchRange(r.id, { deviceModel: e.target.value })} className={`${rowInputCls} flex-1`} aria-label="Device model" />
+              <input value={r.condition} list="kiosk-tradein-conditions" placeholder="Good — light scratches" onChange={e => patchRange(r.id, { condition: e.target.value })} className={`${rowInputCls} flex-1`} aria-label="Condition" />
+              <input type="number" min={0} step={1} value={r.lowPrice} onFocus={selectOnFocus} onChange={e => patchRange(r.id, { lowPrice: Math.max(0, parseFloat(e.target.value) || 0) })} className={`${rowInputCls} w-20`} aria-label="Low price" />
+              <span className="text-slate-400 text-sm shrink-0">–</span>
+              <input type="number" min={0} step={1} value={r.highPrice} onFocus={selectOnFocus} onChange={e => patchRange(r.id, { highPrice: Math.max(0, parseFloat(e.target.value) || 0) })} className={`${rowInputCls} w-20`} aria-label="High price" />
+              <button type="button" aria-label={r.active === false ? 'Show on the kiosk' : 'Hide from the kiosk'} title={r.active === false ? 'Hidden — click to show' : 'Showing — click to hide'}
+                onClick={() => patchRange(r.id, { active: r.active === false })} className="p-1.5 text-slate-400 hover:text-indigo-600 shrink-0">
+                {r.active === false ? <ArchiveRestore className="w-4 h-4" /> : <Archive className="w-4 h-4" />}
+              </button>
+              <button type="button" aria-label="Delete" onClick={() => setRanges(ranges.filter(x => x.id !== r.id))} className="p-1.5 text-slate-400 hover:text-rose-600 shrink-0"><Trash2 className="w-4 h-4" /></button>
+            </div>
+          ))}
+          {ranges.length === 0 && <p className="text-sm text-slate-400 dark:text-slate-500 py-2">No trade-in ranges yet. The kiosk leaves the “Sell us yours” section out until there is one.</p>}
+        </div>
+        <button type="button" onClick={addRange} className="flex items-center gap-1.5 mt-3 px-3 py-1.5 rounded-lg text-xs font-medium bg-indigo-600 hover:bg-indigo-700 text-white"><Plus className="w-3.5 h-3.5" /> Add trade-in range</button>
+        <p className="text-xs text-slate-400 dark:text-slate-500 mt-3">The kiosk collects nothing from the customer — no name, no phone, no email. It shows the range and tells them to come to the counter.</p>
+      </SettingsCard>
+
+      <SettingsCard title="Setting the tablet up">
+        <ul className="text-sm text-slate-600 dark:text-slate-300 space-y-1.5 list-disc pl-5">
+          <li>Open the kiosk link in the tablet's browser and add it to the home screen, so it opens full-screen with no address bar to type over.</li>
+          <li><strong>iPad:</strong> Settings → Accessibility → Guided Access, then triple-click the side button on the kiosk page. <strong>Android:</strong> Settings → Security → Screen pinning.</li>
+          <li>Turn <strong>Auto-Lock off</strong> (iPad: Settings → Display &amp; Brightness → Auto-Lock → Never) and leave the tablet on its charger — the page is built to sit on all day.</li>
+          <li>The page refreshes itself every couple of minutes, and if the wifi drops it keeps showing the last prices it had with a quiet “last updated” line rather than going blank.</li>
+        </ul>
+      </SettingsCard>
+    </SettingsSection>
+  );
+};
 
 const PayrollSection: React.FC<{ draft: AppSettings; patch: PatchFn }> = ({ draft, patch }) => (
   <SettingsSection title="Payroll" description="Pay period schedule used for the Time Clock payroll summary. Changing this only affects periods going forward — already-paid periods keep their original dates and amounts.">

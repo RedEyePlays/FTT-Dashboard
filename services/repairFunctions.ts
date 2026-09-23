@@ -25,3 +25,28 @@ export const techUpdateRepair = async (
   assertOnline();
   await call({ repairId, draft });
 };
+
+/**
+ * Ask the server to find a stock photo for a device's brand/model.
+ *
+ * The browser never touches Wikimedia Commons: the licence check has to happen
+ * somewhere a client cannot skip it (functions/src/commonsPolicy.ts). The
+ * device document is updated server-side, so the photo arrives on the next
+ * subscription tick rather than being returned here.
+ *
+ * Resolves false on anything that goes wrong. A missing stock photo is a
+ * normal outcome, not an error worth interrupting somebody for.
+ */
+export async function findDevicePhoto(
+  itemId: string, brand: string, model: string,
+): Promise<boolean> {
+  try {
+    const call = httpsCallable<{ itemId: string; brand: string; model: string }, { found: boolean }>(
+      functions, 'findDevicePhoto',
+    );
+    const res = await call({ itemId, brand, model });
+    return !!res.data?.found;
+  } catch {
+    return false;
+  }
+}

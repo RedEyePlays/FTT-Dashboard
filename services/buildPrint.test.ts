@@ -78,6 +78,39 @@ describe('the printed spec sheet', () => {
     expect(html).toContain('FlipThatTech');
   });
 
+  it('prints the machine\u2019s photo, and labels a STOCK one with its credit', () => {
+    const withStock = buildSheetHtml(
+      customerSheet({
+        build: build(), warrantyDays: 90,
+        photos: [{
+          id: 'ph0', url: 'https://cdn.test/stock.jpg', kind: 'stock',
+          credit: 'Jane Doe, CC BY-SA 4.0', addedBy: 'system', addedAt: 1,
+        }],
+      }),
+      { storeName: 'FlipThatTech' },
+    );
+    expect(withStock).toContain('https://cdn.test/stock.jpg');
+    expect(withStock).toContain('Stock photo \u2014 actual device may vary');
+    expect(withStock).toContain('Jane Doe, CC BY-SA 4.0');
+    assertClean(withStock);
+  });
+
+  it('labels a REAL photo nothing \u2014 a caption under an actual picture only invites doubt', () => {
+    const withReal = buildSheetHtml(
+      customerSheet({
+        build: build(), warrantyDays: 90,
+        photos: [{ id: 'ph1', url: 'https://cdn.test/real.jpg', kind: 'real', addedBy: 'u1', addedAt: 1 }],
+      }),
+      { storeName: 'FlipThatTech' },
+    );
+    expect(withReal).toContain('https://cdn.test/real.jpg');
+    expect(withReal).not.toContain('Stock photo');
+  });
+
+  it('prints no photo block at all when the shop has not taken one', () => {
+    expect(html).not.toContain('<figure class="photo">');
+  });
+
   it('a customer order prints the quote, deposit and balance and nothing more', () => {
     const order = buildSheetHtml(
       customerSheet({

@@ -48,10 +48,16 @@ function setMeta(b: PublicBuild): void {
     ['og:description', description],
     ['og:type', 'product'],
     ['og:site_name', b.shopName],
-    ['twitter:card', 'summary'],
+    // A link with no picture is a grey box in a Messenger thread. The full
+    // image, not the thumbnail — a scraper scales it down itself, and a 400px
+    // one scaled UP looks like a scam.
+    ['twitter:card', b.photo?.url ? 'summary_large_image' : 'summary'],
     ['twitter:title', title],
     ['twitter:description', description],
   ];
+  if (b.photo?.url) {
+    tags.push(['og:image', b.photo.url], ['twitter:image', b.photo.url]);
+  }
   if (b.price != null) {
     tags.push(['product:price:amount', String(b.price)], ['product:price:currency', 'CAD']);
   }
@@ -65,6 +71,26 @@ function setMeta(b: PublicBuild): void {
     }
     el.setAttribute('content', content);
   }
+}
+
+/**
+ * The machine's photo, and the honesty line beneath a stock one.
+ *
+ * A REAL photo is labelled nothing — a caption under an actual picture of the
+ * actual machine only makes a buyer wonder what the catch is. A stock photo
+ * always says so, and carries its credit, because it is a picture of something
+ * LIKE the thing for sale.
+ */
+function renderPhoto(b: PublicBuild): string {
+  if (!b.photo?.url) return '';
+  const note = b.photo.stock
+    ? `<p class="b-photo-note">Stock photo — actual device may vary${b.photo.credit ? ` · ${escapeHtml(b.photo.credit)}` : ''}</p>`
+    : '';
+  return `
+    <figure class="b-photo">
+      <img src="${escapeHtml(b.photo.url)}" alt="${escapeHtml(b.name)}" />
+      ${note}
+    </figure>`;
 }
 
 function renderPart(p: PublicPart): string {
@@ -130,6 +156,7 @@ function renderBuild(b: PublicBuild): string {
 
   return `
     <article class="b-card${sold ? ' is-sold' : ''}">
+      ${renderPhoto(b)}
       <header class="b-head">
         ${sold ? '<span class="b-sold-flag">Sold</span>' : '<span class="b-avail-flag">Available</span>'}
         <h1 class="b-name">${escapeHtml(b.name)}</h1>

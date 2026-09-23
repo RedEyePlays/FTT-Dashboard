@@ -10,3 +10,5 @@ export const LOOKUP_FUNCTION_NAME = 'repairStatusLookup';
 // The public PC-build listing lookup, reached at /build/<token>. Same project,
 // same region, same reasoning as above.
 export const BUILD_LOOKUP_FUNCTION_NAME = 'buildShareLookup';
+// The counter kiosk's listing, reached at /showroom/<token>.
+export const SHOWROOM_FUNCTION_NAME = 'showroomLookup';

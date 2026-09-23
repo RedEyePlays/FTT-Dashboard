@@ -4,6 +4,7 @@ import {
   FORBIDDEN_FIELDS,
   PUBLIC_BUILD_KEYS,
   PUBLIC_PART_KEYS,
+  PUBLIC_PHOTO_KEYS,
   PublicBuild,
   shareVisible,
   toPublicBuild,
@@ -62,8 +63,37 @@ const SHOP = {
   warrantyDays: 90,
 };
 
-const build = (over: Record<string, unknown> = {}, shop = SHOP): PublicBuild =>
-  toPublicBuild(stored(over), shop, NOW);
+/**
+ * The finished machine's inventory device. Photos live here, not on the build,
+ * and this document is FULL of things the public must never see — which is
+ * exactly why the photo is built field by field rather than passed through.
+ */
+const device = (photos: unknown[]): Record<string, unknown> => ({
+  id: "inv-1",
+  sku: "FTT-0000777",
+  purchaseCost: 880,
+  targetSalePrice: 1200,
+  imei: "SECRET-IMEI-0001",
+  serial: "SECRET-SERIAL-0001",
+  boughtFrom: "Dana Wu",
+  photos,
+});
+
+const realPhoto = {
+  id: "ph1", url: "https://cdn.test/real.jpg", thumbUrl: "https://cdn.test/real_thumb.jpg",
+  kind: "real", addedBy: "tech-uid", addedAt: 1,
+};
+const stockPhoto = {
+  id: "ph0", url: "https://cdn.test/stock.jpg", thumbUrl: "https://cdn.test/stock_thumb.jpg",
+  kind: "stock", credit: "Jane Doe, CC BY-SA 4.0", sourceUrl: "https://commons.wikimedia.org/wiki/File:X.jpg",
+  addedBy: "system", addedAt: 1,
+};
+
+const build = (
+  over: Record<string, unknown> = {},
+  shop = SHOP,
+  dev?: Record<string, unknown>,
+): PublicBuild => toPublicBuild(stored(over), shop, NOW, dev);
 
 // --- The allow-list ----------------------------------------------------------
 
@@ -80,6 +110,14 @@ function assertOnlyAllowedKeys(value: PublicBuild): void {
       (PUBLIC_BUILD_KEYS as readonly string[]).includes(key),
       `public build carries an un-allow-listed key: ${key}`,
     );
+  }
+  if (value.photo) {
+    for (const key of Object.keys(value.photo)) {
+      assert.ok(
+        (PUBLIC_PHOTO_KEYS as readonly string[]).includes(key),
+        `public photo carries an un-allow-listed key: ${key}`,
+      );
+    }
   }
   for (const part of value.parts) {
     for (const key of Object.keys(part)) {
@@ -250,4 +288,56 @@ test("a CANCELLED build stops at once — there is nothing to sell", () => {
 
 test("a sold build with no timestamp keeps working rather than 404ing a posted link", () => {
   assert.equal(shareVisible(stored({ status: "sold" }), NOW), true);
+});
+
+
+/* ---------------- The listing's photo ---------------- */
+
+test("a build with no device has no photo, and that is not an error", () => {
+  const b = build();
+  assert.equal(b.photo, undefined);
+  assertOnlyAllowedKeys(b);
+});
+
+test("a REAL photo is carried, and is labelled nothing", () => {
+  const b = build({}, SHOP, device([stockPhoto, realPhoto]));
+  // The real photo WINS over the stock one wherever both exist: a Marketplace
+  // buyer should be looking at the machine they would be buying.
+  assert.equal(b.photo?.url, "https://cdn.test/real.jpg");
+  assert.equal(b.photo?.thumbUrl, "https://cdn.test/real_thumb.jpg");
+  assert.equal(b.photo?.stock, undefined);
+  assert.equal(b.photo?.credit, undefined);
+  assertOnlyAllowedKeys(b);
+});
+
+test("a STOCK photo is flagged and keeps its credit — dropping it is a licence breach", () => {
+  const b = build({}, SHOP, device([stockPhoto]));
+  assert.equal(b.photo?.url, "https://cdn.test/stock.jpg");
+  assert.equal(b.photo?.stock, true);
+  assert.equal(b.photo?.credit, "Jane Doe, CC BY-SA 4.0");
+});
+
+test("the photo carries NOTHING about who took it, or where it came from", () => {
+  const b = build({}, SHOP, device([realPhoto, stockPhoto]));
+  const photo = b.photo as unknown as Record<string, unknown>;
+  for (const key of ["id", "addedBy", "addedAt", "sourceUrl", "kind"]) {
+    assert.ok(!(key in photo), `photo leaked ${key}`);
+  }
+});
+
+test("the DEVICE document does not leak through the photo it supplied", () => {
+  // The whole inventory document is read (Firestore has no field projection
+  // here) and it is full of cost, IMEI, serial and the seller's name. Only the
+  // photo's four keys may cross — asserted structurally, because a substring
+  // scan for a price would fire on a part name like "RTX 4070".
+  const b = build({}, SHOP, device([realPhoto]));
+  assertOnlyAllowedKeys(b);
+  for (const field of ["purchaseCost", "imei", "serial", "boughtFrom", "photos"]) {
+    assert.ok(!(field in b), `public build leaked ${field}`);
+  }
+});
+
+test("a photo row with no url is ignored rather than rendering a broken image", () => {
+  const b = build({}, SHOP, device([{ id: "x", kind: "real", url: "" }]));
+  assert.equal(b.photo, undefined);
 });

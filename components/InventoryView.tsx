@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { InventoryItem, DeviceBuyer, ItemKind, DeviceType, DeviceStatus, ActivityEntry, AuditEntry, Repair, Note, Role, Customer } from '../types';
 import { CustomerDraft } from '../domain/customers';
+import { STOCK_PHOTO_NOTE, mainPhoto } from '../domain/devicePhotos';
 import { linkedRepairFor, REPAIR_STATUS_LABEL } from '../domain/repairs';
 import { inRepairTicketFor } from '../domain/repairVisibility';
 import { isStalePendingRepair, isOrphanedPendingRepair, PENDING_REPAIR_STALE_DAYS } from '../domain/alerts';
@@ -42,6 +43,10 @@ interface Props {
   section: InvSection;              // active inventory section (URL-driven)
   onSelectSection: (s: InvSection) => void; // switch section (updates the route)
   onSave: (item: InventoryItem) => void;
+  /** Photo uploads need the workspace and the acting user. */
+  workspaceId?: string;
+  currentUserId?: string;
+  onFindStockPhoto?: (item: InventoryItem) => Promise<boolean>;
   // May return a promise so bulk actions can tell which items in a multi-select
   // action actually succeeded, instead of assuming every write landed.
   onUpdate: (id: string, field: keyof InventoryItem, value: any) => void | Promise<void>;
@@ -323,7 +328,24 @@ const parseCSV = (text: string): Record<string, string>[] => {
   return rows.filter(r => r.some(x => x !== '')).map(r => Object.fromEntries(header.map((h, i) => [h.trim(), r[i] ?? ''])));
 };
 
-export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activity, auditLogs = [], canViewCost = false, userId, section, onSelectSection, onSave, onUpdate, onDelete, onGenerateSku, onSeed, repairs = [], customers, onCreateCustomer, onCreateRepair, onOpenRepair, notes, noteRole, onOpenNote }) => {
+/**
+ * The row thumbnail. A REAL photo wins over the auto-fetched stock one
+ * (domain/devicePhotos.ts), so the placeholder drops behind the moment
+ * somebody photographs the device.
+ */
+const PhotoThumb: React.FC<{ item: InventoryItem; onClick: () => void }> = ({ item, onClick }) => {
+  const photo = mainPhoto(item.photos);
+  if (!photo) return null;
+  return (
+    <button onClick={onClick} title={photo.kind === 'stock' ? STOCK_PHOTO_NOTE : 'Photos'}
+      className="relative w-7 h-7 rounded overflow-hidden border border-slate-200 dark:border-slate-700 shrink-0">
+      <img src={photo.thumbUrl || photo.url} alt="" loading="lazy" className="w-full h-full object-cover" />
+      {photo.kind === 'stock' && <span className="absolute inset-x-0 bottom-0 h-1 bg-amber-400/80" />}
+    </button>
+  );
+};
+
+export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activity, auditLogs = [], canViewCost = false, userId, section, onSelectSection, onSave, workspaceId, currentUserId, onFindStockPhoto, onUpdate, onDelete, onGenerateSku, onSeed, repairs = [], customers, onCreateCustomer, onCreateRepair, onOpenRepair, notes, noteRole, onOpenNote }) => {
   const linkedRepairOf = (id: string): Repair | undefined => linkedRepairFor(id, repairs);
   // Only a STILL-OPEN ticket flags the device as in repair; a completed/picked
   // up/cancelled one leaves the SKU cell exactly as it was.
@@ -683,6 +705,7 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
       onSave={(item) => { onSave(item); setAddKind(null); }}
       onGenerateSku={onGenerateSku}
       onOpenDuplicate={(it) => { setAddKind(null); openItem(it); }}
+      workspaceId={workspaceId} currentUserId={currentUserId} onFindStockPhoto={onFindStockPhoto}
       onClose={() => { setAddKind(null); if (!isMobile) focusSearch(); }} />
   ) : null;
 
@@ -1052,6 +1075,7 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
       )}
 
       {expandItem && <ItemFormModal initial={expandItem} canViewCost={canViewCost} deviceBuyers={deviceBuyers} onSave={onSave} onGenerateSku={onGenerateSku} onClose={closeItem}
+        workspaceId={workspaceId} currentUserId={currentUserId} onFindStockPhoto={onFindStockPhoto}
         linkedRepair={linkedRepairOf(expandItem.id)}
         onCreateRepair={onCreateRepair ? () => { onCreateRepair(expandItem); setExpandItem(null); } : undefined}
         onOpenRepair={onOpenRepair ? (id: string) => { onOpenRepair(id); setExpandItem(null); } : undefined}
@@ -1309,6 +1333,11 @@ const Sheet: React.FC<{
                       <button onClick={() => onExpand(i)} className="p-1 text-slate-400 hover:text-indigo-600" title="Edit"><Pencil className="w-4 h-4" /></button>
                       <button onClick={() => onLabel(i)} className="p-1 text-slate-400 hover:text-indigo-600" title="Print label"><Printer className="w-4 h-4" /></button>
                       <button onClick={e => setMenu({ i, ...openAt(e, 180) })} className="p-1 text-slate-400 hover:text-indigo-600" title="More actions"><MoreVertical className="w-4 h-4" /></button>
+                      {/* A thumbnail, so a shelf of similar-looking phones is
+                          scannable by eye. Clicking it opens the device, where
+                          the gallery is. A device with no photo shows nothing
+                          rather than an empty box on every row. */}
+                      <PhotoThumb item={i} onClick={() => onExpand(i)} />
                     </div>
                   </td>
                   {cols.map(c => (

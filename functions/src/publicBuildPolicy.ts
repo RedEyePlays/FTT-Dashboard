@@ -28,9 +28,25 @@ export interface PublicPart {
   storeName?: string;
 }
 
+/**
+ * ONE PHOTO OF THE MACHINE, for the listing.
+ *
+ * `stock` and `credit` travel together and are not decoration: a stock image
+ * is labelled as one on the page, and most Commons files are CC-BY, so
+ * dropping the attribution because it is small would be a licence breach.
+ */
+export interface PublicPhoto {
+  url: string;
+  thumbUrl?: string;
+  stock?: true;
+  credit?: string;
+}
+
 export interface PublicBuild {
   found: true;
   name: string;
+  /** The finished machine, when the shop has photographed it. */
+  photo?: PublicPhoto;
   /** "Available" or "Sold". The internal pipeline never leaves the shop. */
   status: string;
   parts: PublicPart[];
@@ -62,7 +78,7 @@ export type PublicBuildResult = PublicBuild | { found: false };
  * shipping. Keep it in sync deliberately — that friction is the feature.
  */
 export const PUBLIC_BUILD_KEYS = [
-  'found', 'name', 'status', 'parts', 'price', 'retailTotal', 'retailComplete',
+  'found', 'name', 'photo', 'status', 'parts', 'price', 'retailTotal', 'retailComplete',
   'storeTotal', 'storeName', 'saving', 'warrantyDays',
   'shopName', 'shopPhone', 'shopAddress', 'shopEmail',
 ] as const;
@@ -70,6 +86,8 @@ export const PUBLIC_BUILD_KEYS = [
 export const PUBLIC_PART_KEYS = [
   'category', 'name', 'condition', 'warranty', 'newPrice', 'storePrice', 'storeName',
 ] as const;
+
+export const PUBLIC_PHOTO_KEYS = ['url', 'thumbUrl', 'stock', 'credit'] as const;
 
 /**
  * Fields that must NEVER reach the public object, named so the test can say
@@ -156,10 +174,43 @@ export interface ShopProfile {
  * explicitly, coerced, and assigned — which is what makes the allow-list real
  * rather than a comment.
  */
+/**
+ * The one photo the listing shows, built field by field like everything else.
+ *
+ * A REAL photo always wins over the stock one, mirroring domain/devicePhotos.ts's
+ * mainPhoto — a buyer looking at a Marketplace post should be looking at the
+ * machine they would be buying, not at a catalogue render of something like it.
+ * `addedBy`, `addedAt`, `id` and `sourceUrl` are deliberately not carried: who
+ * in the shop took the picture is nobody's business outside it.
+ */
+export function publicPhoto(photos: unknown): PublicPhoto | undefined {
+  if (!Array.isArray(photos) || photos.length === 0) return undefined;
+  const list = photos as Record<string, unknown>[];
+  const chosen = list.find(p => str(p.kind) === 'real') || list[0];
+  const url = str(chosen?.url);
+  if (!url) return undefined;
+  const out: PublicPhoto = { url };
+  const thumb = str(chosen.thumbUrl);
+  if (thumb) out.thumbUrl = thumb;
+  if (str(chosen.kind) === 'stock') {
+    out.stock = true;
+    const credit = str(chosen.credit);
+    if (credit) out.credit = credit;
+  }
+  return out;
+}
+
 export function toPublicBuild(
   build: Record<string, unknown>,
   shop: ShopProfile,
   nowMs: number,
+  /**
+   * The finished machine's inventory document, when the build has one. Photos
+   * live on the DEVICE, not on the build — a finished shelf build becomes an
+   * inventory item, and photographing it once has to serve the kiosk, the
+   * inventory list and this listing alike.
+   */
+  device?: Record<string, unknown>,
 ): PublicBuild {
   const rawParts = Array.isArray(build.parts) ? (build.parts as Record<string, unknown>[]) : [];
   const buildStore = str(build.comparisonStore);
@@ -206,6 +257,9 @@ export function toPublicBuild(
     warrantyDays: typeof shop.warrantyDays === 'number' && shop.warrantyDays > 0 ? Math.round(shop.warrantyDays) : 0,
     shopName: str(shop.name) || 'Our shop',
   };
+
+  const photo = publicPhoto(device?.photos);
+  if (photo) out.photo = photo;
 
   if (price != null) out.price = price;
   if (retailTotal > 0) out.retailTotal = retailTotal;
