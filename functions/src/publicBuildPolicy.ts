@@ -71,7 +71,12 @@ export interface PublicBuild {
   price?: number;
   /** Σ new prices, and whether every part had one. */
   retailTotal?: number;
-  retailComplete: boolean;
+  /**
+   * Optional ONLY because a build with `hidePublicComparison` set omits it
+   * along with every other comparison field — see toPublicBuild. Present on
+   * every build that shows the comparison, which is the default.
+   */
+  retailComplete?: boolean;
   /** Σ at the comparison store, present only when complete. */
   storeTotal?: number;
   storeName?: string;
@@ -115,6 +120,24 @@ export const PUBLIC_PART_KEYS = [
 ] as const;
 
 export const PUBLIC_PHOTO_KEYS = ['url', 'thumbUrl', 'stock', 'credit'] as const;
+
+/**
+ * THE COMPARISON FIELDS, in one list, because they must travel together.
+ *
+ * `hidePublicComparison` on a build (types.ts) removes every one of these from
+ * the payload. The per-part half is the point: the parts array carries its own
+ * `newPrice`/`storePrice`, so omitting only the totals would leave the
+ * comparison trivially reconstructible by adding up the rows — the toggle
+ * would look like it worked while doing nothing at all.
+ *
+ * The shop's asking `price` is NOT here. That is the machine's price, not a
+ * comparison, and it still goes out.
+ */
+export const COMPARISON_BUILD_KEYS = [
+  'retailTotal', 'retailComplete', 'storeTotal', 'storeName', 'saving',
+] as const;
+
+export const COMPARISON_PART_KEYS = ['newPrice', 'storePrice', 'storeName'] as const;
 
 /**
  * Fields that must NEVER reach the public object, named so the test can say
@@ -330,6 +353,16 @@ export function toPublicBuild(
 ): PublicBuild {
   const rawParts = Array.isArray(build.parts) ? (build.parts as Record<string, unknown>[]) : [];
   const buildStore = str(build.comparisonStore);
+  // THE SHOP SWITCHED THE COMPARISON OFF FOR THIS BUILD (types.ts's
+  // hidePublicComparison). Enforced here, at the point the payload is
+  // assembled, and not in the page: if the page did the hiding, the figures
+  // would still ship in the callable's response for anyone to read. Hiding
+  // means NOT SENT.
+  //
+  // PUBLIC PAGE ONLY. The printed display card, the customer spec sheet
+  // (domain/buildSheet.ts) and the AI listing (domain/listingCopy.ts)
+  // deliberately ignore this flag and show the comparison as they always have.
+  const hideComparison = build.hidePublicComparison === true;
 
   const parts: PublicPart[] = rawParts
     .filter(p => str(p.name))
@@ -342,23 +375,38 @@ export function toPublicBuild(
       const warranty = warrantyWords(p.mfrWarrantyUntil, nowMs);
       if (warranty) out.warranty = warranty;
       const newPrice = pos(p.retailPrice);
-      if (newPrice != null) out.newPrice = newPrice;
       const storePrice = pos(p.altStorePrice);
-      if (storePrice != null) out.storePrice = storePrice;
-      const storeName = str(p.altStoreName) || buildStore;
-      if (storeName && (storePrice != null || newPrice != null)) out.storeName = storeName;
+      // The per-part prices go with the totals, ALWAYS. The rows are what make
+      // the comparison addable up by hand, so a build that hides the totals
+      // and ships the rows has hidden nothing (COMPARISON_PART_KEYS).
+      if (!hideComparison) {
+        if (newPrice != null) out.newPrice = newPrice;
+        if (storePrice != null) out.storePrice = storePrice;
+        const storeName = str(p.altStoreName) || buildStore;
+        if (storeName && (storePrice != null || newPrice != null)) out.storeName = storeName;
+      }
       return out;
     });
 
-  // Totals, recomputed here from the public numbers rather than trusted from
-  // the document — the page must never be able to show a figure that was not
-  // derived from what it is also showing.
-  const priced = parts.filter(p => p.newPrice != null);
-  const retailComplete = parts.length > 0 && priced.length === parts.length;
+  // Totals, recomputed here rather than trusted from the document — the page
+  // must never be able to show a figure that was not derived from the parts it
+  // is also showing.
+  //
+  // Derived from the SAME named parts the public object carries, read straight
+  // off the stored rows: when the comparison is hidden the public rows no
+  // longer carry prices, and computing the totals from those would silently
+  // turn "every part is priced" into "nothing is". Gating what is EMITTED is
+  // the whole mechanism; the arithmetic itself stays identical either way.
+  const pricedRows = rawParts.filter(p => str(p.name)).map(p => ({
+    newPrice: pos(p.retailPrice),
+    storePrice: pos(p.altStorePrice),
+  }));
+  const priced = pricedRows.filter(p => p.newPrice != null);
+  const retailComplete = pricedRows.length > 0 && priced.length === pricedRows.length;
   const retailTotal = round2(priced.reduce((n, p) => n + (p.newPrice || 0), 0));
 
-  const comparison = parts.map(p => p.storePrice ?? p.newPrice);
-  const storeComplete = parts.length > 0 && comparison.every(v => v != null);
+  const comparison = pricedRows.map(p => p.storePrice ?? p.newPrice);
+  const storeComplete = pricedRows.length > 0 && comparison.every(v => v != null);
   const storeTotal = round2(comparison.reduce<number>((n, v) => n + (v || 0), 0));
 
   const price = pos(build.targetPrice);
@@ -369,7 +417,12 @@ export function toPublicBuild(
     name: str(build.name) || 'Custom PC',
     status: TERMINAL.has(str(build.status)) ? 'Sold' : 'Available',
     parts,
-    retailComplete,
+    // In its original position, spread from a LOCAL literal rather than from
+    // the stored build, so a payload with the comparison shown serializes
+    // byte-for-byte as it did before the flag existed. (Key order is not
+    // load-bearing for the page, which reads by name — but "the default path is
+    // unchanged" is a much easier claim to check when it is literally true.)
+    ...(hideComparison ? {} : { retailComplete }),
     warrantyDays: typeof shop.warrantyDays === 'number' && shop.warrantyDays > 0 ? Math.round(shop.warrantyDays) : 0,
     performance: publicPerformance(
       build,
@@ -381,17 +434,27 @@ export function toPublicBuild(
   const photo = publicPhoto(device?.photos);
   if (photo) out.photo = photo;
 
+  // The shop's asking price is NOT part of the comparison and always goes out:
+  // it is the machine's price, not a claim about anybody else's.
   if (price != null) out.price = price;
-  if (retailTotal > 0) out.retailTotal = retailTotal;
-  if (buildStore && storeComplete) {
-    out.storeTotal = storeTotal;
-    out.storeName = buildStore;
-  }
-  // A saving is only shown when it flatters and when the total behind it is
-  // complete — a saving computed from some of the parts is a different number
-  // wearing the same label, and a buyer cannot tell.
-  if (headline != null && price != null && headline - price > 0) {
-    out.saving = round2(headline - price);
+
+  // Every comparison field, together, behind the one flag
+  // (COMPARISON_BUILD_KEYS). `retailComplete` is among them: on its own it
+  // still says whether the shop has a full retail total for this machine.
+  // Every comparison field, together, behind the one flag — `retailComplete`
+  // is set in the literal above so the unchanged path keeps its key order.
+  if (!hideComparison) {
+    if (retailTotal > 0) out.retailTotal = retailTotal;
+    if (buildStore && storeComplete) {
+      out.storeTotal = storeTotal;
+      out.storeName = buildStore;
+    }
+    // A saving is only shown when it flatters and when the total behind it is
+    // complete — a saving computed from some of the parts is a different number
+    // wearing the same label, and a buyer cannot tell.
+    if (headline != null && price != null && headline - price > 0) {
+      out.saving = round2(headline - price);
+    }
   }
 
   const phone = str(shop.phone);

@@ -433,3 +433,128 @@ test("the card is matched through the board partner and the memory size", () => 
   );
   assert.equal(b.performance.length, 2);
 });
+
+// --- Hiding the comparison on ONE build's public page -----------------------
+
+/**
+ * `hidePublicComparison` (types.ts) switches off the "build it yourself at
+ * Canada Computers and pay $310 more" block for one build.
+ *
+ * THE PART THAT MATTERS: hiding means NOT SENT. The flag is honoured here,
+ * where the payload is assembled, and not in the page — if the page did the
+ * hiding, the figures would still be sitting in the callable's response for
+ * anyone who opened the network tab.
+ *
+ * THE TRAP, and why these tests check the rows and not just the totals: the
+ * parts array carries per-part `newPrice`/`storePrice`. Omitting only the
+ * totals would leave the comparison addable up from the rows, so the toggle
+ * would look like it worked while doing nothing.
+ */
+
+const hidden = (over: Record<string, unknown> = {}): PublicBuild =>
+  build({ hidePublicComparison: true, ...over });
+
+test("FLAG OFF: the payload is byte-for-byte what it was before the flag existed", () => {
+  // Same document, once with the field absent and once with it explicitly
+  // false. Neither may differ from the other in any way, key order included.
+  const absent = JSON.stringify(build());
+  const explicitFalse = JSON.stringify(build({ hidePublicComparison: false }));
+  assert.equal(explicitFalse, absent);
+  // And the comparison is genuinely there to be hidden, or these tests prove
+  // nothing at all.
+  const b = build();
+  assert.equal(b.storeName, "Canada Computers");
+  assert.equal(b.storeTotal, 1250);
+  assert.equal(b.retailComplete, true);
+  assert.ok(b.saving != null && b.saving > 0);
+  assert.ok(b.parts.every(p => p.newPrice != null));
+});
+
+test("FLAG ON: no totals, no store name and no saving anywhere in the payload", () => {
+  const b = hidden();
+  for (const key of ["saving", "storeTotal", "storeName", "retailTotal", "retailComplete"]) {
+    assert.ok(!(key in b), `${key} must not be on the public object at all`);
+  }
+});
+
+test("FLAG ON: not one part row carries a price or a store name", () => {
+  const b = hidden();
+  assert.ok(b.parts.length >= 2);
+  for (const p of b.parts) {
+    for (const key of ["newPrice", "storePrice", "storeName"]) {
+      assert.ok(!(key in p), `part ${p.name} must not carry ${key}`);
+    }
+  }
+  // The stored figures really were there, so this is omission and not an
+  // accident of the fixture.
+  assert.ok(build().parts.some(p => p.storePrice != null));
+});
+
+test("FLAG ON: the comparison cannot be reconstructed from what IS sent", () => {
+  // The whole point: no number in the payload adds up to the store total.
+  const json = JSON.stringify(hidden());
+  for (const figure of [480, 510, 900, 740, 1380, 1250]) {
+    assert.ok(
+      !new RegExp(`\\b${figure}\\b`).test(json),
+      `${figure} is a comparison figure and must not be in the payload`,
+    );
+  }
+});
+
+test("FLAG ON: everything that is not a comparison still goes out", () => {
+  const b = hidden();
+  // The shop's asking price is the machine's price, not a comparison.
+  assert.equal(b.price, 1200);
+  assert.equal(b.name, "Starter Gaming PC");
+  assert.equal(b.status, "Available");
+  assert.equal(b.warrantyDays, 90);
+  assert.equal(b.shopName, "FlipThatTech");
+  assert.equal(b.shopPhone, "416-555-0100");
+  assert.equal(b.shopAddress, "12 Main St, Toronto");
+  assert.equal(b.shopEmail, "hello@flipthat.tech");
+  // Parts keep their names, categories, conditions and warranties.
+  assert.deepEqual(b.parts.map(p => p.name), ["Ryzen 7 7800X3D", "RTX 4070 Windforce"]);
+  assert.deepEqual(b.parts.map(p => p.category), ["CPU", "GPU"]);
+  assert.equal(b.parts[0].condition, "New");
+  assert.equal(b.parts[1].condition, "Used — tested");
+  assert.match(b.parts[0].warranty || "", /maker warranty/);
+});
+
+test("FLAG ON: the photo and the performance table are untouched", () => {
+  const withPhoto = toPublicBuild(
+    stored({ hidePublicComparison: true }),
+    { ...SHOP, gpuPerformance: GPU_TABLE },
+    NOW,
+    device([stockPhoto, realPhoto]),
+  );
+  assert.equal(withPhoto.photo?.url, "https://cdn.test/real.jpg");
+  assert.ok(withPhoto.performance.length > 0);
+  // Hiding a price comparison is not a reason to stop being careful about
+  // everything else.
+  assertOnlyAllowedKeys(withPhoto);
+  for (const field of FORBIDDEN_FIELDS) {
+    assert.ok(!(field in withPhoto), `build leaked ${field}`);
+    for (const part of withPhoto.parts) assert.ok(!(field in part), `part leaked ${field}`);
+  }
+});
+
+test("FLAG ON: a truthy-but-not-true stored value does NOT hide the comparison", () => {
+  // `=== true`, deliberately: a stray "false" string or a 0 from a bad write
+  // must not decide what a public page shows, in either direction.
+  assert.equal(build({ hidePublicComparison: "yes" }).storeTotal, 1250);
+  assert.equal(build({ hidePublicComparison: 1 }).storeTotal, 1250);
+  assert.equal(build({ hidePublicComparison: "false" }).storeTotal, 1250);
+  assert.ok(!("storeTotal" in build({ hidePublicComparison: true })));
+});
+
+test("FLAG ON: it does not disturb a build that had no comparison to begin with", () => {
+  const unpriced = { id: "p1", category: "CPU", name: "Ryzen 5 5600", condition: "used" };
+  const shown = build({ parts: [unpriced] });
+  const off = hidden({ parts: [unpriced] });
+  // Shown: an unpriced build already had no totals, only retailComplete: false.
+  assert.equal(shown.retailComplete, false);
+  assert.ok(!("storeTotal" in shown));
+  // Hidden: the same, minus the flag that says the total was incomplete.
+  assert.ok(!("retailComplete" in off));
+  assert.deepEqual(off.parts.map(p => p.name), ["Ryzen 5 5600"]);
+});

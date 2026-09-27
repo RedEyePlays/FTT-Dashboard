@@ -1258,6 +1258,24 @@ const SharePanel: React.FC<{
             )}
           </div>
           {customOpen && <CustomCodeRow value={custom} onChange={setCustom} onUse={useCustom} />}
+
+          {/* WHAT STRANGERS ON THE INTERNET SEE — which is why it lives here,
+              with the public link, and NOT beside the display card's
+              `showComparison` print-preview switch. Those are two different
+              things and putting them together would make them look like one:
+              this is stored on the build and enforced server-side; that one is
+              transient and resets whenever the modal opens. */}
+          <label className="flex items-start gap-2 pt-1 cursor-pointer">
+            <input type="checkbox" checked={build.hidePublicComparison === true}
+              onChange={e => onSave({ ...build, hidePublicComparison: e.target.checked || undefined }, build)}
+              className="mt-0.5 w-4 h-4 rounded border-slate-300 dark:border-slate-600 text-indigo-600 focus:ring-indigo-500" />
+            <span className="text-xs text-slate-600 dark:text-slate-300">
+              Hide the price comparison on the public link
+              <span className="block text-[11px] text-slate-400">
+                The page then shows your price, specs and photos — no store total and no “save $X”. The printed display card and the customer spec sheet are unaffected.
+              </span>
+            </span>
+          </label>
         </div>
 
         {/* Big enough to scan off the counter tablet from across the desk. */}

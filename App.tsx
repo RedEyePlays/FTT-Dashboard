@@ -157,7 +157,7 @@ const App: React.FC = () => {
     user, isLoadingAuth, authError, setAuthError,
     appUser, roleLoading, workspaceId, workspaceUsers, invites, auditLogs, loadMoreAuditLogs, auditHasMore,
     data, notes, setNotes, tasks, setTasks,
-    deviceBuyers, dropOffs, settlements, salesTransactions, customers, repairs, repairBatches, pcBuilds,
+    deviceBuyers, dropOffs, settlements, settlementsLoaded, salesTransactions, customers, repairs, repairBatches, pcBuilds,
     timeEntries, payPeriods, payPeriodApprovals, staffBonuses, kioskStaff, cashReconciliations, staffNotes, expenses, recurringExpenses,
     skuCounters, setSkuCounters, activityLog, lastBackup, settings,
     dbLoading, dbError, reconnect, refusedCollections, enableExtendedData, enableCashData,
@@ -185,12 +185,29 @@ const App: React.FC = () => {
   // that needs them. Idempotent; once enabled it stays for the session.
   useEffect(() => {
     if (view === 'timeclock' || view === 'reports' || view === 'dropoff') enableExtendedData();
-    // Owner/manager also need timeEntries/payPeriods on the Dashboard itself
-    // for the "payroll due" nudge (domain/timeclock.ts's payrollDue) —
-    // gated to the same payroll.manage tier so employees/technicians never
-    // trigger this extra read just by opening the Dashboard.
-    if (view === 'dashboard' && (appUser?.role === 'owner' || appUser?.role === 'manager')) enableExtendedData();
-  }, [view, appUser?.role, enableExtendedData]);
+    // The Dashboard itself needs deferred data for two of its own figures:
+    //
+    //   • timeEntries/payPeriods for the "payroll due" nudge
+    //     (domain/timeclock.ts's payrollDue) — payroll.manage.
+    //   • settlements for the fee income in the period cards' profit
+    //     (domain/dashboardPeriods.ts) — reports.profit.summary, the same
+    //     permission that governs the P&L's fee-income line.
+    //
+    // The second is why this is no longer an owner/manager role check: a
+    // manager already qualified, but so does an employee an owner has granted
+    // the allowProfit override, and without this their cards would understate
+    // profit by every settled fee — permanently, since nothing else they do
+    // would ever trigger the load. Every role that reaches either branch may
+    // read what it subscribes to (domain/subscriptionAccess.ts: settlements is
+    // activeMemberOf, so every human role can; the two manager-up collections
+    // are filtered out per role there, not here). A technician or kiosk holds
+    // neither permission and still triggers no extra read by opening a screen.
+    // `can` directly rather than the `allow` helper: that helper is declared
+    // further down the component, so naming it in this effect's dependency
+    // array would read it before initialization.
+    const may = (p: Permission) => can(appUser?.role, p, { allowProfit: appUser?.allowProfit });
+    if (view === 'dashboard' && (may('payroll.manage') || may('reports.profit.summary'))) enableExtendedData();
+  }, [view, appUser?.role, appUser?.allowProfit, enableExtendedData]);
   // Active Inventory sub-section, mirrored to the URL (/inventory/<section>).
   const [invSection, setInvSection] = useState<InvSection>(DEFAULT_INV_SECTION);
   // A customer to pre-seed the POS / Repairs view with (from a CRM quick action).
@@ -3257,6 +3274,15 @@ const App: React.FC = () => {
               user navigated there. */}
           <ErrorBoundary key={view} variant="route" label={PAGE_TITLES[view]} onCrash={handleCrash} userEmail={appUser?.email}>
           <Suspense fallback={<ViewLoader />}>
+          {/* The `settlements` prop below carries device-buyer fee income into
+              the period cards' PROFIT (never revenue — domain/dashboardPeriods
+              .ts). It is gated on reports.profit.summary, the same permission
+              that governs the P&L's fee-income line (see tabAllowed in
+              components/ReportsView.tsx), and NOT a new one. It is also passed
+              only once the deferred subscription has actually delivered:
+              before that it is undefined rather than [], so the cards state
+              that fee income is still missing instead of quietly showing a
+              profit figure that is short by it. */}
           {view === 'dashboard' && (
             allow('reports.view')
               ? <Dashboard data={data} salesTransactions={salesTransactions} activity={activityLog} repairs={repairs} repairBatches={repairBatches} canViewProfit={allow('reports.profit.summary')} onViewAnalytics={() => navigate('analytics')} onViewRepairs={allow('repairs.manage') ? () => navigate('repairs') : undefined} booksStartDate={settings.operations.booksStartDate}
@@ -3264,7 +3290,8 @@ const App: React.FC = () => {
                   onViewCash={allow('cash.reconcile') ? () => navigate('reports') : undefined}
                   onViewLayaways={allow('cash.reconcile') ? () => navigate('layaways') : undefined}
                   payrollDue={allow('payroll.manage') ? dashboardPayrollDue : undefined}
-                  onViewPayroll={allow('payroll.manage') ? () => navigate('timeclock') : undefined} />
+                  onViewPayroll={allow('payroll.manage') ? () => navigate('timeclock') : undefined}
+                  settlements={allow('reports.profit.summary') && settlementsLoaded ? settlements : undefined} />
               : <div className="text-center text-slate-400 py-20">You don't have access to reports.</div>
           )}
           {view === 'layaways' && allow('sales.complete') && (

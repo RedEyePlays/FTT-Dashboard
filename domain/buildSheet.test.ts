@@ -181,6 +181,24 @@ describe('the shelf display card', () => {
     expect(plain.specs.every(s => s.condition === null)).toBe(true);
   });
 
+  it('IGNORES hidePublicComparison — that flag is the public page, not this card', () => {
+    // The toggle is about what strangers on the internet see. The card is
+    // printed and stood next to the machine in the shop, and the customer spec
+    // sheet is handed to somebody already at the counter; both keep the
+    // comparison. Enforcement of the flag lives in
+    // functions/src/publicBuildPolicy.ts and nowhere else.
+    const card = displayCard({
+      build: build({ hidePublicComparison: true }), warrantyDays: 90, shopName: 'F', shopPhone: 'p',
+    });
+    expect(card.comparison).not.toBeNull();
+    expect(card.comparison?.saving).toBe('$220.00');
+    // And the card's OWN preview toggle still works, independently of it.
+    expect(displayCard({
+      build: build({ hidePublicComparison: true }), warrantyDays: 90, shopName: 'F', shopPhone: 'p',
+      showComparison: false,
+    }).comparison).toBeNull();
+  });
+
   it('omits the comparison when a part has no retail price, rather than misleading', () => {
     const partial = build({ parts: [...FULL_PARTS, part({ id: 'p5', category: 'PSU', name: '750W', retailPrice: undefined })] });
     expect(displayCard({ build: partial, warrantyDays: 90, shopName: 'F', shopPhone: 'p' }).comparison).toBeNull();
