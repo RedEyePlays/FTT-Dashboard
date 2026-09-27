@@ -52,7 +52,13 @@ export interface PublicBuild {
   parts: PublicPart[];
   price?: number;
   retailTotal?: number;
-  retailComplete: boolean;
+  /**
+   * Absent on a build whose shop switched the comparison off for the public
+   * page (types.ts's hidePublicComparison): the server then omits this, the
+   * totals, the saving AND the per-part prices, so there is nothing here to
+   * add up. renderComparison already falls through to '' in that case.
+   */
+  retailComplete?: boolean;
   storeTotal?: number;
   storeName?: string;
   saving?: number;

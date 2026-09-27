@@ -51,6 +51,16 @@ export function useWorkspaceData() {
   const [deviceBuyers, setDeviceBuyers] = useState<DeviceBuyer[]>([]);
   const [dropOffs, setDropOffs] = useState<DropOff[]>([]);
   const [settlements, setSettlements] = useState<Settlement[]>([]);
+  // HAS the settlements listener actually delivered a snapshot yet?
+  //
+  // `settlements` starts as [] and stays [] until the deferred subscription
+  // arrives, so an empty array on its own cannot tell "the shop has settled
+  // nobody" from "we don't know yet". Any surface that folds settlement fees
+  // into a profit figure needs that difference: showing a total that is short
+  // by the day's fee income, with nothing to say so, is the bug the Dashboard
+  // cards had. Refused (a role that may not read it) leaves this false, which
+  // is the honest answer there too.
+  const [settlementsLoaded, setSettlementsLoaded] = useState(false);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [salesTransactions, setSalesTransactions] = useState<SalesTransaction[]>([]);
   const [repairs, setRepairs] = useState<Repair[]>([]);
@@ -135,7 +145,7 @@ export function useWorkspaceData() {
       setUser(u);
       if (!u) {
         setDevices([]); setAccessories([]); setNotes([]); setTasks([]);
-        setDeviceBuyers([]); setDropOffs([]); setSettlements([]); setCustomers([]);
+        setDeviceBuyers([]); setDropOffs([]); setSettlements([]); setSettlementsLoaded(false); setCustomers([]);
         setSalesTransactions([]); setRepairs([]); setRepairBatches([]); setTimeEntries([]); setPayPeriods([]); setActivityLog([]); setSkuCounters({});
         setAppUser(null); setWorkspaceUsers([]); setInvites([]); setAuditLogs([]); setStaffNotes([]); setExtendedEnabled(false); setCashEnabled(false);
         setDbLoading(false); setRoleLoading(false);
@@ -302,7 +312,7 @@ export function useWorkspaceData() {
       // `buyerId` backfilled here, so no component, domain function or write
       // handler downstream ever has to know the legacy name existed.
       allowed.has('dropOffs') && subscribeCollection<DropOff>(workspaceId, 'dropOffs', rows => setDropOffs(rows.map(withResolvedBuyerId<DropOff>)), onErr('dropOffs')),
-      allowed.has('settlements') && subscribeCollection<Settlement>(workspaceId, 'settlements', rows => setSettlements(rows.map(withResolvedBuyerId<Settlement>)), onErr('settlements')),
+      allowed.has('settlements') && subscribeCollection<Settlement>(workspaceId, 'settlements', rows => { setSettlements(rows.map(withResolvedBuyerId<Settlement>)); setSettlementsLoaded(true); }, onErr('settlements')),
       allowed.has('timeEntries') && subscribeCollection<TimeEntry>(workspaceId, 'timeEntries', setTimeEntries, onErr('timeEntries')),
       allowed.has('payPeriods') && subscribeCollection<PayPeriodPaid>(workspaceId, 'payPeriods', setPayPeriods, onErr('payPeriods')),
       allowed.has('payPeriodApprovals') && subscribeCollection<PayPeriodApproval>(workspaceId, 'payPeriodApprovals', setPayPeriodApprovals, onErr('payPeriodApprovals')),
@@ -385,7 +395,7 @@ export function useWorkspaceData() {
     auditHasMore: auditLogs.length >= auditLimit,
     // collections
     devices, accessories, data, notes, setNotes, tasks, setTasks,
-    deviceBuyers, dropOffs, settlements, customers, salesTransactions,
+    deviceBuyers, dropOffs, settlements, settlementsLoaded, customers, salesTransactions,
     repairs, repairBatches, pcBuilds, timeEntries, payPeriods, payPeriodApprovals, staffBonuses, kioskStaff, cashReconciliations, staffNotes,
     expenses, recurringExpenses,
     skuCounters, setSkuCounters, activityLog, lastBackup, settings,

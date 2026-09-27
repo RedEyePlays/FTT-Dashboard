@@ -1450,6 +1450,31 @@ export interface PcBuild {
    */
   comparisonStore?: string;
   /**
+   * SUPPRESS THE PRICE COMPARISON ON THE PUBLIC SHARE PAGE.
+   *
+   * Some machines shouldn't advertise "build it yourself at Canada Computers
+   * and pay $400 more". Set on a build, the public payload omits the store and
+   * retail totals, the saving, AND the per-part new/store prices — the parts
+   * array carries its own pricing, so dropping only the totals would leave the
+   * comparison addable up from the rows (functions/src/publicBuildPolicy.ts).
+   * Hiding means NOT SENT: it is enforced where the payload is assembled, not
+   * in the page, so the numbers never leave the building.
+   *
+   * PUBLIC PAGE ONLY, and deliberately so. The printed display card
+   * (components/PcBuildsView.tsx), the customer spec sheet (domain/buildSheet
+   * .ts) and the AI listing (domain/listingCopy.ts) all keep showing the
+   * comparison exactly as before: this is about what strangers on the internet
+   * see, not about what the shop hands a customer standing at the counter.
+   *
+   * Not to be confused with PcBuildsView's `showComparison`, which is a
+   * transient print-preview switch on the display-card modal and resets every
+   * time it opens.
+   *
+   * Absent/false on every existing build, which shows the comparison — the
+   * behaviour they have today, with nothing migrated.
+   */
+  hidePublicComparison?: boolean;
+  /**
    * The shop's own notes on this build — "waiting on the GPU", "customer wants
    * white cables". INTERNAL. Never on the display card, never on the public
    * listing, and not on the customer spec sheet either (domain/buildSheet.ts).

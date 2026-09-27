@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
-import { InventoryItem, SalesTransaction, ActivityEntry, Repair, RepairBatch, CashReconciliation } from '../types';
+import { InventoryItem, SalesTransaction, ActivityEntry, Repair, RepairBatch, CashReconciliation, Settlement } from '../types';
 import { unreconciledDays, isRecognizedSale } from '../domain/reports';
+import { dashboardPeriods, settlementsIncluded } from '../domain/dashboardPeriods';
 import { PayrollDue } from '../domain/timeclock';
 import { layawayTotals } from '../domain/layaway';
 import { isReversed } from '../domain/pos';
@@ -35,6 +36,18 @@ interface DashboardProps {
   // for anyone who can't act on it, same reasoning as cashReconciliations.
   payrollDue?: PayrollDue | null;
   onViewPayroll?: () => void;
+  // Device-buyer settlements, for the fee income in the period cards' PROFIT
+  // (never revenue — see domain/dashboardPeriods.ts). Owner/manager tier, the
+  // same as cashReconciliations and payrollDue, and gated on the permission
+  // that already governs the P&L's fee-income line (reports.profit.summary).
+  //
+  // OMITTED, not empty, for anyone who can't see it — and also until the
+  // deferred subscription has actually delivered. The two cases are the same
+  // thing to a reader of these cards: an amount that is silently short by the
+  // day's fee income, looking exactly like the bug this prop was added to fix.
+  // The cards say so when it's absent, rather than passing an incomplete
+  // figure off as a complete one.
+  settlements?: Settlement[];
   onViewCash?: () => void;
   // Active-layaways tile (owner/manager tier, same as onViewCash) — omitted
   // hides the tile for anyone who can't reach the list it links to.
@@ -60,7 +73,7 @@ const relTime = (ts: number) => {
 };
 const platformLabel = (p?: string) => (p && p !== 'None / In-Store' ? p : 'In-Store');
 
-export const Dashboard: React.FC<DashboardProps> = ({ data, salesTransactions, activity, repairs = [], repairBatches = [], canViewProfit = true, onViewAnalytics, onViewRepairs, cashReconciliations, onViewCash, onViewLayaways, payrollDue, onViewPayroll, booksStartDate }) => {
+export const Dashboard: React.FC<DashboardProps> = ({ data, salesTransactions, activity, repairs = [], repairBatches = [], canViewProfit = true, onViewAnalytics, onViewRepairs, cashReconciliations, onViewCash, onViewLayaways, payrollDue, onViewPayroll, booksStartDate, settlements }) => {
   const mask = (v: string) => (canViewProfit ? v : '•••');
   const staleCash = useMemo(
     () => (cashReconciliations ? unreconciledDays(cashReconciliations, todayISO(), booksStartDate) : []),
@@ -90,35 +103,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, salesTransactions, a
   const m = useMemo(() => {
     const now = new Date();
     const todayStr = ymd(now);
-    const weekAgo = new Date(now); weekAgo.setDate(now.getDate() - 6);
-    const weekAgoStr = ymd(weekAgo);
-    const monthPrefix = todayStr.slice(0, 7);
 
-    // Sales events, unioned & de-duplicated: every transaction, plus any device
-    // sold directly on its inventory row that isn't already in a transaction.
-    //
-    // Only RECOGNIZED sales contribute (domain/reports.ts's isRecognizedSale —
-    // not voided/returned, and not an open layaway still owing a balance).
-    // This used to count every transaction's full subtotal/netProfit
-    // unconditionally, which meant a fresh $500 layaway that had only
-    // collected a $50 deposit inflated Today/This Week/This Month revenue by
-    // the full $500 the moment it was created — and a voided/returned sale
-    // did too, since neither was ever filtered out here (domain/reports.ts's
-    // P&L and domain/analytics.ts's Owner Analytics already did this
-    // correctly; this tile just hadn't been kept in sync with that rule).
-    const txnInvIds = new Set<string>();
-    salesTransactions.forEach(t => t.lines?.forEach(l => { if (l.inventoryId) txnInvIds.add(l.inventoryId); }));
-    const events: { date: string; revenue: number; profit: number }[] = [];
-    salesTransactions.filter(isRecognizedSale).forEach(t => events.push({ date: t.date, revenue: t.subtotal || 0, profit: t.netProfit || 0 }));
-    data.forEach(i => {
-      if (kindOf(i) === 'device' && i.soldDate && !txnInvIds.has(i.id)) {
-        const revenue = i.salePrice || 0;
-        const profit = revenue - (i.purchaseCost || 0) - (i.repairCost || 0) - (i.shippingCost || 0) - (i.platformFees || 0);
-        events.push({ date: i.soldDate, revenue, profit });
-      }
-    });
-    const bucket = (pred: (d: string) => boolean) =>
-      events.filter(e => pred(e.date)).reduce((a, e) => ({ revenue: a.revenue + e.revenue, profit: a.profit + e.profit }), { revenue: 0, profit: 0 });
+    // The three period cards, including device-buyer settlement fees as PROFIT
+    // with no revenue. Derived in domain/dashboardPeriods.ts rather than here:
+    // these totals were hand-rolled inline, which is precisely how this became
+    // the last profit surface still missing settlement income while the P&L
+    // and Owner Analytics both had it.
+    const periods = dashboardPeriods({ data, salesTransactions, settlements }, now);
 
     // Inventory snapshot
     const devices = data.filter(i => kindOf(i) === 'device');
@@ -181,9 +172,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, salesTransactions, a
     const layaways = layawayTotals(salesTransactions);
 
     return {
-      today: bucket(d => d === todayStr),
-      week: bucket(d => d >= weekAgoStr && d <= todayStr),
-      month: bucket(d => d.startsWith(monthPrefix)),
+      today: periods.today,
+      week: periods.week,
+      month: periods.month,
       devicesInStock: held.length,
       accessoryUnits: accessories.reduce((a, i) => a + (i.quantity || 0), 0),
       accessorySkus: accessories.length,
@@ -194,7 +185,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, salesTransactions, a
       recentSales, topAccessories, bestPlatforms, layaways,
       maxPlatRev: Math.max(1, ...bestPlatforms.map(p => p.revenue)),
     };
-  }, [data, salesTransactions]);
+  }, [data, salesTransactions, settlements]);
 
   const recentActivity = useMemo(() => [...activity].sort((a, b) => b.ts - a.ts).slice(0, 8), [activity]);
 
@@ -283,6 +274,18 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, salesTransactions, a
         <PeriodCard icon={<CalendarRange className="w-5 h-5" />} title="Last 7 Days" revenue={m.week.revenue} profit={m.week.profit} mask={mask} />
         <PeriodCard icon={<Calendar className="w-5 h-5" />} title="This Month" revenue={m.month.revenue} profit={m.month.profit} mask={mask} />
       </div>
+      {/* SAID OUT LOUD rather than left as a quietly short number. Profit here
+          includes device-buyer settlement fees; when the settlement data isn't
+          available — the first paint before the deferred subscription delivers,
+          or a viewer who can see profit but not that collection — these figures
+          are missing exactly that, which looks identical to the bug this note
+          exists to rule out. Only shown to somebody who can see the profit
+          figure in the first place; for anyone else it is masked anyway. */}
+      {canViewProfit && !settlementsIncluded(settlements) && (
+        <p className="text-xs text-slate-400 -mt-2">
+          Profit above doesn't include device-buyer settlement fees yet — they load with the rest of the settlement data.
+        </p>
+      )}
 
       {/* Inventory snapshot */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
