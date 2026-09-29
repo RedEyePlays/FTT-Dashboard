@@ -1,6 +1,7 @@
 import { Repair, RepairBatch } from '../types';
 import { REPAIR_STATUS_LABEL, balanceOwing, batchTotals, repairPartsCost, repairLabor, partName } from '../domain/repairs';
 import { PRINT_PREVIEW_BAR_STYLE, PRINT_PREVIEW_BAR_HTML } from './printPreview';
+import { STATUS_PAGE_ORIGIN } from '../domain/statusLink';
 
 // Reuses the app's print pattern: open a window, write inline-styled HTML, print.
 const money = (n?: number) => `$${(n || 0).toFixed(2)}`;
@@ -75,9 +76,15 @@ const openThermalPrint = (title: string, body: string) => {
 const row = (k: string, v?: string) => (v ? `<div class="row"><span class="k">${esc(k)}</span><span>${esc(v)}</span></div>` : '');
 // Public customer-facing repair-status page — a fully separate, standalone
 // site (see status-page/) deployed to its own Firebase Hosting target, not a
-// route of this app. Hardcoded rather than derived from window.location since
-// this app's own origin is no longer where that page lives.
-const trackUrl = (): string => 'https://status.flipthat.tech';
+// route of this app. Deliberately NOT derived from window.location, since this
+// app's own origin is not where that page lives.
+//
+// It comes from STATUS_PAGE_ORIGIN because THIS IS PRINTED ON PAPER. It used
+// to be its own copy of the address, which meant the one surface that cannot
+// be re-deployed was also the one that would not follow when the host moves: a
+// customer holding a receipt would be left with a dead link while every share
+// link, QR code and ad snippet in the app had already followed the constant.
+const trackUrl = (): string => STATUS_PAGE_ORIGIN;
 const deviceBlock = (r: Repair) => {
   const name = [r.brand, r.model].filter(Boolean).join(' ') || r.deviceType || 'Device';
   return `<h3>Device</h3>${row('Device', name)}${row('Type', r.deviceType)}${row('Storage', r.storage)}${row('Color', r.color)}${row('IMEI / Serial', r.imei)}${row('Carrier', r.carrier)}`;

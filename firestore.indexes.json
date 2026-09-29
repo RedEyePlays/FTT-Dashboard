@@ -1,27 +1,49 @@
 {
-  "indexes": [
+  "comment": [
+    "SINGLE-FIELD COLLECTION-GROUP SCOPES GO IN fieldOverrides, NOT IN indexes.",
+    "",
+    "The two public lookups below each need one field indexed across every",
+    "workspace. Both were declared as entries in `indexes` with a single field,",
+    "which Firestore rejects outright: 'this index is not necessary, configure",
+    "using single field index controls'. The whole file was therefore",
+    "undeployable — `firebase deploy --only firestore:indexes` failed before it",
+    "got to anything else, so no index work of any kind could ship.",
+    "",
+    "They are declared as fieldOverrides instead, which is the supported way to",
+    "widen ONE field's scope to COLLECTION_GROUP, and which deploys from this",
+    "file like everything else. Nothing here is configured by hand in the",
+    "console: the repo stays the source of truth, and an exemption cannot be",
+    "deleted out from under the Cloud Functions without this file disagreeing.",
+    "",
+    "EACH OVERRIDE ALSO RESTATES THE COLLECTION-SCOPED INDEXES. A fieldOverride",
+    "REPLACES Firestore's automatic single-field indexing for that field, so",
+    "listing only the COLLECTION_GROUP scope would quietly drop the ordinary",
+    "per-collection indexes the app's own queries use.",
+    "",
+    "`indexes` is legitimately empty: the app has no composite indexes.",
+    "Composite ones belong there when they arrive."
+  ],
+  "indexes": [],
+  "fieldOverrides": [
     {
-      "comment": "Collection-group index for the public repair-status lookup (repairStatusLookup Cloud Function): query repairs across all workspaces by exact ticket number.",
+      "comment": "Public repair-status lookup (repairStatusLookup Cloud Function): collectionGroup('repairs').where('repairNumber','==',ticket) — an equality match across every workspace, so it needs the COLLECTION_GROUP scope below. Do not remove it; the public status page stops resolving ticket numbers without it.",
       "collectionGroup": "repairs",
-      "queryScope": "COLLECTION_GROUP",
-      "fields": [
-        {
-          "fieldPath": "repairNumber",
-          "order": "ASCENDING"
-        }
+      "fieldPath": "repairNumber",
+      "indexes": [
+        { "order": "ASCENDING", "queryScope": "COLLECTION" },
+        { "order": "DESCENDING", "queryScope": "COLLECTION" },
+        { "order": "ASCENDING", "queryScope": "COLLECTION_GROUP" }
       ]
     },
     {
-      "comment": "Collection-group index for the public PC-build listing lookup (buildShareLookup Cloud Function): find a build across all workspaces by its share token.",
+      "comment": "Public PC-build listing lookup (buildShareLookup Cloud Function): collectionGroup('pcBuilds').where('shareToken','==',token) — the same shape. Do not remove it; every shared build link stops resolving without it.",
       "collectionGroup": "pcBuilds",
-      "queryScope": "COLLECTION_GROUP",
-      "fields": [
-        {
-          "fieldPath": "shareToken",
-          "order": "ASCENDING"
-        }
+      "fieldPath": "shareToken",
+      "indexes": [
+        { "order": "ASCENDING", "queryScope": "COLLECTION" },
+        { "order": "DESCENDING", "queryScope": "COLLECTION" },
+        { "order": "ASCENDING", "queryScope": "COLLECTION_GROUP" }
       ]
     }
-  ],
-  "fieldOverrides": []
+  ]
 }
