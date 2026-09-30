@@ -14,7 +14,12 @@ import {
   hoursInRange, dayRange, weekRange, recentPayPeriods, periodPayFor, paidKey,
   toISODate, periodEndInclusive, entriesOnDate, PayPeriod, PayCycle, PAY_CYCLE_DAYS,
   isMissedClockOut, missedClockOuts, isValidClockOutCorrection, isCorrectedEntry, payrollFlagsFor,
+  isLongShift, DEFAULT_LONG_SHIFT_HOURS,
 } from '../domain/timeclock';
+import {
+  isoDateInZone, toZonedInput, fromZonedInput, safeZone, shopTimeNote, zoneCity,
+  deviceDiffersFromShop,
+} from '../domain/shopTime';
 import { paidBreakSettingNote } from '../domain/paidBreakChange';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 import { toCSV, triggerDownload } from '../services/backup';
@@ -53,6 +58,17 @@ interface Props {
   // settings.operations.paidBreakReasons — break kinds the shop pays through.
   // Empty (the default) means every break is deducted, exactly as before.
   paidBreakReasons?: PaidBreakReasons;
+  // settings.general.timeZone — THE SHOP'S zone, not the reader's device.
+  //
+  // Every time and date on this screen is rendered in it and labelled with it.
+  // Without that, the screen silently follows whichever device is held: the
+  // owner read it from Dubai and saw a 1:22 PM shift as 9:22 PM, a correction
+  // box asking for Sep 30 on a Sep 29 shift, and a heading that said Sep 29 —
+  // all three correct, none of them reconcilable from what was on screen.
+  shopTimeZone?: string;
+  // settings.operations.longShiftHours — a shift longer than this is flagged
+  // for a human. Informational only; it never blocks anything.
+  longShiftHours?: number;
   // When that setting last changed, used only to DATE the note on a period
   // approved under the previous one.
   paidBreakReasonsUpdatedAt?: number;
@@ -92,7 +108,7 @@ export const TimeClockView: React.FC<Props> = ({
   me, users, entries, payPeriods, payPeriodApprovals, payCycle, payAnchorISO, canManagePayroll, canMarkPaid,
   onClockIn, onClockOut, onStartBreak, onEndBreak, onApprovePeriod, onApproveAllPeriod, onMarkPaid, onUnmarkPaid, onCorrectClockOut, onOpenUsers,
   staffBonuses = [], canAddBonus = false, onSaveBonus, onDeleteBonus, paidBreakReasons = [],
-  paidBreakReasonsUpdatedAt,
+  paidBreakReasonsUpdatedAt, shopTimeZone, longShiftHours = DEFAULT_LONG_SHIFT_HOURS,
 }) => {
   const now = useNow();
   const [showBreakPicker, setShowBreakPicker] = useState(false);
@@ -169,11 +185,13 @@ export const TimeClockView: React.FC<Props> = ({
       </div>
 
       {/* --- Daily hours (owner/manager) ---------------------------------- */}
-      {canManagePayroll && <DailyHours users={users} entries={entries} now={now} onCorrectClockOut={onCorrectClockOut} paidBreakReasons={paidBreakReasons} />}
+      {canManagePayroll && <DailyHours users={users} entries={entries} now={now} onCorrectClockOut={onCorrectClockOut} paidBreakReasons={paidBreakReasons} zone={shopTimeZone} longShiftHours={longShiftHours} />}
 
       {/* --- Payroll summary (owner/manager) ------------------------------ */}
       {canManagePayroll && (
         <PayrollSummary
+          zone={shopTimeZone}
+          longShiftHours={longShiftHours}
           users={users}
           entries={entries}
           payPeriods={payPeriods}
@@ -313,40 +331,96 @@ const BreakPickerModal: React.FC<{ onClose: () => void; onPick: (r: BreakReason,
 // timeEntries — clock-in, clock-out and worked total per shift, plus a per-person
 // total. Bucketed by clock-in day (same rule as the payroll math). Owner/manager
 // only (rendered behind canManagePayroll).
-const fmtTime = (ms: number): string => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+// EVERY TIME AND DATE BELOW IS THE SHOP'S, NOT THE DEVICE'S.
+//
+// These took no zone and used bare toLocaleTimeString/local date fields, so
+// the whole screen followed whichever device was being held. See
+// domain/shopTime.ts for the incident and the conversion.
+const fmtTime = (ms: number, zone?: string): string =>
+  new Date(ms).toLocaleTimeString([], {
+    hour: '2-digit', minute: '2-digit', ...(safeZone(zone) ? { timeZone: safeZone(zone) } : {}),
+  });
 
-// <input type="datetime-local"> uses local wall-clock time with no timezone —
-// pad manually rather than slicing an ISO string (which is UTC).
-const toLocalInput = (ms: number): string => {
-  const d = new Date(ms);
-  const p = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
-};
-const fromLocalInput = (v: string): number => new Date(v).getTime();
+const fmtDate = (ms: number, zone?: string): string => isoDateInZone(ms, zone);
+
+const fmtDateTime = (ms: number, zone?: string): string =>
+  `${fmtDate(ms, zone)} ${fmtTime(ms, zone)}`;
+
+// <input type="datetime-local"> carries a bare wall-clock value with no zone
+// attached. THE VALUE IN THIS SCREEN'S BOXES IS SHOP WALL-CLOCK TIME — what a
+// clock on the shop wall read — so it agrees with every other time shown
+// beside it. domain/shopTime.ts converts both ways; the input's own label
+// spells this out, because the owner typing into it may be on another
+// continent and the box itself cannot say what it means.
+const toShopInput = (ms: number, zone?: string): string => toZonedInput(ms, zone);
+const fromShopInput = (v: string, zone?: string): number => fromZonedInput(v, zone);
 
 // Inline editor for correcting one shift's clock-out (missed or otherwise
 // wrong). Owner/manager only — rendered behind the same gate as Daily Hours.
-const ClockOutFixer: React.FC<{ entry: TimeEntry; now: number; onCancel: () => void; onSave: (newClockOut: number) => void }> = ({ entry, now, onCancel, onSave }) => {
-  const [value, setValue] = useState(() => toLocalInput(entry.clockOut ?? now));
-  const parsed = fromLocalInput(value);
+/**
+ * THE BOX TAKES SHOP WALL-CLOCK TIME. That decision is made here and said out
+ * loud on screen, because half-converting it is worse than not converting it:
+ * the owner would type a value tonight believing one interpretation while the
+ * input meant the other, and nothing would ever reveal the difference.
+ *
+ * Shop time, rather than device time with a preview, because every other
+ * number on this screen is now shop time — a correction box that alone meant
+ * something else would reintroduce exactly the contradiction being fixed.
+ *
+ * When the device's clock disagrees with the shop's, the box also shows what
+ * the typed value is on THIS device. That is the reassurance a traveller
+ * needs: not a second thing to interpret, just confirmation that the shop time
+ * they typed is the local time they remember.
+ */
+const ClockOutFixer: React.FC<{
+  entry: TimeEntry; now: number; zone?: string;
+  onCancel: () => void; onSave: (newClockOut: number) => void;
+}> = ({ entry, now, zone, onCancel, onSave }) => {
+  const [value, setValue] = useState(() => toShopInput(entry.clockOut ?? now, zone));
+  const parsed = fromShopInput(value, zone);
   const valid = isFinite(parsed) && isValidClockOutCorrection(entry, parsed, now);
+  const offset = deviceDiffersFromShop(now, zone);
+  const wasClosed = !isClockedIn(entry);
 
   useEscapeKey(onCancel);
 
   return (
-    <div className="flex flex-wrap items-center gap-2 bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2">
-      <span className="text-xs text-slate-500 dark:text-slate-400">Set actual clock-out for {new Date(entry.clockIn).toLocaleDateString()}:</span>
-      <input type="datetime-local" value={value} max={toLocalInput(now)} onChange={e => setValue(e.target.value)}
-        className="px-2 py-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-md text-sm text-slate-900 dark:text-slate-100 dark:[color-scheme:dark]" />
-      <button onClick={() => valid && onSave(parsed)} disabled={!valid} className="px-3 py-1 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white rounded-md text-xs font-medium">Save</button>
-      <button onClick={onCancel} className="px-3 py-1 text-xs text-slate-500 hover:text-slate-700">Cancel</button>
-      {!valid && <span className="text-xs text-rose-500">Must be after clock-in ({fmtTime(entry.clockIn)}) and not in the future.</span>}
+    <div className="bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 space-y-1.5">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-xs text-slate-500 dark:text-slate-400">
+          Set actual clock-out for {fmtDate(entry.clockIn, zone)}
+          <span className="font-semibold"> in {safeZone(zone) ? `${zoneCity(zone)} (shop) time` : 'this device\'s time'}</span>:
+        </span>
+        <input type="datetime-local" value={value} max={toShopInput(now, zone)} onChange={e => setValue(e.target.value)}
+          className="px-2 py-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-md text-sm text-slate-900 dark:text-slate-100 dark:[color-scheme:dark]" />
+        <button onClick={() => valid && onSave(parsed)} disabled={!valid} className="px-3 py-1 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white rounded-md text-xs font-medium">Save</button>
+        <button onClick={onCancel} className="px-3 py-1 text-xs text-slate-500 hover:text-slate-700">Cancel</button>
+      </div>
+      {/* Only when the two actually differ — on the shop's own terminal this
+          line would be noise repeating what the box already says. */}
+      {valid && offset && (
+        <p className="text-[11px] text-slate-500 dark:text-slate-400">
+          That is <span className="font-semibold">{new Date(parsed).toLocaleString()}</span> on this device.
+        </p>
+      )}
+      {/* Changing a shift that already has a clock-out is the case this screen
+          refused to offer at all. Saying so is not a warning against doing it —
+          it is what stops somebody correcting the wrong row. */}
+      {wasClosed && (
+        <p className="text-[11px] text-slate-500 dark:text-slate-400">
+          This shift already has a clock-out of {fmtTime(entry.clockOut!, zone)}. The original is kept in the correction history.
+        </p>
+      )}
+      {!valid && <p className="text-xs text-rose-500">Must be after clock-in ({fmtTime(entry.clockIn, zone)}) and not in the future.</p>}
     </div>
   );
 };
 
-const DailyHours: React.FC<{ users: AppUser[]; entries: TimeEntry[]; now: number; onCorrectClockOut: (entryId: string, newClockOut: number) => void; paidBreakReasons?: PaidBreakReasons }> = ({ users, entries, now, onCorrectClockOut, paidBreakReasons = [] }) => {
-  const today = toISODate(now);
+const DailyHours: React.FC<{ users: AppUser[]; entries: TimeEntry[]; now: number; onCorrectClockOut: (entryId: string, newClockOut: number) => void; paidBreakReasons?: PaidBreakReasons; zone?: string; longShiftHours?: number }> = ({ users, entries, now, onCorrectClockOut, paidBreakReasons = [], zone, longShiftHours = DEFAULT_LONG_SHIFT_HOURS }) => {
+  // The date pickers and the range filter work in SHOP dates, so a row
+  // cannot appear under a date outside the range the reader selected — which
+  // is what happens the moment display and filtering use different zones.
+  const today = fmtDate(now, zone);
   const [from, setFrom] = useState(today);
   const [to, setTo] = useState(today);
   const [fixing, setFixing] = useState<string | null>(null); // entry id being corrected
@@ -357,13 +431,21 @@ const DailyHours: React.FC<{ users: AppUser[]; entries: TimeEntry[]; now: number
 
   // Missed clock-outs are surfaced regardless of the selected date range —
   // they need attention whether or not today's range happens to include them.
-  const missed = useMemo(() => missedClockOuts(entries, now), [entries, now]);
-  const jumpToMissed = (e: TimeEntry) => { const d = toISODate(e.clockIn); setFrom(d); setTo(d); setFixing(e.id); };
+  const missed = useMemo(() => missedClockOuts(entries, now, zone), [entries, now, zone]);
+  // Shifts too long to be plausible — the gap that let a 20.94 h shift through.
+  // Surfaced on THIS screen as well as the pay-period review, because the
+  // owner was looking at a different day when it mattered and a flag only on
+  // the review would not have caught it either.
+  const longOnes = useMemo(
+    () => entries.filter(e => isLongShift(e, now, longShiftHours, paidBreakReasons)).sort((a, b) => a.clockIn - b.clockIn),
+    [entries, now, longShiftHours, paidBreakReasons],
+  );
+  const jumpToMissed = (e: TimeEntry) => { const d = fmtDate(e.clockIn, zone); setFrom(d); setTo(d); setFixing(e.id); };
 
   // Shifts whose clock-in day falls in [lo, hi], grouped by employee, each with
   // its own day total; sorted by employee name.
   const groups = useMemo(() => {
-    const inRange = entries.filter(e => e.clockIn != null && toISODate(e.clockIn) >= lo && toISODate(e.clockIn) <= hi);
+    const inRange = entries.filter(e => e.clockIn != null && fmtDate(e.clockIn, zone) >= lo && fmtDate(e.clockIn, zone) <= hi);
     const byUser = new Map<string, TimeEntry[]>();
     for (const e of inRange) { const list = byUser.get(e.userId) || []; list.push(e); byUser.set(e.userId, list); }
     return [...byUser.entries()]
@@ -374,7 +456,7 @@ const DailyHours: React.FC<{ users: AppUser[]; entries: TimeEntry[]; now: number
         totalHours: list.reduce((s, e) => s + workedHours(e, now, paidBreakReasons), 0),
       }))
       .sort((a, b) => a.name.localeCompare(b.name));
-  }, [entries, lo, hi, nameById, now]);
+  }, [entries, lo, hi, nameById, now, zone, paidBreakReasons]);
 
   const grandTotal = groups.reduce((s, g) => s + g.totalHours, 0);
   const singleDay = lo === hi;
@@ -384,7 +466,14 @@ const DailyHours: React.FC<{ users: AppUser[]; entries: TimeEntry[]; now: number
   return (
     <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl overflow-hidden">
       <div className="px-4 py-3 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between gap-3 flex-wrap">
-        <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200 flex items-center gap-2"><CalendarDays className="w-4 h-4 text-indigo-500" /> Daily hours</h3>
+        <div>
+          <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200 flex items-center gap-2"><CalendarDays className="w-4 h-4 text-indigo-500" /> Daily hours</h3>
+          {/* ALWAYS shown, not only when the device disagrees — a label that
+              appears only when something is wrong is one nobody learns to
+              look for, and the owner in the shop should read the same words
+              as the owner abroad. */}
+          <p className="text-[11px] text-slate-400 mt-0.5">{shopTimeNote(zone)}</p>
+        </div>
         <div className="flex items-center gap-2 flex-wrap">
           <button onClick={() => { setFrom(today); setTo(today); }} className={`px-2.5 py-1.5 rounded-lg text-xs font-medium border ${singleDay && lo === today ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'}`}>Today</button>
           <label className="text-xs text-slate-400 flex items-center gap-1">From <input type="date" max={today} value={from} onChange={e => setFrom(e.target.value)} className={dInput} /></label>
@@ -401,7 +490,22 @@ const DailyHours: React.FC<{ users: AppUser[]; entries: TimeEntry[]; now: number
           {missed.map(e => (
             <button key={e.id} onClick={() => jumpToMissed(e)}
               className="text-xs font-medium px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-300 hover:bg-amber-200 dark:hover:bg-amber-800/60">
-              {nameById.get(e.userId) || e.userId} · {toISODate(e.clockIn)}
+              {nameById.get(e.userId) || e.userId} · {fmtDate(e.clockIn, zone)}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {longOnes.length > 0 && (
+        <div className="px-4 py-2.5 bg-amber-50 dark:bg-amber-900/20 border-b border-amber-200 dark:border-amber-800 flex flex-wrap items-center gap-2">
+          <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+          <span className="text-sm text-amber-800 dark:text-amber-300 font-medium">
+            {longOnes.length} shift{longOnes.length !== 1 ? 's' : ''} over {longShiftHours} h — check before payout:
+          </span>
+          {longOnes.map(e => (
+            <button key={e.id} onClick={() => { const d = fmtDate(e.clockIn, zone); setFrom(d); setTo(d); setFixing(e.id); }}
+              className="text-xs font-medium px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-300 hover:bg-amber-200 dark:hover:bg-amber-800/60">
+              {nameById.get(e.userId) || e.userId} · {fmtDate(e.clockIn, zone)} · {fmtHours(workedHours(e, now, paidBreakReasons))}
             </button>
           ))}
         </div>
@@ -424,38 +528,58 @@ const DailyHours: React.FC<{ users: AppUser[]; entries: TimeEntry[]; now: number
                 </tr></thead>
                 <tbody className="divide-y divide-slate-50 dark:divide-slate-800/60">
                   {g.shifts.map(e => {
-                    const stale = isMissedClockOut(e, now);
+                    const stale = isMissedClockOut(e, now, zone);
                     const hasCorrections = isCorrectedEntry(e);
+                    const tooLong = isLongShift(e, now, longShiftHours, paidBreakReasons);
                     return (
                       <React.Fragment key={e.id}>
                         <tr>
-                          {!singleDay && <td className="py-1 pr-4 text-slate-500 dark:text-slate-400">{toISODate(e.clockIn)}</td>}
-                          <td className="py-1 pr-4 text-slate-600 dark:text-slate-300 tabular-nums">{fmtTime(e.clockIn)}</td>
+                          {!singleDay && <td className="py-1 pr-4 text-slate-500 dark:text-slate-400">{fmtDate(e.clockIn, zone)}</td>}
+                          <td className="py-1 pr-4 text-slate-600 dark:text-slate-300 tabular-nums">{fmtTime(e.clockIn, zone)}</td>
                           <td className="py-1 pr-4 text-slate-600 dark:text-slate-300 tabular-nums">
                             {isClockedIn(e) ? (
                               <span className={`inline-flex items-center gap-1 ${stale ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400'}`}>
                                 {stale && <AlertTriangle className="w-3.5 h-3.5" />}
                                 {stale ? 'Missed clock-out' : 'On the clock'}
                               </span>
-                            ) : fmtTime(e.clockOut!)}
+                            ) : fmtTime(e.clockOut!, zone)}
                             {hasCorrections && (
-                              <span title={e.corrections!.map(c => `${c.fromClockOut ? fmtTime(c.fromClockOut) : 'open'} → ${fmtTime(c.toClockOut)} by ${c.correctedByEmail || c.correctedBy} on ${new Date(c.correctedAt).toLocaleString()}${c.note ? ` — ${c.note}` : ''}`).join('\n')}
+                              <span title={e.corrections!.map(c => `${c.fromClockOut ? fmtTime(c.fromClockOut, zone) : 'open'} → ${fmtTime(c.toClockOut, zone)} by ${c.correctedByEmail || c.correctedBy} on ${fmtDateTime(c.correctedAt, zone)}${c.note ? ` — ${c.note}` : ''}`).join('\n')}
                                 className="inline-flex items-center gap-0.5 ml-1.5 text-[10px] text-slate-400 cursor-help"><History className="w-3 h-3" /> corrected</span>
                             )}
                           </td>
                           <td className="py-1 text-right text-slate-700 dark:text-slate-200 tabular-nums">
                             <span className="inline-flex items-center gap-2 justify-end">
-                              {fmtHours(workedHours(e, now, paidBreakReasons))}
-                              {(stale || isClockedIn(e)) && (
-                                <button onClick={() => setFixing(fixing === e.id ? null : e.id)} title="Fix clock-out" className="p-0.5 text-slate-400 hover:text-indigo-600"><Wrench className="w-3.5 h-3.5" /></button>
+                              {tooLong && (
+                                <span title={`Longer than ${longShiftHours} h — check this is right before it is paid.`}
+                                  className="inline-flex items-center gap-0.5 text-[10px] font-medium text-amber-600 dark:text-amber-400 cursor-help">
+                                  <AlertTriangle className="w-3 h-3" /> long
+                                </span>
                               )}
+                              {fmtHours(workedHours(e, now, paidBreakReasons))}
+                              {/* ON EVERY SHIFT, not only open or missed ones.
+                                  This used to be `(stale || isClockedIn(e))`, so a
+                                  shift with a clock-out was frozen in the UI
+                                  however wrong it was — one overnight outage left a
+                                  20.94 h shift closed at the wrong time with no way
+                                  to fix it short of editing Firestore by hand.
+                                  firestore.rules always allowed the write
+                                  (`allow update: if isManagerUp(ws)`, with no
+                                  condition on the entry being open); only this
+                                  screen refused. Same gate as Daily Hours itself,
+                                  no new permission, and the write still goes
+                                  through correctClockOut so the original value and
+                                  who changed it are kept. */}
+                              <button onClick={() => setFixing(fixing === e.id ? null : e.id)}
+                                title={isClockedIn(e) ? 'Fix clock-out' : 'Correct this clock-out'}
+                                className="p-0.5 text-slate-400 hover:text-indigo-600"><Wrench className="w-3.5 h-3.5" /></button>
                             </span>
                           </td>
                         </tr>
                         {fixing === e.id && (
                           <tr>
                             <td colSpan={singleDay ? 3 : 4} className="py-2">
-                              <ClockOutFixer entry={e} now={now}
+                              <ClockOutFixer entry={e} now={now} zone={zone}
                                 onCancel={() => setFixing(null)}
                                 onSave={t => { onCorrectClockOut(e.id, t); setFixing(null); }} />
                             </td>
@@ -505,7 +629,11 @@ const PayrollSummary: React.FC<{
   // Jump to Users, so the "no rate set" warning is one click from fixing it
   // rather than an instruction to go and find the screen yourself.
   onOpenUsers?: () => void;
-}> = ({ users, entries, payPeriods, payPeriodApprovals, payCycle, payAnchorISO, now, canApprove, canMarkPaid, onApprovePeriod, onApproveAllPeriod, onMarkPaid, onUnmarkPaid, staffBonuses = [], canAddBonus = false, onAddBonus, onDeleteBonus, paidBreakReasons = [], paidBreakReasonsUpdatedAt, onOpenUsers }) => {
+  // The shop's zone and the long-shift threshold — see the Props block at the
+  // top of this file.
+  zone?: string;
+  longShiftHours?: number;
+}> = ({ users, entries, payPeriods, payPeriodApprovals, payCycle, payAnchorISO, now, canApprove, canMarkPaid, onApprovePeriod, onApproveAllPeriod, onMarkPaid, onUnmarkPaid, staffBonuses = [], canAddBonus = false, onAddBonus, onDeleteBonus, paidBreakReasons = [], paidBreakReasonsUpdatedAt, onOpenUsers, zone, longShiftHours = DEFAULT_LONG_SHIFT_HOURS }) => {
   const days = PAY_CYCLE_DAYS[payCycle];
   // BOTH GROUPS' periods, newest first. On a bi-weekly cycle the two groups are
   // paid on alternating weeks (domain/payGroups.ts), so the picker interleaves
@@ -575,7 +703,10 @@ const PayrollSummary: React.FC<{
   const periodStartISO = toISODate(period.start);
   const totalBonus = rows.reduce((s, r) => s + periodPayTotals(r.pay.gross, staffBonuses, r.user.id, periodStartISO).bonus, 0);
 
-  const flags = useMemo(() => payrollFlagsFor(entries, users, period, now), [entries, users, period, now]);
+  const flags = useMemo(
+    () => payrollFlagsFor(entries, users, period, now, paidBreakReasons, longShiftHours),
+    [entries, users, period, now, paidBreakReasons, longShiftHours],
+  );
 
   const periodLabel = (p: UserPayPeriod) => userPeriodLabel(p, payGroupsApply(payCycle));
 
@@ -670,13 +801,19 @@ const PayrollSummary: React.FC<{
         </p>
       )}
 
-      {(flags.missedClockOuts.length > 0 || flags.correctedEntries.length > 0 || flags.noRateUsers.length > 0) && (
+      {(flags.missedClockOuts.length > 0 || flags.correctedEntries.length > 0 || flags.noRateUsers.length > 0 || flags.longShifts.length > 0) && (
         <div className="mx-4 mt-3 px-3 py-2 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg flex flex-col gap-1">
           {flags.missedClockOuts.length > 0 && (
             <p className="text-xs text-amber-800 dark:text-amber-300 flex items-center gap-1.5"><AlertTriangle className="w-3.5 h-3.5 shrink-0" /> {flags.missedClockOuts.length} missed clock-out{flags.missedClockOuts.length !== 1 ? 's' : ''} in this period.</p>
           )}
           {flags.correctedEntries.length > 0 && (
             <p className="text-xs text-amber-800 dark:text-amber-300 flex items-center gap-1.5"><History className="w-3.5 h-3.5 shrink-0" /> {flags.correctedEntries.length} manager-corrected shift{flags.correctedEntries.length !== 1 ? 's' : ''} in this period.</p>
+          )}
+          {/* INFORMATIONAL — it sits beside the others and blocks nothing.
+              Somebody may genuinely have worked a long day, and a flag that
+              stopped payroll would be worked around within a week. */}
+          {flags.longShifts.length > 0 && (
+            <p className="text-xs text-amber-800 dark:text-amber-300 flex items-center gap-1.5"><AlertTriangle className="w-3.5 h-3.5 shrink-0" /> {flags.longShifts.length} shift{flags.longShifts.length !== 1 ? 's' : ''} over {longShiftHours} h in this period — check before paying.</p>
           )}
           {flags.noRateUsers.length > 0 && (
             <p className="text-xs text-amber-800 dark:text-amber-300 flex items-center gap-1.5"><AlertTriangle className="w-3.5 h-3.5 shrink-0" /> No hourly rate set for: {flags.noRateUsers.map(nameOf).join(', ')} — gross pay would compute as $0.</p>
@@ -830,9 +967,9 @@ const PayrollSummary: React.FC<{
                             <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                               {shifts.map(e => (
                                 <tr key={e.id}>
-                                  <td className="py-1 pr-4 text-slate-500 dark:text-slate-400">{toISODate(e.clockIn)}</td>
-                                  <td className="py-1 pr-4 tabular-nums">{fmtTime(e.clockIn)}</td>
-                                  <td className="py-1 pr-4 tabular-nums">{e.clockOut ? fmtTime(e.clockOut) : '—'}</td>
+                                  <td className="py-1 pr-4 text-slate-500 dark:text-slate-400">{fmtDate(e.clockIn, zone)}</td>
+                                  <td className="py-1 pr-4 tabular-nums">{fmtTime(e.clockIn, zone)}</td>
+                                  <td className="py-1 pr-4 tabular-nums">{e.clockOut ? fmtTime(e.clockOut, zone) : '—'}</td>
                                   {/* Named, so a paid lunch and an unpaid bank
                                       run on the same shift are told apart. */}
                                   <td className="py-1 pr-4">

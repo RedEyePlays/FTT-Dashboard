@@ -1,6 +1,15 @@
 import { ViewState, RepairStatus, RecurringFrequency, BreakReason } from '../types';
 import { REPAIR_STATUSES } from './repairs';
-import { PayCycle, PAY_PERIOD_ANCHOR } from './timeclock';
+import {
+  PayCycle, PAY_PERIOD_ANCHOR,
+  // The long-shift threshold lives with the time-clock math it is compared
+  // against, and is re-exported here so Settings has one import for the
+  // bounds it renders. Same direction as PAY_PERIOD_ANCHOR — settings reads
+  // from timeclock, never the other way, or the two modules form a cycle.
+  DEFAULT_LONG_SHIFT_HOURS, MIN_LONG_SHIFT_HOURS, MAX_LONG_SHIFT_HOURS,
+} from './timeclock';
+
+export { DEFAULT_LONG_SHIFT_HOURS, MIN_LONG_SHIFT_HOURS, MAX_LONG_SHIFT_HOURS };
 import { ExpenseCategory, DEFAULT_EXPENSE_CATEGORIES } from './expenses';
 import { GpuPerformanceRow } from './gpuPerformance';
 
@@ -12,6 +21,7 @@ import { GpuPerformanceRow } from './gpuPerformance';
 export const DEFAULT_DAILY_AI_CALLS = 200;
 export const MIN_DAILY_AI_CALLS = 10;
 export const MAX_DAILY_AI_CALLS = 5_000;
+
 
 // Central, owner-configurable business settings. Persisted in Firestore (the
 // workspace meta doc) so the shop can be configured without code changes.
@@ -249,6 +259,24 @@ export interface AppSettings {
     // When that list last changed. Only used to date the "figures
     // recalculated" note on a pay period — the setting itself is the list.
     paidBreakReasonsUpdatedAt?: number;
+    // A SHIFT LONGER THAN THIS IS FLAGGED FOR A HUMAN TO LOOK AT, in hours.
+    //
+    // The incident: the shop's internet dropped overnight, clock-outs never
+    // reached Firebase, and one shift ended up CLOSED with a wrong clock-out
+    // at 20.94 h against a real 6.5 h. It tripped none of the existing
+    // payroll flags — those catch open shifts, corrected shifts and missing
+    // rates — so a ~14 h overstatement, roughly $245, reached payout looking
+    // completely ordinary.
+    //
+    // 14 hours by default: past any plausible rostered shift including a long
+    // Saturday with setup and close, comfortably under the ~20 h that a
+    // forgotten overnight clock-out produces, and clear of a legitimate
+    // 12-hour day so the flag does not cry wolf on shops that run those.
+    //
+    // INFORMATIONAL ONLY. It never blocks approval and never edits anything:
+    // somebody may genuinely have worked a long day, and a flag that stops
+    // payroll would be worked around within a week.
+    longShiftHours?: number;
     // FLOOR PRICE (domain/priceFloor.ts). A device must sell for at least
     // cost + percent AND cost + dollars — whichever is higher, since each
     // guards a different worry. Both unset = no floor, which is exactly
@@ -317,7 +345,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   dashboard: { widgets: Object.fromEntries(DASHBOARD_WIDGETS.map(w => [w, true])), landingView: 'dashboard', analyticsRange: 'today' },
   appearance: { theme: 'system' },
   backups: { enabled: false, frequency: 'daily', retention: 14 },
-  operations: { gpuPerformance: [], aiDailyCallCap: DEFAULT_DAILY_AI_CALLS, openingFloatDefault: 0, voidWindowDays: 0, returnRestockingFeePercent: 0, agingInventoryDays: 30, staleLayawayDays: 60, autoLockMinutes: 4, booksStartDate: '', paidBreakReasons: [], deviceWarrantyDays: 90, accessoryWarrantyDays: 0, buildLabourRate: 15, repairWarrantyDays: 30, repairPrices: [], tradeInRanges: [] },
+  operations: { gpuPerformance: [], aiDailyCallCap: DEFAULT_DAILY_AI_CALLS, openingFloatDefault: 0, voidWindowDays: 0, returnRestockingFeePercent: 0, agingInventoryDays: 30, staleLayawayDays: 60, autoLockMinutes: 4, booksStartDate: '', paidBreakReasons: [], longShiftHours: DEFAULT_LONG_SHIFT_HOURS, deviceWarrantyDays: 90, accessoryWarrantyDays: 0, buildLabourRate: 15, repairWarrantyDays: 30, repairPrices: [], tradeInRanges: [] },
   payroll: { cycle: 'biweekly', anchorISO: PAY_PERIOD_ANCHOR },
   expenses: { categories: DEFAULT_EXPENSE_CATEGORIES },
   reviews: {
