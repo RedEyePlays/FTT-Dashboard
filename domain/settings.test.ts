@@ -104,12 +104,15 @@ describe('mergeSettings', () => {
       gpuPerformance: [],
       // The server-enforced daily AI request cap (functions/src/ai/usage.ts).
       aiDailyCallCap: 200,
+      // A shift longer than this is flagged for review before payout
+      // (domain/timeclock.ts's payrollFlagsFor). Informational only.
+      longShiftHours: 14,
     });
   });
 
   it('merges a partial operations patch over the defaults', () => {
     const o = mergeSettings({ operations: { voidWindowDays: 3, returnRestockingFeePercent: 15 } as any }).operations;
-    expect(o).toEqual({ openingFloatDefault: 0, voidWindowDays: 3, returnRestockingFeePercent: 15, agingInventoryDays: 30, autoLockMinutes: 4, staleLayawayDays: 60, booksStartDate: '', paidBreakReasons: [], deviceWarrantyDays: 90, accessoryWarrantyDays: 0, buildLabourRate: 15, repairWarrantyDays: 30, repairPrices: [], tradeInRanges: [], gpuPerformance: [], aiDailyCallCap: 200 });
+    expect(o).toEqual({ openingFloatDefault: 0, voidWindowDays: 3, returnRestockingFeePercent: 15, agingInventoryDays: 30, autoLockMinutes: 4, staleLayawayDays: 60, booksStartDate: '', paidBreakReasons: [], deviceWarrantyDays: 90, accessoryWarrantyDays: 0, buildLabourRate: 15, repairWarrantyDays: 30, repairPrices: [], tradeInRanges: [], gpuPerformance: [], aiDailyCallCap: 200, longShiftHours: 14 });
   });
 });
 

@@ -10,6 +10,23 @@ import { TimeEntry, TimeBreak, BreakReason, TimeEntryCorrection, AppUser, PayPer
 // Date.now() inside these helpers) so the logic is deterministic and testable.
 
 export const MINUTE_MS = 60_000;
+
+/**
+ * Hours past which a single shift is flagged for a human to look at.
+ *
+ * 14: past any plausible rostered shift including a long Saturday with setup
+ * and close, comfortably under the ~20 h a forgotten overnight clock-out
+ * produces, and clear of a legitimate 12-hour day so the flag does not cry
+ * wolf on a shop that runs those. Owner-adjustable
+ * (settings.operations.longShiftHours); 0 or less turns it off.
+ *
+ * It lives here rather than in domain/settings.ts because settings.ts already
+ * imports from this module and the reverse would make a cycle.
+ */
+export const DEFAULT_LONG_SHIFT_HOURS = 14;
+/** Below this an ordinary day trips the flag; above it, an overnight miss hides behind it. */
+export const MIN_LONG_SHIFT_HOURS = 6;
+export const MAX_LONG_SHIFT_HOURS = 24;
 export const HOUR_MS = 3_600_000;
 export const DAY_MS = 86_400_000;
 
@@ -226,6 +243,28 @@ export const toISODate = (ms: number): string => {
   return `${y}-${m}-${day}`;
 };
 
+/**
+ * The calendar day of an instant — in `zone` when one is given, otherwise
+ * device-local exactly as toISODate has always done.
+ *
+ * Deliberately the ONLY place in this module that knows about zones, and it is
+ * used solely by the missed-clock-out check. Hours, pay and pay-period
+ * boundaries are untouched and keep using toISODate: changing what day a shift
+ * is PAID in is a different and much larger decision than changing what day it
+ * is DISPLAYED under.
+ */
+export const dayKey = (ms: number, zone?: string): string => {
+  if (!zone) return toISODate(ms);
+  try {
+    // en-CA formats as YYYY-MM-DD, which is the shape the rest of this uses.
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit',
+    }).format(new Date(ms));
+  } catch {
+    return toISODate(ms);   // an unusable stored zone must not break the screen
+  }
+};
+
 export interface PayPeriod {
   index: number;   // integer offset from the anchor period
   start: number;   // epoch ms at local midnight, inclusive
@@ -323,12 +362,22 @@ export const entriesOnDate = (entries: TimeEntry[], dateISO: string): TimeEntry[
 // on an earlier calendar day than `now` — i.e. someone forgot to clock out
 // before leaving, rather than simply still being on shift today.
 
-export const isMissedClockOut = (e: TimeEntry, now: number): boolean =>
-  isClockedIn(e) && toISODate(e.clockIn) !== toISODate(now);
+/**
+ * `zone` names the SHOP's timezone, so "an earlier calendar day" means an
+ * earlier day in the shop rather than wherever the reader happens to be.
+ *
+ * Optional, and omitting it keeps the previous device-local behaviour exactly,
+ * so no existing caller changes. It matters because the owner read this screen
+ * from Dubai: a shift clocked in at 1 PM Toronto and still legitimately running
+ * is "yesterday" on a Dubai clock, and every one of those shifts was reported
+ * as a missed clock-out to the one person able to act on it.
+ */
+export const isMissedClockOut = (e: TimeEntry, now: number, zone?: string): boolean =>
+  isClockedIn(e) && dayKey(e.clockIn, zone) !== dayKey(now, zone);
 
 /** Every open shift left over from a previous day, oldest clock-in first. */
-export const missedClockOuts = (entries: TimeEntry[], now: number): TimeEntry[] =>
-  entries.filter(e => isMissedClockOut(e, now)).sort((a, b) => a.clockIn - b.clockIn);
+export const missedClockOuts = (entries: TimeEntry[], now: number, zone?: string): TimeEntry[] =>
+  entries.filter(e => isMissedClockOut(e, now, zone)).sort((a, b) => a.clockIn - b.clockIn);
 
 /** A corrected clock-out must land after the clock-in and not be in the future. */
 export const isValidClockOutCorrection = (entry: TimeEntry, newClockOut: number, now: number): boolean =>
@@ -484,7 +533,38 @@ export interface PayrollFlags {
   missedClockOuts: TimeEntry[];   // still-open shifts within the period (bucketed by clock-in)
   correctedEntries: TimeEntry[];  // shifts with at least one manager correction
   noRateUsers: AppUser[];         // active users with hours in this period but no hourlyRate set
+  /**
+   * Shifts whose PAID hours exceed the shop's long-shift threshold.
+   *
+   * The gap this closes: a shift that is CLOSED, with a clock-out present, and
+   * simply wrong. The shop's internet dropped overnight, a clock-out never
+   * reached Firebase, and the shift was later closed at 20.94 h against a real
+   * 6.5 h. It is not open, not corrected, and the user has a rate — so it trips
+   * none of the three flags above and reaches payout looking ordinary.
+   *
+   * Measured with workedHours and the shop's paid-break reasons, exactly like
+   * every other figure here, so a long shift with unpaid breaks is judged on
+   * the hours actually being PAID rather than on wall-clock elapsed time.
+   *
+   * INFORMATIONAL. Nothing downstream may block on it.
+   */
+  longShifts: TimeEntry[];
 }
+
+/**
+ * Is one shift long enough to be worth a human look?
+ *
+ * A threshold of 0 or less disables the flag entirely, which is how a shop
+ * that genuinely runs very long shifts turns it off rather than learning to
+ * ignore it.
+ */
+export const isLongShift = (
+  e: TimeEntry,
+  now: number,
+  thresholdHours: number,
+  paidReasons: PaidBreakReasons = [],
+): boolean =>
+  thresholdHours > 0 && workedHours(e, now, paidReasons) > thresholdHours;
 
 /**
  * Everything the payroll review screen needs to flag BEFORE payout: missed
@@ -497,6 +577,11 @@ export const payrollFlagsFor = (
   users: AppUser[],
   period: PayPeriod,
   now: number,
+  // Both optional and both defaulting to today's behaviour, so every existing
+  // caller keeps working unchanged: no paid-break reasons, and the standard
+  // long-shift threshold.
+  paidReasons: PaidBreakReasons = [],
+  longShiftHours: number = DEFAULT_LONG_SHIFT_HOURS,
 ): PayrollFlags => {
   const inPeriod = entries.filter(e => e.clockIn != null && e.clockIn >= period.start && e.clockIn < period.end);
   const userById = new Map(users.map(u => [u.id, u]));
@@ -509,6 +594,7 @@ export const payrollFlagsFor = (
     missedClockOuts: inPeriod.filter(e => isMissedClockOut(e, now)),
     correctedEntries: inPeriod.filter(isCorrectedEntry),
     noRateUsers: users.filter(u => noRateUserIds.has(u.id)),
+    longShifts: inPeriod.filter(e => isLongShift(e, now, longShiftHours, paidReasons)),
   };
 };
 

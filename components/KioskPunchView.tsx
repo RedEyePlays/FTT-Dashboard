@@ -39,6 +39,17 @@ type Step = 'names' | 'pin' | 'confirm' | 'break_reason' | 'done';
 
 const CONFIRMATION_MS = 3000;
 
+// DEVICE-LOCAL ON PURPOSE, unlike the Time Clock screen (which renders in the
+// shop's configured zone — see domain/shopTime.ts).
+//
+// This iPad is bolted to the wall inside the shop, so its zone IS the shop's,
+// and the two times it shows are a live wall clock and a "you punched at…"
+// confirmation read by the person standing in front of it. Both must match the
+// clock on the wall beside it. Converting them through a stored setting would
+// add a way for the kiosk to be WRONG — a mistyped zone would put the punch
+// confirmation an hour out for staff who cannot change it — in exchange for
+// correctness in a situation the kiosk is never in. Reviewed during the
+// shop-time work and deliberately left alone.
 const fmtTime = (ms: number) =>
   new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 

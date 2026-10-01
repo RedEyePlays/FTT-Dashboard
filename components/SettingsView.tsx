@@ -10,6 +10,7 @@ import {
   AppSettings, ThemeMode, PaymentMethodKey, CURRENCIES, TIME_ZONES,
   DASHBOARD_WIDGETS, STATUS_COLOR_OPTIONS, LabelSize, mergeLabelSizes, RepairPrice, TradeInRange,
   DEFAULT_DAILY_AI_CALLS, MIN_DAILY_AI_CALLS, MAX_DAILY_AI_CALLS,
+  DEFAULT_LONG_SHIFT_HOURS, MIN_LONG_SHIFT_HOURS, MAX_LONG_SHIFT_HOURS,
 } from '../domain/settings';
 import { AiUsagePanel } from './AiUsagePanel';
 import { newShareToken } from '../domain/buildShare';
@@ -440,6 +441,12 @@ const OperationsSection: React.FC<{ draft: AppSettings; patch: PatchFn; confirmP
         hint="An open layaway older than this is flagged on the Layaways list as needing follow-up."
         value={draft.operations.staleLayawayDays}
         onChange={v => patch('operations', { staleLayawayDays: Math.max(1, Math.round(parseFloat(v) || 1)) })} />
+      <SettingsTextField label="Long shift alert (hours)" type="number" min={MIN_LONG_SHIFT_HOURS} max={MAX_LONG_SHIFT_HOURS} step={1}
+        hint="A single shift longer than this is flagged on Daily Hours and on the pay-period review before approval. It never blocks approval and never changes anyone's hours — it exists because a forgotten clock-out can close at 20 h and otherwise reach payout looking completely ordinary. Times on the Time Clock screen are shown in the shop's time zone (set under General)."
+        value={draft.operations.longShiftHours ?? DEFAULT_LONG_SHIFT_HOURS}
+        onChange={v => patch('operations', {
+          longShiftHours: Math.max(MIN_LONG_SHIFT_HOURS, Math.min(MAX_LONG_SHIFT_HOURS, Math.round(parseFloat(v) || DEFAULT_LONG_SHIFT_HOURS))),
+        })} />
       <SettingsTextField label="Books start date" type="date"
         hint="Reports, profit, expenses and alerts ignore anything before this date. Nothing is deleted — every sale, repair, customer and inventory record stays fully visible and searchable. Leave blank to include everything."
         value={draft.operations.booksStartDate || ''}

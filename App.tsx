@@ -3580,6 +3580,8 @@ const App: React.FC = () => {
               payPeriodApprovals={payPeriodApprovals}
               payCycle={settings.payroll.cycle}
               payAnchorISO={settings.payroll.anchorISO}
+              shopTimeZone={settings.general.timeZone}
+              longShiftHours={settings.operations.longShiftHours}
               canManagePayroll={allow('payroll.manage')}
               canMarkPaid={appUser.role === 'owner'}
               onClockIn={handleClockIn}
