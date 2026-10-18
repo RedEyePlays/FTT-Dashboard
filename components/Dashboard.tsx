@@ -52,6 +52,13 @@ interface DashboardProps {
   // Active-layaways tile (owner/manager tier, same as onViewCash) — omitted
   // hides the tile for anyone who can't reach the list it links to.
   onViewLayaways?: () => void;
+  // SCAN A RECEIPT, within a tap of the dashboard.
+  //
+  // It is here because this is used standing at a counter or sitting in a car,
+  // not at a desk: a receipt archive that takes four taps to reach is an
+  // archive the paper never makes it into. Omitted for anyone without
+  // 'expenses.add' (domain/receipt.ts's canUseReceipts).
+  onScanReceipt?: () => void;
   // settings.operations.booksStartDate — drawer alerts ignore days before it
   // (the shop wasn't running the till through the app then, so flagging them
   // is a permanent, unactionable warning).
@@ -73,7 +80,7 @@ const relTime = (ts: number) => {
 };
 const platformLabel = (p?: string) => (p && p !== 'None / In-Store' ? p : 'In-Store');
 
-export const Dashboard: React.FC<DashboardProps> = ({ data, salesTransactions, activity, repairs = [], repairBatches = [], canViewProfit = true, onViewAnalytics, onViewRepairs, cashReconciliations, onViewCash, onViewLayaways, payrollDue, onViewPayroll, booksStartDate, settlements }) => {
+export const Dashboard: React.FC<DashboardProps> = ({ data, salesTransactions, activity, repairs = [], repairBatches = [], canViewProfit = true, onViewAnalytics, onViewRepairs, cashReconciliations, onViewCash, onViewLayaways, payrollDue, onViewPayroll, booksStartDate, settlements, onScanReceipt }) => {
   const mask = (v: string) => (canViewProfit ? v : '•••');
   const staleCash = useMemo(
     () => (cashReconciliations ? unreconciledDays(cashReconciliations, todayISO(), booksStartDate) : []),
@@ -265,6 +272,16 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, salesTransactions, a
             </span>
           </span>
           {onViewPayroll && <ArrowRight className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />}
+        </button>
+      )}
+
+      {/* ONE TAP FROM THE DASHBOARD. First on a phone, above the figures,
+          because capturing the paper is the time-critical action — the numbers
+          are still there in ten minutes and the receipt may not be. */}
+      {onScanReceipt && (
+        <button onClick={onScanReceipt}
+          className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-semibold bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm">
+          <Receipt className="w-4 h-4" /> Scan a receipt
         </button>
       )}
 

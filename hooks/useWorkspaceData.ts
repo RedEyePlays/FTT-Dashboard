@@ -4,7 +4,7 @@ import { doc, getDoc } from 'firebase/firestore';
 import {
   InventoryItem, Note, Task, DeviceBuyer, DropOff, Settlement, Customer, SalesTransaction,
   ActivityEntry, AppUser, WorkspaceInvite, AuditEntry, Repair, RepairBatch, PcBuild, TimeEntry, PayPeriodPaid, PayPeriodApproval, CashReconciliation, StaffNote,
-  Expense, RecurringExpense, StaffBonus, KioskStaff,
+  Expense, RecurringExpense, StaffBonus, KioskStaff, Receipt,
 } from '../types';
 import { decryptData } from '../services/security';
 import { AppSettings, mergeSettings } from '../domain/settings';
@@ -61,6 +61,8 @@ export function useWorkspaceData() {
   // cards had. Refused (a role that may not read it) leaves this false, which
   // is the honest answer there too.
   const [settlementsLoaded, setSettlementsLoaded] = useState(false);
+  // The receipt archive (domain/receipt.ts). Owner/manager, like expenses.
+  const [receipts, setReceipts] = useState<Receipt[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [salesTransactions, setSalesTransactions] = useState<SalesTransaction[]>([]);
   const [repairs, setRepairs] = useState<Repair[]>([]);
@@ -364,12 +366,19 @@ export function useWorkspaceData() {
   //     the P&L input.
   //   • recurringExpenses — owner only; recurring templates are owner-only
   //     configuration, matching the firestore.rules block.
+  //   • receipts          — owner + manager, the SAME tier as expenses and for
+  //     the same reason: a receipt photographs the shop's own spending, so it
+  //     must never be more visible than the expense it would become
+  //     (firestore.rules' receipts block, domain/receipt.ts).
   useEffect(() => {
     if (!user || !appUser || !workspaceId || (appUser.role !== 'owner' && appUser.role !== 'manager')) {
-      setExpenses([]); setRecurringExpenses([]); return;
+      setExpenses([]); setRecurringExpenses([]); setReceipts([]); return;
     }
     const onErr = (e: Error) => { console.error('Firestore error (expenses):', e); };
-    const subs = [subscribeCollection<Expense>(workspaceId, 'expenses', setExpenses, onErr)];
+    const subs = [
+      subscribeCollection<Expense>(workspaceId, 'expenses', setExpenses, onErr),
+      subscribeCollection<Receipt>(workspaceId, 'receipts', setReceipts, onErr),
+    ];
     if (appUser.role === 'owner') {
       subs.push(subscribeCollection<RecurringExpense>(workspaceId, 'recurringExpenses', setRecurringExpenses, onErr));
     } else {
@@ -397,7 +406,7 @@ export function useWorkspaceData() {
     devices, accessories, data, notes, setNotes, tasks, setTasks,
     deviceBuyers, dropOffs, settlements, settlementsLoaded, customers, salesTransactions,
     repairs, repairBatches, pcBuilds, timeEntries, payPeriods, payPeriodApprovals, staffBonuses, kioskStaff, cashReconciliations, staffNotes,
-    expenses, recurringExpenses,
+    expenses, recurringExpenses, receipts,
     skuCounters, setSkuCounters, activityLog, lastBackup, settings,
     // connection status
     dbLoading, dbError, setDbError, reconnect,

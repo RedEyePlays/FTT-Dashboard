@@ -2,9 +2,10 @@ rules_version = '2';
 
 // Cloud Storage rules for FlipThatTech.
 //
-// Three prefixes exist, and they have OPPOSITE read rules on purpose:
-// backups are owner-only, AI chat attachments are one-user-only, and device
-// photos are public. Read the comment on each before adding a fourth.
+// Four prefixes exist, and they have OPPOSITE read rules on purpose:
+// backups are owner-only, AI chat attachments are one-user-only, receipts are
+// manager-up, and device photos are public. Read the comment on each before
+// adding a fifth — the differences are deliberate, not drift.
 service firebase.storage {
   match /b/{bucket}/o {
 
@@ -24,6 +25,20 @@ service firebase.storage {
     // a technician photographs the bench work they are doing, and a photo is
     // not a financial record.
     function isStaffOf(ws) { return activeMemberOf(ws); }
+
+    // Owner or manager, for the financial prefixes. Mirrors firestore.rules'
+    // isManagerUp — the tier that gates `expenses`, and therefore the tier
+    // that gates receipts, so a receipt is never more visible than the expense
+    // it would become.
+    function isManagerUpOf(ws) {
+      return activeMemberOf(ws)
+        && (me().role == 'owner' || me().role == 'manager');
+    }
+    // A workspace is owned by the user whose uid == workspaceId, the same
+    // identity the backups prefix relies on below.
+    function isOwnerOf(ws) {
+      return request.auth != null && request.auth.uid == ws && activeMemberOf(ws);
+    }
 
     // --- BACKUPS: OWNER ONLY -------------------------------------------------
     //
@@ -93,6 +108,41 @@ service firebase.storage {
                        || request.resource.contentType.matches('text/.*')
                        || request.resource.contentType == 'application/pdf'
                        || request.resource.contentType == 'application/csv');
+    }
+
+    // --- RECEIPTS: PRIVATE, MANAGER-UP, A FINANCIAL RECORD ------------------
+    //
+    // receipts/{workspaceId}/{receiptId}/{fileName}
+    //
+    // ITS OWN PREFIX, and shaped on aiAttachments above rather than on the
+    // device photos below. A receipt is a photograph of the shop's own
+    // spending — a supplier invoice with trade pricing on it, a card slip, the
+    // owner's personal card in the frame. The deviceImages comment names
+    // receipts explicitly as a thing that must never go under a public prefix,
+    // and this is that rule being honoured rather than worked around.
+    //
+    // READ IS MANAGER-UP, mirroring the `expenses` block in firestore.rules
+    // (isManagerUp there, isManagerUpOf here) so A RECEIPT IS NEVER MORE
+    // VISIBLE THAN THE EXPENSE IT WOULD BECOME. Not isStaffOf: an employee has
+    // no expense access at all, and a technician is trusted with bench photos
+    // precisely because those are not financial records.
+    //
+    // DELETE IS OWNER-ONLY and deliberate, matching domain/receipt.ts. The
+    // ordinary way to say "this is not a business cost" is the not_expense
+    // status, which KEEPS the image; deletion is for a photo that should never
+    // have been taken, and it is the owner's call.
+    //
+    // The 8 MB cap matches functions/src/ai/attachmentPolicy.ts, which is what
+    // the parse is actually handed. The client resizes every scan to ~1600px /
+    // ~80% JPEG first (services/imageResize.ts), so a real scan lands far
+    // under it and anything near the cap is a bug or a bypass.
+    match /receipts/{workspaceId}/{receiptId}/{fileName} {
+      allow read: if isManagerUpOf(workspaceId);
+      allow write: if isManagerUpOf(workspaceId)
+                   && request.resource.size < 8 * 1024 * 1024
+                   && (request.resource.contentType.matches('image/.*')
+                       || request.resource.contentType == 'application/pdf');
+      allow delete: if isOwnerOf(workspaceId);
     }
 
     match /deviceImages/{workspaceId}/{itemId}/{fileName} {

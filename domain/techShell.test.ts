@@ -26,7 +26,7 @@ const ALL_VIEWS = Object.keys({
   dashboard: 1, analytics: 1, reports: 1, entry: 1, edit: 1, grid: 1, notes: 1,
   ai: 1, pos: 1, quickpurchase: 1, dropoff: 1, repairs: 1, customers: 1,
   users: 1, audit: 1, settings: 1, timeclock: 1, closeout: 1, layaways: 1,
-  pcbuilds: 1,
+  pcbuilds: 1, receipts: 1,
 } satisfies Record<ViewState, 1>) as ViewState[];
 
 describe('the technician shell has exactly two screens', () => {
@@ -50,7 +50,9 @@ describe('the technician shell has exactly two screens', () => {
     expect(reachable).toEqual(['repairs', 'pcbuilds']);
 
     // Named explicitly, because these are the ones the owner asked about.
-    for (const v of ['grid', 'reports', 'customers', 'settings', 'analytics', 'pos', 'users', 'audit'] as ViewState[]) {
+    // 'receipts' among them: a technician holds no expense permission at all,
+    // and a receipt is a financial record (domain/receipt.ts's canUseReceipts).
+    for (const v of ['grid', 'reports', 'customers', 'settings', 'analytics', 'pos', 'users', 'audit', 'receipts'] as ViewState[]) {
       expect({ v, lands: techScreenFor(v, true) }).toEqual({ v, lands: 'repairs' });
     }
   });

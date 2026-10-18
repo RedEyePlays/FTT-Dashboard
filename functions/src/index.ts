@@ -8,8 +8,9 @@ import { AiRouter, fallbackFromConfig, providerFromConfig } from "./ai/router";
 import { ProviderError, ValidationError } from "./ai/types";
 import {
   ChatTurn, InventoryRow, needsProfitVisibility, runBulkParse, runChat,
-  runImeiExtract, runInsights, runListing, runGpuPerformance,
+  runImeiExtract, runInsights, runListing, runGpuPerformance, runReceiptParse,
 } from "./ai/tasks";
+import { CategoryOption } from "./ai/receiptPolicy";
 import { Viewer } from "./ai/retrievalPolicy";
 import { retrieveContext } from "./ai/context";
 import {
@@ -107,7 +108,19 @@ type AiRequest =
   // The FACTS object is built on the client from an allow-list
   // (domain/listing.ts) — never an inventory row, never a build document.
   | { op: "listing"; facts: Record<string, unknown>; platform?: string; length?: string; markUsedParts?: boolean }
-  | { op: "gpuPerformance"; gpuModel: string };
+  | { op: "gpuPerformance"; gpuModel: string }
+  // A PHOTOGRAPHED RECEIPT, read into SUGGESTIONS. The image is sent for one
+  // parse at upload time and is not retained here; the stored copy lives in
+  // Cloud Storage under the workspace's own prefix (storage.rules).
+  //
+  // Nothing in this op's path creates an Expense. It cannot: it returns
+  // suggestions, and the only route into the books stays the existing expense
+  // write path, reached from the review screen after an explicit tap.
+  | {
+    op: "receiptParse";
+    base64Image: string;
+    mediaType?: string;
+  };
 
 // insights/chat send the full inventory — including purchaseCost, salePrice,
 // repairCost — to the model and can return real profit/margin figures, so they
@@ -188,6 +201,52 @@ function lastUserText(history: ChatTurn[]): string {
 }
 
 /** The shop's own name, for the prompt. Best effort — never fails the call. */
+/**
+ * THIS WORKSPACE'S OWN EXPENSE CATEGORIES, read server-side.
+ *
+ * Read from the shop's settings rather than accepted from the client, because
+ * the list is what bounds the model's category suggestion: a client that could
+ * send its own list could have a receipt suggest a category the expense form
+ * would then refuse, which turns a one-tap confirm into a puzzle.
+ *
+ * An unreadable settings document yields an empty list, and an empty list
+ * means the model is told to omit the category entirely — a missing suggestion
+ * the owner picks themselves, never an invented one.
+ */
+async function expenseCategoriesFor(ws: string): Promise<CategoryOption[]> {
+  try {
+    const snap = await admin.firestore().doc(`user_data/${ws}/meta/app`).get();
+    const settings = (snap.data() as Record<string, unknown> | undefined)?.settings as Record<string, unknown> | undefined;
+    const expenses = (settings?.expenses || {}) as Record<string, unknown>;
+    const list = Array.isArray(expenses.categories) ? expenses.categories : [];
+    return list
+      .filter((c): c is Record<string, unknown> => !!c && typeof c === "object")
+      .map(c => ({
+        key: typeof c.key === "string" ? c.key : "",
+        label: typeof c.label === "string" ? c.label : "",
+        archived: c.archived === true,
+      }))
+      .filter(c => !!c.key);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * The image type to declare to the provider.
+ *
+ * Only the types the providers actually accept as an image block. A PDF is NOT
+ * one of them, and a receipt uploaded as a PDF is filed and left unparsed
+ * rather than mislabelled as a JPEG — see the PR.
+ */
+function receiptMediaType(v: unknown): "image/jpeg" | "image/png" | "image/webp" | "image/gif" {
+  const t = typeof v === "string" ? v.toLowerCase().split(";")[0].trim() : "";
+  if (t === "image/png" || t === "image/webp" || t === "image/gif") return t;
+  // The client resizes every scan to JPEG before upload
+  // (services/imageResize.ts), so this is the real default rather than a guess.
+  return "image/jpeg";
+}
+
 async function shopNameFor(ws: string): Promise<string> {
   try {
     const snap = await admin.firestore().doc(`user_data/${ws}/meta/app`).get();
@@ -351,6 +410,28 @@ export const aiGenerate = onCall(
             });
           case "gpuPerformance":
             return await runGpuPerformance(router, body.gpuModel ?? "");
+          case "receiptParse": {
+            if (!caller.workspaceId) {
+              throw new HttpsError("permission-denied", "Your account is not attached to a workspace.");
+            }
+            // THE CATEGORY LIST COMES FROM THE SERVER, from this workspace's
+            // own settings — never from the client, which must not get to
+            // widen what the model may suggest.
+            const categories = await expenseCategoriesFor(caller.workspaceId);
+            const parsed = await runReceiptParse(
+              router,
+              body.base64Image ?? "",
+              receiptMediaType(body.mediaType),
+              categories,
+              new Date().toISOString().split("T")[0],
+            );
+            meterFor((body.base64Image ?? "").length, JSON.stringify(parsed).length);
+            return {
+              parsed,
+              model: modelFor(provider, "fast"),
+              provider,
+            };
+          }
           default:
             throw new HttpsError(
               "invalid-argument",
@@ -367,7 +448,7 @@ export const aiGenerate = onCall(
         await recordUsage(caller.workspaceId, {
           op: body.op,
           provider,
-          model: modelFor(provider, body.op === "bulkParse" || body.op === "imeiExtract" ? "fast" : "reasoning"),
+          model: modelFor(provider, body.op === "bulkParse" || body.op === "imeiExtract" || body.op === "receiptParse" ? "fast" : "reasoning"),
           inputTokens: estimateTokens("x".repeat(m?.inputChars ?? approxRequestChars(body))),
           outputTokens: estimateTokens("x".repeat(m?.outputChars ?? JSON.stringify(result ?? "").length)),
           ms: Date.now() - startedAt,

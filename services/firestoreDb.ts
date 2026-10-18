@@ -5,7 +5,7 @@ import { db } from './firebase';
 import {
   InventoryItem, DeviceBuyer, DropOff, Settlement, Customer, SalesTransaction, ActivityEntry, Note, Task,
   AppUser, WorkspaceInvite, AuditEntry, TimeEntry, PayPeriodPaid, PayPeriodApproval, CashReconciliation, StaffNote, ListingPlatform, Repair,
-  Expense, RecurringExpense, RefundPaidFrom, RefundSplit, StaffBonus, KioskStaff,
+  Expense, RecurringExpense, RefundPaidFrom, RefundSplit, StaffBonus, KioskStaff, Receipt,
 } from '../types';
 import { collectionFor } from '../domain/inventory';
 import {
@@ -34,6 +34,9 @@ export const COLLECTIONS = [
   'dropOffs', 'runners', 'settlements', 'activityLog', 'auditLogs',
   'repairs', 'repairBatches', 'timeEntries', 'payPeriods', 'payPeriodApprovals', 'staffBonuses', 'cashReconciliations', 'staffNotes',
   'expenses', 'recurringExpenses',
+  // PHOTOGRAPHED RECEIPTS (domain/receipt.ts). Its own collection because a
+  // receipt outlives — and usually never has — an expense.
+  'receipts',
   // Custom PC builds (domain/pcBuild.ts).
   'pcBuilds',
   // The kiosk punch roster. Deliberately NOT in functions/src/backups.ts's
@@ -419,6 +422,17 @@ export const deleteStaffNote = (uid: string, id: string) => deleteItem(uid, 'sta
 export const saveExpense = (uid: string, e: Expense) => saveItem(uid, 'expenses', e);
 export const deleteExpense = (uid: string, id: string) => deleteItem(uid, 'expenses', id);
 export const saveRecurringExpense = (uid: string, r: RecurringExpense) => saveItem(uid, 'recurringExpenses', r);
+
+/**
+ * A RECEIPT DOCUMENT. The archive, which exists with no expense attached.
+ *
+ * Nothing here writes an expense. Creating one from a receipt goes through the
+ * existing saveExpense above, from the review screen, after an explicit tap —
+ * there is deliberately no combined "file and post" write.
+ */
+export const saveReceipt = (uid: string, r: Receipt) => saveItem(uid, 'receipts', r);
+/** Owner-only, and the caller removes the stored objects too (receiptUpload.ts). */
+export const deleteReceipt = (uid: string, id: string) => deleteItem(uid, 'receipts', id);
 export const deleteRecurringExpense = (uid: string, id: string) => deleteItem(uid, 'recurringExpenses', id);
 
 export const saveTimeEntry = (uid: string, e: TimeEntry) => saveItem(uid, 'timeEntries', e);

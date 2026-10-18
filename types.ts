@@ -464,6 +464,113 @@ export interface Expense {
 // field keeps its exact previous behavior.
 export type RecurringAmountMode = 'fixed' | 'variable';
 
+/**
+ * A PHOTOGRAPHED RECEIPT. THE ARCHIVE IS THE PRODUCT.
+ *
+ * Its own collection, deliberately NOT a field on Expense: the whole point is
+ * that a receipt can exist with no expense attached, forever. The owner's
+ * stated need is "just in case I forget something or I just need something for
+ * my record in the future" — a shoebox that does not lose things, not a faster
+ * way to type expenses. An expense is an OPTIONAL action on top of the file.
+ *
+ * NOTHING HERE EVER BECOMES AN EXPENSE ON ITS OWN. There is no auto-post, no
+ * confidence shortcut and no setting that turns one on. `linkedExpenseId` is
+ * set only by the review screen, after the owner has read a draft and tapped
+ * to create it. That is the feature's main promise and the rest of this shape
+ * exists to keep it.
+ */
+export type ReceiptStatus =
+  /**
+   * Filed, nothing done with it. THE DEFAULT AND A PERMANENT RESTING STATE —
+   * not a to-do item, and never hidden by a default filter. Most receipts in a
+   * working archive will sit here forever, which is success, not backlog.
+   */
+  | 'unreviewed'
+  /** An Expense was created from it; `linkedExpenseId` says which. */
+  | 'linked'
+  /**
+   * Deliberately not an expense — personal, a duplicate, warranty paperwork,
+   * already captured. A REAL OUTCOME, not a soft delete: the image stays, the
+   * document stays, and it stays searchable.
+   */
+  | 'not_expense';
+
+/** One stored image of a receipt. A two-page invoice is one receipt, two pages. */
+export interface ReceiptPage {
+  /** Storage path, not a URL — URLs are derived at read time. */
+  path: string;
+  thumbPath?: string;
+  /** Bytes of the stored (already resized) image. */
+  sizeBytes?: number;
+  contentType?: string;
+}
+
+/**
+ * WHAT THE MODEL THOUGHT IT SAW. SUGGESTIONS, NEVER FACTS.
+ *
+ * Kept strictly separate from anything the owner typed (`entered` below), so
+ * "was the parsing any good?" stays answerable. A correction never overwrites
+ * the parse it corrected.
+ *
+ * EVERY FIELD IS OPTIONAL BECAUSE THE MODEL MUST NOT GUESS. A field it cannot
+ * read comes back absent, not approximated. An empty field the owner fills in
+ * is a minor annoyance; a confidently wrong total that reaches a draft is the
+ * failure this whole design exists to avoid.
+ */
+export interface ReceiptParse {
+  date?: string;            // YYYY-MM-DD
+  total?: number;
+  currency?: string;        // ISO 4217, e.g. 'CAD'
+  payee?: string;
+  tax?: number;
+  /**
+   * A key from THIS workspace's AppSettings.expenses.categories — never a
+   * category the model invented. Clamped server-side
+   * (functions/src/ai/receiptPolicy.ts) against the list the callable was given.
+   */
+  category?: string;
+  /** Free text the model read, for full-text search. */
+  text?: string;
+  /** When the parse ran, and what answered it. */
+  parsedAt?: number;
+  model?: string;
+  /**
+   * Why there is no parse. A receipt that will not parse is STILL FILED and
+   * still searchable by upload date — a parse failure is a fact about the
+   * photo, not an error state for the receipt.
+   */
+  failed?: string;
+}
+
+/** The fields the owner typed or corrected. Always wins over `parsed`. */
+export interface ReceiptEntered {
+  date?: string;
+  total?: number;
+  currency?: string;
+  payee?: string;
+  tax?: number;
+  category?: string;
+  note?: string;
+}
+
+export interface Receipt {
+  id: string;
+  pages: ReceiptPage[];
+  status: ReceiptStatus;
+  /** Set only when status is 'linked'. Cleared if that expense is deleted. */
+  linkedExpenseId?: string;
+  /** The model's suggestions. Absent until the parse returns. */
+  parsed?: ReceiptParse;
+  /** The owner's own values. Absent until somebody edits something. */
+  entered?: ReceiptEntered;
+  uploadedBy: string;
+  uploadedByEmail: string;
+  uploadedAt: number;
+  /** Set when a receipt is marked not_expense, for the "why" in the list. */
+  notExpenseReason?: string;
+  updatedAt?: number;
+}
+
 export interface RecurringExpense {
   id: string;
   category: string;
@@ -894,7 +1001,7 @@ export interface AppData {
   activityLog?: ActivityEntry[];
 }
 
-export type ViewState = 'dashboard' | 'analytics' | 'reports' | 'entry' | 'edit' | 'grid' | 'notes' | 'ai' | 'pos' | 'quickpurchase' | 'dropoff' | 'repairs' | 'customers' | 'users' | 'audit' | 'settings' | 'timeclock' | 'closeout' | 'layaways' | 'pcbuilds';
+export type ViewState = 'dashboard' | 'analytics' | 'reports' | 'entry' | 'edit' | 'grid' | 'notes' | 'ai' | 'pos' | 'quickpurchase' | 'dropoff' | 'repairs' | 'customers' | 'users' | 'audit' | 'settings' | 'timeclock' | 'closeout' | 'layaways' | 'pcbuilds' | 'receipts';
 
 // A single cash movement in a day's drawer, logged as part of reconciliation:
 // a manual cash-in (top-up / tip / off-sale payment), a paid cash expense, or an
