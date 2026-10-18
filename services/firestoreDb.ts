@@ -1,5 +1,5 @@
 import {
-  collection, doc, onSnapshot, setDoc, deleteDoc, getDoc, getDocs, writeBatch, query, where, orderBy, limit, runTransaction, increment, arrayUnion, deleteField,
+  collection, doc, onSnapshot, setDoc, deleteDoc, getDoc, getDocs, writeBatch, query, where, orderBy, limit, startAfter, runTransaction, increment, arrayUnion, deleteField,
 } from 'firebase/firestore';
 import { db } from './firebase';
 import {
@@ -13,6 +13,7 @@ import {
 } from '../domain/reports';
 import { AppSettings } from '../domain/settings';
 import { allocateSkuInTxn } from './sku';
+import { modelKeyOf, withModelKey } from '../domain/modelKey';
 import { assertOnline, OFFLINE_SKU_MESSAGE, OFFLINE_IMEI_INDEX_MESSAGE } from './functionsGuard';
 
 // Shared shop data lives under user_data/{workspaceId}/<collection>, where
@@ -163,14 +164,30 @@ export async function commitAutoInventory(uid: string, payload: {
       // hard-deleted, but be defensive) — reclaim the slot below instead of
       // getting stuck unable to ever create under this identity again.
     }
-    tx.set(docRef(uid, 'inventory', payload.candidate.id), clean(payload.candidate));
+    tx.set(docRef(uid, 'inventory', payload.candidate.id), inventoryDoc(payload.candidate));
     tx.set(indexRef, { inventoryId: payload.candidate.id });
     return { action: 'create' as const, item: payload.candidate };
   });
 }
 
+/**
+ * AN INVENTORY DOCUMENT, WITH ITS COUNTABLE MODEL KEY STAMPED ON.
+ *
+ * `modelKey` (domain/modelKey.ts) is what lets the AI assistant answer "how
+ * many 15 Pro Max in stock" with a Firestore `count()` instead of a capped
+ * sample. A row saved without it is invisible to that count, so it is applied
+ * HERE, at every inventory write, rather than at each caller — the auto-
+ * inventory transaction, the checkout batch, the drop-off batches and the
+ * ordinary form save all go through this one function.
+ *
+ * Re-derived on every save, so correcting a typo in `model` fixes the count
+ * too. Used for inventory only: `accessories`, customers and the rest have no
+ * model to key.
+ */
+const inventoryDoc = (item: Record<string, any>): any => clean(withModelKey(item as any));
+
 export const saveItem = (uid: string, name: CollName, item: { id: string } & Record<string, any>) =>
-  setDoc(docRef(uid, name, item.id), clean(item));
+  setDoc(docRef(uid, name, item.id), name === 'inventory' ? inventoryDoc(item) : clean(item));
 
 /**
  * A WRITE THE CALLER CAN HONESTLY WAIT FOR.
@@ -270,7 +287,7 @@ export async function commitSale(uid: string, payload: {
   activity: ActivityEntry[];
 }) {
   const batch = writeBatch(db);
-  payload.soldRows.forEach(d => batch.set(docRef(uid, 'inventory', d.id), clean(d)));
+  payload.soldRows.forEach(d => batch.set(docRef(uid, 'inventory', d.id), inventoryDoc(d)));
   payload.accessoryUpdates.forEach(a => batch.set(docRef(uid, 'accessories', a.id), { quantity: increment(a.delta) }, { merge: true } as any));
   batch.set(docRef(uid, 'salesTransactions', payload.transaction.id), clean(payload.transaction));
   if (payload.customer) batch.set(docRef(uid, 'customers', payload.customer.id), clean(payload.customer), { merge: true } as any);
@@ -294,7 +311,7 @@ export async function collectLayawayBalance(uid: string, payload: {
 }) {
   const batch = writeBatch(db);
   batch.set(docRef(uid, 'salesTransactions', payload.transaction.id), clean(payload.transaction));
-  (payload.devices || []).forEach(d => batch.set(docRef(uid, 'inventory', d.id), clean(d)));
+  (payload.devices || []).forEach(d => batch.set(docRef(uid, 'inventory', d.id), inventoryDoc(d)));
   if (payload.repair) batch.set(docRef(uid, 'repairs', payload.repair.id), clean(payload.repair));
   payload.activity.forEach(a => batch.set(docRef(uid, 'activityLog', a.id), clean(a)));
   await batch.commit();
@@ -319,6 +336,10 @@ export async function voidSale(uid: string, payload: {
   activity: ActivityEntry[];
 }) {
   const batch = writeBatch(db);
+  // FIELD MERGES, deliberately NOT routed through inventoryDoc: they touch only
+  // the sale fields and never item/model/brand, so the stored modelKey is
+  // already correct. Re-keying here would derive a key from this partial
+  // object and wipe the real one.
   payload.devices.forEach(d => batch.set(docRef(uid, 'inventory', d.id),
     { soldDate: '', soldTo: '', salePrice: 0, deviceStatus: 'ready', transactionId: '', listedPlatforms: d.listedPlatforms || [] }, { merge: true } as any));
   payload.accessoryUpdates.forEach(a => batch.set(docRef(uid, 'accessories', a.id),
@@ -346,6 +367,8 @@ export async function returnSale(uid: string, payload: {
   activity: ActivityEntry[];
 }) {
   const batch = writeBatch(db);
+  // Field merges, like voidSale above — see the note there on why these are not
+  // re-keyed.
   payload.resellDevices.forEach(d => batch.set(docRef(uid, 'inventory', d.id),
     { soldDate: '', soldTo: '', salePrice: 0, deviceStatus: 'ready', transactionId: '', listedPlatforms: d.listedPlatforms || [] }, { merge: true } as any));
   payload.defectiveDevices.forEach(d => batch.set(docRef(uid, 'inventory', d.id),
@@ -681,3 +704,77 @@ export async function exportWorkspaceData(wsId: string): Promise<Record<string, 
 }
 
 export const recordBackup = (wsId: string, ts: number) => setDoc(metaRef(wsId), clean({ lastBackup: ts }), { merge: true });
+
+/**
+ * RE-INDEX EXISTING STOCK FOR COUNTING.
+ *
+ * `modelKey` is stamped on every save from now on, but rows written before it
+ * existed have none — and a count that matches on the key omits them SILENTLY.
+ * An undercount presented as a total is worse than a refusal, because the owner
+ * would restock on it, so two things cover the gap: the assistant reports how
+ * many devices are unkeyed every time it gives a count
+ * (functions/src/ai/context.ts's coverageFor), and this closes it.
+ *
+ * IT CANNOT SILENTLY SKIP A ROW:
+ *
+ *   • It walks EVERY device document, ordered by id, in pages — not a query
+ *     filtered on the field being added, which would be circular.
+ *   • It is RESUMABLE and idempotent: `after` carries the last id written, and
+ *     re-running stamps the same keys to the same values.
+ *   • It returns `scanned`, `written` and `unkeyable` separately. A row that
+ *     genuinely has nothing to key on (no model, no item) is counted as
+ *     UNKEYABLE and reported, never quietly treated as done.
+ *   • It stops at `maxDocs` and hands back a cursor rather than running until
+ *     a timeout and leaving the caller unsure how far it got.
+ *
+ * Writes through the same `inventoryDoc` as every other inventory save, so a
+ * backfilled key and a freshly-saved one cannot differ.
+ */
+export interface ReindexProgress {
+  scanned: number;
+  written: number;
+  /** Devices with nothing to build a key from. Reported, not hidden. */
+  unkeyable: number;
+  /** Pass back as `after` to continue; absent when the walk is complete. */
+  nextAfter?: string;
+  done: boolean;
+}
+
+export async function reindexModelKeys(
+  uid: string,
+  opts: { after?: string; maxDocs?: number } = {},
+): Promise<ReindexProgress> {
+  const pageSize = 300;
+  const maxDocs = Math.max(1, opts.maxDocs ?? 1200);
+  let scanned = 0;
+  let written = 0;
+  let unkeyable = 0;
+  let cursor = opts.after;
+
+  while (scanned < maxDocs) {
+    const parts: any[] = [orderBy('__name__'), limit(Math.min(pageSize, maxDocs - scanned))];
+    if (cursor) parts.push(startAfter(cursor));
+    const snap = await getDocs(query(colRef(uid, 'inventory'), ...parts));
+    if (snap.empty) return { scanned, written, unkeyable, done: true };
+
+    const batch = writeBatch(db);
+    let inBatch = 0;
+    for (const d of snap.docs) {
+      scanned++;
+      cursor = d.id;
+      const row: Record<string, any> = { id: d.id, ...(d.data() as Record<string, any>) };
+      const key = modelKeyOf(row as any);
+      if (!key) { unkeyable++; continue; }
+      if (row.modelKey === key) continue;      // already correct — no write
+      batch.set(docRef(uid, 'inventory', d.id), { modelKey: key }, { merge: true } as any);
+      inBatch++;
+      written++;
+    }
+    if (inBatch > 0) await batch.commit();
+    // A short page means the collection ended.
+    if (snap.docs.length < Math.min(pageSize, maxDocs)) {
+      return { scanned, written, unkeyable, done: true };
+    }
+  }
+  return { scanned, written, unkeyable, nextAfter: cursor, done: false };
+}

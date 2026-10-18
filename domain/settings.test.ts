@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { mergeSettings, DEFAULT_SETTINGS, BUILT_IN_LABEL_SIZES, mergeLabelSizes, LabelSize } from './settings';
+import { SEED_MODEL_ALIASES } from './modelAliases';
 
 describe('mergeSettings', () => {
   it('returns defaults when nothing is stored', () => {
@@ -107,12 +108,15 @@ describe('mergeSettings', () => {
       // A shift longer than this is flagged for review before payout
       // (domain/timeclock.ts's payrollFlagsFor). Informational only.
       longShiftHours: 14,
+      // The owner's own shop shorthand for model names, seeded (and editable)
+      // so the AI assistant understands "15pm" — domain/modelAliases.ts.
+      modelAliases: SEED_MODEL_ALIASES,
     });
   });
 
   it('merges a partial operations patch over the defaults', () => {
     const o = mergeSettings({ operations: { voidWindowDays: 3, returnRestockingFeePercent: 15 } as any }).operations;
-    expect(o).toEqual({ openingFloatDefault: 0, voidWindowDays: 3, returnRestockingFeePercent: 15, agingInventoryDays: 30, autoLockMinutes: 4, staleLayawayDays: 60, booksStartDate: '', paidBreakReasons: [], deviceWarrantyDays: 90, accessoryWarrantyDays: 0, buildLabourRate: 15, repairWarrantyDays: 30, repairPrices: [], tradeInRanges: [], gpuPerformance: [], aiDailyCallCap: 200, longShiftHours: 14 });
+    expect(o).toEqual({ openingFloatDefault: 0, voidWindowDays: 3, returnRestockingFeePercent: 15, agingInventoryDays: 30, autoLockMinutes: 4, staleLayawayDays: 60, booksStartDate: '', paidBreakReasons: [], deviceWarrantyDays: 90, accessoryWarrantyDays: 0, buildLabourRate: 15, repairWarrantyDays: 30, repairPrices: [], tradeInRanges: [], gpuPerformance: [], aiDailyCallCap: 200, longShiftHours: 14, modelAliases: SEED_MODEL_ALIASES });
   });
 });
 

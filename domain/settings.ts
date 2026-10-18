@@ -12,6 +12,7 @@ import {
 export { DEFAULT_LONG_SHIFT_HOURS, MIN_LONG_SHIFT_HOURS, MAX_LONG_SHIFT_HOURS };
 import { ExpenseCategory, DEFAULT_EXPENSE_CATEGORIES } from './expenses';
 import { GpuPerformanceRow } from './gpuPerformance';
+import { SEED_MODEL_ALIASES } from './modelAliases';
 
 /**
  * The default daily AI cap, mirrored from functions/src/ai/usagePolicy.ts —
@@ -259,6 +260,22 @@ export interface AppSettings {
     // When that list last changed. Only used to date the "figures
     // recalculated" note on a pay period — the setting itself is the list.
     paidBreakReasonsUpdatedAt?: number;
+    /**
+     * SHOP SHORTHAND FOR MODEL NAMES — "15pm" meaning "iPhone 15 Pro Max".
+     *
+     * Here rather than in code because these are the OWNER'S words and they
+     * change with every phone generation; hardcoding them would mean a code
+     * change each September. Seeded with a handful of obvious ones
+     * (SEED_MODEL_ALIASES) so it works the day it ships, and the point is that
+     * he adds his own.
+     *
+     * Used by the AI assistant's question parser
+     * (functions/src/ai/countPolicy.ts's expandAliases). The expansion is
+     * ADDITIVE: it gives a question a second way to match, and never rewrites
+     * the words, so an alias cannot change the meaning of a question that
+     * already worked.
+     */
+    modelAliases?: { alias: string; model: string }[];
     // A SHIFT LONGER THAN THIS IS FLAGGED FOR A HUMAN TO LOOK AT, in hours.
     //
     // The incident: the shop's internet dropped overnight, clock-outs never
@@ -345,7 +362,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   dashboard: { widgets: Object.fromEntries(DASHBOARD_WIDGETS.map(w => [w, true])), landingView: 'dashboard', analyticsRange: 'today' },
   appearance: { theme: 'system' },
   backups: { enabled: false, frequency: 'daily', retention: 14 },
-  operations: { gpuPerformance: [], aiDailyCallCap: DEFAULT_DAILY_AI_CALLS, openingFloatDefault: 0, voidWindowDays: 0, returnRestockingFeePercent: 0, agingInventoryDays: 30, staleLayawayDays: 60, autoLockMinutes: 4, booksStartDate: '', paidBreakReasons: [], longShiftHours: DEFAULT_LONG_SHIFT_HOURS, deviceWarrantyDays: 90, accessoryWarrantyDays: 0, buildLabourRate: 15, repairWarrantyDays: 30, repairPrices: [], tradeInRanges: [] },
+  operations: { gpuPerformance: [], aiDailyCallCap: DEFAULT_DAILY_AI_CALLS, openingFloatDefault: 0, voidWindowDays: 0, returnRestockingFeePercent: 0, agingInventoryDays: 30, staleLayawayDays: 60, autoLockMinutes: 4, booksStartDate: '', paidBreakReasons: [], longShiftHours: DEFAULT_LONG_SHIFT_HOURS, modelAliases: SEED_MODEL_ALIASES, deviceWarrantyDays: 90, accessoryWarrantyDays: 0, buildLabourRate: 15, repairWarrantyDays: 30, repairPrices: [], tradeInRanges: [] },
   payroll: { cycle: 'biweekly', anchorISO: PAY_PERIOD_ANCHOR },
   expenses: { categories: DEFAULT_EXPENSE_CATEGORIES },
   reviews: {
@@ -378,6 +395,9 @@ export function mergeSettings(partial?: DeepPartial<AppSettings>): AppSettings {
       repairPrices: (partial.operations?.repairPrices as RepairPrice[] | undefined) ?? d.operations.repairPrices,
       tradeInRanges: (partial.operations?.tradeInRanges as TradeInRange[] | undefined) ?? d.operations.tradeInRanges,
       gpuPerformance: (partial.operations?.gpuPerformance as GpuPerformanceRow[] | undefined) ?? d.operations.gpuPerformance,
+      // An array setting: a stored list REPLACES the seeds rather than merging
+      // with them, so removing a seeded alias actually removes it.
+      modelAliases: (partial.operations?.modelAliases as { alias: string; model: string }[] | undefined) ?? d.operations.modelAliases,
     },
     payroll: { ...d.payroll, ...partial.payroll },
     expenses: {

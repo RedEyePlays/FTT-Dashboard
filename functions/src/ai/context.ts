@@ -7,6 +7,12 @@ import {
   BusinessSummary, ContextBlock, DeviceStory,
   deviceHeadline, deviceTimeline, renderContext, renderRecord, renderTimeline,
 } from "./timeline";
+import {
+  COUNT_PREAMBLE, CountCoverage, CountRequest, CountResult, countFilters,
+  countKindFor, renderCounts, renderWithheld, withheldFor,
+} from "./countPolicy";
+import { ModelAlias } from "./countPolicy";
+import { normalizeModelName } from "./modelKey";
 
 /**
  * THE RETRIEVAL STEP — the only part of this that touches Firestore.
@@ -78,6 +84,96 @@ export const businessSummary = async (
     summary.salesThisMonth = Math.round(month * 100) / 100;
   }
   return summary;
+};
+
+
+/* ---------------- Counting, WITHOUT reading documents ---------------- */
+
+/**
+ * HOW MANY OF THIS MODEL — by aggregation, not retrieval.
+ *
+ * This is the answer to "how many 15pm in stock". The word-search path cannot
+ * answer it at any cap: it reads the newest LOOKUP_LIMIT rows and keeps
+ * MAX_RECORDS_PER_KIND, so with 162 devices in stock it sees a slice and can
+ * only ever give examples. Those caps are why per-message cost stopped scaling
+ * with the shop and they are unchanged here.
+ *
+ * COST: a `count()` aggregation reads NO DOCUMENTS. Firestore bills it as one
+ * read per 1,000 index entries scanned, so a model count over this shop's few
+ * hundred devices is ONE read — the same price as the three the always-on
+ * summary already pays, and independent of how many devices match.
+ *
+ * It matches on the stored `modelKey` (modelKey.ts) because Firestore has no
+ * substring match and `item` is free text — see that file for why a prefix
+ * range over `item` was rejected rather than tried.
+ */
+const countsForModel = async (
+  ws: string,
+  req: CountRequest,
+): Promise<CountResult> => {
+  // The filters come from countPolicy's countFilters, so which predicate
+  // answers which question is decided in the pure module and tested there.
+  const count = await safe(async () => {
+    let q: FirebaseFirestore.Query = db().collection(`user_data/${ws}/inventory`);
+    for (const f of countFilters(req)) q = q.where(f.field, f.op, f.value);
+    return (await q.count().get()).data().count;
+  }, 0);
+
+  return { ...req, count };
+};
+
+/**
+ * How many devices the aggregation cannot see.
+ *
+ * Two counts, no documents: every device, and every device that HAS a
+ * modelKey. The difference is the rows written before the key existed, which a
+ * key-equality count omits silently.
+ *
+ * Reported rather than swallowed, because an undercount presented as a total
+ * is worse than a refusal — the owner would restock on it. renderCounts turns
+ * a non-zero figure into a sentence.
+ */
+const coverageFor = async (ws: string): Promise<CountCoverage> => {
+  const col = db().collection(`user_data/${ws}/inventory`);
+  const [total, keyed] = await Promise.all([
+    safe(async () => (await col.count().get()).data().count, 0),
+    // `>= ""` is every row where modelKey exists and is a string. A row
+    // without the field is not matched by any range on it, which is exactly
+    // the set being measured.
+    safe(async () => (await col.where("modelKey", ">=", "").count().get()).data().count, 0),
+  ]);
+  return { total, unkeyed: Math.max(0, total - keyed) };
+};
+
+/**
+ * The counts a question asked for, if it asked for any.
+ *
+ * Only runs when the question WANTS a number (countPolicy's wantsCount) and
+ * named a model through the owner's shorthand. A question with no recognised
+ * model is left to the existing path — guessing a model from free words and
+ * then counting it would produce a confident number about the wrong thing.
+ */
+export const modelCounts = async (
+  ws: string,
+  plan: QuestionPlan,
+  question: string,
+): Promise<{ results: CountResult[]; coverage: CountCoverage }> => {
+  const models = plan.modelQueries || [];
+  if (!plan.asksCount || models.length === 0) return { results: [], coverage: { total: 0, unkeyed: 0 } };
+
+  const kind = countKindFor(question, !!plan.range);
+  const requests: CountRequest[] = models.slice(0, 4).map((model) => ({
+    model,
+    key: normalizeModelName(model),
+    kind,
+    ...(kind === "sold" && plan.range ? { range: plan.range } : {}),
+  }));
+
+  const [results, coverage] = await Promise.all([
+    Promise.all(requests.map((r) => countsForModel(ws, r))),
+    coverageFor(ws),
+  ]);
+  return { results, coverage };
 };
 
 /* ---------------- Finding the records a question names ---------------- */
@@ -202,20 +298,46 @@ export const retrieveContext = async (
   question: string,
   viewer: Viewer,
   todayISO: string,
+  /** The workspace's own shorthand. Empty keeps the previous behaviour exactly. */
+  aliases: ModelAlias[] = [],
 ): Promise<RetrievedContext> => {
-  const plan = planQuestion(question, todayISO);
+  const plan = planQuestion(question, todayISO, aliases);
   const summary = await businessSummary(ws, viewer, todayISO);
+
+  /**
+   * WHAT THIS ACCOUNT MAY NOT BE TOLD, named rather than used as grounds to
+   * refuse the whole question.
+   *
+   * It reports the gap and does not widen it: the viewer flags still decide
+   * what may be shown, and every money and payroll field is still stripped by
+   * redactRecord exactly as before.
+   */
+  const withheld = withheldFor(plan, viewer);
+  const withheldBlock: ContextBlock[] = withheld.length
+    ? [{ title: "", body: renderWithheld(withheld) }]
+    : [];
 
   // A question that names nothing gets the summary and nothing else. That is
   // the common case for "how are we doing this month", and it now costs three
   // aggregations instead of the entire inventory.
   if (plan.broad && !plan.customerQuery) {
-    const { text, truncated } = renderContext(summary, []);
+    const { text, truncated } = renderContext(summary, withheldBlock);
     return { text, records: 0, truncated, plan };
   }
 
-  const blocks: ContextBlock[] = [];
+  const blocks: ContextBlock[] = [...withheldBlock];
   let records = 0;
+
+  // COUNTS FIRST, and ahead of the device records on purpose: they are exact
+  // and the records below are a capped sample, so the model should read the
+  // authoritative number before it sees anything it might recount from.
+  const { results: counts, coverage } = await modelCounts(ws, plan, question);
+  if (counts.length > 0) {
+    blocks.push({
+      title: `STOCK COUNTS\n${COUNT_PREAMBLE}`,
+      body: renderCounts(counts, coverage),
+    });
+  }
 
   const [byId, byWord] = await Promise.all([
     devicesByIdentifier(ws, plan.identifiers),
@@ -269,7 +391,11 @@ export const retrieveContext = async (
     }
   }
 
-  if (blocks.length === 0) {
+  // "Nothing matched" only when nothing was found AND nothing was counted. A
+  // counted zero is an answer — "no iPhone 15 Pro Max in stock" is a fact the
+  // owner can act on, and calling it a missing record was the original
+  // complaint.
+  if (blocks.length === withheldBlock.length && counts.length === 0) {
     blocks.push({
       title: "NOTHING MATCHED",
       body: "  No record in this workspace matched that. Say so plainly rather than guessing at an answer.",

@@ -13,6 +13,7 @@ import {
   DEFAULT_LONG_SHIFT_HOURS, MIN_LONG_SHIFT_HOURS, MAX_LONG_SHIFT_HOURS,
 } from '../domain/settings';
 import { AiUsagePanel } from './AiUsagePanel';
+import { ModelAliasesPanel } from './ModelAliasesPanel';
 import { newShareToken } from '../domain/buildShare';
 import { kioskUrl, TRADE_IN_CONDITIONS } from '../domain/showroom';
 import { PayCycle, PAY_CYCLE_LABEL, BREAK_REASONS } from '../domain/timeclock';
@@ -478,6 +479,14 @@ const OperationsSection: React.FC<{ draft: AppSettings; patch: PatchFn; confirmP
           aiDailyCallCap: Math.min(MAX_DAILY_AI_CALLS, Math.max(MIN_DAILY_AI_CALLS, Math.round(parseFloat(v) || DEFAULT_DAILY_AI_CALLS))),
         })} />
       {canManage && <AiUsagePanel workspaceId={workspaceId} cap={draft.operations.aiDailyCallCap ?? DEFAULT_DAILY_AI_CALLS} />}
+      {/* The owner's own words for his models, plus the one-off re-index that
+          lets older stock be counted. Next to the AI settings because that is
+          the only thing that reads them. */}
+      <ModelAliasesPanel
+        value={draft.operations.modelAliases || []}
+        onChange={v => patch('operations', { modelAliases: v })}
+        canManage={canManage}
+        workspaceId={workspaceId} />
       <SettingsTextField label="PC build labour rate ($/hr)" type="number" min={0} step={0.01}
         hint="Pre-filled when logging hours on a custom PC build. The rate is snapshotted onto each entry, so a later change never restates hours already logged."
         value={draft.operations.buildLabourRate ?? 15}

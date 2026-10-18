@@ -11,6 +11,7 @@ import {
   runImeiExtract, runInsights, runListing, runGpuPerformance, runReceiptParse,
 } from "./ai/tasks";
 import { CategoryOption } from "./ai/receiptPolicy";
+import { ModelAlias, cleanAliases } from "./ai/countPolicy";
 import { Viewer } from "./ai/retrievalPolicy";
 import { retrieveContext } from "./ai/context";
 import {
@@ -213,6 +214,26 @@ function lastUserText(history: ChatTurn[]): string {
  * means the model is told to omit the category entirely — a missing suggestion
  * the owner picks themselves, never an invented one.
  */
+/**
+ * The workspace's own model shorthand ("15pm" → "iPhone 15 Pro Max").
+ *
+ * Read server-side from settings, never from the client: the alias list
+ * decides which model a question gets COUNTED against, so letting the caller
+ * supply it would let them ask for a count of something the shop never
+ * configured.
+ */
+async function modelAliasesFor(ws: string): Promise<ModelAlias[]> {
+  try {
+    const snap = await admin.firestore().doc(`user_data/${ws}/meta/app`).get();
+    const settings = (snap.data() as Record<string, unknown> | undefined)?.settings as Record<string, unknown> | undefined;
+    const operations = (settings?.operations || {}) as Record<string, unknown>;
+    return cleanAliases(operations.modelAliases);
+  } catch {
+    // No aliases is the pre-existing behaviour, not a failure.
+    return [];
+  }
+}
+
 async function expenseCategoriesFor(ws: string): Promise<CategoryOption[]> {
   try {
     const snap = await admin.firestore().doc(`user_data/${ws}/meta/app`).get();
@@ -375,6 +396,7 @@ export const aiGenerate = onCall(
             // RETRIEVAL, server-side, before the model is called at all.
             const retrieved = await retrieveContext(
               caller.workspaceId, question, caller.viewer, today,
+              await modelAliasesFor(caller.workspaceId),
             );
 
             const chat = await runChat(router, {
