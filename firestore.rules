@@ -480,6 +480,44 @@ service cloud.firestore {
         allow delete: if isOwnerOf(ws)
           || (isManagerUp(ws) && resource.data.enteredBy == request.auth.uid);
       }
+      // PHOTOGRAPHED RECEIPTS — THE ARCHIVE, which outlives any expense.
+      //
+      // Its own collection, deliberately not a field on `expenses`: a receipt
+      // exists with no expense attached, and that is the normal case rather
+      // than an intermediate state. Deleting an expense must never take the
+      // only copy of the paper with it.
+      //
+      // GATED EXACTLY LIKE `expenses` ABOVE, and for the same reason the
+      // storage prefix is: a receipt is a photograph of the shop's own
+      // spending — trade pricing, card slips — so IT MUST NEVER BE MORE
+      // VISIBLE THAN THE EXPENSE IT WOULD BECOME. Read is manager-up, not
+      // activeMemberOf: an employee holds no expense permission at all.
+      //
+      // CREATE/UPDATE is manager-up, mirroring 'expenses.add', which a manager
+      // already holds. A manager may only file a receipt stamped with their
+      // OWN uid in uploadedBy, the same per-document ownership check the
+      // expenses create rule uses, so a receipt cannot be filed under somebody
+      // else's name. Update stays manager-up without an ownership check
+      // because reviewing is the point of the archive: the owner corrects a
+      // parse on a receipt a manager photographed, and a manager finishes
+      // reviewing one the owner scanned on the way in.
+      //
+      // DELETE IS OWNER-ONLY AND DELIBERATE (domain/receipt.ts's
+      // canDeleteReceipt). Marking something not_expense is the ordinary way
+      // to say "this is not a business cost" and it KEEPS the image; deletion
+      // is for a photo that should never have been taken.
+      //
+      // Nothing in this block can create an expense. The receipt document
+      // records `linkedExpenseId` after the fact; the Expense itself is
+      // written through the expenses rules above, which is the only route into
+      // the P&L.
+      match /receipts/{id} {
+        allow read: if isManagerUp(ws);
+        allow create: if isOwnerOf(ws)
+          || (isManagerUp(ws) && request.resource.data.uploadedBy == request.auth.uid);
+        allow update: if isManagerUp(ws);
+        allow delete: if isOwnerOf(ws);
+      }
       // Recurring templates are owner-only CONFIGURATION (which bills recur,
       // at what amount or in variable "enter it each period" mode, and which
       // periods were generated/skipped). A manager may add an expense but

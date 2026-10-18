@@ -226,3 +226,38 @@ export const proposeGpuPerformance = async (gpuModel: string): Promise<GpuPerfor
     sources: Array.isArray(data.sources) ? data.sources : [],
   };
 };
+
+/**
+ * READ A PHOTOGRAPHED RECEIPT INTO SUGGESTIONS.
+ *
+ * Runs once per receipt at upload, including receipts that will never become
+ * expenses — that is what makes the archive searchable later.
+ *
+ * RETURNS SUGGESTIONS AND NOTHING ELSE. Nothing in this path writes an expense;
+ * the only route into the books is the existing expense write path, reached
+ * from the review screen after the owner taps (domain/receipt.ts).
+ *
+ * A PARSE FAILURE IS NOT AN ERROR FOR THE RECEIPT. The caller files the photo
+ * regardless, so this resolves with `{}` on an unreadable image and REJECTS
+ * only when the call itself failed (offline, over the daily cap, refused), so
+ * the caller can tell "could not read it" apart from "did not ask".
+ */
+export interface ParsedReceiptFields {
+  date?: string;
+  total?: number;
+  currency?: string;
+  payee?: string;
+  tax?: number;
+  category?: string;
+  text?: string;
+}
+
+export const parseReceiptImage = async (
+  base64Image: string,
+  mediaType: string,
+): Promise<{ parsed: ParsedReceiptFields; model?: string }> => {
+  assertOnline();
+  const result = await aiGenerate({ op: "receiptParse", base64Image, mediaType });
+  const data = (result.data ?? {}) as { parsed?: ParsedReceiptFields; model?: string };
+  return { parsed: data.parsed || {}, model: data.model };
+};

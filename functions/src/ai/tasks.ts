@@ -20,6 +20,10 @@ import {
   GPU_PERFORMANCE_SCHEMA, GpuPerformanceProposal,
   gpuPerformanceSystemPrompt, gpuPerformanceUserPrompt, validateGpuPerformance,
 } from "./gpuPolicy";
+import {
+  CategoryOption, ReceiptParseResult, receiptPrompt, receiptSchema,
+  validateReceiptParse,
+} from "./receiptPolicy";
 
 /**
  * THE TASKS, PROVIDER-AGNOSTIC.
@@ -385,4 +389,55 @@ export const runGpuPerformance = async (
   const second = validateGpuPerformance(model, await ask(first.reason));
   if (second.ok) return second.value;
   throw new ValidationError("gpuPerformance", second.reason);
+};
+
+/* ---------------- receiptParse ---------------- */
+
+/**
+ * READ A PHOTOGRAPHED RECEIPT INTO SUGGESTIONS.
+ *
+ * Runs on EVERY upload, including receipts that will never become expenses —
+ * that is what makes the archive searchable later, and it is the only moment
+ * the image is in hand anyway.
+ *
+ * It returns suggestions and nothing else. NOTHING IN THIS PATH CREATES AN
+ * EXPENSE, and nothing downstream of it does either without the owner reading
+ * a draft and tapping to confirm (domain/receipt.ts's expenseFromReceipt).
+ *
+ * A PARSE FAILURE IS NOT AN ERROR STATE FOR THE RECEIPT. `{}` is a legitimate
+ * answer for an unreadable photo, and the caller files the receipt regardless —
+ * which is why this resolves rather than throwing on an empty result.
+ *
+ * `fast` tier: this is reading printed text off a photo, not reasoning about
+ * it, and it runs once per receipt at upload time. See the PR for the measured
+ * per-scan cost.
+ */
+export const runReceiptParse = async (
+  router: AiRouter,
+  base64Image: string,
+  mediaType: "image/jpeg" | "image/png" | "image/webp" | "image/gif",
+  categories: CategoryOption[],
+  todayISO: string,
+): Promise<ReceiptParseResult> => {
+  // Tolerates a data: prefix, like runImeiExtract — the client reads files
+  // through FileReader and the header is easy to leave on.
+  const clean = (base64Image || "").split(",")[1] || base64Image || "";
+  if (!clean) return {};
+
+  const raw = await router.runStructured("receiptParse", {
+    tier: "fast",
+    maxTokens: MAX_TOKENS.fast,
+    turns: [{
+      role: "user",
+      text: receiptPrompt(categories, todayISO),
+      image: { base64: clean, mediaType },
+    }],
+    resultName: "record_receipt_fields",
+    resultDescription: "Record only the fields actually legible on this receipt.",
+    schema: receiptSchema(categories),
+  });
+
+  // Validated and category-clamped BEFORE it reaches the client, so a
+  // suggestion the expense form could not accept never lands on a receipt.
+  return validateReceiptParse(raw, categories);
 };

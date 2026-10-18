@@ -40,7 +40,10 @@ const AuditLogView = lazy(() => import('./components/AuditLogView').then(m => ({
 const TimeClockView = lazy(() => import('./components/TimeClockView').then(m => ({ default: m.TimeClockView })));
 const CloseOutView = lazy(() => import('./components/CloseOutView').then(m => ({ default: m.CloseOutView })));
 const PcBuildsView = lazy(() => import('./components/PcBuildsView').then(m => ({ default: m.PcBuildsView })));
-import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, DeviceBuyer, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission, Repair, RepairBatch, TimeEntry, PayPeriodPaid, PayPeriodApproval, BreakReason, SalesTransaction, CashReconciliation, StaffNote, BalancePayment, Expense, RecurringExpense, RefundSplit, StaffBonus, KioskStaff, CashDrawerEntry, AppUser, PcBuild } from './types';
+// Lazy like every other route: the Firebase Storage SDK and the image
+// resizing only load for the people who actually scan receipts.
+const ReceiptsView = lazy(() => import('./components/ReceiptsView').then(m => ({ default: m.ReceiptsView })));
+import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, DeviceBuyer, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission, Repair, RepairBatch, TimeEntry, PayPeriodPaid, PayPeriodApproval, BreakReason, SalesTransaction, CashReconciliation, StaffNote, BalancePayment, Expense, RecurringExpense, RefundSplit, StaffBonus, KioskStaff, CashDrawerEntry, AppUser, PcBuild, Receipt, ReceiptEntered } from './types';
 import { skuPrefix, nextSku } from './services/sku';
 import { BUILD_STATUS_LABEL, buildToInventoryItem } from './domain/pcBuild';
 import { REPAIR_PREFIX, BATCH_PREFIX, applyTechEdit, techUpdateAuditPlan, repairSalePrefill, completeRepair, completeRepairSale, dateToEpochMs, isRepairOpen, flagDeviceForRepair, restoredDeviceStatus } from './domain/repairs';
@@ -77,7 +80,7 @@ import {
   saveTimeEntry, savePayPeriodPaid, deletePayPeriodPaid, savePayPeriodApproval, deletePayPeriodApproval,
   saveStaffNote, deleteStaffNote, commitAutoInventory, settleDeviceBuyer,
   saveStaffBonus, deleteStaffBonus,
-  saveExpense, deleteExpense, saveRecurringExpense, deleteRecurringExpense,
+  saveExpense, saveReceipt, deleteReceipt, deleteExpense, saveRecurringExpense, deleteRecurringExpense,
 } from './services/firestoreDb';
 import { decideAutoInventory, autoInventoryPurchaseDrawerEffect, AutoInventoryNotice } from './domain/autoInventory';
 import { buildQuickPurchaseItem, quickPurchaseDrawerEffect } from './domain/quickPurchase';
@@ -132,6 +135,7 @@ const PAGE_TITLES: Record<ViewState, string> = {
   repairs: 'Repairs', customers: 'Customers', users: 'Users', audit: 'Audit Log',
   settings: 'Settings', timeclock: 'Time Clock', closeout: 'Close Out', layaways: 'Layaways',
   pcbuilds: 'PC Builds',
+  receipts: 'Receipts',
 };
 import { LoadingScreen, LoadingSkeleton, DbErrorScreen } from './components/StatusScreens';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -142,6 +146,13 @@ import { checkoutStorageKey } from './domain/checkoutPersistence';
 import { clearCheckoutState } from './services/checkoutPersistence';
 import { mergeById, mergeSkuCounters } from './domain/restore';
 import { canOpenNotes } from './domain/notes';
+import {
+  ExpenseDraft, applyEdit, canDeleteReceipt, expenseFromReceipt, linkReceipt,
+  markNotExpense, orphanedReceipts, unlinkReceipt,
+} from './domain/receipt';
+import { useReceiptCapture } from './hooks/useReceiptCapture';
+import { useConnectionStatus } from './hooks/useConnectionStatus';
+import { deleteReceiptObjects, receiptUrl } from './services/receiptUpload';
 
 // Suspense fallback for lazily-loaded views — reuses LoadingScreen's spinner
 // style, but sized to sit inside the content area rather than full-screen.
@@ -159,7 +170,7 @@ const App: React.FC = () => {
     data, notes, setNotes, tasks, setTasks,
     deviceBuyers, dropOffs, settlements, settlementsLoaded, salesTransactions, customers, repairs, repairBatches, pcBuilds,
     timeEntries, payPeriods, payPeriodApprovals, staffBonuses, kioskStaff, cashReconciliations, staffNotes, expenses, recurringExpenses,
-    skuCounters, setSkuCounters, activityLog, lastBackup, settings,
+    skuCounters, setSkuCounters, activityLog, lastBackup, settings, receipts,
     dbLoading, dbError, reconnect, refusedCollections, enableExtendedData, enableCashData,
     deviceBuyersRef, dropOffsRef, settlementsRef, customersRef, salesTransactionsRef,
     repairsRef, repairBatchesRef, skuRef, dataRef,
@@ -1620,6 +1631,113 @@ const App: React.FC = () => {
     saveExpense(uid, next).catch(e => writeFailed('The expense', e, 'It is not in the books.'));
     audit(isNew ? 'expense.create' : 'expense.update', 'expense', next.id, before, next);
   };
+
+
+  /* ---------------- Receipts: the archive, and the ONE route to an expense ---------------- */
+
+  // Capture, offline queue, upload and parse. Nothing in this hook writes an
+  // expense — see hooks/useReceiptCapture.ts.
+  const connection = useConnectionStatus();
+  const receiptCapture = useReceiptCapture({
+    workspaceId: uid,
+    me: appUser,
+    isOffline: connection === 'offline',
+    // The same loud-failure surfacing every other write uses. A scan that did
+    // not save must never pass quietly — the owner bins the paper after
+    // photographing it.
+    onProblem: msg => writeFailed('That scan', new Error(msg), msg),
+  });
+
+  const handleReceiptEdit = (receiptId: string, patch: Partial<ReceiptEntered>) => {
+    if (!uid || !allow('expenses.add')) return;
+    const target = receipts.find(r => r.id === receiptId);
+    if (!target) return;
+    // STRAIGHT INTO `entered`, never into `parsed`. The original reading
+    // survives every correction, which is what keeps "was the parsing any
+    // good?" answerable.
+    saveReceipt(uid, { ...target, entered: applyEdit(target, patch), updatedAt: Date.now() })
+      .catch(e => writeFailed('That change', e, 'The receipt is unchanged.'));
+  };
+
+  /**
+   * THE ONLY PLACE A RECEIPT BECOMES AN EXPENSE.
+   *
+   * Reached from one button in the review screen, with the draft the owner was
+   * looking at. There is no auto-post, no confidence shortcut and no setting
+   * that turns one on.
+   *
+   * It goes through the EXISTING expense write path (handleSaveExpense), which
+   * is the only route into the P&L and already carries the rules, the audit
+   * entry and the cash-drawer link. No second write route to the books is
+   * added anywhere.
+   */
+  const handleCreateExpenseFromReceipt = async (receipt: Receipt, draft: ExpenseDraft) => {
+    if (!uid || !appUser || !allow('expenses.add')) return;
+    // The receipt's own image becomes the expense's proof, so the expense is
+    // not a dead end either.
+    let proof = '';
+    try {
+      const path = receipt.pages?.[0]?.path;
+      if (path) proof = await receiptUrl(path);
+    } catch {
+      // A missing URL must not block the expense — the link back by id still
+      // works, and the receipt screen can always produce the image.
+    }
+    const expense = expenseFromReceipt(draft, receipt.id, proof, appUser, Date.now(), newId);
+    if (!expense) return;   // incomplete draft: the button is disabled anyway
+    handleSaveExpense(expense, true);
+    // Both directions, so neither screen is a dead end.
+    saveReceipt(uid, linkReceipt(receipt, expense.id, Date.now()))
+      .catch(e => writeFailed('Linking the receipt', e, 'The expense was created.'));
+    audit('receipt.link', 'receipt', receipt.id, { status: receipt.status }, { status: 'linked', expenseId: expense.id });
+  };
+
+  const handleMarkNotExpense = (receipt: Receipt, reason?: string) => {
+    if (!uid || !allow('expenses.add')) return;
+    // ONE TAP, AND THE IMAGE STAYS. This is a real outcome, not a soft delete.
+    saveReceipt(uid, markNotExpense(receipt, Date.now(), reason))
+      .catch(e => writeFailed('That change', e, 'The receipt is unchanged.'));
+    audit('receipt.not_expense', 'receipt', receipt.id, { status: receipt.status }, { status: 'not_expense', reason });
+  };
+
+  const handleReopenReceipt = (receipt: Receipt) => {
+    if (!uid || !allow('expenses.add')) return;
+    saveReceipt(uid, unlinkReceipt(receipt, Date.now()))
+      .catch(e => writeFailed('That change', e, 'The receipt is unchanged.'));
+  };
+
+  const handleDeleteReceipt = async (receipt: Receipt) => {
+    // OWNER-ONLY and deliberate (domain/receipt.ts's canDeleteReceipt,
+    // mirrored in both rules files).
+    if (!uid || !canDeleteReceipt(allow)) return;
+    if (!window.confirm(
+      'Delete this receipt?\n\nThe photo is removed for good. If you only mean "this is not a business cost", use "Not an expense" instead — that keeps the image.',
+    )) return;
+    audit('receipt.delete', 'receipt', receipt.id, receipt, undefined);
+    try {
+      await deleteReceipt(uid, receipt.id);
+    } catch (e) {
+      writeFailed('The receipt', e, 'It has not been deleted.');
+      return;
+    }
+    // After the document, so a failed object delete leaves an orphan file
+    // rather than a receipt that cannot be removed.
+    deleteReceiptObjects(receipt).catch(() => { /* orphan file, not a blocked delete */ });
+  };
+
+  /**
+   * A LINKED EXPENSE WAS DELETED — THE RECEIPT STAYS, as unreviewed.
+   *
+   * The photo is still a photo of a real receipt and the owner may well link
+   * it again. Deleting an expense must never take the only copy of the paper
+   * with it, which is the entire reason receipts are their own collection.
+   */
+  useEffect(() => {
+    if (!uid || !allow('expenses.add')) return;
+    for (const orphan of orphanedReceipts(receipts, expenses)) {
+      saveReceipt(uid, unlinkReceipt(orphan, Date.now())).catch(() => { /* retried next render */ });
+    }
+  }, [uid, receipts, expenses]);
 
   const handleDeleteExpense = (expense: Expense) => {
     if (!uid || !allow('expenses.add')) return;
@@ -3291,7 +3409,8 @@ const App: React.FC = () => {
                   onViewLayaways={allow('cash.reconcile') ? () => navigate('layaways') : undefined}
                   payrollDue={allow('payroll.manage') ? dashboardPayrollDue : undefined}
                   onViewPayroll={allow('payroll.manage') ? () => navigate('timeclock') : undefined}
-                  settlements={allow('reports.profit.summary') && settlementsLoaded ? settlements : undefined} />
+                  settlements={allow('reports.profit.summary') && settlementsLoaded ? settlements : undefined}
+                  onScanReceipt={allow('expenses.add') ? () => navigate('receipts') : undefined} />
               : <div className="text-center text-slate-400 py-20">You don't have access to reports.</div>
           )}
           {view === 'layaways' && allow('sales.complete') && (
@@ -3404,6 +3523,34 @@ const App: React.FC = () => {
                 { isWarrantyClaim: r.isWarrantyClaim, isCancelled: r.status === 'cancelled' },
               ) : undefined}
             />
+          )}
+          {/* THE ARCHIVE. Gated on 'expenses.add' — the same tier that may
+              file an expense, so a receipt is never more reachable than the
+              expense it would become (domain/receipt.ts's canUseReceipts).
+              Employees, technicians and the kiosk hold no expense permission
+              at all and never see it. */}
+          {view === 'receipts' && (
+            allow('expenses.add')
+              ? <ReceiptsView
+                  me={appUser}
+                  receipts={receipts}
+                  queue={receiptCapture.queue}
+                  categories={settings.expenses.categories}
+                  expenses={expenses}
+                  canDelete={canDeleteReceipt(allow)}
+                  isOffline={connection === 'offline'}
+                  onScan={files => { void receiptCapture.scan(files); }}
+                  onAddPages={(id, files) => { void receiptCapture.addPages(id, files); }}
+                  onEditFields={handleReceiptEdit}
+                  // THE ONLY expense-creating callback wired into this screen.
+                  onCreateExpense={(r, draft) => { void handleCreateExpenseFromReceipt(r, draft); }}
+                  onMarkNotExpense={handleMarkNotExpense}
+                  onReopen={handleReopenReceipt}
+                  onDelete={r => { void handleDeleteReceipt(r); }}
+                  onRetryQueued={() => { void receiptCapture.retry(); }}
+                  onOpenExpenses={() => navigate('reports')}
+                />
+              : <div className="text-center text-slate-400 py-20">You don't have access to receipts.</div>
           )}
           {view === 'pcbuilds' && allow('builds.manage') && (
             <PcBuildsView
