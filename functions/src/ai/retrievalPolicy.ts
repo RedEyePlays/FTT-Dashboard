@@ -24,6 +24,9 @@
  * plain `node --test`.
  */
 
+import { ModelAlias, expandAliases, wantsCount } from "./countPolicy";
+import { modelKeyOf, normalizeModelName } from "./modelKey";
+
 /* ---------------- The caps ---------------- */
 
 /**
@@ -74,6 +77,20 @@ export interface QuestionPlan {
   asksPayroll: boolean;
   /** Nothing specific was named — answer from the summary alone. */
   broad: boolean;
+  /**
+   * Model names the question referred to by SHOP SHORTHAND — "15pm" meaning
+   * "iPhone 15 Pro Max" (countPolicy.ts's expandAliases, from the owner's own
+   * list in settings).
+   *
+   * ADDITIVE, NEVER SUBSTITUTIVE. `words` above is untouched and still carries
+   * the original tokens, and the existing all-words match still runs on them
+   * unchanged. This is a SECOND way for a row to match, so an alias cannot
+   * break a question that already worked — nothing is removed, reworded or
+   * reinterpreted, only widened.
+   */
+  modelQueries: string[];
+  /** Does the question want a NUMBER rather than a list? */
+  asksCount: boolean;
 }
 
 /** Words that are never worth searching stock on. */
@@ -165,7 +182,15 @@ export const parseDateRange = (text: string, todayISO: string): DateRange | unde
 };
 
 /** Everything the question points at. */
-export const planQuestion = (question: string, todayISO: string): QuestionPlan => {
+export const planQuestion = (
+  question: string,
+  todayISO: string,
+  /**
+   * The workspace's own shorthand. Defaulted to empty so every existing
+   * caller and test keeps its exact previous behaviour.
+   */
+  aliases: ModelAlias[] = [],
+): QuestionPlan => {
   const text = (question || "").slice(0, MAX_TURN_CHARS);
   const repairNumbers = [...new Set((text.match(REPAIR_NUMBER) || []).map(normalizeForLookup))];
 
@@ -190,6 +215,8 @@ export const planQuestion = (question: string, todayISO: string): QuestionPlan =
 
   const range = parseDateRange(text, todayISO);
 
+  const modelQueries = expandAliases(text, aliases);
+
   return {
     identifiers: [...identifiers],
     repairNumbers,
@@ -198,7 +225,14 @@ export const planQuestion = (question: string, todayISO: string): QuestionPlan =
     ...(customerQuery ? { customerQuery } : {}),
     asksMoney: MONEY_WORDS.test(text),
     asksPayroll: PAYROLL_WORDS.test(text),
-    broad: identifiers.size === 0 && repairNumbers.length === 0 && words.length === 0,
+    // A question carrying recognised shorthand is never "broad", even if every
+    // one of its other words is a stop word: "how many 15pm" is words-empty
+    // after filtering, and answering it from the summary alone is the original
+    // uselessness.
+    broad: identifiers.size === 0 && repairNumbers.length === 0 && words.length === 0
+      && modelQueries.length === 0,
+    modelQueries,
+    asksCount: wantsCount(text),
   };
 };
 
@@ -262,8 +296,36 @@ export const selectDevices = (
 ): Record<string, unknown>[] => {
   const exact = items.filter((i) => matchesIdentifier(i, plan.identifiers));
   if (exact.length >= limit) return exact.slice(0, limit);
-  const rest = items.filter((i) => !exact.includes(i) && matchesWords(i, plan.words));
+  // ALL the question's words, exactly as before — OR a model the shorthand
+  // expanded to. The `||` is the whole alias mechanism on this path: the
+  // original condition is evaluated unchanged, so a question that matched
+  // before still matches, and one that matched nothing can now also match on
+  // the expanded model name.
+  const rest = items.filter((i) => !exact.includes(i)
+    && (matchesWords(i, plan.words) || matchesModelQuery(i, plan.modelQueries ?? [])));
   return [...exact, ...rest].slice(0, limit);
+};
+
+/**
+ * Does this row look like one of the models the shorthand named?
+ *
+ * Compared on the folded key (modelKey.ts), so "iPhone 15 Pro Max" matches a
+ * row whose model field reads "iphone15 pro max" and one whose `item` reads
+ * "Apple iPhone 15 Pro Max 256GB Blue".
+ */
+export const matchesModelQuery = (
+  item: Record<string, unknown>,
+  modelQueries: string[],
+): boolean => {
+  if (!modelQueries || modelQueries.length === 0) return false;
+  const rowKey = modelKeyOf(item);
+  if (!rowKey) return false;
+  return modelQueries.some((q) => {
+    const want = normalizeModelName(q);
+    // Either direction: a row keyed "iphone15promax256" still answers a
+    // question about "iphone15promax".
+    return !!want && (rowKey === want || rowKey.includes(want) || want.includes(rowKey));
+  });
 };
 
 /* ---------------- What a caller may be told ---------------- */

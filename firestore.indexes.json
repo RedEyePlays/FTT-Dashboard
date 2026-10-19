@@ -20,10 +20,29 @@
     "listing only the COLLECTION_GROUP scope would quietly drop the ordinary",
     "per-collection indexes the app's own queries use.",
     "",
-    "`indexes` is legitimately empty: the app has no composite indexes.",
-    "Composite ones belong there when they arrive."
+    "`indexes` now carries the two the model-count aggregations need — see the",
+    "comment on each."
   ],
-  "indexes": [],
+  "indexes": [
+    {
+      "comment": "AI model counts, in stock (functions/src/ai/context.ts's countsForModel): inventory.where('modelKey','==',k).where('deviceStatus','==','ready').count(). An aggregation, so it reads no documents — but it still needs this composite index to run at all. Without it 'how many 15 Pro Max in stock' fails rather than answering.",
+      "collectionGroup": "inventory",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "modelKey", "order": "ASCENDING" },
+        { "fieldPath": "deviceStatus", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "comment": "AI model counts, sold and sold-in-a-date-range: inventory.where('modelKey','==',k).where('soldDate','>=',from).where('soldDate','<=',to).count(). The same index serves the all-time sold count, which is the same query with an open lower bound.",
+      "collectionGroup": "inventory",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "modelKey", "order": "ASCENDING" },
+        { "fieldPath": "soldDate", "order": "ASCENDING" }
+      ]
+    }
+  ],
   "fieldOverrides": [
     {
       "comment": "Public repair-status lookup (repairStatusLookup Cloud Function): collectionGroup('repairs').where('repairNumber','==',ticket) — an equality match across every workspace, so it needs the COLLECTION_GROUP scope below. Do not remove it; the public status page stops resolving ticket numbers without it.",
