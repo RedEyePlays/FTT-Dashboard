@@ -1,5 +1,7 @@
-import { StaffBonus, BonusPaidFrom } from '../types';
+import { AppUser, PayGroup, StaffBonus, BonusPaidFrom } from '../types';
 import { DrawerEffect } from './dropoffs';
+import { UserPayPeriod, groupOnDate, periodForDate } from './payGroups';
+import { PayCycle, periodEndInclusive, toISODate } from './timeclock';
 
 const round2 = (n: number): number => Math.round((n || 0) * 100) / 100;
 
@@ -110,3 +112,134 @@ export const visibleBonuses = (
 /** A bonus must name a person, be worth something, and say why. */
 export const canSaveBonus = (b: Partial<StaffBonus>): boolean =>
   !!b.userId && !!b.date && (b.amount || 0) > 0 && !!(b.reason || '').trim();
+
+/* ---------------- Which period a bonus belongs to ---------------- */
+
+/**
+ * WHERE A BONUS LANDS, decided by its own DATE.
+ *
+ * THE BUG. `payPeriodStart` was taken from the Pay period summary dropdown —
+ * the period the owner happened to be LOOKING AT — and the `date` field they
+ * filled in never influenced it. The two were independent and nothing said so,
+ * so a bonus dated into an ended period was filed against the current one: the
+ * old period's payout never moved and the owner got no indication.
+ *
+ * The date is what the owner actually stated. The dropdown is scenery.
+ *
+ * Resolved for THE BONUS'S OWN USER, not the selected one and not the viewer —
+ * somebody who changed pay groups has different boundaries, which is what
+ * groupOnDate and payGroupHistory exist for (domain/payGroups.ts).
+ *
+ * A date in no period that person has stays STANDALONE: `payPeriodStart`
+ * absent, which the type already means ("Absent = a standalone bonus, not tied
+ * to any period"). It is never snapped to the nearest.
+ */
+export interface ResolvedBonusPeriod {
+  /** The period's start as stored on the bonus, or undefined for standalone. */
+  periodStart?: string;
+  /** The period itself, for showing the owner what they are about to do. */
+  period: UserPayPeriod | null;
+  /** The group in force on that date — a group move changes the boundaries. */
+  group: PayGroup;
+}
+
+export const resolveBonusPeriod = (
+  user: Pick<AppUser, 'payGroup' | 'payGroupHistory'>,
+  dateISO: string,
+  cycle: PayCycle,
+  anchorISO: string,
+): ResolvedBonusPeriod => {
+  const period = periodForDate(user, dateISO, cycle, anchorISO);
+  return {
+    ...(period ? { periodStart: toISODate(period.start) } : {}),
+    period,
+    group: groupOnDate(user, dateISO),
+  };
+};
+
+/**
+ * What the dialog says BEFORE saving, so the owner never has to work out which
+ * period a date belongs to.
+ *
+ * The resolved period stated plainly, not a warning after the fact.
+ */
+export const bonusPeriodLabel = (resolved: ResolvedBonusPeriod): string => {
+  if (!resolved.period) {
+    return 'That date is outside every pay period for this person, so this will be saved as a standalone bonus — it still counts in profit, just not in any period total.';
+  }
+  const start = toISODate(resolved.period.start);
+  const end = toISODate(periodEndInclusive(resolved.period));
+  const kind = resolved.period.kind === 'catchup' ? ' (catch-up period)' : '';
+  return `Counts in the pay period ${start} → ${end}${kind}, group ${resolved.group}.`;
+};
+
+/* ---------------- Bonuses already saved against the wrong period ---------------- */
+
+/**
+ * A saved bonus whose `date` and `payPeriodStart` disagree.
+ *
+ * SURFACED, NEVER REWRITTEN. Some bonuses are already attached to the wrong
+ * period — at least one in this shop's live data. A migration that silently
+ * re-attached them would change what a historical period paid out without
+ * being asked, which is worse than the bug: the owner may have reconciled or
+ * paid from the figure as it stands. So this reports the mismatch and the
+ * owner decides; deleting and re-adding is the remedy.
+ *
+ * INFORMATIONAL. Nothing here blocks approval or alters a bonus.
+ *
+ * A STANDALONE bonus is never a mismatch. No period was claimed, so there is
+ * nothing to disagree with — unticking "count this in the pay period" is a
+ * real and common case, not an error.
+ */
+export interface BonusPeriodMismatch {
+  bonus: StaffBonus;
+  /** What it is filed against today. */
+  attachedTo: string;
+  /** Where its own date says it belongs — absent when the date is in no period. */
+  expected?: string;
+}
+
+export const bonusPeriodMismatch = (
+  bonus: StaffBonus,
+  user: Pick<AppUser, 'payGroup' | 'payGroupHistory'> | undefined,
+  cycle: PayCycle,
+  anchorISO: string,
+): BonusPeriodMismatch | null => {
+  const attachedTo = bonus.payPeriodStart;
+  // Standalone: nothing was claimed, so nothing can disagree.
+  if (!attachedTo) return null;
+  // No user record (a deleted account) means no group history to resolve
+  // against. Reporting a mismatch we cannot substantiate would be a false
+  // alarm on exactly the rows nobody can fix.
+  if (!user) return null;
+
+  const resolved = resolveBonusPeriod(user, bonus.date, cycle, anchorISO);
+  if (resolved.periodStart === attachedTo) return null;
+  return {
+    bonus,
+    attachedTo,
+    ...(resolved.periodStart ? { expected: resolved.periodStart } : {}),
+  };
+};
+
+/** Every saved bonus whose date and period disagree, oldest date first. */
+export const bonusPeriodMismatches = (
+  bonuses: StaffBonus[],
+  users: Pick<AppUser, 'id' | 'payGroup' | 'payGroupHistory'>[],
+  cycle: PayCycle,
+  anchorISO: string,
+): BonusPeriodMismatch[] => {
+  const byId = new Map(users.map(u => [u.id, u]));
+  return (bonuses || [])
+    .map(b => bonusPeriodMismatch(b, byId.get(b.userId), cycle, anchorISO))
+    .filter((m): m is BonusPeriodMismatch => m !== null)
+    .sort((a, b) => a.bonus.date.localeCompare(b.bonus.date));
+};
+
+/** The line the review screen shows for one mismatch. */
+export const mismatchLabel = (m: BonusPeriodMismatch): string =>
+  `${m.bonus.userEmail.split('@')[0]} — $${(m.bonus.amount || 0).toFixed(2)} dated ${m.bonus.date}`
+  + ` is counted in the period starting ${m.attachedTo}`
+  + (m.expected
+    ? `, but that date falls in ${m.expected}.`
+    : ', but that date is in no pay period for them.');

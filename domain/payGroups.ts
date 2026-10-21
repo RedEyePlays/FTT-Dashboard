@@ -306,3 +306,49 @@ export const staffOnPeriod = <T extends Pick<AppUser, 'id' | 'payGroup' | 'payGr
   }
   return staff.filter(u => groupOnDate(u, onISO) === p.group);
 };
+
+/**
+ * THE PERIOD A GIVEN DATE FALLS IN, for one person.
+ *
+ * THE BUG THIS EXISTS FOR. The bonus dialog filed a bonus against whatever
+ * period the Pay period summary dropdown happened to be showing, never against
+ * the date the owner typed. Period ends yesterday, today is a new period, owner
+ * opens the box and types yesterday's date: the money landed on the new period,
+ * the old period's payout did not move, and nothing on screen said so. Quiet,
+ * and money.
+ *
+ * It is derived HERE, from payPeriodsForUser, rather than by a second
+ * boundary calculation. Pay periods depend on the person's pay group and on
+ * the HISTORY of that group, so a parallel implementation would drift from the
+ * one that computes the payout — and the two disagreeing is the same class of
+ * bug again, one layer down.
+ *
+ * STRICT CONTAINMENT, never nearest. A date that falls in no period this person
+ * has — before their first recorded group, say — returns null, and the caller
+ * leaves the bonus standalone. Snapping it to the closest period would be
+ * inventing a fact about when somebody was paid.
+ */
+export const periodForDate = (
+  u: Pick<AppUser, 'payGroup' | 'payGroupHistory'>,
+  dateISO: string,
+  cycle: PayCycle,
+  anchorISO: string,
+): UserPayPeriod | null => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateISO || '')) return null;
+  const ms = Date.parse(`${dateISO}T00:00:00`);
+  if (!Number.isFinite(ms)) return null;
+  // The shape is not enough: Date.parse rolls "2026-02-31" forward to 3 March
+  // rather than rejecting it, which would file a bonus in a period the owner
+  // never named — this bug's own failure mode, one layer down. Round-tripping
+  // catches it.
+  if (toISODate(ms) !== dateISO) return null;
+
+  // Asked for the periods as they stood ON that date, so a group move after it
+  // cannot retro-fit the date into the new group's schedule. A handful is
+  // plenty: the containing period is the newest one at that moment, and the
+  // extras only cover a catch-up period sitting beside it.
+  const periods = payPeriodsForUser(u, ms, cycle, anchorISO, 6);
+  // `end` is exclusive, matching PayPeriod everywhere else — a date on a
+  // boundary belongs to the period starting that day, not the one ending.
+  return periods.find(p => ms >= p.start && ms < p.end) || null;
+};
