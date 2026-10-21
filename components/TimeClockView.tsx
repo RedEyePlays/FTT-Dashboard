@@ -1094,13 +1094,24 @@ const AddBonusModal: React.FC<{
 }> = ({ user, periodStart, payCycle, payAnchorISO, onClose, onSave }) => {
   const [amount, setAmount] = useState('');
   const [reason, setReason] = useState('');
-  // Today when today is inside the period being viewed; otherwise the period's
-  // own start, so opening the box from a past period does not silently offer a
-  // date outside it. Either way the owner can change it, and whatever they
-  // change it to is what decides the period.
+  /**
+   * Seeded with today when today is INSIDE the period being viewed, and with
+   * that period's start otherwise.
+   *
+   * This is the one thing the dropdown's period is still good for. Clicking
+   * "+ Bonus" on a past period's row means "a bonus for that period", so
+   * offering today's date — which now resolves to the CURRENT period — would
+   * make the obvious action do the surprising thing. Seeding inside the row
+   * clicked makes it work with no typing.
+   *
+   * It is only a DEFAULT. Whatever the owner changes it to is what decides the
+   * period, and the line below always states where that is.
+   */
   const [date, setDate] = useState(() => {
     const today = toISODate(Date.now());
-    return periodStart && today < periodStart ? periodStart : today;
+    if (!periodStart) return today;
+    const todaysPeriod = resolveBonusPeriod(user, today, payCycle, payAnchorISO).periodStart;
+    return todaysPeriod === periodStart ? today : periodStart;
   });
   const [paidFrom, setPaidFrom] = useState<BonusPaidFrom>('store_cash');
   const [attach, setAttach] = useState(true);

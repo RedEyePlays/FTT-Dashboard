@@ -263,3 +263,62 @@ describe('the review strip flags a mismatched bonus', () => {
     } finally { m.unmount(); }
   });
 });
+
+describe('the date the dialog opens on', () => {
+  /**
+   * The dropdown's period has exactly one job left: seeding this default.
+   * Clicking "+ Bonus" on a past period's row means "a bonus for that period",
+   * so it must not open on today — today now resolves to the CURRENT period,
+   * which would make the obvious action do the surprising thing.
+   */
+  const selectPeriod = (host: HTMLElement, index: number) => {
+    // The period picker is a <select>, not a row of buttons.
+    const picker = host.querySelector('select') as HTMLSelectElement;
+    expect(picker, 'no period picker').toBeTruthy();
+    expect(picker.options.length).toBeGreaterThan(1);
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value')!.set!;
+    act(() => {
+      setter.call(picker, picker.options[index].value);
+      picker.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    return picker;
+  };
+
+  it('opens on TODAY while the current period is selected', () => {
+    const m = mount(view({}));
+    try {
+      const f = openDialog(m.host);
+      expect(f.dateInput.value).toBe(toISODate(Date.now()));
+      // Which is inside the selected period, so no "different period" note.
+      expect(f.text()).not.toMatch(/not the period you were viewing/);
+    } finally { m.unmount(); }
+  });
+
+  it('opens INSIDE a past period when that row is the one selected', () => {
+    const m = mount(view({}));
+    try {
+      selectPeriod(m.host, 1);          // the period before the current one
+      const f = openDialog(m.host);
+      // Not today — a date inside the period whose row was clicked, so the
+      // common case needs no typing.
+      expect(f.dateInput.value).toBe(ENDED);
+      expect(f.dateInput.value).not.toBe(toISODate(Date.now()));
+      expect(f.text()).toContain(`Counts in the pay period ${ENDED}`);
+      expect(f.text()).not.toMatch(/not the period you were viewing/);
+    } finally { m.unmount(); }
+  });
+
+  it('and saving from there files it against THAT period', () => {
+    const saved: Saved = {};
+    const m = mount(view(saved));
+    try {
+      selectPeriod(m.host, 1);
+      const f = openDialog(m.host);
+      setValue(f.amount, '40');
+      setValue(f.reason, 'covered a shift');
+      act(() => { f.button(/add bonus/i).dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+      expect(saved.bonus!.date).toBe(ENDED);
+      expect(saved.bonus!.payPeriodStart).toBe(ENDED);
+    } finally { m.unmount(); }
+  });
+});
