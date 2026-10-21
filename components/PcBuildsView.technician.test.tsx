@@ -7,6 +7,7 @@ import { PcBuildsView } from './PcBuildsView';
 import { PcBuild } from '../types';
 import { can } from '../services/rbac';
 import { RECORDED_LABEL } from '../domain/costVisibility';
+import { RETAIL_STALE_DAYS, retailAsOfLabel } from '../domain/pcBuild';
 
 /**
  * THE PEOPLE WHO BUILD THE MACHINES CAN USE THE SECTION.
@@ -260,20 +261,69 @@ describe('a technician sees the real numbers on a build', () => {
     m.unmount();
   });
 
+  /**
+   * A DATE RELATIVE TO THE TEST'S OWN CLOCK, never a literal.
+   *
+   * This test used to pin `retailCheckedAt: '2026-09-20'` and assert that
+   * string appeared on screen. It passed when it was written, crossed
+   * RETAIL_STALE_DAYS, and then failed forever — on main, with nothing in the
+   * code having changed. A test that fails on a date nobody chose is worse
+   * than no test, because it teaches the owner to stop trusting red checks.
+   *
+   * Both offsets are derived FROM the threshold, so moving RETAIL_STALE_DAYS
+   * moves the fixtures with it instead of silently re-arming the bomb.
+   */
+  const daysAgo = (days: number): string => {
+    const d = new Date();
+    d.setDate(d.getDate() - days);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
+  /** Comfortably inside the fresh window, whatever the threshold is. */
+  const FRESH = daysAgo(Math.max(1, Math.floor(RETAIL_STALE_DAYS / 2)));
+  /** Just past it — the first day the row switches to showing an age. */
+  const STALE = daysAgo(RETAIL_STALE_DAYS + 1);
+
+  const withRetail = (retailCheckedAt: string) => mount(<PcBuildsView {...techProps([ready({
+    parts: [{ id: 'p1', category: 'GPU', name: 'RTX 4070', cost: 500, condition: 'new',
+      source: 'retail', retailPrice: 700, retailCheckedAt }],
+  })])} />);
+
+  const retailInput = (host: HTMLElement) => [...host.querySelectorAll('input')]
+    .find(i => (i as HTMLInputElement).placeholder === 'Retail') as HTMLInputElement;
+
   it('shows RETAIL PRICE on the row itself, no "More" needed', () => {
-    const m = mount(<PcBuildsView {...techProps([ready({
-      parts: [{ id: 'p1', category: 'GPU', name: 'RTX 4070', cost: 500, condition: 'new',
-        source: 'retail', retailPrice: 700, retailCheckedAt: '2026-09-20' }],
-    })])} />);
+    const m = withRetail(FRESH);
     click(button(m.host, /Bench Build/));
 
-    const retail = [...m.host.querySelectorAll('input')]
-      .find(i => (i as HTMLInputElement).placeholder === 'Retail') as HTMLInputElement;
+    const retail = retailInput(m.host);
     expect(retail).toBeTruthy();
     expect(retail.value).toBe('700');
     expect(retail.disabled).toBe(false);
-    // The date travels with it, quietly — a stale price must look stale.
-    expect(m.text()).toContain('2026-09-20');
+    // A FRESH price shows the date itself — the date travels with the price.
+    expect(m.text()).toContain(FRESH);
+    m.unmount();
+  });
+
+  it('a STALE price shows its AGE instead, and keeps the exact date in the tooltip', () => {
+    // The behaviour the old fixture had drifted into, now asserted on purpose:
+    // a stale retail price must LOOK stale or the comparison on the customer's
+    // card is fiction (components/PcBuildsView.tsx). The date is not lost — it
+    // moves into the title.
+    const m = withRetail(STALE);
+    click(button(m.host, /Bench Build/));
+
+    expect(retailInput(m.host).value).toBe('700');
+    // An age in days, not the date. (No \b anchor: textContent runs the
+    // elements together as "Paid31d old", so there is no boundary to match.)
+    expect(m.text()).toContain(`${RETAIL_STALE_DAYS + 1}d old`);
+    expect(m.text()).not.toContain(STALE);
+
+    // And the exact date is still reachable, via retailAsOfLabel.
+    const aged = [...m.host.querySelectorAll('span[title]')]
+      .find(el => /as of/.test(el.getAttribute('title') || ''));
+    expect(aged, 'no element carried the as-of tooltip').toBeTruthy();
+    expect(aged!.getAttribute('title')).toBe(retailAsOfLabel({ retailPrice: 700, retailCheckedAt: STALE }));
+    expect(aged!.getAttribute('title')).toContain(STALE);
     m.unmount();
   });
 

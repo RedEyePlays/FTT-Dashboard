@@ -546,10 +546,23 @@ const App: React.FC = () => {
     console.error(`${what} failed`, e);
     try { captureError(e, { where: 'writeFailed', what }); } catch { /* reporting is best-effort */ }
     try {
+      // IT DOES NOT ASSERT A CAUSE IT DOES NOT KNOW.
+      //
+      // This said "Check your connection and try again" for EVERY failed
+      // write. A return with a blank restocking fee was rejected by Firestore
+      // for an undefined field value, and the owner spent real time chasing
+      // connectivity because the message told them to. The connection is now
+      // offered as one possibility rather than stated as the reason.
+      //
+      // Deliberately NOT a classification of error codes into causes: a wrong
+      // guess is what caused this, and getting it right is a bigger change
+      // than a message. What stays is the part that was always true and
+      // useful — what failed, what it means, and to tell the owner.
       window.alert(
         `${what} could NOT be saved.\n\n`
         + (consequence ? `${consequence}\n\n` : '')
-        + 'Check your connection and try again. If it keeps failing, write it down and tell the owner.',
+        + 'Please try again. If it keeps failing, write it down and tell the owner — '
+        + 'it may be your connection, or it may be a problem in the app.',
       );
     } catch { /* no window (tests) — the console line above is still there */ }
   };
