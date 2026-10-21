@@ -344,8 +344,16 @@ export async function voidSale(uid: string, payload: {
     { soldDate: '', soldTo: '', salePrice: 0, deviceStatus: 'ready', transactionId: '', listedPlatforms: d.listedPlatforms || [] }, { merge: true } as any));
   payload.accessoryUpdates.forEach(a => batch.set(docRef(uid, 'accessories', a.id),
     { quantity: increment(a.delta) }, { merge: true } as any));
+  // THROUGH clean(), like the activity write below.
+  //
+  // `voided` carries four OPTIONAL fields (voidedByEmail, refundPaidFrom,
+  // refundSplits) and Firestore rejects `undefined` outright — the whole
+  // commit fails with "Unsupported field value: undefined". It is not
+  // hypothetical: singleRefundSource (domain/pos.ts) returns undefined
+  // whenever a refund is split across two sources or is $0, and a $0 refund
+  // needing no source is exactly what the payload type documents.
   batch.set(docRef(uid, 'salesTransactions', payload.transactionId),
-    { status: 'voided', ...payload.voided }, { merge: true } as any);
+    clean({ status: 'voided', ...payload.voided }), { merge: true } as any);
   payload.activity.forEach(a => batch.set(docRef(uid, 'activityLog', a.id), clean(a)));
   await batch.commit();
 }
@@ -375,8 +383,16 @@ export async function returnSale(uid: string, payload: {
     { soldDate: '', soldTo: '', salePrice: 0, deviceStatus: 'returned', transactionId: '', listedPlatforms: d.listedPlatforms || [] }, { merge: true } as any));
   payload.accessoryUpdates.forEach(a => batch.set(docRef(uid, 'accessories', a.id),
     { quantity: increment(a.delta) }, { merge: true } as any));
+  // THROUGH clean(), for the same reason as voidSale above.
+  //
+  // THE BUG THIS FIXES: leave the restocking fee blank and `restockingFee`
+  // arrives as undefined, Firestore refuses the whole batch, and the owner
+  // sees "The return could NOT be saved" — which had nothing to do with their
+  // connection. Any value including 0 worked; only blank failed.
+  // returnedByEmail, refundPaidFrom and refundSplits are optional on the same
+  // payload and fail identically.
   batch.set(docRef(uid, 'salesTransactions', payload.transactionId),
-    { status: 'returned', ...payload.returned }, { merge: true } as any);
+    clean({ status: 'returned', ...payload.returned }), { merge: true } as any);
   payload.activity.forEach(a => batch.set(docRef(uid, 'activityLog', a.id), clean(a)));
   await batch.commit();
 }
