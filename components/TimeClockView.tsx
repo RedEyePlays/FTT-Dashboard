@@ -7,6 +7,7 @@ import { AppUser, TimeEntry, PayPeriodPaid, PayPeriodApproval, BreakReason, Staf
 import {
   periodPayTotals, bonusesForPeriod, bonusesForUser, canSaveBonus,
   BONUS_PAID_FROM_LABEL, BONUS_PAID_FROM_OPTIONS,
+  bonusPeriodLabel, bonusPeriodMismatches, mismatchLabel, resolveBonusPeriod,
 } from '../domain/bonuses';
 import {
   BREAK_REASONS, breakReasonLabel, openEntryFor, isOnBreak, workedHours, isClockedIn,
@@ -219,6 +220,8 @@ export const TimeClockView: React.FC<Props> = ({
         <AddBonusModal
           user={bonusFor.user}
           periodStart={bonusFor.periodStart}
+          payCycle={payCycle}
+          payAnchorISO={payAnchorISO}
           onClose={() => setBonusFor(null)}
           onSave={b => { onSaveBonus(b); setBonusFor(null); }}
         />
@@ -708,6 +711,28 @@ const PayrollSummary: React.FC<{
     [entries, users, period, now, paidBreakReasons, longShiftHours],
   );
 
+  /**
+   * BONUSES ALREADY FILED AGAINST THE WRONG PERIOD.
+   *
+   * Surfaced beside the payroll flags, NEVER rewritten: changing what a
+   * historical period paid out without being asked is worse than the bug,
+   * because the owner may already have paid or reconciled from the figure as
+   * it stands. Deleting and re-adding is the remedy and it is theirs to make.
+   *
+   * Computed here rather than inside payrollFlagsFor because resolving a
+   * period needs domain/payGroups.ts, and domain/timeclock.ts (where that
+   * function lives) is what payGroups imports — putting it there would make an
+   * import cycle.
+   *
+   * Workspace-wide rather than per-period on purpose: a bonus filed against
+   * the WRONG period is, by definition, not in the period it should be in, so
+   * filtering by the selected period is how it stays invisible.
+   */
+  const bonusMismatches = useMemo(
+    () => bonusPeriodMismatches(staffBonuses, users, payCycle, payAnchorISO),
+    [staffBonuses, users, payCycle, payAnchorISO],
+  );
+
   const periodLabel = (p: UserPayPeriod) => userPeriodLabel(p, payGroupsApply(payCycle));
 
   const nameById = useMemo(() => new Map(users.map(u => [u.id, nameOf(u)])), [users]);
@@ -801,7 +826,7 @@ const PayrollSummary: React.FC<{
         </p>
       )}
 
-      {(flags.missedClockOuts.length > 0 || flags.correctedEntries.length > 0 || flags.noRateUsers.length > 0 || flags.longShifts.length > 0) && (
+      {(flags.missedClockOuts.length > 0 || flags.correctedEntries.length > 0 || flags.noRateUsers.length > 0 || flags.longShifts.length > 0 || bonusMismatches.length > 0) && (
         <div className="mx-4 mt-3 px-3 py-2 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg flex flex-col gap-1">
           {flags.missedClockOuts.length > 0 && (
             <p className="text-xs text-amber-800 dark:text-amber-300 flex items-center gap-1.5"><AlertTriangle className="w-3.5 h-3.5 shrink-0" /> {flags.missedClockOuts.length} missed clock-out{flags.missedClockOuts.length !== 1 ? 's' : ''} in this period.</p>
@@ -817,6 +842,24 @@ const PayrollSummary: React.FC<{
           )}
           {flags.noRateUsers.length > 0 && (
             <p className="text-xs text-amber-800 dark:text-amber-300 flex items-center gap-1.5"><AlertTriangle className="w-3.5 h-3.5 shrink-0" /> No hourly rate set for: {flags.noRateUsers.map(nameOf).join(', ')} — gross pay would compute as $0.</p>
+          )}
+          {/* INFORMATIONAL, like the rest of this strip. It blocks nothing and
+              corrects nothing — the owner decides, and deleting and re-adding
+              is the remedy. */}
+          {bonusMismatches.length > 0 && (
+            <div className="text-xs text-amber-800 dark:text-amber-300 flex items-start gap-1.5">
+              <History className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+              <span>
+                {bonusMismatches.length} bonus{bonusMismatches.length !== 1 ? 'es' : ''} counted in a period its date does not fall in:
+                <ul className="list-disc ml-4 mt-0.5">
+                  {bonusMismatches.slice(0, 5).map(m => <li key={m.bonus.id}>{mismatchLabel(m)}</li>)}
+                </ul>
+                {bonusMismatches.length > 5 && <span className="block mt-0.5">+{bonusMismatches.length - 5} more.</span>}
+                <span className="block mt-0.5 text-amber-700/90 dark:text-amber-400/90">
+                  Nothing has been changed. To move one, delete it and add it again — the date now decides the period.
+                </span>
+              </span>
+            </div>
           )}
         </div>
       )}
@@ -1021,23 +1064,62 @@ const PayrollSummary: React.FC<{
 // ("on the side") — which is how these are usually paid. Forcing one into a
 // period it wasn't part of would misstate that period's payout, so the choice
 // is explicit rather than implied by where the button was clicked.
+/**
+ * THE PERIOD COMES FROM THE DATE, NOT FROM THE DROPDOWN.
+ *
+ * It used to read `payPeriodStart: attach ? periodStart : undefined`, where
+ * `periodStart` was the SELECTED period from the Pay period summary above. The
+ * `date` field the owner filled in never influenced it. So: period ended
+ * yesterday, today is a new period, owner types yesterday's date — the bonus
+ * filed against the new period, the old period's payout never moved, and
+ * nothing on screen said so.
+ *
+ * The date is what the owner actually stated. The dropdown's period is passed
+ * in only to date the FORM (it is still where the owner was standing), and
+ * making the dropdown drive the date instead would be the same bug pointed the
+ * other way.
+ */
 const AddBonusModal: React.FC<{
   user: AppUser;
+  /**
+   * The period the summary was showing. Used ONLY to seed the date field, so
+   * adding a bonus from a past period's row starts on a day inside it instead
+   * of on today. It no longer decides where the money lands.
+   */
   periodStart: string;
+  payCycle: PayCycle;
+  payAnchorISO: string;
   onClose: () => void;
   onSave: (b: Omit<StaffBonus, 'id' | 'createdBy' | 'createdByEmail' | 'createdAt'>) => void;
-}> = ({ user, periodStart, onClose, onSave }) => {
+}> = ({ user, periodStart, payCycle, payAnchorISO, onClose, onSave }) => {
   const [amount, setAmount] = useState('');
   const [reason, setReason] = useState('');
-  const [date, setDate] = useState(() => toISODate(Date.now()));
+  // Today when today is inside the period being viewed; otherwise the period's
+  // own start, so opening the box from a past period does not silently offer a
+  // date outside it. Either way the owner can change it, and whatever they
+  // change it to is what decides the period.
+  const [date, setDate] = useState(() => {
+    const today = toISODate(Date.now());
+    return periodStart && today < periodStart ? periodStart : today;
+  });
   const [paidFrom, setPaidFrom] = useState<BonusPaidFrom>('store_cash');
   const [attach, setAttach] = useState(true);
   useEscapeKey(onClose);
 
+  // Recomputed on every keystroke in the date field, for the user the bonus is
+  // FOR — a person who changed pay groups has different boundaries.
+  const resolved = useMemo(
+    () => resolveBonusPeriod(user, date, payCycle, payAnchorISO),
+    [user, date, payCycle, payAnchorISO],
+  );
+
   const draft = {
     userId: user.id, userEmail: user.email,
     amount: parseFloat(amount) || 0, date, reason: reason.trim(), paidFrom,
-    payPeriodStart: attach ? periodStart : undefined,
+    // Derived from the DATE. Standalone when the owner unticks attach, and
+    // standalone too when the date falls in no period for this person — never
+    // snapped to the nearest one.
+    payPeriodStart: attach ? resolved.periodStart : undefined,
   };
   const valid = canSaveBonus(draft);
 
@@ -1081,8 +1163,26 @@ const AddBonusModal: React.FC<{
           </div>
           <label className="flex items-start gap-2 text-xs text-slate-600 dark:text-slate-300">
             <input type="checkbox" className="mt-0.5" checked={attach} onChange={e => setAttach(e.target.checked)} />
-            <span>Count this in the pay period starting {periodStart}. Untick for a bonus paid on the side — it still counts in profit, just not in this period's total.</span>
+            <span>Count this in the pay period the date above falls in. Untick for a bonus paid on the side — it still counts in profit, just not in any period's total.</span>
           </label>
+          {/* THE RESOLVED PERIOD, STATED BEFORE SAVING, and updated as soon as
+              the date changes. Not a warning after the fact: the owner should
+              never have to work out which period a date belongs to. */}
+          {attach && (
+            <p className={`text-[11px] rounded-lg px-2.5 py-2 ${resolved.period
+              ? 'text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-900/20'
+              : 'text-amber-800 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/20'}`}>
+              {bonusPeriodLabel(resolved)}
+              {/* Said out loud when the date lands somewhere other than the
+                  period the owner was looking at — the exact case that used to
+                  pass silently. */}
+              {resolved.periodStart && periodStart && resolved.periodStart !== periodStart && (
+                <span className="block mt-1 font-semibold">
+                  Note: that is not the period you were viewing ({periodStart}). The date decides.
+                </span>
+              )}
+            </p>
+          )}
           <p className="text-[11px] text-slate-400">
             Recorded as a bonus, not a Wages expense — the Wages category is informational and never reduces net profit. This does.
           </p>
