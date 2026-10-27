@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { StoreTag } from './StoreTag';
 import { X, Wallet, ArrowUpFromLine, ArrowDownToLine, Banknote } from 'lucide-react';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 import { selectOnFocus } from '../hooks/selectOnFocus';
@@ -8,6 +9,12 @@ export type CashMovementKind = 'cashIn' | 'cashOut' | 'withdrawal';
 interface Props {
   onClose: () => void;
   onLog: (m: { kind: CashMovementKind; amount: number; note?: string }) => void;
+  /**
+   * The store whose till this is (domain/locations.ts). Named right in the
+   * dialog, because the one thing a per-store drawer must never let somebody
+   * do is count one shop's cash into the other's day.
+   */
+  storeLabel?: string;
   initialKind?: CashMovementKind;
   // Today's expected cash right now, so the person logging sees the running total
   // update as they go (computed once by the app from the shared drawer summary).
@@ -32,7 +39,7 @@ const KINDS: { value: CashMovementKind; label: string; icon: React.ReactNode; he
 
 const money = (n: number) => `$${(n || 0).toFixed(2)}`;
 
-export const LogCashMovementModal: React.FC<Props> = ({ onClose, onLog, initialKind = 'cashOut', expectedBefore }) => {
+export const LogCashMovementModal: React.FC<Props> = ({ onClose, onLog, storeLabel, initialKind = 'cashOut', expectedBefore }) => {
   const [kind, setKind] = useState<CashMovementKind>(initialKind);
   const [amount, setAmount] = useState('');
   const [note, setNote] = useState('');
@@ -52,7 +59,7 @@ export const LogCashMovementModal: React.FC<Props> = ({ onClose, onLog, initialK
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={onClose}>
       <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-sm border border-slate-200 dark:border-slate-700" onClick={e => e.stopPropagation()}>
         <div className="px-5 py-3 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
-          <h2 className="font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2"><Wallet className="w-4 h-4" /> Log cash movement</h2>
+          <h2 className="font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2"><Wallet className="w-4 h-4" /> Log cash movement <StoreTag storeLabel={storeLabel} /></h2>
           <button onClick={onClose} aria-label="Close"><X className="w-5 h-5 text-slate-400" /></button>
         </div>
         <div className="p-5 space-y-4">

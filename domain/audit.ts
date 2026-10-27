@@ -65,6 +65,10 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   'user.disable': 'User disabled',
   'user.enable': 'User enabled',
   'user.allow_profit': 'Financial access changed',
+  // Which stores somebody may work at (multi-store stage 2). Owner-only, and
+  // on the critical list below: it decides whose till a person's cash actions
+  // land on.
+  'user.locations': 'Store access changed',
   'user.set_rate': 'Pay rate changed',
   // Written server-side by the setStaffPassword Cloud Function
   // (functions/src/staffPassword.ts), never by the client — and it never
@@ -108,7 +112,7 @@ export const auditActionLabel = (action: string): string =>
 // (see the exhaustive `audit(` grep this was built from), not guessed names.
 export const CRITICAL_AUDIT_ACTIONS: readonly string[] = [
   'sale.void', 'sale.return',
-  'user.create', 'user.set_pin', 'user.role_change', 'user.allow_profit',
+  'user.create', 'user.set_pin', 'user.role_change', 'user.allow_profit', 'user.locations',
   'cash.reconcile', 'settings.update',
 ];
 

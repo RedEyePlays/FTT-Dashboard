@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Users, UserPlus, ShieldCheck, Ban, CheckCircle2, Trash2, Mail, Eye, DollarSign, KeyRound, X, Lock, MessageSquarePlus, AlertTriangle, RotateCcw, UserCog, Tablet } from 'lucide-react';
-import { AppUser, WorkspaceInvite, Role, StaffNote } from '../types';
+import { Users, UserPlus, ShieldCheck, Ban, CheckCircle2, Trash2, Mail, Eye, DollarSign, KeyRound, X, Lock, MessageSquarePlus, AlertTriangle, RotateCcw, UserCog, Tablet, Store } from 'lucide-react';
+import { AppUser, WorkspaceInvite, Role, StaffNote, Location } from '../types';
 import { ROLE_LABEL } from '../services/rbac';
 import { canAssignPin, isValidPinFormat, PIN_MAX_LENGTH, canHaveKioskPin, isValidKioskPinFormat, KIOSK_PIN_LENGTH } from '../domain/pin';
 import { sortStaffNotes, canAddStaffNote } from '../domain/staffNotes';
@@ -11,6 +11,7 @@ import { selectOnFocus } from '../hooks/selectOnFocus';
 import { rateHistoryForDisplay, effectiveFromLabel } from '../domain/payRates';
 import { PAY_GROUPS, PAY_GROUP_LABEL, payGroupOf, payGroupsApply, WEEKLY_GROUPS_NOTE } from '../domain/payGroups';
 import { PayCycle } from '../domain/timeclock';
+import { activeLocations, permittedLocations, LOCATION_ACCESS_NOT_PAYROLL } from '../domain/locations';
 
 interface Props {
   me: AppUser;
@@ -61,6 +62,14 @@ interface Props {
   // non-owner caller anyway, this just doesn't render the button.
   // Resolves to null on success, or an error message to show in the dialog.
   onResetPassword?: (uid: string, newPassword: string) => Promise<string | null>;
+  /**
+   * WHICH STORES SOMEBODY MAY WORK AT (multi-store stage 2). Owner-only — the
+   * control is not rendered for a manager, and no manager-writable branch in
+   * firestore.rules names `locationIds`, so a manager cannot grant themselves
+   * another store either way. Absent in a single-store workspace.
+   */
+  locations?: Location[];
+  onSetLocations?: (uid: string, locationIds: string[]) => void;
   // Owner-only internal staff shoutout/notes log (services/rbac.ts's staffNotes.manage).
   staffNotes?: StaffNote[];
   canManageStaffNotes?: boolean;
@@ -69,6 +78,83 @@ interface Props {
 }
 
 const AUTO_LOCK_OPTIONS = [1, 2, 4, 5, 10, 15, 30];
+
+/**
+ * WHICH STORES ONE PERSON MAY WORK AT — owner-only (multi-store stage 2).
+ *
+ * A LIST of checkboxes, not a dropdown: staff cover both shops, and a control
+ * that only let you pick one would have been wrong the first week somebody
+ * filled in a shift across town.
+ *
+ * TICKING NOTHING IS NOT A LOCKOUT. An empty list means the default store —
+ * which is what every account holds until the owner sets one deliberately —
+ * and the control says so on screen rather than leaving somebody to find out
+ * by locking a colleague out of the till. The owner themselves always holds
+ * every store, so their row shows that instead of offering checkboxes that
+ * would do nothing.
+ *
+ * AND IT IS NOT PAYROLL. Said in the control, because it is the obvious wrong
+ * guess about what this does: hours come from whichever kiosk somebody punches
+ * in at, and a pay period still spans both stores.
+ */
+const StoreAccessControl: React.FC<{
+  user: AppUser;
+  locations: Location[];
+  onChange: (locationIds: string[]) => void;
+}> = ({ user, locations, onChange }) => {
+  const [open, setOpen] = useState(false);
+  const stores = activeLocations(locations);
+  const held = (user.locationIds || []).filter(id => stores.some(l => l.id === id));
+  const isOwner = user.role === 'owner';
+  // What this person ACTUALLY gets, resolved by the same function the app
+  // reads at runtime — so the summary can never claim something the app does
+  // not do.
+  const effective = permittedLocations(user, locations);
+  const summary = isOwner
+    ? 'All stores'
+    : held.length
+      ? effective.map(l => l.name).join(', ')
+      : `${effective.map(l => l.name).join(', ') || 'Default store'} (default)`;
+
+  const toggle = (id: string) => {
+    onChange(held.includes(id) ? held.filter(x => x !== id) : [...held, id]);
+  };
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => !isOwner && setOpen(o => !o)}
+        disabled={isOwner}
+        title={isOwner ? 'The owner always works every store' : LOCATION_ACCESS_NOT_PAYROLL}
+        className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-60 disabled:cursor-default"
+      >
+        <Store className="w-3.5 h-3.5" /> {summary}
+      </button>
+      {open && !isOwner && (
+        <div className="absolute right-0 z-20 mt-1 w-72 p-3 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 shadow-xl">
+          <p className="text-xs font-bold text-slate-700 dark:text-slate-200 mb-1">Stores {user.email.split('@')[0]} works at</p>
+          <p className="text-[11px] text-slate-500 dark:text-slate-400 mb-2">{LOCATION_ACCESS_NOT_PAYROLL}</p>
+          <div className="space-y-1">
+            {stores.map(l => (
+              <label key={l.id} className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200 cursor-pointer">
+                <input type="checkbox" className="rounded" checked={held.includes(l.id)} onChange={() => toggle(l.id)} />
+                {l.name}
+              </label>
+            ))}
+          </div>
+          <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-2">
+            {held.length === 0
+              ? 'None ticked — they work the default store. Nobody is locked out by leaving this empty.'
+              : 'They see and act on these stores only.'}
+          </p>
+          <button type="button" onClick={() => setOpen(false)} className="mt-2 text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:underline">Done</button>
+        </div>
+      )}
+    </div>
+  );
+};
+
 
 // The roles the per-user dropdown offers. 'kiosk' is deliberately ABSENT: a
 // kiosk is a device, created through its own explicit "Add kiosk device"
@@ -467,6 +553,7 @@ export const UsersView: React.FC<Props> = ({
   onSetPin, onSetKioskPin, onClearKioskPin, onCreateKioskDevice, onRevokeKioskDevice,
   canManageSecurity, autoLockMinutes, onSetAutoLockMinutes, onResetPassword,
   staffNotes = [], canManageStaffNotes = false, onAddStaffNote, onDeleteStaffNote,
+  locations = [], onSetLocations,
 }) => {
   const [email, setEmail] = useState('');
   const [role, setRole] = useState<Role>(canManageAll ? 'employee' : 'technician');
@@ -716,6 +803,12 @@ export const UsersView: React.FC<Props> = ({
                   <label className="flex items-center gap-1 text-xs text-slate-600 dark:text-slate-300 cursor-pointer" title="Allow this user to see profit, margins & the analytics dashboard">
                     <input type="checkbox" checked={!!u.allowProfit} onChange={e => onSetAllowProfit(u.id, e.target.checked)} className="rounded" /> <Eye className="w-3.5 h-3.5" /> Financials
                   </label>
+                )}
+                {/* Which stores this person works at. Hidden entirely until
+                    there is more than one store to choose between. */}
+                {canManageAll && onSetLocations && activeLocations(locations).length > 1 && (
+                  <StoreAccessControl user={u} locations={locations}
+                    onChange={ids => onSetLocations(u.id, ids)} />
                 )}
                 {canManageAll && onChangeRate && (
                   <RateControl user={u} defaultEffectiveFrom={nextBoundaryISO}
