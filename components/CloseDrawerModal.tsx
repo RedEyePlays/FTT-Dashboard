@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { StoreTag } from './StoreTag';
 import { X, Lock, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { CashDrawerSummary, reconcileCash } from '../domain/reports';
 import { useEscapeKey } from '../hooks/useEscapeKey';
@@ -7,6 +8,12 @@ import { selectOnFocus } from '../hooks/selectOnFocus';
 interface Props {
   onClose: () => void;
   onCloseDrawer: (countedCash: number, leftInDrawer: number, note?: string) => void;
+  /**
+   * The store whose till this is (domain/locations.ts). Named right in the
+   * dialog, because the one thing a per-store drawer must never let somebody
+   * do is count one shop's cash into the other's day.
+   */
+  storeLabel?: string;
   summary: CashDrawerSummary;              // today's live expected-cash breakdown
   alreadyReconciled?: { countedCash: number; variance: number; byEmail?: string; at: number };
   /**
@@ -26,7 +33,7 @@ const input = 'w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-2
 // reconciles in one step — the full history/edit form stays in Reports > Cash
 // for anyone who needs to revisit a past day. Owner/manager only (cash.reconcile),
 // rendered from CashDrawerPanel only when that permission is present.
-export const CloseDrawerModal: React.FC<Props> = ({ onClose, onCloseDrawer, summary, alreadyReconciled, usualFloat }) => {
+export const CloseDrawerModal: React.FC<Props> = ({ onClose, onCloseDrawer, storeLabel, summary, alreadyReconciled, usualFloat }) => {
   const [counted, setCounted] = useState(alreadyReconciled ? String(alreadyReconciled.countedCash) : '');
   // The float that stays behind. Defaults to the owner's usual float, or to
   // today's opening float — deliberately never to the count.
@@ -56,7 +63,7 @@ export const CloseDrawerModal: React.FC<Props> = ({ onClose, onCloseDrawer, summ
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={onClose}>
       <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-sm border border-slate-200 dark:border-slate-700" onClick={e => e.stopPropagation()}>
         <div className="px-5 py-3 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
-          <h2 className="font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2"><Lock className="w-4 h-4" /> Close drawer</h2>
+          <h2 className="font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2"><Lock className="w-4 h-4" /> Close drawer <StoreTag storeLabel={storeLabel} /></h2>
           <button onClick={onClose} aria-label="Close"><X className="w-5 h-5 text-slate-400" /></button>
         </div>
         <div className="p-5 space-y-4">

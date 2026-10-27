@@ -32,6 +32,18 @@ interface DashboardProps {
   // Omitted for anyone who can't reconcile, so no one sees a warning they
   // have no way to act on.
   cashReconciliations?: CashReconciliation[];
+  /**
+   * Which store each unreconciled day belongs to (multi-store stage 2).
+   *
+   * The flag deliberately keeps reading EVERY store's drawers rather than only
+   * the terminal's own: an uncounted till at the other shop is exactly what
+   * nobody would otherwise notice, and hiding it would make the flag less
+   * useful than the single-store one it replaces. With two stores open the
+   * same date can appear twice, so each one is named.
+   *
+   * Absent in a single-store workspace, where there is nothing to name.
+   */
+  drawerStoreName?: (rec: CashReconciliation) => string;
   // Payroll-due flag (owner/manager — same tier as payroll.manage). Omitted
   // for anyone who can't act on it, same reasoning as cashReconciliations.
   payrollDue?: PayrollDue | null;
@@ -80,7 +92,7 @@ const relTime = (ts: number) => {
 };
 const platformLabel = (p?: string) => (p && p !== 'None / In-Store' ? p : 'In-Store');
 
-export const Dashboard: React.FC<DashboardProps> = ({ data, salesTransactions, activity, repairs = [], repairBatches = [], canViewProfit = true, onViewAnalytics, onViewRepairs, cashReconciliations, onViewCash, onViewLayaways, payrollDue, onViewPayroll, booksStartDate, settlements, onScanReceipt }) => {
+export const Dashboard: React.FC<DashboardProps> = ({ data, salesTransactions, activity, repairs = [], repairBatches = [], canViewProfit = true, onViewAnalytics, onViewRepairs, cashReconciliations, drawerStoreName, onViewCash, onViewLayaways, payrollDue, onViewPayroll, booksStartDate, settlements, onScanReceipt }) => {
   const mask = (v: string) => (canViewProfit ? v : '•••');
   const staleCash = useMemo(
     () => (cashReconciliations ? unreconciledDays(cashReconciliations, todayISO(), booksStartDate) : []),
@@ -246,7 +258,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, salesTransactions, a
               {staleCash.length === 1 ? '1 day has unreconciled cash' : `${staleCash.length} days have unreconciled cash`}
             </span>
             <span className="block text-xs text-amber-700/80 dark:text-amber-300/80 truncate">
-              Drawer activity was recorded but never counted — {staleCash.slice(0, 3).map(r => r.date).join(', ')}
+              Drawer activity was recorded but never counted — {staleCash.slice(0, 3).map(r => (drawerStoreName ? `${r.date} (${drawerStoreName(r)})` : r.date)).join(', ')}
               {staleCash.length > 3 ? ` +${staleCash.length - 3} more` : ''}
             </span>
           </span>

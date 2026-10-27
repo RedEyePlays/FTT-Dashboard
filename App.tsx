@@ -98,7 +98,11 @@ import { collectionFor, stockChange, applyDirectSale } from './domain/inventory'
 import { canVoidSale, canReturnSale, returnRefund, saleAccessoryRestock, saleDeviceListedPlatforms, collectedOnSale, refundDrawerEffect, refundSplitsValid, singleRefundSource } from './domain/pos';
 import { applyBalancePayment, cashPortionOfPayment } from './domain/layaway';
 import { stampPickupWarranty } from './domain/warranty';
-import { expectedCashForDate, cashDrawerSummary, drawerCarryOver, openDrawerPatch, ReconciliationInput, drawerStateChange, changesDrawerState, recomputedExpectedCash, recomputedVariance, DrawerAppends, closeDrawerPlan, correctFloatPlan } from './domain/reports';
+import { expectedCashForDate, expectedCashForDateAt, cashDrawerSummary, drawerCarryOver, openDrawerPatch, ReconciliationInput, drawerStateChange, changesDrawerState, recomputedExpectedCash, recomputedVariance, DrawerAppends, closeDrawerPlan, correctFloatPlan } from './domain/reports';
+import { drawersAt, drawerOn, drawerIdFor, drawerLocationId } from './domain/drawerKey';
+import { locationName, defaultLocation } from './domain/locations';
+import { useActiveStore } from './hooks/useActiveStore';
+import { StorePicker } from './components/StorePicker';
 import { useToday } from './hooks/useToday';
 import { duePeriodsFor, buildRecurringExpense, canMutateExpense } from './domain/expenses';
 import { isEligibleForReviewRequest, ReviewEligibility, reviewRequestsSentOn, underDailyReviewRequestCap } from './domain/reviews';
@@ -497,6 +501,40 @@ const App: React.FC = () => {
 
   // Role-based permission check (mirrors the Firestore rules)
   const allow = (p: Permission) => can(appUser?.role, p, { allowProfit: appUser?.allowProfit });
+
+  /* ------------- WHICH STORE'S TILL THIS IS (multi-store stage 2) ------------- */
+  //
+  // The cash drawer is one document per STORE per day (domain/drawerKey.ts).
+  // Every cash figure on screen and every cash write below is scoped through
+  // these values, so there is one place that decides "whose till?" rather than
+  // fourteen call sites each deciding for themselves.
+  //
+  // With no store list configured, `activeLocationId` is '' and every helper
+  // here degrades to exactly today's single-shop behaviour.
+  const {
+    activeLocationId, activeLocation, permitted: permittedStores, setActiveLocationId,
+  } = useActiveStore(appUser, locations);
+  const defaultLocationId = useMemo(() => defaultLocation(locations)?.id || '', [locations]);
+  // The name shown on every cash screen. A till figure with no store against
+  // it is the one that gets counted into the wrong day.
+  const storeLabel = activeLocationId ? locationName(locations, activeLocationId) : '';
+  // THIS store's drawer history, and nothing else. The carry-over, the
+  // unreconciled-days flag, Day History and the close-out all take a LIST of
+  // reconciliations, so scoping the list is what keeps each of them inside one
+  // store — the float left in Brampton last night must never become
+  // Mississauga's opening float this morning.
+  const storeDrawers = useMemo(
+    () => drawersAt(cashReconciliations, activeLocationId, defaultLocationId),
+    [cashReconciliations, activeLocationId, defaultLocationId],
+  );
+  // This store's cash takings for a day — not the company's. Both drawers
+  // expecting every store's cash would make each one read as short by the
+  // other's day (domain/reports.ts's expectedCashForDateAt).
+  const storeCashSalesFor = useMemo(
+    () => (d: string) => expectedCashForDateAt(salesTransactions, d, activeLocationId, defaultLocationId),
+    [salesTransactions, activeLocationId, defaultLocationId],
+  );
+  const drawerForDate = (d: string) => drawerOn(cashReconciliations, d, activeLocationId, defaultLocationId);
 
   // The register cash drawer lives on POS (not just Reports), so load cash
   // reconciliations for anyone who can handle cash the moment they're on POS —
@@ -1074,6 +1112,13 @@ const App: React.FC = () => {
       ...payload.transaction,
       soldBy: appUser.id,
       soldByEmail: appUser.email,
+      // WHERE IT WAS RUNG, from this terminal's store — not from the payload,
+      // same reasoning as the seller above. The day's cash sales are what the
+      // store's drawer is counted against (domain/reports.ts's
+      // expectedCashForDateAt), so an unstamped sale would be counted into the
+      // default store's till. Omitted entirely when no store list exists, so
+      // nothing is stamped with a location the workspace does not have.
+      ...(activeLocationId ? { locationId: activeLocationId } : {}),
     };
     const balanceOwing = transaction.balanceOwing || 0;
     const isLayaway = balanceOwing > 0;
@@ -1237,7 +1282,6 @@ const App: React.FC = () => {
     const cashPortion = cashPortionOfPayment(payment);
     if (cashPortion >= 0.005) {
       const date = todayISO();
-      const existing = cashReconciliations.find(r => r.date === date);
       const entry = { id: newId(), amount: cashPortion, note: `Layaway balance collected — ${tx.id.slice(0, 8)} (${tx.customerName || 'customer'})` };
       commitDrawerRecord(date, {}, { cashIn: [entry] }, { path: 'collectBalance', transactionId: tx.id });
     }
@@ -1422,7 +1466,7 @@ const App: React.FC = () => {
     // each list as a patch, so without this every pre-existing entry on a day
     // got credited to whoever pressed Save the first time it was edited — see
     // domain/dayLedger.ts's stampNewEntries.
-    const current = cashReconciliations.find(r => r.date === date);
+    const current = drawerForDate(date);
     const attributedPatch: Partial<CashReconciliation> = {
       ...patch,
       ...(patch.cashIn ? { cashIn: stampNewEntries(patch.cashIn, current?.cashIn, stampCtx) } : {}),
@@ -1436,10 +1480,19 @@ const App: React.FC = () => {
       ...(appends.cashOut ? { cashOut: stamp(appends.cashOut) } : {}),
       ...(appends.withdrawals ? { withdrawals: stamp(appends.withdrawals) } : {}),
     };
+    // WHOSE TILL, resolved once, here. `drawerIdFor` keeps writing to a
+    // legacy bare-date document for a day that already has one, so the day
+    // this shipped does not split in half (domain/drawerKey.ts).
     const args = {
-      date, patch: attributedPatch, appends: attributedAppends,
-      cashSales: expectedCashForDate(salesTransactions, date),
-      carry: drawerCarryOver(cashReconciliations, date, d => expectedCashForDate(salesTransactions, d)),
+      date,
+      id: drawerIdFor(cashReconciliations, date, activeLocationId, defaultLocationId),
+      locationId: activeLocationId,
+      patch: attributedPatch, appends: attributedAppends,
+      cashSales: storeCashSalesFor(date),
+      // Within this store only: the carry-over walks back through THIS store's
+      // records, so a shop that was shut yesterday carries its own last till
+      // forward and never the other shop's.
+      carry: drawerCarryOver(storeDrawers, date, storeCashSalesFor),
       actor,
     };
     try {
@@ -1531,7 +1584,7 @@ const App: React.FC = () => {
     // used to be logged unconditionally, so a failed write still told the
     // shop the till had been closed and counted.
     if (!saved) return;
-    const cashSales = expectedCashForDate(salesTransactions, date);
+    const cashSales = storeCashSalesFor(date);
     const expected = recomputedExpectedCash(saved.record, cashSales);
     const variance = recomputedVariance(saved.record, cashSales);
     logActivity(`Drawer closed — counted $${countedCash.toFixed(2)}${Math.abs(variance) >= 0.005 ? ` (${variance > 0 ? 'over' : 'short'} $${Math.abs(variance).toFixed(2)})` : ''}${plan.removedAmount >= 0.005 ? `, $${plan.removedAmount.toFixed(2)} taken out, $${plan.patch.leftInDrawer!.toFixed(2)} left in` : ', all left in'}${queuedSuffix(saved.queued)}`);
@@ -1570,7 +1623,7 @@ const App: React.FC = () => {
   const handleOpenDrawer = async (openingFloat: number) => {
     if (!uid || !appUser || !allow('cash.log')) return;
     const date = todayISO();
-    const existing = cashReconciliations.find(r => r.date === date);
+    const existing = drawerForDate(date);
     const saved = await commitDrawerRecord(date, openDrawerPatch(openingFloat, { id: appUser.id, email: appUser.email }, existing), undefined, { path: 'openDrawer' });
     if (!saved) return;
     logActivity(`Drawer opened with $${openingFloat.toFixed(2)}${queuedSuffix(saved.queued)}`);
@@ -1584,7 +1637,6 @@ const App: React.FC = () => {
   const handleLogCashMovement = async ({ kind, amount, note }: { kind: CashMovementKind; amount: number; note?: string }) => {
     if (!uid || !appUser || !allow('cash.log') || !(amount > 0)) return;
     const date = todayISO();
-    const existing = cashReconciliations.find(r => r.date === date);
     const listKey: 'cashIn' | 'cashOut' | 'withdrawals' = kind === 'cashIn' ? 'cashIn' : kind === 'cashOut' ? 'cashOut' : 'withdrawals';
     const saved = await commitDrawerRecord(date, {}, { [listKey]: [{ id: newId(), amount, note }] }, { path: 'logCashMovement', kind });
     if (!saved) return;
@@ -1637,7 +1689,6 @@ const App: React.FC = () => {
     if (!isNew && (!before || !canMutateExpense(before, expenseViewer))) return;
     const next: Expense = isNew ? stampExpense(expense, appUser, Date.now()) : expense;
     if (isNew && next.paymentMethod === 'cash') {
-      const existing = cashReconciliations.find(r => r.date === next.date);
       const entry = { id: newId(), amount: next.amount, note: `${next.category} — ${next.payee || next.note || 'expense'}` };
       commitDrawerRecord(next.date, {}, { cashOut: [entry] }, { path: 'expenseCashOut', expenseId: next.id });
       next.cashDrawerLinked = true;
@@ -1804,7 +1855,6 @@ const App: React.FC = () => {
     }
     const expense: Expense = { ...draft, id: newId() };
     if (expense.paymentMethod === 'cash') {
-      const existing = cashReconciliations.find(rec => rec.date === expense.date);
       const entry = { id: newId(), amount: expense.amount, note: `${expense.category} — ${expense.payee || 'recurring expense'}` };
       commitDrawerRecord(expense.date, {}, { cashOut: [entry] }, { path: 'recurringExpenseCashOut', expenseId: expense.id });
       expense.cashDrawerLinked = true;
@@ -1880,15 +1930,17 @@ const App: React.FC = () => {
     // The cash-sales lookup makes the carried float RECOMPUTED rather than
     // read off the previous day's stored expectedCash, which an offline
     // merge write can leave stale (see domain/reports.ts).
-    () => drawerCarryOver(cashReconciliations, today, d => expectedCashForDate(salesTransactions, d)),
-    [cashReconciliations, salesTransactions, today],
+    // THIS STORE's records and THIS STORE's cash sales — see the
+    // active-store block near the top of this component.
+    () => drawerCarryOver(storeDrawers, today, storeCashSalesFor),
+    [storeDrawers, storeCashSalesFor, today],
   );
   const todayDrawer = useMemo(() => cashDrawerSummary(
-    cashReconciliations.find(r => r.date === today),
-    expectedCashForDate(salesTransactions, today),
+    storeDrawers.find(r => r.date === today),
+    storeCashSalesFor(today),
     todayCarryOver,
-  ), [cashReconciliations, salesTransactions, todayCarryOver, today]);
-  const todayRecon = cashReconciliations.find(r => r.date === today);
+  ), [storeDrawers, storeCashSalesFor, todayCarryOver, today]);
+  const todayRecon = storeDrawers.find(r => r.date === today);
 
   const handleBulkImport = (items: InventoryItem[]) => {
     if (uid) items.forEach(it => saveItem(uid, collectionFor(it), it));
@@ -2147,6 +2199,32 @@ const App: React.FC = () => {
     updateUserDoc(targetUid, { allowProfit }).catch(() => {});
     audit('user.allow_profit', 'user', targetUid, undefined, { allowProfit });
   };
+  /**
+   * WHICH STORES SOMEBODY MAY WORK AT (multi-store stage 2).
+   *
+   * OWNER ONLY, on purpose and in two places. Here, because deciding who works
+   * which shop is a decision about the business, not a rota a shift lead
+   * adjusts; and in firestore.rules, where no manager-writable branch on
+   * `users` names `locationIds` at all — so a manager cannot grant themselves
+   * another store even by writing the document directly.
+   *
+   * An EMPTY list is stored as empty, not as a lockout: domain/locations.ts's
+   * permittedLocations reads it as "the default store", which is what every
+   * account holds until the owner sets one deliberately.
+   *
+   * It has nothing to do with pay. Hours come from whichever kiosk somebody
+   * punches in at, and a pay period still spans both stores.
+   */
+  const handleSetUserLocations = (targetUid: string, locationIds: string[]) => {
+    if (appUser?.role !== 'owner') return;
+    const before = workspaceUsers.find(u => u.id === targetUid)?.locationIds;
+    // Only ids that are really stores, so a stale picker cannot store a
+    // dangling reference that reads as "no access" later.
+    const known = locationIds.filter(id => locations.some(l => l.id === id));
+    updateUserDoc(targetUid, { locationIds: known }).catch(e => writeFailed('That store access change', e, 'It was not saved.'));
+    audit('user.locations', 'user', targetUid, { locationIds: before }, { locationIds: known });
+  };
+
   const handleInvite = (email: string, role: Role) => {
     if (!workspaceId) return;
     // Managers may only invite technicians; owners may invite any role.
@@ -3334,6 +3412,7 @@ const App: React.FC = () => {
         view={view}
         onNavigate={navigate}
         allow={allow}
+        storeSlot={<StorePicker active={activeLocation} permitted={permittedStores} onPick={setActiveLocationId} />}
         pageTitle={PAGE_TITLES[view]}
         onOpenDrawer={() => setDrawerOpen(true)}
         userEmail={appUser.email}
@@ -3419,6 +3498,7 @@ const App: React.FC = () => {
             allow('reports.view')
               ? <Dashboard data={data} salesTransactions={salesTransactions} activity={activityLog} repairs={repairs} repairBatches={repairBatches} canViewProfit={allow('reports.profit.summary')} onViewAnalytics={() => navigate('analytics')} onViewRepairs={allow('repairs.manage') ? () => navigate('repairs') : undefined} booksStartDate={settings.operations.booksStartDate}
                   cashReconciliations={allow('cash.reconcile') ? cashReconciliations : undefined}
+                  drawerStoreName={locations.length > 1 ? (r => locationName(locations, drawerLocationId(r, defaultLocationId))) : undefined}
                   onViewCash={allow('cash.reconcile') ? () => navigate('reports') : undefined}
                   onViewLayaways={allow('cash.reconcile') ? () => navigate('layaways') : undefined}
                   payrollDue={allow('payroll.manage') ? dashboardPayrollDue : undefined}
@@ -3451,7 +3531,7 @@ const App: React.FC = () => {
             // Reconciliation (and, if granted, Expenses) tab — never a coarse
             // permission standing in as a proxy for profit visibility.
             (allow('cash.reconcile') || allow('reports.profit.summary'))
-              ? <ReportsView salesTransactions={salesTransactions} cashReconciliations={cashReconciliations} inventory={data} payPeriods={payPeriods} staffBonuses={visibleBonuses(staffBonuses, { id: appUser?.id || '', canViewPayroll: allow('payroll.manage') })} settlements={settlements} deviceBuyers={deviceBuyers} onSaveReconciliation={handleSaveReconciliation} booksStartDate={settings.operations.booksStartDate} paidBreakReasons={settings.operations.paidBreakReasons} defaultOpeningFloat={settings.operations.openingFloatDefault}
+              ? <ReportsView salesTransactions={salesTransactions} cashReconciliations={cashReconciliations} storeDrawers={storeDrawers} storeLabel={storeLabel} cashSalesFor={storeCashSalesFor} inventory={data} payPeriods={payPeriods} staffBonuses={visibleBonuses(staffBonuses, { id: appUser?.id || '', canViewPayroll: allow('payroll.manage') })} settlements={settlements} deviceBuyers={deviceBuyers} onSaveReconciliation={handleSaveReconciliation} booksStartDate={settings.operations.booksStartDate} paidBreakReasons={settings.operations.paidBreakReasons} defaultOpeningFloat={settings.operations.openingFloatDefault}
                   repairs={repairs} customers={customers} auditLogs={auditLogs} activity={activityLog} timeEntries={timeEntries} users={workspaceUsers}
                   expenses={expenses} expenseCategories={settings.expenses.categories}
                   canAddExpense={allow('expenses.add')} canViewAllExpenses={allow('expenses.viewAll')}
@@ -3655,6 +3735,7 @@ const App: React.FC = () => {
               canViewProfit={allow('reports.profit.detailed')}
               onGenerateSku={(deviceType) => handleGenerateSku('device', deviceType)}
               cashDrawer={allow('cash.log') ? todayDrawer : undefined}
+              storeLabel={storeLabel}
               onOpenDrawer={allow('cash.log') ? () => setShowOpenDrawer(true) : undefined}
               onLogCash={allow('cash.log') ? (kind) => setCashLogKind(kind) : undefined}
               onCloseDrawer={allow('cash.reconcile') ? () => setShowCloseDrawer(true) : undefined}
@@ -3677,7 +3758,8 @@ const App: React.FC = () => {
               onDeviceBuyersChange={saveDeviceBuyers}
               onDropOffsChange={saveDropOffs}
               onSettle={handleSettleDeviceBuyer}
-              cashReconciliations={cashReconciliations}
+              cashReconciliations={storeDrawers}
+              storeLabel={storeLabel}
               canPrintLabels={canPrintDropOffLabel(appUser?.role)}
             />
           )}
@@ -3710,6 +3792,8 @@ const App: React.FC = () => {
               onSetRole={handleSetRole}
               onSetDisabled={handleSetDisabled}
               onSetAllowProfit={handleSetAllowProfit}
+              locations={locations}
+              onSetLocations={appUser.role === 'owner' ? handleSetUserLocations : undefined}
               onChangeRate={allow('users.manage') ? handleChangeRate : undefined}
               onSetPayGroup={allow('users.manage') ? handleSetPayGroup : undefined}
               payCycle={settings.payroll.cycle}
@@ -3777,6 +3861,7 @@ const App: React.FC = () => {
               alerts={alerts}
               todayDrawer={todayDrawer}
               todayRecon={todayRecon}
+              storeLabel={storeLabel}
               booksStartDate={settings.operations.booksStartDate}
               onNavigate={navigate}
             />
@@ -3870,19 +3955,19 @@ const App: React.FC = () => {
 
       {showCorrectFloat && appUser.role === 'owner' && (
         <Suspense fallback={null}>
-          <CorrectFloatModal currentFloat={todayDrawer.openingFloat} onClose={() => setShowCorrectFloat(false)} onCorrect={handleCorrectFloat} />
+          <CorrectFloatModal storeLabel={storeLabel} currentFloat={todayDrawer.openingFloat} onClose={() => setShowCorrectFloat(false)} onCorrect={handleCorrectFloat} />
         </Suspense>
       )}
 
       {cashLogKind && allow('cash.log') && (
         <Suspense fallback={null}>
-          <LogCashMovementModal onClose={() => setCashLogKind(null)} onLog={handleLogCashMovement} initialKind={cashLogKind} expectedBefore={todayDrawer.expected} />
+          <LogCashMovementModal storeLabel={storeLabel} onClose={() => setCashLogKind(null)} onLog={handleLogCashMovement} initialKind={cashLogKind} expectedBefore={todayDrawer.expected} />
         </Suspense>
       )}
 
       {showOpenDrawer && allow('cash.log') && (
         <Suspense fallback={null}>
-          <OpenDrawerModal onClose={() => setShowOpenDrawer(false)} onOpen={handleOpenDrawer}
+          <OpenDrawerModal storeLabel={storeLabel} onClose={() => setShowOpenDrawer(false)} onOpen={handleOpenDrawer}
             /* Pre-fill with what the till was actually left holding, not the
                shop's nominal float — the cash didn't go anywhere overnight.
                Falls back to the configured default when there's nothing to
@@ -3895,7 +3980,7 @@ const App: React.FC = () => {
 
       {showCloseDrawer && allow('cash.reconcile') && (
         <Suspense fallback={null}>
-          <CloseDrawerModal onClose={() => setShowCloseDrawer(false)} onCloseDrawer={handleCloseDrawer} summary={todayDrawer}
+          <CloseDrawerModal storeLabel={storeLabel} onClose={() => setShowCloseDrawer(false)} onCloseDrawer={handleCloseDrawer} summary={todayDrawer}
             usualFloat={settings.operations.openingFloatDefault}
             alreadyReconciled={todayRecon?.reconciledAt ? {
               countedCash: todayRecon.countedCash || 0, variance: todayRecon.variance,

@@ -1,10 +1,17 @@
 import React from 'react';
 import { Wallet, DoorOpen, ArrowDownToLine, Banknote, ArrowUpFromLine, AlertTriangle, Lock, CheckCircle2 } from 'lucide-react';
 import { CashDrawerSummary } from '../domain/reports';
+import { StoreTag } from './StoreTag';
 import type { CashMovementKind } from './LogCashMovementModal';
 
 interface Props {
   summary: CashDrawerSummary;         // today's live drawer (shared math)
+  /**
+   * WHOSE TILL THIS IS. The register panel is the screen cash is actually
+   * handled on, so it is the one that must never leave the store implied —
+   * see components/StoreTag.tsx.
+   */
+  storeLabel?: string;
   onOpenDrawer: () => void;
   onLog: (kind: CashMovementKind) => void;
   // Count + close the drawer for the day, right here at the register — owner/
@@ -26,7 +33,7 @@ const money = (n: number) => `$${(n || 0).toFixed(2)}`;
 // is actually handled (not buried in a header menu). Shows the live expected
 // drawer total and the quick actions: open drawer, cash in, cash out, withdrawal,
 // and — when the viewer can reconcile — close the drawer for the day.
-export const CashDrawerPanel: React.FC<Props> = ({ summary, onOpenDrawer, onLog, onCloseDrawer, reconciledToday, onCorrectFloat }) => {
+export const CashDrawerPanel: React.FC<Props> = ({ summary, storeLabel, onOpenDrawer, onLog, onCloseDrawer, reconciledToday, onCorrectFloat }) => {
   const btn = 'flex items-center justify-center gap-1.5 px-2.5 py-2 rounded-lg text-xs font-medium border bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-indigo-400';
   // CLOSED MEANS CLOSED. The panel used to keep showing the live EXPECTED
   // figure after the day was counted and closed, so closing the drawer looked
@@ -43,6 +50,8 @@ export const CashDrawerPanel: React.FC<Props> = ({ summary, onOpenDrawer, onLog,
           <div className="w-9 h-9 rounded-lg bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0"><Wallet className="w-4 h-4" /></div>
           <div className="min-w-0">
             <p className="text-[11px] uppercase tracking-wide text-slate-400 leading-none">{closed ? 'Counted at close' : 'Expected in drawer'}</p>
+            {/* Right under the big number, not tucked in a corner. */}
+            <StoreTag storeLabel={storeLabel} className="mt-0.5" />
             <p className="text-lg font-bold text-slate-900 dark:text-white leading-tight tabular-nums">{money(closed ? summary.countedCash! : summary.expected)}</p>
           </div>
           {!summary.opened && (

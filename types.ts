@@ -864,6 +864,26 @@ export interface AppUser {
   kioskPinUpdatedAt?: number;
   kioskPinUpdatedBy?: string;
   kioskPinUpdatedByEmail?: string;
+  /**
+   * WHICH STORES THIS PERSON WORKS AT — a LIST, never one store.
+   *
+   * Staff cover both shops, so a single-store field would have been wrong the
+   * first week somebody filled in a shift across town. It decides which
+   * store's cash drawer and records they act on in the app
+   * (domain/locations.ts's permittedLocations).
+   *
+   * ABSENT OR EMPTY IS NOT A LOCKOUT — it means the DEFAULT store, which is
+   * what every account holds until the owner sets one deliberately. The owner
+   * always holds every store regardless of what this says.
+   *
+   * It has NOTHING to do with pay. Hours come from the kiosk somebody punches
+   * in at, and a pay period aggregates both stores; see
+   * LOCATION_ACCESS_NOT_PAYROLL, which is the sentence the Users screen shows.
+   *
+   * OWNER-SET ONLY. No manager-writable branch in firestore.rules names this
+   * field, so a manager cannot grant themselves — or anyone — another store.
+   */
+  locationIds?: string[];
 }
 
 /**
@@ -1158,14 +1178,23 @@ export interface CashDrawerEntry {
   adjustment?: 'closeRemoval' | 'floatCorrection';
 }
 
-// A saved daily cash-drawer record (one per calendar day; id === date). It can
+// A saved cash-drawer record — ONE PER STORE PER CALENDAR DAY. It can
 // be in two states: OPEN (a starting float was set and/or movements logged, but
 // not yet counted) or RECONCILED (counted + closed at end of day). `openedAt`
 // marks a real start-of-day open; `reconciledAt` marks a real end-of-day count —
 // so a bare cash movement is never mistaken for a completed reconciliation.
 // Expected ending cash = openingFloat + cashSales + Σ cashIn − Σ cashOut − Σ withdrawals.
 export interface CashReconciliation {
-  id: string;              // the date, YYYY-MM-DD (one record per day)
+  /**
+   * `{YYYY-MM-DD}__{locationId}` — one drawer per store per day.
+   *
+   * It used to be the bare date, which meant two stores collided on the same
+   * document on the same day and one store's float, movements and count
+   * silently overwrote the other's. See domain/drawerKey.ts for the key
+   * scheme, and for why records written before that stage keep their bare-date
+   * ids instead of being re-keyed (a bare id is the DEFAULT store's).
+   */
+  id: string;
   date: string;            // YYYY-MM-DD
   openingFloat?: number;   // starting cash in the drawer at open
   cashSales?: number;      // cash taken in from that day's sales

@@ -22,7 +22,7 @@ import { stampReconcile } from './attribution';
 const ACTOR = { id: 'u1', email: 'till@shop.test' };
 const NOW = 1_700_000_000_000;
 const build = (patch?: Partial<CashReconciliation>, appends?: Parameters<typeof buildDrawerMergeWrite>[0]['appends']) =>
-  buildDrawerMergeWrite({ date: '2026-09-16', patch, appends, actor: ACTOR, now: NOW });
+  buildDrawerMergeWrite({ date: '2026-09-16', id: '2026-09-16', patch, appends, actor: ACTOR, now: NOW });
 
 describe('rule 1 — appends become arrayUnion, never a whole array', () => {
   it('a cash-out append is a union of just that entry', () => {

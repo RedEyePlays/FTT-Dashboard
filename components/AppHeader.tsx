@@ -41,6 +41,13 @@ interface AppHeaderProps {
   // not good enough for that.
   isRegister?: boolean;
   onSwitchUser?: () => void;
+  /**
+   * WHICH STORE THIS TERMINAL IS WORKING AT (multi-store stage 2) — a slot
+   * rather than data, the same way Settings takes `locationsSlot`, so the
+   * header stays unaware of locations and the picker lives in one component.
+   * Empty in a single-store workspace.
+   */
+  storeSlot?: React.ReactNode;
   activity?: ActivityEntry[];
   alerts?: Alert[];
   notifSeenTs?: number;
@@ -63,7 +70,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   darkMode, onToggleTheme, onToggleAiSidebar, onOpenFinder,
   onOpenSettings, onOpenBulk, onStartAdd, onLock, onManualLock, activity = [],
   alerts = [], notifSeenTs = 0, onMarkNotificationsSeen = () => {}, showNotes = true,
-  isRegister = false, onSwitchUser,
+  isRegister = false, onSwitchUser, storeSlot,
 }) => {
   // Keyboard hint for the global-search bar (⌘K on Mac, Ctrl K elsewhere).
   const modKey = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl ';
@@ -222,6 +229,11 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           {/* Phones: show the current page title instead of the brand. */}
           {!isTech && <span className="sm:hidden text-base font-bold text-slate-800 dark:text-slate-100 truncate">{pageTitle || 'FlipThatTech'}</span>}
         </button>
+
+        {/* Beside the brand, visible on every screen: the cash screens are
+            about ONE store's till, and the header is the one place that says
+            which without having to be on a cash screen to find out. */}
+        {storeSlot}
 
         {isTech ? (
           /*
