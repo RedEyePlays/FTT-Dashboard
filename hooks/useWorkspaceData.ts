@@ -4,7 +4,7 @@ import { doc, getDoc } from 'firebase/firestore';
 import {
   InventoryItem, Note, Task, DeviceBuyer, DropOff, Settlement, Customer, SalesTransaction,
   ActivityEntry, AppUser, WorkspaceInvite, AuditEntry, Repair, RepairBatch, PcBuild, TimeEntry, PayPeriodPaid, PayPeriodApproval, CashReconciliation, StaffNote,
-  Expense, RecurringExpense, StaffBonus, KioskStaff, Receipt,
+  Expense, RecurringExpense, StaffBonus, KioskStaff, Receipt, Location,
 } from '../types';
 import { decryptData } from '../services/security';
 import { AppSettings, mergeSettings } from '../domain/settings';
@@ -63,6 +63,9 @@ export function useWorkspaceData() {
   const [settlementsLoaded, setSettlementsLoaded] = useState(false);
   // The receipt archive (domain/receipt.ts). Owner/manager, like expenses.
   const [receipts, setReceipts] = useState<Receipt[]>([]);
+  // The shop's stores (domain/locations.ts). Empty until an owner seeds them,
+  // and nothing branches on it in stage 1.
+  const [locations, setLocations] = useState<Location[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [salesTransactions, setSalesTransactions] = useState<SalesTransaction[]>([]);
   const [repairs, setRepairs] = useState<Repair[]>([]);
@@ -272,6 +275,13 @@ export function useWorkspaceData() {
       subscribeCollection<Repair>(wsId, 'repairs', setRepairs, onErrFor('repairs')),
       subscribeCollection<RepairBatch>(wsId, 'repairBatches', setRepairBatches, onErrFor('repairBatches')),
       subscribeCollection<PcBuild>(wsId, 'pcBuilds', setPcBuilds, onErrFor('pcBuilds')),
+      // STORES (domain/locations.ts). Readable by every active member, and
+      // OPTIONAL like pcBuilds rather than core: a workspace whose rules have
+      // not been deployed yet must not have the till, inventory and repairs
+      // blanked over a collection nothing branches on yet. That is the exact
+      // mistake PR #209 made (see domain/subscriptionAccess.ts), so this is
+      // onErrFor, not onErr.
+      subscribeCollection<Location>(wsId, 'locations', setLocations, onErrFor('locations')),
       subscribeCollection<ActivityEntry>(wsId, 'activityLog', rows => setActivityLog(rows.sort((a, b) => b.ts - a.ts)), onErrFor('activityLog'), { orderByField: 'ts', limitTo: ACTIVITY_LIMIT }),
       subscribeMeta(wsId, m => { setNotes(m.notes || []); setTasks(m.tasks || []); setSkuCounters(m.skuCounters || {}); setLastBackup(m.lastBackup); setSettings(mergeSettings(m.settings)); }, onErrFor('meta')),
     ];
@@ -405,7 +415,7 @@ export function useWorkspaceData() {
     // collections
     devices, accessories, data, notes, setNotes, tasks, setTasks,
     deviceBuyers, dropOffs, settlements, settlementsLoaded, customers, salesTransactions,
-    repairs, repairBatches, pcBuilds, timeEntries, payPeriods, payPeriodApprovals, staffBonuses, kioskStaff, cashReconciliations, staffNotes,
+    repairs, repairBatches, pcBuilds, locations, timeEntries, payPeriods, payPeriodApprovals, staffBonuses, kioskStaff, cashReconciliations, staffNotes,
     expenses, recurringExpenses, receipts,
     skuCounters, setSkuCounters, activityLog, lastBackup, settings,
     // connection status

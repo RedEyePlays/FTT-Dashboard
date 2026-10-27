@@ -93,9 +93,15 @@ interface Props {
   confirmPaidBreakChange?: (next: BreakReason[]) => boolean;
   /** Needed to read this workspace's AI usage counters (owner-only). */
   workspaceId?: string;
+  /**
+   * The stores panel (components/LocationsPanel.tsx). Passed in as a slot like
+   * backupSlot, so this file stays free of the Firestore writes and the
+   * backfill runner it needs.
+   */
+  locationsSlot?: React.ReactNode;
 }
 
-export const SettingsView: React.FC<Props> = ({ settings, onSave, canManage, role, appVersion = '1.0.0', backupSlot, loadBackupHistory, onDownloadBackup, confirmPaidBreakChange, workspaceId }) => {
+export const SettingsView: React.FC<Props> = ({ settings, onSave, canManage, role, appVersion = '1.0.0', backupSlot, loadBackupHistory, onDownloadBackup, confirmPaidBreakChange, workspaceId, locationsSlot }) => {
   const isMobile = useIsMobile();
   const [active, setActive] = useState<SectionId>('general');
   const [draft, setDraft] = useState<AppSettings>(settings);
@@ -173,7 +179,15 @@ export const SettingsView: React.FC<Props> = ({ settings, onSave, canManage, rol
         {/* Active section */}
         <div className="flex-1 min-w-0">
           <fieldset disabled={readOnly} className={readOnly ? 'opacity-70' : ''}>
-            {active === 'general' && <GeneralSection draft={draft} patch={patch} />}
+            {active === 'general' && (
+              <>
+                <GeneralSection draft={draft} patch={patch} />
+                {/* OWNER-ONLY, and placed under General because it seeds from
+                    the store name and address right above it. Multi-store
+                    stage 1 — nothing else in the app asks for a location. */}
+                {role === 'owner' && locationsSlot}
+              </>
+            )}
             {active === 'store' && <StoreSection draft={draft} patch={patch} />}
             {active === 'repairs' && <RepairsSection draft={draft} setDraft={setDraft} />}
             {active === 'checkout' && <CheckoutSection draft={draft} patch={patch} togglePay={(k, v) => patch('payments', { [k]: v } as any)} />}

@@ -146,6 +146,18 @@ export interface InventoryItem {
   dropOffId?: string;
 
   notes: string;
+  /**
+   * WHERE THE STOCK PHYSICALLY IS. A transfer (stage 4) moves this with the device and carries its cost along; the selling store takes the profit.
+   *
+   * Multi-store stage 1 — see Location.
+   *
+   * OPTIONAL, AND ABSENT MEANS "AS BEFORE". Every record written before the
+   * second store existed has none, and nothing in the app branches on it yet —
+   * which is what makes this stage invisible and reversible. The backfill
+   * (services/firestoreDb.ts's backfillLocationIds) assigns Brampton to the
+   * rows that predate the split, and only ever to rows with no location.
+   */
+  locationId?: string;
 }
 
 // Who FUNDED the purchase — the store advancing money it is owed back, the
@@ -258,6 +270,18 @@ export interface DropOff {
   acceptedBy?: string;
   acceptedByEmail?: string;
   acceptedAt?: number;
+  /**
+   * WHERE THE DEVICE CAME IN.
+   *
+   * Multi-store stage 1 — see Location.
+   *
+   * OPTIONAL, AND ABSENT MEANS "AS BEFORE". Every record written before the
+   * second store existed has none, and nothing in the app branches on it yet —
+   * which is what makes this stage invisible and reversible. The backfill
+   * (services/firestoreDb.ts's backfillLocationIds) assigns Brampton to the
+   * rows that predate the split, and only ever to rows with no location.
+   */
+  locationId?: string;
 }
 
 // A per-device fee correction made on the pre-settlement review screen —
@@ -331,6 +355,18 @@ export interface Settlement {
   settledBy?: string;
   settledByEmail?: string;
   settledAt?: number;
+  /**
+   * WHERE THE DEVICES CAME IN, for the buyer run being settled.
+   *
+   * Multi-store stage 1 — see Location.
+   *
+   * OPTIONAL, AND ABSENT MEANS "AS BEFORE". Every record written before the
+   * second store existed has none, and nothing in the app branches on it yet —
+   * which is what makes this stage invisible and reversible. The backfill
+   * (services/firestoreDb.ts's backfillLocationIds) assigns Brampton to the
+   * rows that predate the split, and only ever to rows with no location.
+   */
+  locationId?: string;
 }
 
 // A note can reference one record. This is a lightweight pointer, not an
@@ -447,6 +483,20 @@ export interface Expense {
   cashDrawerLinked?: boolean;     // true once its drawer cash-out effect was applied
   recurringId?: string;           // set when auto-generated from a RecurringExpense
   recurringPeriod?: string;       // the period key it was generated for, e.g. '2026-03'
+  /**
+   * WHICH STORE THE COST BELONGS TO, or COMPANY_LOCATION_ID for one that
+   * belongs to neither (multi-store stage 1). See Location.
+   *
+   * The owner's decision: rent, hydro and wages land on their own store;
+   * parts bought from Chinese suppliers are an expense rather than inventory
+   * and are tagged to the COMPANY, as are the app's own running costs and the
+   * owner's pay. Company costs appear only in the combined P&L.
+   *
+   * OPTIONAL, AND ABSENT MEANS "AS BEFORE" — an untagged expense behaves
+   * exactly as it does today and shows in the combined P&L only. Historical
+   * expenses are deliberately NOT backfilled: see backfillLocationIds.
+   */
+  locationId?: string;
 }
 
 // A template for an expense that recurs on a schedule (rent, subscriptions).
@@ -718,6 +768,57 @@ export interface PayGroupChange {
   setAt: number;
 }
 
+/* ---------------- Locations (multi-store, stage 1) ---------------- */
+
+/**
+ * ONE STORE.
+ *
+ * FlipThatTech is opening a second store in Mississauga — same company (Roxen
+ * International Canada Inc.), one set of books, filterable by store. Not
+ * separate entities.
+ *
+ * LOCATIONS ARE DATA, NOT A SETTINGS STRING. `settings.general.storeName` is a
+ * single string that drives receipts; a second store needs something records
+ * can POINT AT, so that renaming a store does not orphan its history and so a
+ * later stage's transfers have something to reference. The settings string is
+ * deliberately left alone and still drives receipts.
+ *
+ * NEVER HARD-DELETED. Deactivating hides a location from pickers and leaves
+ * every record pointing at it intact and readable — a deleted location would
+ * orphan devices, sales and shifts with no way to tell where they happened.
+ */
+export interface Location {
+  id: string;
+  /** What staff call it: "Brampton". Shown in pickers and, later, on receipts. */
+  name: string;
+  address?: string;
+  /** False hides it from pickers. History pointing at it is untouched. */
+  active: boolean;
+  /**
+   * The store a new record belongs to when nothing else says otherwise, and
+   * the one existing data was backfilled to. Exactly one location carries it.
+   */
+  isDefault?: boolean;
+  createdAt: number;
+  createdBy?: string;
+  updatedAt?: number;
+}
+
+/**
+ * A COST THAT BELONGS TO THE COMPANY, NOT TO EITHER STORE.
+ *
+ * The owner's decision: rent, hydro and wages land on their own store, but
+ * parts bought from Chinese suppliers are an expense rather than inventory and
+ * belong to the company — as do the app's own running costs and the owner's
+ * pay. These appear only in the COMBINED P&L, never in one store's.
+ *
+ * A sentinel rather than a real Location document, because it is not a place:
+ * it has no address, nobody works there, and no device is ever at it. Used
+ * only in `Expense.locationId`.
+ */
+export const COMPANY_LOCATION_ID = 'company';
+
+
 export interface AppUser {
   id: string;            // Firebase Auth uid
   email: string;
@@ -966,6 +1067,18 @@ export interface SalesTransaction {
   // i.e. only for a sale that started as a layaway. A sale paid in full at
   // checkout never has this set (it never had a balance to begin with).
   layawayCompletedAt?: number;
+  /**
+   * WHERE IT SOLD. The owner's decision: sale profit belongs to the store the DEVICE was at, and an online sale follows the device.
+   *
+   * Multi-store stage 1 — see Location.
+   *
+   * OPTIONAL, AND ABSENT MEANS "AS BEFORE". Every record written before the
+   * second store existed has none, and nothing in the app branches on it yet —
+   * which is what makes this stage invisible and reversible. The backfill
+   * (services/firestoreDb.ts's backfillLocationIds) assigns Brampton to the
+   * rows that predate the split, and only ever to rows with no location.
+   */
+  locationId?: string;
 }
 
 /** One payment collected against a layaway's balanceOwing, after the original checkout. */
@@ -1087,6 +1200,18 @@ export interface CashReconciliation {
   recordedBy: string;      // uid of whoever last touched the record
   recordedByEmail?: string;
   recordedAt: number;      // epoch ms (last touch)
+  /**
+   * WHICH STORE'S DRAWER. Added now, unused now: stage 2 makes drawers per-store, and adding the field later would mean a second migration over every day's record.
+   *
+   * Multi-store stage 1 — see Location.
+   *
+   * OPTIONAL, AND ABSENT MEANS "AS BEFORE". Every record written before the
+   * second store existed has none, and nothing in the app branches on it yet —
+   * which is what makes this stage invisible and reversible. The backfill
+   * (services/firestoreDb.ts's backfillLocationIds) assigns Brampton to the
+   * rows that predate the split, and only ever to rows with no location.
+   */
+  locationId?: string;
 }
 
 // --- Time clock / payroll ---
@@ -1131,6 +1256,18 @@ export interface TimeEntry {
   // phone punch are told apart in the Time Clock view and the audit log —
   // they carry different trust, and the owner should be able to see which.
   source?: 'kiosk';
+  /**
+   * WHERE THE SHIFT WAS WORKED — and the owner's decision is that this comes from the KIOSK it was punched on, never from the person. Staff work both stores and their hours split automatically. Stage 3 fills it; this stage only adds the field.
+   *
+   * Multi-store stage 1 — see Location.
+   *
+   * OPTIONAL, AND ABSENT MEANS "AS BEFORE". Every record written before the
+   * second store existed has none, and nothing in the app branches on it yet —
+   * which is what makes this stage invisible and reversible. The backfill
+   * (services/firestoreDb.ts's backfillLocationIds) assigns Brampton to the
+   * rows that predate the split, and only ever to rows with no location.
+   */
+  locationId?: string;
 }
 
 // A record-keeping acknowledgment that an owner reviewed/paid an employee for a
@@ -1377,6 +1514,18 @@ export interface Repair {
   // SalesTransaction that recognized its revenue/profit. Analytics reads this to
   // count the repair's money once (via the sale) instead of twice.
   salesTransactionId?: string;
+  /**
+   * WHERE THE WORK IS HAPPENING.
+   *
+   * Multi-store stage 1 — see Location.
+   *
+   * OPTIONAL, AND ABSENT MEANS "AS BEFORE". Every record written before the
+   * second store existed has none, and nothing in the app branches on it yet —
+   * which is what makes this stage invisible and reversible. The backfill
+   * (services/firestoreDb.ts's backfillLocationIds) assigns Brampton to the
+   * rows that predate the split, and only ever to rows with no location.
+   */
+  locationId?: string;
 }
 
 export type RepairBatchStatus = 'active' | 'completed' | 'cancelled';
