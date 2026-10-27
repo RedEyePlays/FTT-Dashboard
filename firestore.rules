@@ -518,6 +518,34 @@ service cloud.firestore {
         allow update: if isManagerUp(ws);
         allow delete: if isOwnerOf(ws);
       }
+      // STORES (domain/locations.ts). Multi-store stage 1.
+      //
+      // READ IS EVERY ACTIVE MEMBER. A location is a name and an address —
+      // the shop's own shopfront, printed on receipts and shown in pickers
+      // from stage 2 on. It carries nothing sensitive, and a staff member who
+      // cannot read the list cannot be shown which store a record belongs to.
+      //
+      // WRITE IS OWNER-ONLY. Opening, renaming or closing a store is a
+      // decision about the business, not a counter action.
+      //
+      // DELETE IS REFUSED OUTRIGHT, for anybody. A deleted location orphans
+      // every device, sale, repair and shift pointing at it, with no way left
+      // to say where any of it happened. Closing a store is `active: false`
+      // (domain/locations.ts's deactivateLocation), which hides it from
+      // pickers and leaves all of that intact and readable. There is no
+      // deleteLocation in services/firestoreDb.ts either — this is the second
+      // lock, on the stored copy.
+      //
+      // NOTHING ELSE IN THIS FILE IS GATED BY LOCATION, deliberately. Stage 1
+      // adds a field; it does not change who may read what. Tightening these
+      // rules by location mid-migration would lock staff out of every record
+      // that has not been backfilled yet.
+      match /locations/{id} {
+        allow read: if activeMemberOf(ws);
+        allow create, update: if isOwnerOf(ws);
+        allow delete: if false;
+      }
+
       // Recurring templates are owner-only CONFIGURATION (which bills recur,
       // at what amount or in variable "enter it each period" mode, and which
       // periods were generated/skipped). A manager may add an expense but

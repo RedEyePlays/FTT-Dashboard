@@ -153,6 +153,7 @@ import {
 import { useReceiptCapture } from './hooks/useReceiptCapture';
 import { useConnectionStatus } from './hooks/useConnectionStatus';
 import { deleteReceiptObjects, receiptUrl } from './services/receiptUpload';
+import { LocationsPanel } from './components/LocationsPanel';
 
 // Suspense fallback for lazily-loaded views — reuses LoadingScreen's spinner
 // style, but sized to sit inside the content area rather than full-screen.
@@ -170,7 +171,7 @@ const App: React.FC = () => {
     data, notes, setNotes, tasks, setTasks,
     deviceBuyers, dropOffs, settlements, settlementsLoaded, salesTransactions, customers, repairs, repairBatches, pcBuilds,
     timeEntries, payPeriods, payPeriodApprovals, staffBonuses, kioskStaff, cashReconciliations, staffNotes, expenses, recurringExpenses,
-    skuCounters, setSkuCounters, activityLog, lastBackup, settings, receipts,
+    skuCounters, setSkuCounters, activityLog, lastBackup, settings, receipts, locations,
     dbLoading, dbError, reconnect, refusedCollections, enableExtendedData, enableCashData,
     deviceBuyersRef, dropOffsRef, settlementsRef, customersRef, salesTransactionsRef,
     repairsRef, repairBatchesRef, skuRef, dataRef,
@@ -3791,6 +3792,27 @@ const App: React.FC = () => {
               canManage={allow('settings.manage')}
               role={appUser.role}
               workspaceId={workspaceId}
+              locationsSlot={
+                <LocationsPanel
+                  locations={locations}
+                  general={settings.general}
+                  workspaceId={workspaceId}
+                  currentUserId={appUser.id}
+                  /* THE AUDIT ENTRY. Backfilling every record in the workspace
+                     is the largest single data change this app has made — if it
+                     later turns out wrong, the owner needs to know exactly what
+                     ran, who ran it, when, and the counts per collection. */
+                  onBackfillComplete={summary => audit(
+                    'locations.backfill', 'location', summary.locationId,
+                    undefined,
+                    {
+                      locationName: summary.locationName,
+                      totalWritten: summary.totalWritten,
+                      perCollection: summary.perCollection,
+                    },
+                  )}
+                />
+              }
               loadBackupHistory={appUser.role === 'owner' && workspaceId ? () => import('./services/backupStorage').then(m => m.listWorkspaceBackups(workspaceId)) : undefined}
               onDownloadBackup={(path) => { import('./services/backupStorage').then(m => m.getBackupDownloadUrl(path)).then(url => window.open(url, '_blank', 'noopener')).catch(() => {}); }}
               backupSlot={

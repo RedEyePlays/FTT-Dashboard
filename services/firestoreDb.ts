@@ -5,7 +5,7 @@ import { db } from './firebase';
 import {
   InventoryItem, DeviceBuyer, DropOff, Settlement, Customer, SalesTransaction, ActivityEntry, Note, Task,
   AppUser, WorkspaceInvite, AuditEntry, TimeEntry, PayPeriodPaid, PayPeriodApproval, CashReconciliation, StaffNote, ListingPlatform, Repair,
-  Expense, RecurringExpense, RefundPaidFrom, RefundSplit, StaffBonus, KioskStaff, Receipt,
+  Expense, RecurringExpense, RefundPaidFrom, RefundSplit, StaffBonus, KioskStaff, Receipt, Location,
 } from '../types';
 import { collectionFor } from '../domain/inventory';
 import {
@@ -14,6 +14,7 @@ import {
 import { AppSettings } from '../domain/settings';
 import { allocateSkuInTxn } from './sku';
 import { modelKeyOf, withModelKey } from '../domain/modelKey';
+import { LocationTaggedCollection } from '../domain/locations';
 import { assertOnline, OFFLINE_SKU_MESSAGE, OFFLINE_IMEI_INDEX_MESSAGE } from './functionsGuard';
 
 // Shared shop data lives under user_data/{workspaceId}/<collection>, where
@@ -35,6 +36,9 @@ export const COLLECTIONS = [
   'dropOffs', 'runners', 'settlements', 'activityLog', 'auditLogs',
   'repairs', 'repairBatches', 'timeEntries', 'payPeriods', 'payPeriodApprovals', 'staffBonuses', 'cashReconciliations', 'staffNotes',
   'expenses', 'recurringExpenses',
+  // STORES (domain/locations.ts). Multi-store stage 1: records point at one
+  // of these, so a renamed store does not orphan its history.
+  'locations',
   // PHOTOGRAPHED RECEIPTS (domain/receipt.ts). Its own collection because a
   // receipt outlives — and usually never has — an expense.
   'receipts',
@@ -793,4 +797,105 @@ export async function reindexModelKeys(
     }
   }
   return { scanned, written, unkeyable, nextAfter: cursor, done: false };
+}
+
+/* ---------------- Locations (multi-store, stage 1) ---------------- */
+
+export const saveLocation = (uid: string, l: Location) => saveItem(uid, 'locations', l);
+/**
+ * There is deliberately NO deleteLocation.
+ *
+ * A deleted location orphans every device, sale, repair and shift pointing at
+ * it, with no way left to say where any of it happened. Deactivating
+ * (domain/locations.ts's deactivateLocation) hides it from pickers and leaves
+ * all of that intact and readable — and firestore.rules refuses a delete on
+ * this collection outright, so the absence of a function here is not the only
+ * thing enforcing it.
+ */
+
+/**
+ * ASSIGN EXISTING RECORDS TO A LOCATION. ONE COLLECTION PER CALL.
+ *
+ * The largest single data change this app has made: every device, sale,
+ * repair, drop-off, settlement, shift and drawer record in the workspace. It
+ * follows `reindexModelKeys` above rather than inventing a second migration
+ * style — paged on `orderBy('__name__')` with `startAfter`, a cursor handed
+ * back as `nextAfter`, resumable, and counts reported separately.
+ *
+ * FOUR PROPERTIES, each load-bearing:
+ *
+ *   IT NEVER GUESSES. Only a row with NO `locationId` is touched. A row that
+ *   already has one is counted as `skipped` and left alone — always, including
+ *   on a resumed run. Stage 4's transfers will set this field deliberately,
+ *   and a migration that overwrote their work would move stock between stores
+ *   in the books.
+ *
+ *   IT IS IDEMPOTENT. A second run writes nothing, because by then every row
+ *   has a location and every row is skipped. Same discipline as
+ *   reindexModelKeys skipping a row whose modelKey already matches.
+ *
+ *   IT IS RESUMABLE. It will not finish in one call across every collection,
+ *   so it stops at `maxDocs` and hands back the cursor rather than running to
+ *   a timeout and leaving the caller unsure how far it got.
+ *
+ *   IT REPORTS, PER COLLECTION, what it scanned, wrote and skipped — so the
+ *   owner can see it actually finished instead of trusting a spinner.
+ *
+ * ONE COLLECTION PER CALL because a single cursor cannot span collections:
+ * document ids are only ordered within one. The caller loops.
+ */
+export interface LocationBackfillProgress {
+  collection: LocationTaggedCollection;
+  scanned: number;
+  written: number;
+  /** Already had a location. Never overwritten. */
+  skipped: number;
+  /** Pass back as `after` to continue; absent when the collection is done. */
+  nextAfter?: string;
+  done: boolean;
+}
+
+export async function backfillLocationIds(
+  uid: string,
+  locationId: string,
+  opts: { collection: LocationTaggedCollection; after?: string; maxDocs?: number },
+): Promise<LocationBackfillProgress> {
+  const collection = opts.collection;
+  if (!locationId) throw new Error('A location is required to backfill to.');
+  const pageSize = 300;
+  const maxDocs = Math.max(1, opts.maxDocs ?? 1200);
+  let scanned = 0;
+  let written = 0;
+  let skipped = 0;
+  let cursor = opts.after;
+
+  while (scanned < maxDocs) {
+    const take = Math.min(pageSize, maxDocs - scanned);
+    const parts: any[] = [orderBy('__name__'), limit(take)];
+    if (cursor) parts.push(startAfter(cursor));
+    const snap = await getDocs(query(colRef(uid, collection as CollName), ...parts));
+    if (snap.empty) return { collection, scanned, written, skipped, done: true };
+
+    const batch = writeBatch(db);
+    let inBatch = 0;
+    for (const d of snap.docs) {
+      scanned++;
+      cursor = d.id;
+      const row = d.data() as Record<string, unknown>;
+      // THE ONE CONDITION. A row that already carries a location — set by a
+      // previous run, by stage 4's transfers, or by hand — is never touched.
+      if (typeof row.locationId === 'string' && row.locationId) { skipped++; continue; }
+      // A field merge, so nothing else on the record can be disturbed by a
+      // migration whose only job is to add one field.
+      batch.set(docRef(uid, collection as CollName, d.id), { locationId }, { merge: true } as any);
+      inBatch++;
+      written++;
+    }
+    if (inBatch > 0) await batch.commit();
+    // A short page means the collection ended.
+    if (snap.docs.length < take) {
+      return { collection, scanned, written, skipped, done: true };
+    }
+  }
+  return { collection, scanned, written, skipped, nextAfter: cursor, done: false };
 }
