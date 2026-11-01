@@ -565,9 +565,57 @@ service cloud.firestore {
       //
       // Technicians still cannot touch the till at all (isStaffOf excludes
       // them), and only the owner may delete a day's record.
+      //
+      // ONE DRAWER PER STORE PER DAY — multi-store stage 2. The id is
+      // `{YYYY-MM-DD}__{locationId}` (domain/drawerKey.ts), and two things are
+      // enforced here that the client alone cannot be trusted with:
+      //
+      //  1. THE KEY AND THE FIELD MUST AGREE. A write whose `locationId` said
+      //     Mississauga while landing on Brampton's document would put one
+      //     store's cash on the other's day and leave the record itself
+      //     claiming otherwise — the exact failure this stage exists to stop.
+      //     A BARE-DATE id is accepted too: every record written before this
+      //     stage has one, and those days keep being written where they
+      //     already are rather than being re-keyed.
+      //
+      //  2. A PERSON WRITES THEIR OWN STORE'S TILL. `users.locationIds` is the
+      //     owner-set list of stores somebody works at. The owner writes any
+      //     store's drawer.
+      //
+      // AN EMPTY OR ABSENT LIST IS NOT A LOCKOUT, deliberately: it means "the
+      // default store" (domain/locations.ts's permittedLocations), which is
+      // what every account holds until the owner sets one. Rules cannot
+      // resolve WHICH store is the default — that needs a query, which rules
+      // cannot do — so an empty list is not narrowed here. The restriction
+      // therefore bites exactly when the owner has actually restricted
+      // somebody, and nobody is locked out of their own till by a field no
+      // one has filled in yet. The client picks the store (hooks/
+      // useActiveStore.ts) from the same list.
+      //
+      // Nothing else in this file is changed by stage 2: every other
+      // collection's rules stay as they are, and a record with a location and
+      // one without are still equally readable to exactly the same people.
+      function drawerKeyAgrees(id) {
+        return request.resource.data.get('id', '') == id
+            && (id == request.resource.data.get('date', '') + '__' + request.resource.data.get('locationId', '')
+                || id == request.resource.data.get('date', ''));
+      }
+      //
+      // The profile is passed IN rather than re-fetched: every me() is a
+      // document read, a single-document request is capped at ten of them, and
+      // a rule that exceeds the cap does not fail safe — it errors, which
+      // denies the write. The first version of this rule did exactly that and
+      // locked legitimate writes out of the till.
+      function tillAllowed(prof, loc) {
+        return prof.role == 'owner'
+            || prof.get('locationIds', []).size() == 0
+            || prof.get('locationIds', []).hasAny([loc]);
+      }
       match /cashReconciliations/{id} {
         allow read: if activeMemberOf(ws);
-        allow create, update: if isStaffOf(ws);
+        allow create, update: if isStaffOf(ws)
+          && drawerKeyAgrees(id)
+          && tillAllowed(me(), request.resource.data.get('locationId', ''));
         allow delete: if isOwnerOf(ws);
       }
 

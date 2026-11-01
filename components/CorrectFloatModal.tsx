@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { StoreTag } from './StoreTag';
 import { X, Wrench, AlertTriangle } from 'lucide-react';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 import { selectOnFocus } from '../hooks/selectOnFocus';
@@ -20,12 +21,18 @@ interface Props {
   currentFloat: number;
   onClose: () => void;
   onCorrect: (newFloat: number, reason: string) => void;
+  /**
+   * The store whose till this is (domain/locations.ts). Named right in the
+   * dialog, because the one thing a per-store drawer must never let somebody
+   * do is count one shop's cash into the other's day.
+   */
+  storeLabel?: string;
 }
 
 const money = (n: number) => `$${(n || 0).toFixed(2)}`;
 const input = 'w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500';
 
-export const CorrectFloatModal: React.FC<Props> = ({ currentFloat, onClose, onCorrect }) => {
+export const CorrectFloatModal: React.FC<Props> = ({ currentFloat, onClose, onCorrect, storeLabel }) => {
   const [value, setValue] = useState('');
   const [reason, setReason] = useState('');
   const num = parseFloat(value);
@@ -45,7 +52,7 @@ export const CorrectFloatModal: React.FC<Props> = ({ currentFloat, onClose, onCo
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={onClose}>
       <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-sm border border-slate-200 dark:border-slate-700" onClick={e => e.stopPropagation()}>
         <div className="px-5 py-3 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
-          <h2 className="font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2"><Wrench className="w-4 h-4" /> Correct today's float</h2>
+          <h2 className="font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2"><Wrench className="w-4 h-4" /> Correct today's float <StoreTag storeLabel={storeLabel} /></h2>
           <button onClick={onClose} aria-label="Close"><X className="w-5 h-5 text-slate-400" /></button>
         </div>
         <div className="p-5 space-y-4">

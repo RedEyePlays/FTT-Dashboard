@@ -55,7 +55,11 @@ beforeEach(async () => {
     await setDoc(doc(db, 'users', 'employee-uid'), { id: 'employee-uid', email: 'employee@shop.test', role: 'employee', workspaceId: WORKSPACE, disabled: false });
     await setDoc(doc(db, 'users', 'tech-uid'), { id: 'tech-uid', email: 'tech@shop.test', role: 'technician', workspaceId: WORKSPACE, disabled: false });
     // Pre-existing records the DENIED-mutation tests attempt to alter.
-    await setDoc(doc(db, 'user_data', WORKSPACE, 'cashReconciliations', 'today'), { date: '2026-01-01' });
+    // A drawer document's id IS its key: `{date}__{locationId}`, or a bare
+    // date for a record written before multi-store stage 2. firestore.rules
+    // now requires the stored id and date to agree with the key, so these
+    // fixtures use a real one rather than 'today'.
+    await setDoc(doc(db, 'user_data', WORKSPACE, 'cashReconciliations', '2026-01-01'), { id: '2026-01-01', date: '2026-01-01' });
     await setDoc(doc(db, 'user_data', WORKSPACE, 'salesTransactions', 'sale1'), { status: 'completed', total: 100 });
     await setDoc(doc(db, 'user_data', WORKSPACE, 'meta', 'app'), { notes: [] });
     await setDoc(doc(db, 'user_data', WORKSPACE, 'staffNotes', 'note1'), { text: 'hi' });
@@ -80,7 +84,7 @@ describe('the catch-all cannot resurrect access a dedicated block denies', () =>
 
   it('manager write to cashReconciliations reconcile fields is ALLOWED', async () => {
     const db = asManager();
-    await assertSucceeds(setDoc(doc(db, 'user_data', WORKSPACE, 'cashReconciliations', 'today'),
+    await assertSucceeds(setDoc(doc(db, 'user_data', WORKSPACE, 'cashReconciliations', '2026-01-01'),
       { reconciledAt: Date.now(), reconciledBy: 'manager-uid', countedCash: 120 }, { merge: true }));
   });
 
@@ -128,8 +132,8 @@ describe('legitimate flows still work after removing the catch-all', () => {
 
   it('employee logging a cash movement (no reconcile fields) is ALLOWED', async () => {
     const db = asEmployee();
-    await assertSucceeds(setDoc(doc(db, 'user_data', WORKSPACE, 'cashReconciliations', 'today2'),
-      { date: '2026-01-02', cashIn: [{ amount: 20 }] }));
+    await assertSucceeds(setDoc(doc(db, 'user_data', WORKSPACE, 'cashReconciliations', '2026-01-02'),
+      { id: '2026-01-02', date: '2026-01-02', cashIn: [{ amount: 20 }] }));
   });
 
   it('technician update within techRepairKeys is ALLOWED', async () => {
@@ -317,7 +321,7 @@ describe('employee operational permissions (granted)', () => {
   });
 
   it('employee can RECONCILE the drawer (write reconcile fields on cashReconciliations)', async () => {
-    await assertSucceeds(setDoc(doc(asEmployee(), 'user_data', WORKSPACE, 'cashReconciliations', 'today'),
+    await assertSucceeds(setDoc(doc(asEmployee(), 'user_data', WORKSPACE, 'cashReconciliations', '2026-01-01'),
       { reconciledAt: Date.now(), reconciledBy: 'employee-uid', reconciledByEmail: 'employee@shop.test', countedCash: 120, note: 'end of shift' }, { merge: true }));
   });
 

@@ -34,7 +34,7 @@ const merge = (
   patch: Partial<CashReconciliation>,
   appends?: Parameters<typeof mergeDrawerRecord>[0]['appends'],
   cashSales = 0,
-) => mergeDrawerRecord({ date: '2026-03-16', existing, patch, appends, cashSales, carry: null, actor: ACTOR, now: NOW });
+) => mergeDrawerRecord({ date: '2026-03-16', id: '2026-03-16', existing, patch, appends, cashSales, carry: null, actor: ACTOR, now: NOW });
 
 describe('the lost update — a second terminal must not wipe the first', () => {
   // The drawer as the tablet left it: opened this morning, one cash-out
@@ -115,14 +115,14 @@ describe('a new day seeds from the till that was carried over', () => {
 
   it('opens with yesterday\'s cash, not $0', () => {
     const out = mergeDrawerRecord({
-      date: '2026-03-16', existing: undefined, patch: {}, cashSales: 0, carry, actor: ACTOR, now: NOW,
+      date: '2026-03-16', id: '2026-03-16', existing: undefined, patch: {}, cashSales: 0, carry, actor: ACTOR, now: NOW,
     });
     expect(out.openingFloat).toBe(940);
   });
 
   it('a drawer nobody closed reads as still open today', () => {
     const out = mergeDrawerRecord({
-      date: '2026-03-16', existing: undefined, patch: {}, cashSales: 0, carry, actor: ACTOR, now: NOW,
+      date: '2026-03-16', id: '2026-03-16', existing: undefined, patch: {}, cashSales: 0, carry, actor: ACTOR, now: NOW,
     });
     expect(out.openedAt).toBe(NOW);
     expect(out.openedBy).toBe('u1');
@@ -130,7 +130,7 @@ describe('a new day seeds from the till that was carried over', () => {
 
   it('once the day HAS a record, its own float is the truth — the carry is not re-applied', () => {
     const out = mergeDrawerRecord({
-      date: '2026-03-16', existing: base({ openingFloat: 100, openedAt: 5 }), patch: {},
+      date: '2026-03-16', id: '2026-03-16', existing: base({ openingFloat: 100, openedAt: 5 }), patch: {},
       cashSales: 0, carry, actor: ACTOR, now: NOW,
     });
     expect(out.openingFloat).toBe(100);
@@ -139,7 +139,7 @@ describe('a new day seeds from the till that was carried over', () => {
 
   it('a carried CLOSED day does not silently reopen today', () => {
     const out = mergeDrawerRecord({
-      date: '2026-03-16', existing: undefined, patch: {}, cashSales: 0,
+      date: '2026-03-16', id: '2026-03-16', existing: undefined, patch: {}, cashSales: 0,
       carry: { float: 500, fromDate: '2026-03-15', stillOpen: false }, actor: ACTOR, now: NOW,
     });
     expect(out.openedAt).toBeUndefined();
@@ -152,7 +152,7 @@ describe('a new day seeds from the till that was carried over', () => {
       base({ id: '2026-03-14', date: '2026-03-14' }), // bare — must not hide the open day
     ];
     const out = mergeDrawerRecord({
-      date: '2026-03-16', existing: undefined, patch: {}, cashSales: 0,
+      date: '2026-03-16', id: '2026-03-16', existing: undefined, patch: {}, cashSales: 0,
       carry: drawerCarryOver(recs, '2026-03-16'), actor: ACTOR, now: NOW,
     });
     expect(out.openingFloat).toBe(940);

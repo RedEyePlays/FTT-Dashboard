@@ -27,12 +27,31 @@ import { warrantyCostRows, WARRANTY_COST_PL_NOTE } from '../domain/warranty';
 import { toCSV, triggerDownload } from '../services/backup';
 import { newId } from '../domain/ids';
 import { toISODate, todayISO, clampToBooksStart } from '../domain/dates';
+import { StoreTag, StoreBanner } from './StoreTag';
 
 type SaveReconciliation = (r: ReconciliationInput) => void;
 
 interface Props {
   salesTransactions: SalesTransaction[];
   cashReconciliations: CashReconciliation[];
+  /**
+   * THIS STORE'S drawer records (multi-store stage 2, domain/drawerKey.ts).
+   *
+   * The cash tab and Day History read these; the P&L keeps reading the full
+   * `cashReconciliations` above, because the books are one set across both
+   * stores and filtering them is stage 5's job, not this screen's.
+   *
+   * Defaults to the whole list, which is what a single-store workspace has.
+   */
+  storeDrawers?: CashReconciliation[];
+  /** The store named on every cash figure here — components/StoreTag.tsx. */
+  storeLabel?: string;
+  /**
+   * That date's cash takings FOR THIS STORE. Injected rather than computed
+   * here, so one place decides how an untagged historical sale is attributed
+   * (domain/reports.ts's expectedCashForDateAt).
+   */
+  cashSalesFor?: (date: string) => number;
   inventory: InventoryItem[];
   payPeriods: PayPeriodPaid[];
   // Staff bonuses — their own P&L line, never folded into payroll. The
@@ -132,7 +151,7 @@ const tabAllowed = (id: TabId, perms: { canReconcile: boolean; canViewProfit: bo
 };
 
 export const ReportsView: React.FC<Props> = ({
-  salesTransactions, cashReconciliations, inventory, payPeriods, staffBonuses = [], booksStartDate, paidBreakReasons = [], settlements, deviceBuyers, onSaveReconciliation,
+  salesTransactions, cashReconciliations, storeDrawers, storeLabel, cashSalesFor, inventory, payPeriods, staffBonuses = [], booksStartDate, paidBreakReasons = [], settlements, deviceBuyers, onSaveReconciliation,
   repairs, customers, auditLogs, activity, timeEntries, users, expenses, expenseCategories,
   recurringExpenses, canAddExpense, canViewAllExpenses, currentUserId, canReconcile, canViewProfit,
   canViewDetailedProfit = false,
@@ -140,6 +159,9 @@ export const ReportsView: React.FC<Props> = ({
   onSaveRecurringExpense, onDeleteRecurringExpense, onGenerateRecurringExpense, onSkipRecurringPeriod,
 }) => {
   const perms = { canReconcile, canViewProfit, canAddExpense, canViewAllExpenses };
+  // A single-store workspace passes neither, and behaves exactly as before.
+  const drawers = storeDrawers || cashReconciliations;
+  const cashSalesOn = cashSalesFor || ((d: string) => expectedCashForDate(salesTransactions, d));
   const tabs = TABS.filter(t => tabAllowed(t.id, perms));
   // Default to the first tab this role can actually see — never a fixed
   // 'history', which a cash.reconcile-only employee (canViewProfit: false)
@@ -168,13 +190,14 @@ export const ReportsView: React.FC<Props> = ({
           money figure whose access it hasn't verified directly. */}
       {tab === 'history' && tabAllowed('history', perms) && (
         <DailyHistoryTab
-          salesTransactions={salesTransactions} cashReconciliations={cashReconciliations}
+          salesTransactions={salesTransactions} cashReconciliations={drawers}
+          storeLabel={storeLabel} cashSalesFor={cashSalesOn}
           repairs={repairs} inventory={inventory} customers={customers} auditLogs={auditLogs} activity={activity}
           timeEntries={timeEntries} users={users} settlements={settlements} booksStartDate={booksStartDate} paidBreakReasons={paidBreakReasons}
           expenses={expenses} staffBonuses={staffBonuses} canViewDetailedProfit={canViewDetailedProfit}
         />
       )}
-      {tab === 'cash' && tabAllowed('cash', perms) && <CashReconTab salesTransactions={salesTransactions} cashReconciliations={cashReconciliations} onSave={onSaveReconciliation} />}
+      {tab === 'cash' && tabAllowed('cash', perms) && <CashReconTab salesTransactions={salesTransactions} cashReconciliations={drawers} storeLabel={storeLabel} cashSalesFor={cashSalesOn} onSave={onSaveReconciliation} />}
       {tab === 'tax' && tabAllowed('tax', perms) && <TaxReportTab salesTransactions={salesTransactions} booksStartDate={booksStartDate} />}
       {tab === 'pnl' && tabAllowed('pnl', perms) && <ProfitLossTab plInput={plInput} repairs={repairs} showExpenseCategories={canViewAllExpenses} />}
       {tab === 'expenses' && tabAllowed('expenses', perms) && (
@@ -231,7 +254,11 @@ const DailyHistoryTab: React.FC<{
   expenses?: Expense[];
   staffBonuses?: StaffBonus[];
   canViewDetailedProfit?: boolean;
-}> = ({ salesTransactions, cashReconciliations, repairs, inventory, customers, auditLogs, activity, timeEntries, users, settlements, booksStartDate, paidBreakReasons = [], expenses = [], staffBonuses = [], canViewDetailedProfit = false }) => {
+  // Multi-store stage 2: `cashReconciliations` above is already scoped to one
+  // store by the caller, and these two say which and supply its takings.
+  storeLabel?: string;
+  cashSalesFor?: (date: string) => number;
+}> = ({ salesTransactions, cashReconciliations, repairs, inventory, customers, auditLogs, activity, timeEntries, users, settlements, booksStartDate, paidBreakReasons = [], expenses = [], staffBonuses = [], canViewDetailedProfit = false, storeLabel, cashSalesFor }) => {
   const [date, setDate] = useState(todayISO());
   const now = Date.now();
 
@@ -246,13 +273,14 @@ const DailyHistoryTab: React.FC<{
 
   // Same cash-reconciliation figures the Cash Reconciliation tab / Close Out
   // read for a day — the saved record (if any) plus that day's cash sales.
-  const cashSales = useMemo(() => expectedCashForDate(salesTransactions, date), [salesTransactions, date]);
+  const cashSalesOn = cashSalesFor || ((d: string) => expectedCashForDate(salesTransactions, d));
+  const cashSales = useMemo(() => cashSalesOn(date), [cashSalesOn, date]);
   const recon = cashReconciliations.find(r => r.date === date);
   // Same carry-over the POS/Close Out read: a day with no record of its
   // own inherits the previous day's till, and stays open if that day was
   // never closed. Without this, viewing a day the shop simply hadn't
   // opened yet showed a $0 drawer that had never been counted.
-  const carry = useMemo(() => drawerCarryOver(cashReconciliations, date, d => expectedCashForDate(salesTransactions, d)), [cashReconciliations, salesTransactions, date]);
+  const carry = useMemo(() => drawerCarryOver(cashReconciliations, date, cashSalesOn), [cashReconciliations, cashSalesOn, date]);
   const drawer = useMemo(() => cashDrawerSummary(recon, cashSales, carry), [recon, cashSales, carry]);
   const reconciled = !!recon?.reconciledAt;
   // Derived, never read off the record: an offline merge write cannot
@@ -318,6 +346,9 @@ const DailyHistoryTab: React.FC<{
 
   return (
     <div className="space-y-6">
+      {/* Which store's cash this day's drawer figures below belong to. The
+          sales/profit/hours figures on this screen are still shop-wide. */}
+      <StoreBanner storeLabel={storeLabel} what="cash drawer, money trail and variance below are this store's" />
       <div className={`${card} p-5`}>
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
@@ -360,7 +391,7 @@ const DailyHistoryTab: React.FC<{
 
       {/* --- Cash reconciliation ------------------------------------------------ */}
       <div className={`${card} p-5`}>
-        <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200 mb-3">Cash Drawer</h3>
+        <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200 mb-3 flex items-center gap-2">Cash Drawer <StoreTag storeLabel={storeLabel} /></h3>
         {!drawer.opened ? (
           <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
             <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0" /> Drawer was never opened this day.
@@ -573,9 +604,13 @@ const CashReconTab: React.FC<{
   salesTransactions: SalesTransaction[];
   cashReconciliations: CashReconciliation[];
   onSave: SaveReconciliation;
-}> = ({ salesTransactions, cashReconciliations, onSave }) => {
+  // Multi-store stage 2: one store's records, named, with its own takings.
+  storeLabel?: string;
+  cashSalesFor?: (date: string) => number;
+}> = ({ salesTransactions, cashReconciliations, onSave, storeLabel, cashSalesFor }) => {
   const [date, setDate] = useState(todayISO());
-  const cashSales = useMemo(() => expectedCashForDate(salesTransactions, date), [salesTransactions, date]);
+  const cashSalesOn = cashSalesFor || ((d: string) => expectedCashForDate(salesTransactions, d));
+  const cashSales = useMemo(() => cashSalesOn(date), [cashSalesOn, date]);
   const saved = cashReconciliations.find(r => r.date === date);
   // Cash taken in after this day was counted. The sale still counts as that
   // day's revenue and profit — this is only about the money not having been in
@@ -666,6 +701,7 @@ const CashReconTab: React.FC<{
             <span>The drawer wasn't opened for this day, so no starting float was recorded. Enter the float you started with below before reconciling — don't leave it assumed.</span>
           </div>
         )}
+        <StoreBanner storeLabel={storeLabel} what="this store's drawer. Counting here closes THIS store's day." />
         <div className="flex flex-wrap items-end gap-4">
           <div>
             <label className={label}>Date</label>
@@ -739,7 +775,7 @@ const CashReconTab: React.FC<{
         </div>
       </div>
 
-      <CashHistory cashReconciliations={cashReconciliations} salesTransactions={salesTransactions} onPick={setDate} />
+      <CashHistory cashReconciliations={cashReconciliations} salesTransactions={salesTransactions} cashSalesFor={cashSalesOn} onPick={setDate} />
     </div>
   );
 };
@@ -753,7 +789,8 @@ const CashReconTab: React.FC<{
 const RANGES: { days: number; label: string }[] = [
   { days: 30, label: '30 days' }, { days: 90, label: '90 days' }, { days: 365, label: '1 year' }, { days: 0, label: 'All' },
 ];
-const CashHistory: React.FC<{ cashReconciliations: CashReconciliation[]; salesTransactions: SalesTransaction[]; onPick: (date: string) => void }> = ({ cashReconciliations, salesTransactions, onPick }) => {
+const CashHistory: React.FC<{ cashReconciliations: CashReconciliation[]; salesTransactions: SalesTransaction[]; cashSalesFor?: (date: string) => number; onPick: (date: string) => void }> = ({ cashReconciliations, salesTransactions, cashSalesFor, onPick }) => {
+  const cashSalesOn = cashSalesFor || ((d: string) => expectedCashForDate(salesTransactions, d));
   const [days, setDays] = useState(30);
   const cutoff = useMemo(() => {
     if (!days) return '';
@@ -788,7 +825,7 @@ const CashHistory: React.FC<{ cashReconciliations: CashReconciliation[]; salesTr
               // Derived per row rather than read off the record — an offline
               // merge write leaves the stored variance stale until the next
               // online write rewrites it.
-              const variance = recomputedVariance(r, expectedCashForDate(salesTransactions, r.date));
+              const variance = recomputedVariance(r, cashSalesOn(r.date));
               return (
                 <tr key={r.id} className="cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/40" onClick={() => onPick(r.date)}>
                   <td className="py-2 font-medium text-slate-700 dark:text-slate-200">{r.date}</td>

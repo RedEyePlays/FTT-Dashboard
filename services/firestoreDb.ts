@@ -563,13 +563,23 @@ export const deletePayPeriodApproval = (uid: string, id: string) => deleteItem(u
  */
 export async function commitCashReconciliation(uid: string, input: {
   date: string;
+  /**
+   * The document id — `{date}__{locationId}`, resolved by the caller through
+   * domain/drawerKey.ts's drawerIdFor. ONE DRAWER PER STORE PER DAY: keying
+   * this on the bare date is what let two stores overwrite each other's till
+   * on the same day, and it is why the id is now passed in rather than built
+   * from `date` here.
+   */
+  id: string;
+  /** The store this drawer belongs to; '' with no store list configured. */
+  locationId?: string;
   patch?: Partial<CashReconciliation>;
   appends?: DrawerAppends;
   cashSales: number;
   carry: DrawerCarryOver | null;
   actor: { id: string; email: string };
 }): Promise<DrawerWriteResult> {
-  const ref = docRef(uid, 'cashReconciliations', input.date);
+  const ref = docRef(uid, 'cashReconciliations', input.id);
 
   // Offline is known up front — don't start a transaction that is certain to
   // reject, just queue the merge write the offline cache can actually hold.
@@ -621,6 +631,14 @@ export interface DrawerWriteResult {
  * store expectedCash/variance, because it cannot see the merged result. Reads
  * derive those (recomputedExpectedCash) and the next online transaction
  * rewrites them.
+ *
+ * IT CANNOT LAND ON ANOTHER STORE'S DRAWER. `ref` is built from the
+ * store-specific document id above, before the queue is involved, so the
+ * document a queued write targets is fixed at the moment it is made and does
+ * not depend on anything about the device when it finally syncs — a terminal
+ * that queues a cash-out in Brampton and reconnects in Mississauga still
+ * writes Brampton's day. The `locationId` field rides along in the same merge
+ * payload, so the queued write is attributable the moment it lands.
  */
 async function queueDrawerMergeWrite(
   ref: ReturnType<typeof docRef>,
@@ -637,8 +655,8 @@ async function queueDrawerMergeWrite(
   // reconnect, and the cache has already accepted the write. Awaiting it
   // would hang the caller for the length of the outage.
   setDoc(ref, payload, { merge: true })
-    .catch(e => console.error('[drawer] queued merge write failed on sync', input.date, e));
-  console.warn('[drawer] queued a merge write instead of a transaction', { date: input.date, reason });
+    .catch(e => console.error('[drawer] queued merge write failed on sync', input.id, e));
+  console.warn('[drawer] queued a merge write instead of a transaction', { drawer: input.id, reason });
   return {
     record: mergeDrawerRecord({ ...input, existing: undefined }),
     change: { openedSet: false, openedCleared: false, reconciledSet: false, reconciledCleared: false, losesOpenedAt: false },
@@ -664,7 +682,7 @@ function runDrawerTransaction(
     // can be traced instead of guessed at.
     if (change.losesOpenedAt) {
       console.warn('[drawer] write removes openedAt', {
-        date: input.date, hadOpenedAt: existing?.openedAt,
+        drawer: input.id, date: input.date, hadOpenedAt: existing?.openedAt,
         patchKeys: Object.keys(input.patch || {}), by: input.actor.email,
       });
     }

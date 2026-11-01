@@ -169,6 +169,75 @@ export const setDefaultLocation = (
  */
 export const canDeleteLocation = (): false => false;
 
+/* ---------------- Who may work at which store ---------------- */
+
+/** What `users.locationIds` is for, in the words the Users screen shows. */
+export const LOCATION_ACCESS_NOT_PAYROLL =
+  'This decides which store\'s cash drawer and records someone works with in the app. '
+  + 'It does NOT affect pay: hours come from the kiosk they punch in at, and a pay '
+  + 'period still spans both stores.';
+
+/** The shape this module needs off a user — role, and the stores they hold. */
+export type LocationMember = { role?: string; locationIds?: string[] };
+
+/**
+ * THE STORES THIS PERSON MAY WORK AT.
+ *
+ * `users.locationIds` is a LIST, not a single store: staff cover both shops,
+ * and a model that let someone belong to one of them would be wrong the first
+ * week somebody filled in a shift across town.
+ *
+ * AN EMPTY (or absent) LIST IS NOT A LOCKOUT. It means "the default store" —
+ * which is what every account holds today, because nobody has set one. A
+ * person with no list keeps working exactly as they do now; the owner opts
+ * into restricting someone, never out of it.
+ *
+ * THE OWNER HOLDS EVERY STORE, always, whatever their list says. One set of
+ * books, one person answerable for it, and no way to lock themselves out of
+ * their own second till.
+ *
+ * Ids in the list that no longer exist are dropped, and a CLOSED store is
+ * dropped too — you cannot be rostered to a shop that isn't open. If that
+ * leaves nothing, the default store stands in rather than nothing at all.
+ */
+export const permittedLocations = (
+  user: LocationMember | undefined,
+  locations: Location[],
+): Location[] => {
+  const active = activeLocations(locations);
+  if (!active.length) return [];
+  if (user?.role === 'owner') return active;
+  const wanted = (user?.locationIds || []).filter(Boolean);
+  const held = active.filter(l => wanted.includes(l.id));
+  if (held.length) return held;
+  const fallback = defaultLocation(locations);
+  return fallback && fallback.active ? [fallback] : active.slice(0, 1);
+};
+
+/** May this person work this store's till? */
+export const canUseLocation = (
+  user: LocationMember | undefined,
+  locations: Location[],
+  id: string,
+): boolean => !!id && permittedLocations(user, locations).some(l => l.id === id);
+
+/**
+ * The store this session acts as, given what the terminal last chose.
+ *
+ * A remembered choice is honoured only while the person may still work there
+ * — a store they have been taken off, or one that has since closed, falls
+ * back to the first they do hold rather than silently leaving them pointed at
+ * a till they cannot write to.
+ */
+export const resolveActiveLocation = (
+  user: LocationMember | undefined,
+  locations: Location[],
+  preferredId?: string,
+): Location | undefined => {
+  const allowed = permittedLocations(user, locations);
+  return allowed.find(l => l.id === preferredId) || allowed[0];
+};
+
 /* ---------------- Which collections carry a location ---------------- */
 
 /**

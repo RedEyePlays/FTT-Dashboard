@@ -32,8 +32,13 @@ interface Props {
   // settled, and — for a cash payment only — logs the cash-drawer effect).
   onSettle: (settlement: Settlement, opts?: { cashDate?: string }) => void;
   // Read-only: used to warn before a BACKDATED settlement's cash entry lands
-  // on a day that has already been counted and closed.
+  // on a day that has already been counted and closed. ALREADY SCOPED TO ONE
+  // STORE by the caller (multi-store stage 2) — the closed-day guard has to
+  // ask about the till the cash is actually going into, and the other store
+  // having closed that date says nothing about this one.
   cashReconciliations?: CashReconciliation[];
+  /** Which store's till the settlement cash lands in — StoreTag.tsx. */
+  storeLabel?: string;
   // Whether this user may print drop-off device labels. Those labels carry the
   // purchase price and the service fee, so printing is gated to the same
   // permission that already exposes drop-off financials (services/
@@ -89,7 +94,7 @@ const STATUS_META: Record<DropOffStatus, { label: string; cls: string }> = {
 
 export const DropOffView: React.FC<Props> = ({
   deviceBuyers, dropOffs, settlements, onDeviceBuyersChange, onDropOffsChange, onSettle,
-  cashReconciliations, canPrintLabels = false, customers = [], onCreateCustomer,
+  cashReconciliations, storeLabel, canPrintLabels = false, customers = [], onCreateCustomer,
 }) => {
   const [tab, setTab] = useState<'entries' | 'deviceBuyers' | 'settlement' | 'history'>('entries');
 
@@ -133,7 +138,7 @@ export const DropOffView: React.FC<Props> = ({
         <DeviceBuyersTab deviceBuyers={deviceBuyers} dropOffs={dropOffs} onDeviceBuyersChange={onDeviceBuyersChange} canPrintLabels={canPrintLabels} />
       )}
       {tab === 'settlement' && (
-        <SettlementTab deviceBuyers={deviceBuyers} dropOffs={dropOffs} settlements={settlements} onSettle={onSettle} cashReconciliations={cashReconciliations} />
+        <SettlementTab deviceBuyers={deviceBuyers} dropOffs={dropOffs} settlements={settlements} onSettle={onSettle} cashReconciliations={cashReconciliations} storeLabel={storeLabel} />
       )}
       {tab === 'history' && (
         <HistoryTab deviceBuyers={deviceBuyers} dropOffs={dropOffs} settlements={settlements} />
@@ -523,7 +528,8 @@ const SettlementTab: React.FC<{
   deviceBuyers: DeviceBuyer[]; dropOffs: DropOff[]; settlements: Settlement[];
   onSettle: (settlement: Settlement, opts?: { cashDate?: string }) => void;
   cashReconciliations?: CashReconciliation[];
-}> = ({ deviceBuyers, dropOffs, settlements, onSettle, cashReconciliations }) => {
+  storeLabel?: string;
+}> = ({ deviceBuyers, dropOffs, settlements, onSettle, cashReconciliations, storeLabel }) => {
   const [buyerId, setBuyerId] = useState(deviceBuyers[0]?.id || '');
   const [notes, setNotes] = useState('');
   const [paymentMethod, setPaymentMethod] = useState<SettlementPaymentMethod>('cash');
@@ -600,7 +606,7 @@ const SettlementTab: React.FC<{
 
   const confirmSettlement = (lines: SettlementReviewLine[], adjustmentAmount: number, adjustmentNote: string) => {
     if (touchesDrawer && cashDayClosed && !window.confirm(
-      `${cashDate} has already been counted and closed.\n\nLogging this settlement's cash against it will CHANGE that closed day's expected cash, and the day will no longer match the count that was signed off on it.\n\nContinue?`,
+      `${storeLabel ? `${storeLabel}: ` : ''}${cashDate} has already been counted and closed.\n\nLogging this settlement's cash against it will CHANGE that closed day's expected cash, and the day will no longer match the count that was signed off on it.\n\nContinue?`,
     )) return;
     run(() => {
       const settlement = buildSettlementFromReview(
@@ -746,6 +752,11 @@ const SettlementTab: React.FC<{
               <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Cash collected on</label>
               <input type="date" value={cashDate} max={today()} onChange={e => setCashDate(e.target.value)}
                 className="w-full p-2 bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-md text-sm" />
+              {touchesDrawer && storeLabel && (
+                <p className="text-[11px] text-indigo-600 dark:text-indigo-400 mt-1">
+                  Cash goes into <span className="font-bold">{storeLabel}</span>'s drawer.
+                </p>
+              )}
               {touchesDrawer && cashDayClosed && (
                 <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-1">
                   {cashDate} has already been counted and closed. Logging this cash against it will change that closed day's expected cash — you'll be asked to confirm.

@@ -223,27 +223,33 @@ describe('which collections carry a location — and the omissions', () => {
 
 /* ---------------- The stage's own guarantee ---------------- */
 
-describe('STAGE 1 CHANGES NOTHING ANYBODY CAN SEE', () => {
+describe('WHAT EACH STAGE DID, AND DID NOT, CHANGE', () => {
   const read = (p: string) => readFileSync(join(__dirname, '..', p), 'utf8');
   /** Source with comments stripped: the prose explains the field everywhere. */
   const code = (p: string) => read(p)
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/^\s*\/\/.*$/gm, '');
 
-  it('NOTHING BRANCHES ON locationId — the field is written and never read', () => {
-    // This is what makes the stage invisible and reversible. The only files
-    // that may mention it are the type, the domain module, the write path, the
-    // one owner-only screen, and the tests.
+  it('ONLY THE CASH DRAWER BRANCHES ON locationId — stages 4 and 5 have not started', () => {
+    // Stage 1's promise was that NOTHING read the field. Stage 2 deliberately
+    // ends that for one thing only: which store's cash drawer a record
+    // belongs to. Per-store inventory filtering (stage 4) and a per-store P&L
+    // (stage 5) have NOT started, and this list is what keeps them from
+    // starting by accident — a new file reading the field trips it.
     const allowed = [
-      'types.ts', 'domain/locations.ts', 'domain/locations.test.ts',
-      'services/firestoreDb.ts', 'services/locationBackfill.test.ts',
-      'components/LocationsPanel.tsx',
-      // Asserts that a located record and an un-located one read identically —
-      // the stage's own promise, which needs the field to check it.
-      'rules-tests/locations.rules.test.ts',
-      // App.tsx wires the panel and the audit entry; it reads the field only
-      // off the backfill's own summary, never off a record.
+      // The field, the store list, and the drawer key built on them.
+      'types.ts', 'domain/locations.ts', 'domain/drawerKey.ts',
+      // The drawer's own arithmetic and its write path.
+      'domain/reports.ts', 'services/firestoreDb.ts',
+      // The two owner-only screens: the store list, and who works where.
+      'components/LocationsPanel.tsx', 'components/UsersView.tsx',
+      // App.tsx resolves the active store and stamps it on a new sale.
       'App.tsx',
+      // Tests.
+      'domain/locations.test.ts', 'domain/drawerKey.test.ts', 'domain/drawerPerStore.test.ts',
+      'services/locationBackfill.test.ts',
+      'rules-tests/locations.rules.test.ts', 'rules-tests/cashDrawerStore.rules.test.ts',
+      'rules-tests/firestore.rules.test.ts',
     ];
     const hits = execSync(
       "grep -rln 'locationId' --include=*.ts --include=*.tsx . | grep -v node_modules || true",
@@ -253,16 +259,14 @@ describe('STAGE 1 CHANGES NOTHING ANYBODY CAN SEE', () => {
     expect(hits.filter(f => !allowed.includes(f))).toEqual([]);
   });
 
-  it('no record type REQUIRES a location — every one is optional', () => {
+  it('A RECORD WITH NO LOCATION STILL BEHAVES, everywhere that reads one', () => {
+    // The backfill is run by the owner, after a backup, and may be part-done
+    // for as long as they like. Nothing may require the field.
     const t = read('types.ts');
-    // `locationId?:` everywhere, never `locationId:`. A required field would
-    // break every existing row the moment it was read back through the type.
     expect(t).not.toMatch(/^\s*locationId:\s/m);
-    // EIGHT types for NINE collections: `inventory` and `accessories` are
-    // both stored as InventoryItem (it carries `kind: 'device' | 'accessory'`),
-    // so one field declaration serves both.
-    expect((t.match(/locationId\?: string;/g) || []).length).toBe(8);
-    expect(LOCATION_TAGGED_COLLECTIONS.length).toBe(9);
+    // And the drawer's own resolution falls back rather than failing: a
+    // bare-date record is the default store's (domain/drawerKey.ts).
+    expect(code('domain/drawerKey.ts')).toMatch(/defaultLocationId \|\| ''/);
   });
 
   it('RECEIPTS STILL PRINT WHAT THEY PRINTED — settings.general drives them, unchanged', () => {
@@ -283,12 +287,30 @@ describe('STAGE 1 CHANGES NOTHING ANYBODY CAN SEE', () => {
     expect(block).toMatch(/allow delete: if false;/);
   });
 
-  it('the rules do not gate anything else by location', () => {
-    // Tightening rules by location mid-migration would lock staff out of every
-    // record not yet backfilled.
+  it('THE RULES GATE BY LOCATION FOR THE CASH DRAWER AND NOTHING ELSE', () => {
+    // Stage 2 tightens one collection. Tightening any other by location
+    // mid-migration would lock staff out of every record not yet backfilled,
+    // which is why the list of blocks allowed to mention the field is checked
+    // rather than assumed.
+    //
+    // Comments are stripped first: the prose here quotes the very field name
+    // being counted.
     const rules = readFileSync(join(__dirname, '..', 'firestore.rules'), 'utf8')
       .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
-    expect(rules).not.toMatch(/locationId/);
+    // Every per-collection block, by its match path.
+    const blocks = [...rules.matchAll(/match \/([A-Za-z_]+)\/\{[^}]*\} \{([\s\S]*?)\n      \}/g)];
+    expect(blocks.length).toBeGreaterThan(10);
+    const gated = blocks.filter(b => /locationId/.test(b[2])).map(b => b[1]);
+    expect(gated).toEqual(['cashReconciliations']);
+    // Outside that block, the ONLY mentions are its own two helpers — the key
+    // agreement check and the "may this person run this till" check. Strip
+    // those as well and the field does not appear in these rules at all.
+    const outside = rules
+      .replace(/match \/cashReconciliations\/\{[^}]*\} \{[\s\S]*?\n      \}/, '')
+      .replace(/function drawerKeyAgrees\(id\) \{[\s\S]*?\n      \}/, '')
+      .replace(/function tillAllowed\(prof, loc\) \{[\s\S]*?\n      \}/, '')
+      .match(/locationId/g) || [];
+    expect(outside).toEqual([]);
   });
 
   it('locations read to every member and write to the owner only', () => {

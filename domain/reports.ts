@@ -85,6 +85,34 @@ export const expectedCashForDate = (transactions: SalesTransaction[], dateISO: s
   round2(transactions.filter(t => t.date === dateISO).reduce((s, t) => s + cashCollectedOnTx(t), 0));
 
 /**
+ * ONE STORE'S cash sales for a day — what that store's drawer should hold.
+ *
+ * Multi-store stage 2. Without this, both stores' drawers expect the whole
+ * company's cash takings, so each one reads as short by the other's day: the
+ * per-store drawer would be exactly as wrong as the shared document it
+ * replaced, only less obviously.
+ *
+ * A sale with no `locationId` counts toward the DEFAULT store, the same rule
+ * drawerKey.ts applies to a bare-date drawer id: every sale rung before there
+ * was a second store happened at Brampton. New sales are stamped at the till
+ * (App.tsx's handleSellCart), so untagged rows are history, not a growing gap.
+ *
+ * With no store asked for (a workspace with no location list) this is
+ * expectedCashForDate exactly.
+ */
+export const expectedCashForDateAt = (
+  transactions: SalesTransaction[],
+  dateISO: string,
+  locationId: string,
+  defaultLocationId?: string,
+): number => {
+  if (!locationId) return expectedCashForDate(transactions, dateISO);
+  return round2(transactions
+    .filter(t => t.date === dateISO && (t.locationId || defaultLocationId || '') === locationId)
+    .reduce((s, t) => s + cashCollectedOnTx(t), 0));
+};
+
+/**
  * Cash taken in on a day AFTER that day's drawer was counted and closed.
  *
  * Business hours don't stop because the till was counted — an evening wholesale
@@ -548,6 +576,15 @@ export interface DrawerAppends {
 
 export interface DrawerMergeInput {
   date: string;
+  /**
+   * The DOCUMENT ID being written — `{date}__{locationId}` for anything new,
+   * or a legacy bare date for a day that already lives under one. Passed in
+   * rather than derived here, because which of the two it is depends on what
+   * is already stored: see domain/drawerKey.ts's drawerIdFor.
+   */
+  id: string;
+  /** The store this drawer belongs to. '' in a workspace with no store list. */
+  locationId?: string;
   /** The record as it exists RIGHT NOW on the server (undefined = no record yet). */
   existing: CashReconciliation | undefined;
   /** Fields to set outright (float, count, note, open/reconcile stamps). */
@@ -586,7 +623,7 @@ export interface DrawerMergeInput {
  * stored figures can never disagree with what the screens compute.
  */
 export function mergeDrawerRecord(input: DrawerMergeInput): CashReconciliation {
-  const { date, existing, patch, appends, cashSales, carry, actor } = input;
+  const { date, id, locationId, existing, patch, appends, cashSales, carry, actor } = input;
   const now = input.now ?? Date.now();
 
   const merged: CashReconciliation = {
@@ -595,9 +632,20 @@ export function mergeDrawerRecord(input: DrawerMergeInput): CashReconciliation {
     // close) would silently reset the opening float to zero and report the
     // whole carried till as a shortage. Only ever applied when the day has NO
     // record yet; once it does, its own stored float is the truth.
-    id: date, date, openingFloat: carry?.float || 0, expectedCash: 0, variance: 0,
+    date, openingFloat: carry?.float || 0, expectedCash: 0, variance: 0,
     recordedBy: actor.id, recordedByEmail: actor.email, recordedAt: now,
     ...existing, ...patch,
+    // AFTER the spreads, so the key and the field can never disagree: the id
+    // is what decides which store's document this is, and a stored
+    // `locationId` saying otherwise would be the thing that is wrong. This
+    // also back-fills the field on a legacy bare-date record the first time
+    // that day is touched again, without any record being rewritten for its
+    // own sake.
+    ...(locationId ? { locationId } : {}),
+    // The id is NEVER taken from `existing` or `patch`: a stale local copy of
+    // a record carries the id it was read under, and a patch has no business
+    // re-keying a document.
+    id,
   };
 
   // Appends land on the SERVER's arrays, and skip ids already present so a
@@ -686,16 +734,22 @@ const MOVEMENT_KEYS = ['cashIn', 'cashOut', 'withdrawals'] as const;
  */
 export function buildDrawerMergeWrite(input: {
   date: string;
+  /** The document id being merged into — see DrawerMergeInput.id. */
+  id: string;
+  /** The store, stamped on every offline write too: a queued merge that
+   *  landed without it would be a drawer nobody could attribute to a till. */
+  locationId?: string;
   patch?: Partial<CashReconciliation>;
   appends?: DrawerAppends;
   actor: { id: string; email: string };
   now?: number;
 }): DrawerMergeWrite {
-  const { date, patch, appends, actor } = input;
+  const { date, id, locationId, patch, appends, actor } = input;
   const now = input.now ?? Date.now();
 
   const set: Record<string, unknown> = {
-    id: date, date,
+    id, date,
+    ...(locationId ? { locationId } : {}),
     recordedBy: actor.id, recordedByEmail: actor.email, recordedAt: now,
   };
   const clear: string[] = [];
@@ -704,6 +758,10 @@ export function buildDrawerMergeWrite(input: {
   for (const [key, value] of Object.entries(patch || {})) {
     // Never let a stale local total overwrite the stored one — rule 3.
     if (key === 'expectedCash' || key === 'variance' || key === 'cashSales') continue;
+    // The key and the store come from the caller's resolved id, never from a
+    // patch: a patch that could re-key or re-locate a drawer is a patch that
+    // could move one store's cash onto the other's day.
+    if (key === 'id' || key === 'locationId') continue;
     if (value === undefined) clear.push(key);
     else set[key] = value;
   }

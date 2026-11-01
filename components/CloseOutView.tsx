@@ -12,6 +12,7 @@ import { todayISO } from '../domain/dates';
 import { CashDrawerSummary } from '../domain/reports';
 import { missedClockOuts } from '../domain/timeclock';
 import { Alert } from '../domain/alerts';
+import { StoreTag } from './StoreTag';
 
 interface Props {
   salesTransactions: SalesTransaction[];
@@ -31,6 +32,13 @@ interface Props {
   settlements: Settlement[];
   todayDrawer: CashDrawerSummary;
   todayRecon?: CashReconciliation;
+  /**
+   * WHICH STORE'S DRAWER this card is about (multi-store stage 2). The rest of
+   * this screen is still the whole shop's day — sales, profit, repairs and the
+   * alert list are company-wide, as they were — so naming the store on the
+   * cash card is what keeps the two from being read as one.
+   */
+  storeLabel?: string;
   // settings.operations.booksStartDate — clamps the day's figures and alerts.
   booksStartDate?: string;
   onNavigate: (v: ViewState) => void;
@@ -45,7 +53,7 @@ const Card: React.FC<{ children: React.ReactNode; className?: string }> = ({ chi
 
 export const CloseOutView: React.FC<Props> = ({
   salesTransactions, repairs, inventory, customers, auditLogs, activity, timeEntries, users,
-  alerts, settlements, todayDrawer, todayRecon, booksStartDate, onNavigate,
+  alerts, settlements, todayDrawer, todayRecon, storeLabel, booksStartDate, onNavigate,
 }) => {
   const now = Date.now();
   // Counted, never recomputed — belowFloorSales reads the stamp each line
@@ -73,14 +81,18 @@ export const CloseOutView: React.FC<Props> = ({
     ? Math.round((todayRecon.countedCash - todayDrawer.expected) * 100) / 100
     : 0;
   const varianceOk = Math.abs(variance) < 0.005;
+  const storeSuffix = storeLabel ? ` — ${storeLabel}` : '';
 
   // Every open-loop item worth a glance before locking up: the standing alert
   // set already shown elsewhere, plus the two close-out-specific ones (missed
   // clock-outs, an unreconciled drawer).
   const flags: { text: string; severity: 'warning' | 'info'; view: ViewState }[] = [
     ...missed.map(e => ({ text: `${nameById.get(e.userId) || e.userId} never clocked out (${new Date(e.clockIn).toLocaleDateString()})`, severity: 'warning' as const, view: 'timeclock' as ViewState })),
-    ...(todayDrawer.opened && !reconciled ? [{ text: 'Cash drawer not reconciled yet today', severity: 'warning' as const, view: 'reports' as ViewState }] : []),
-    ...(!todayDrawer.opened ? [{ text: 'Cash drawer was never opened today', severity: 'info' as const, view: 'pos' as ViewState }] : []),
+    // The store is named in the flag text as well as on the card: this list
+    // is what gets read at the end of the night, and "drawer not reconciled"
+    // without a store is the one that gets closed at the wrong shop.
+    ...(todayDrawer.opened && !reconciled ? [{ text: `Cash drawer not reconciled yet today${storeSuffix}`, severity: 'warning' as const, view: 'reports' as ViewState }] : []),
+    ...(!todayDrawer.opened ? [{ text: `Cash drawer was never opened today${storeSuffix}`, severity: 'info' as const, view: 'pos' as ViewState }] : []),
     // BELOW-MINIMUM SALES, in the list that is read when the day is closed —
     // the count only, since the detail (seller, device, price) lives in Day
     // History where the permission trimming already applies.
@@ -122,7 +134,7 @@ export const CloseOutView: React.FC<Props> = ({
 
       {/* --- Cash reconciliation -------------------------------------------- */}
       <Card>
-        <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200 flex items-center gap-2 mb-3"><DollarSign className="w-4 h-4 text-indigo-500" /> Cash Drawer</h3>
+        <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200 flex items-center gap-2 mb-3"><DollarSign className="w-4 h-4 text-indigo-500" /> Cash Drawer <StoreTag storeLabel={storeLabel} /></h3>
         {!todayDrawer.opened ? (
           <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
             <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0" /> Drawer was never opened today.
