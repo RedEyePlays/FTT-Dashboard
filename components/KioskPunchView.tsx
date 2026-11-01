@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Clock, Delete, ArrowLeft, Check, Coffee, LogIn, LogOut, WifiOff } from 'lucide-react';
+import { Clock, Delete, ArrowLeft, Check, Coffee, LogIn, LogOut, WifiOff, Store, AlertTriangle } from 'lucide-react';
 import { KioskStaff, TimeEntry, BreakReason } from '../types';
 import {
   punchRoster, punchStateFor, PunchState, confirmLabel, fmtDuration, breakElapsedMs,
   canStepOut, isStaleOpenShift, staleShiftLabel,
   initialPinAttempts, PinAttemptState, pinCooldownActive, registerFailedPin, pinErrorMessage,
+  KioskStore, KIOSK_NOT_SET_MESSAGE,
 } from '../domain/kiosk';
 import { BREAK_REASONS, breakReasonLabel, PaidBreakReasons } from '../domain/timeclock';
 import { verifyPin, KIOSK_PIN_LENGTH } from '../domain/pin';
@@ -27,6 +28,21 @@ interface Props {
   entries: TimeEntry[];
   paidBreakReasons?: PaidBreakReasons;
   shopName?: string;
+  /**
+   * WHICH STORE THIS IPAD IS (multi-store stage 3, domain/kiosk.ts's
+   * kioskStoreFor). Every punch this screen takes is stamped with it, so it
+   * is named on screen in the largest place it fits — the same reasoning as
+   * the Time Clock screen saying "all times in shop time". The shop has twice
+   * been bitten by a screen not saying what it was showing; this one decides
+   * where hours are filed.
+   *
+   * `ready: false` blocks the whole punch flow. An unconfigured kiosk must
+   * never silently stamp the default store.
+   *
+   * Omitted entirely only by callers that have no device record to resolve
+   * from — the punch screen then behaves exactly as it did before this stage.
+   */
+  store?: KioskStore;
   /** All four reuse the same domain/timeclock helpers and Firestore writes as the in-app Time Clock. */
   onClockIn: (person: KioskStaff) => Promise<void> | void;
   onClockOut: (person: KioskStaff, open: TimeEntry) => Promise<void> | void;
@@ -54,7 +70,7 @@ const fmtTime = (ms: number) =>
   new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 
 export const KioskPunchView: React.FC<Props> = ({
-  staff, entries, paidBreakReasons = [], shopName, onClockIn, onClockOut, onStartBreak, onEndBreak, onSignOut,
+  staff, entries, paidBreakReasons = [], shopName, store, onClockIn, onClockOut, onStartBreak, onEndBreak, onSignOut,
 }) => {
   const [step, setStep] = useState<Step>('names');
   const [person, setPerson] = useState<KioskStaff | null>(null);
@@ -71,6 +87,10 @@ export const KioskPunchView: React.FC<Props> = ({
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, []);
+
+  // The ONE gate. Every step of the flow is behind it, and commitPrimary /
+  // commitBreak below re-check it rather than trusting the render.
+  const punchable = store ? store.ready : true;
 
   const roster = useMemo(() => punchRoster(staff), [staff]);
   const state: PunchState | null = useMemo(
@@ -156,7 +176,7 @@ export const KioskPunchView: React.FC<Props> = ({
   };
 
   const commitPrimary = () => {
-    if (!person || !state) return;
+    if (!person || !state || !punchable) return;
     if (state.action === 'clock_in') {
       return finish(() => onClockIn(person), `Clocked in — ${person.displayName}`);
     }
@@ -172,7 +192,7 @@ export const KioskPunchView: React.FC<Props> = ({
   };
 
   const commitBreak = (reason: BreakReason) => {
-    if (!person || !state?.open) return;
+    if (!person || !state?.open || !punchable) return;
     const open = state.open;
     return finish(() => onStartBreak(person, open, reason),
       `Stepped out — ${person.displayName} · ${breakReasonLabel(reason)}`);
@@ -187,7 +207,17 @@ export const KioskPunchView: React.FC<Props> = ({
           <Clock className="w-6 h-6 text-indigo-400 shrink-0" />
           <div className="min-w-0">
             <p className="text-base sm:text-lg font-bold truncate">{shopName || 'Time Clock'}</p>
-            <p className="text-xs text-white/50">Tap your name to clock in or out</p>
+            {/* WHICH SHOP'S HOURS THIS IS. Plainly on display, not a
+                footnote: this is the one thing on the screen that decides
+                where somebody's pay is filed. */}
+            {store?.name ? (
+              <p className="text-sm font-bold text-indigo-300 flex items-center gap-1.5 truncate">
+                <Store className="w-4 h-4 shrink-0" /> {store.name}
+                <span className="font-normal text-white/50">· hours recorded here</span>
+              </p>
+            ) : (
+              <p className="text-xs text-white/50">Tap your name to clock in or out</p>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-4 shrink-0">
@@ -201,8 +231,26 @@ export const KioskPunchView: React.FC<Props> = ({
       </header>
 
       <main className="flex-1 flex flex-col items-center justify-center p-4 sm:p-8 w-full">
+        {/* --- NOT CONFIGURED: no punches, and a reason -------------------
+            Deliberately in place of the name tiles rather than beside them.
+            A tappable name on a kiosk that cannot file the punch correctly is
+            worse than no name at all, and staff would believe they had
+            clocked in. firestore.rules refuses the write too. */}
+        {store && !store.ready && (
+          <div className="w-full max-w-xl text-center">
+            <div className="w-20 h-20 rounded-full bg-amber-500/20 flex items-center justify-center mx-auto mb-5">
+              <AlertTriangle className="w-10 h-10 text-amber-300" />
+            </div>
+            <p className="text-2xl font-bold mb-3">This kiosk isn&apos;t set up yet</p>
+            <p className="text-white/70 text-lg leading-relaxed">{KIOSK_NOT_SET_MESSAGE}</p>
+            <p className="text-white/40 text-sm mt-6">
+              Nothing has been lost — clock in on your phone or ask a manager to record your hours in the meantime.
+            </p>
+          </div>
+        )}
+
         {/* --- Name tiles --- */}
-        {step === 'names' && (
+        {punchable && step === 'names' && (
           <div className="w-full max-w-5xl">
             {error && <p className="text-center text-rose-300 mb-4">{error}</p>}
             {roster.length === 0 ? (
@@ -230,7 +278,7 @@ export const KioskPunchView: React.FC<Props> = ({
         )}
 
         {/* --- Keypad --- */}
-        {step === 'pin' && person && (
+        {punchable && step === 'pin' && person && (
           <div className="w-full max-w-xs">
             <p className="text-center text-xl font-semibold mb-1">{person.displayName}</p>
             <p className="text-center text-sm text-white/50 mb-5">Enter your {KIOSK_PIN_LENGTH}-digit punch PIN</p>
@@ -256,7 +304,7 @@ export const KioskPunchView: React.FC<Props> = ({
         )}
 
         {/* --- Confirm --- */}
-        {step === 'confirm' && person && state && (
+        {punchable && step === 'confirm' && person && state && (
           <div className="w-full max-w-md text-center">
             {/* A shift left open overnight is a CORRECTION, not a punch. */}
             {isStaleOpenShift(state, now) ? (
@@ -300,7 +348,7 @@ export const KioskPunchView: React.FC<Props> = ({
         )}
 
         {/* --- Break reason --- */}
-        {step === 'break_reason' && person && (
+        {punchable && step === 'break_reason' && person && (
           <div className="w-full max-w-md text-center">
             <p className="text-xl font-semibold mb-1">{person.displayName}</p>
             <p className="text-sm text-white/50 mb-6">What are you stepping out for?</p>
@@ -318,7 +366,7 @@ export const KioskPunchView: React.FC<Props> = ({
         )}
 
         {/* --- Confirmation, then straight back to the names --- */}
-        {step === 'done' && (
+        {punchable && step === 'done' && (
           <div className="text-center">
             <div className="w-20 h-20 rounded-full bg-emerald-500/20 flex items-center justify-center mx-auto mb-5">
               <Check className="w-10 h-10 text-emerald-300" />
@@ -330,7 +378,10 @@ export const KioskPunchView: React.FC<Props> = ({
       </main>
 
       <footer className="px-5 sm:px-8 py-3 border-t border-white/10 flex items-center justify-between text-xs text-white/40">
-        <span>Kiosk mode — this device can only record clock-ins and clock-outs.</span>
+        <span>
+          Kiosk mode — this device can only record clock-ins and clock-outs.
+          {store?.name ? ` Hours punched here are recorded at ${store.name}.` : ''}
+        </span>
         {/* The only way out, and it needs the full email + password. */}
         <button onClick={onSignOut} className="underline hover:text-white/70">Sign out</button>
       </footer>

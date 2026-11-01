@@ -12,6 +12,7 @@ import { rateHistoryForDisplay, effectiveFromLabel } from '../domain/payRates';
 import { PAY_GROUPS, PAY_GROUP_LABEL, payGroupOf, payGroupsApply, WEEKLY_GROUPS_NOTE } from '../domain/payGroups';
 import { PayCycle } from '../domain/timeclock';
 import { activeLocations, permittedLocations, LOCATION_ACCESS_NOT_PAYROLL } from '../domain/locations';
+import { kioskStoreIssue, KIOSK_STORE_ISSUE_MESSAGE } from '../domain/kiosk';
 
 interface Props {
   me: AppUser;
@@ -70,6 +71,13 @@ interface Props {
    */
   locations?: Location[];
   onSetLocations?: (uid: string, locationIds: string[]) => void;
+  /**
+   * WHICH STORE A KIOSK DEVICE IS (multi-store stage 3). Owner-only, and a
+   * DIFFERENT question from `onSetLocations` above: that one says which till a
+   * person may touch, this one says where an iPad's punches are filed. Absent
+   * for a manager, and the control is not rendered without stores to pick.
+   */
+  onSetKioskLocation?: (deviceUid: string, locationId: string) => void;
   // Owner-only internal staff shoutout/notes log (services/rbac.ts's staffNotes.manage).
   staffNotes?: StaffNote[];
   canManageStaffNotes?: boolean;
@@ -78,6 +86,72 @@ interface Props {
 }
 
 const AUTO_LOCK_OPTIONS = [1, 2, 4, 5, 10, 15, 30];
+/**
+ * WHICH STORE ONE KIOSK IPAD IS — owner-only (multi-store stage 3).
+ *
+ * CHANGING IT IS DELIBERATE AND CONFIRMED. An accidental switch mid-period
+ * silently misfiles everyone's hours from that moment on, and the hours
+ * already recorded keep the store they were punched at (a shift belongs to
+ * where it started), so a mistaken switch is not undone by switching back.
+ * The confirmation says exactly that.
+ *
+ * The device's own stored name is checked against the live store list here —
+ * the kiosk cannot do it, because it deliberately does not read that list
+ * (domain/kiosk.ts) — so the owner is the one who sees a device pointing at a
+ * closed or vanished store, or showing a store's old name.
+ */
+const KioskStoreControl: React.FC<{
+  device: AppUser;
+  locations: Location[];
+  onChange: (locationId: string) => void;
+}> = ({ device, locations, onChange }) => {
+  const stores = activeLocations(locations);
+  const issue = kioskStoreIssue(device, locations);
+  const current = stores.find(l => l.id === device.kioskLocationId);
+
+  const pick = (id: string) => {
+    if (!id || id === device.kioskLocationId) return;
+    const next = stores.find(l => l.id === id);
+    if (!next) return;
+    if (!current) {
+      onChange(id);
+      return;
+    }
+    // Only a CHANGE is confirmed; setting an unconfigured iPad for the first
+    // time has nothing to misfile.
+    const ok = window.confirm(
+      `Change this iPad from ${current.name} to ${next.name}?\n\n`
+      + `Every punch made on it from now on will be recorded at ${next.name}. `
+      + `Hours already punched stay at ${current.name} — a shift belongs to where it started, so switching back does not undo them.\n\n`
+      + 'Only do this if the iPad has physically moved.',
+    );
+    if (ok) onChange(id);
+  };
+
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <Store className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+      <select
+        aria-label="Kiosk store"
+        value={device.kioskLocationId || ''}
+        onChange={e => pick(e.target.value)}
+        className="text-xs font-medium px-2 py-1 rounded bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200"
+      >
+        <option value="">No store set</option>
+        {stores.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+      </select>
+      {issue && (
+        <span title={KIOSK_STORE_ISSUE_MESSAGE[issue]}
+          className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${issue === 'stale-name'
+            ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
+            : 'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300'}`}>
+          {issue === 'not-set' ? 'Will not record hours' : issue === 'stale-name' ? 'Renamed — re-save' : 'Needs attention'}
+        </span>
+      )}
+    </span>
+  );
+};
+
 
 /**
  * WHICH STORES ONE PERSON MAY WORK AT — owner-only (multi-store stage 2).
@@ -553,7 +627,7 @@ export const UsersView: React.FC<Props> = ({
   onSetPin, onSetKioskPin, onClearKioskPin, onCreateKioskDevice, onRevokeKioskDevice,
   canManageSecurity, autoLockMinutes, onSetAutoLockMinutes, onResetPassword,
   staffNotes = [], canManageStaffNotes = false, onAddStaffNote, onDeleteStaffNote,
-  locations = [], onSetLocations,
+  locations = [], onSetLocations, onSetKioskLocation,
 }) => {
   const [email, setEmail] = useState('');
   const [role, setRole] = useState<Role>(canManageAll ? 'employee' : 'technician');
@@ -639,9 +713,15 @@ export const UsersView: React.FC<Props> = ({
                 A shared iPad by the door. It can only record clock-ins and clock-outs — no dashboard, no sales, no customer data — so it's worthless if it walks off.
               </p>
             </div>
-            {kioskDevices.length === 0 && (
-              <button onClick={() => setShowAddKiosk(true)} className="shrink-0 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium">Add kiosk device</button>
-            )}
+            {/* ONE DEVICE ACCOUNT PER IPAD. This used to be offered only
+                while there were none, which was right for one shop and wrong
+                the moment there are two: each iPad carries its own store
+                (multi-store stage 3), so two shops need two devices. Signing
+                the same device account into both iPads would make both of
+                them claim the same store. */}
+            <button onClick={() => setShowAddKiosk(true)} className="shrink-0 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium">
+              {kioskDevices.length === 0 ? 'Add kiosk device' : 'Add another kiosk device'}
+            </button>
           </div>
 
           {kioskDevices.length > 0 && (
@@ -654,6 +734,14 @@ export const UsersView: React.FC<Props> = ({
                     {k.disabled && <span className="ml-1 text-[10px] font-semibold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300">Revoked</span>}
                   </span>
                   <span className="flex items-center gap-2">
+                    {/* WHICH SHOP THIS IPAD IS IN. Every punch it takes is
+                        filed against this, so it is set here by the owner and
+                        nowhere else — a staff member at the door cannot
+                        change it. */}
+                    {onSetKioskLocation && activeLocations(locations).length > 0 && (
+                      <KioskStoreControl device={k} locations={locations}
+                        onChange={id => onSetKioskLocation(k.id, id)} />
+                    )}
                     {onResetPassword && (
                       <button onClick={() => setPwTarget(k)} className="text-xs font-medium text-slate-500 hover:underline">Reset password</button>
                     )}

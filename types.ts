@@ -865,6 +865,44 @@ export interface AppUser {
   kioskPinUpdatedBy?: string;
   kioskPinUpdatedByEmail?: string;
   /**
+   * WHICH STORE THIS KIOSK DEVICE *IS* — set on the kiosk account only.
+   *
+   * Multi-store stage 3. A shift's location comes from the KIOSK it was
+   * punched on, never from the person: staff work both stores and their hours
+   * split automatically with nobody choosing anything. Brampton's iPad stamps
+   * Brampton; Mississauga's stamps Mississauga.
+   *
+   * DELIBERATELY A DIFFERENT FIELD FROM `locationIds` BELOW, and the two must
+   * stay independent. `locationIds` says which TILL a person may touch (stage
+   * 2). This says where a device's punches land. Deriving one from the other
+   * would mean a person's store list silently decided where their hours were
+   * filed, which is exactly what the owner ruled out.
+   *
+   * ONE STORE, not a list: an iPad is bolted to one wall in one shop.
+   *
+   * OWNER-SET ONLY, and server-enforced without a rules change: the only
+   * branch in firestore.rules that may write arbitrary fields on a user
+   * document is the owner's, and a kiosk's own self-update branch is
+   * `hasOnly(['lastLogin', 'notifSeenTs'])` — so the device cannot change
+   * which store it claims to be. That is the whole integrity of the feature.
+   *
+   * ABSENT = UNCONFIGURED, and an unconfigured kiosk REFUSES TO PUNCH rather
+   * than stamping the default store. Silently filing Mississauga's first week
+   * into Brampton would not be noticed until payroll; a kiosk that will not
+   * punch is noticed in a minute.
+   */
+  kioskLocationId?: string;
+  /**
+   * The store's name at the time it was set — denormalized so the punch
+   * screen can SHOW which shop it is without the kiosk reading the store
+   * list. A kiosk subscribes to exactly two collections and this stage does
+   * not make it three (domain/kiosk.ts says why, and what it costs: rename a
+   * store and the iPad shows the old name until the owner re-saves the
+   * device's store. The id, which is what hours are stamped with, is never
+   * stale, and the owner's Users screen flags the mismatch).
+   */
+  kioskLocationName?: string;
+  /**
    * WHICH STORES THIS PERSON WORKS AT — a LIST, never one store.
    *
    * Staff cover both shops, so a single-store field would have been wrong the
@@ -1286,17 +1324,36 @@ export interface TimeEntry {
   // they carry different trust, and the owner should be able to see which.
   source?: 'kiosk';
   /**
-   * WHERE THE SHIFT WAS WORKED — and the owner's decision is that this comes from the KIOSK it was punched on, never from the person. Staff work both stores and their hours split automatically. Stage 3 fills it; this stage only adds the field.
+   * WHERE THE SHIFT WAS WORKED. Multi-store stage 3 fills it.
    *
-   * Multi-store stage 1 — see Location.
+   * STAMPED AT CLOCK-IN AND FIXED FOR THE LIFE OF THE SHIFT. It is never
+   * re-read at clock-out: a shift belongs to where it started, and re-reading
+   * would let a device reconfigured mid-shift rewrite history. Breaks belong
+   * to their shift and carry no location of their own. A manager's clock-out
+   * correction changes times and nothing else.
    *
-   * OPTIONAL, AND ABSENT MEANS "AS BEFORE". Every record written before the
-   * second store existed has none, and nothing in the app branches on it yet —
-   * which is what makes this stage invisible and reversible. The backfill
-   * (services/firestoreDb.ts's backfillLocationIds) assigns Brampton to the
-   * rows that predate the split, and only ever to rows with no location.
+   * OPTIONAL, AND ABSENT MEANS "AS BEFORE" — every record written before the
+   * second store existed has none, and reads as the DEFAULT store, which is
+   * what stage 1's backfill assigned them anyway.
    */
   locationId?: string;
+  /**
+   * WHO SAID SO — a device, or the person being paid.
+   *
+   *   'kiosk'         — stamped by the iPad the punch was made on. The device
+   *                     cannot change which store it is (see AppUser's
+   *                     kioskLocationId), so this is EVIDENCE.
+   *   'self_selected' — chosen by the person in the app's own Clock In, from
+   *                     the stores they work at. This is a CLAIM.
+   *
+   * The distinction is recorded rather than inferred, and is surfaced at
+   * payroll beside missed clock-outs and corrections. It cannot be derived
+   * from `source`: every entry written before stage 3 has no `source` AND a
+   * backfilled location nobody self-selected, so deriving it would label the
+   * whole of history as self-chosen. ABSENT on all of those, which is the
+   * truth — nobody chose it, a migration assigned it.
+   */
+  locationSource?: 'kiosk' | 'self_selected';
 }
 
 // A record-keeping acknowledgment that an owner reviewed/paid an employee for a

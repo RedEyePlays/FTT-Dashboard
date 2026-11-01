@@ -118,6 +118,104 @@ export const pinErrorMessage = (s: PinAttemptState, now: number): string => {
   return WRONG_PIN_MESSAGE;
 };
 
+/* ---------------- WHICH STORE THIS IPAD IS ---------------- */
+//
+// Multi-store stage 3. The punch screen must know which shop it is standing
+// in, because every clock-in it takes is stamped with that answer.
+//
+// WHERE THE ANSWER COMES FROM: the kiosk's OWN DEVICE ACCOUNT —
+// `users/{kioskUid}.kioskLocationId`, set by the owner in Users. Not from the
+// person punching (staff work both stores and must not be choosing), and not
+// from anything the device itself can edit: firestore.rules lets only the
+// owner write that field, and the kiosk's own self-update branch is limited to
+// `lastLogin`/`notifSeenTs`. So the binding is the device's, a staff member at
+// the door cannot change it, and it survives reloads and the iPad being shut
+// overnight — it rides in the same persistent IndexedDB cache that already
+// lets the kiosk punch with the wifi down.
+//
+// IT IS RESOLVED FROM THE DEVICE ALONE, AND THAT IS DELIBERATE. The kiosk
+// subscribes to exactly two collections (the punch roster and a bounded window
+// of time entries) and this stage does not make it three: a device by the
+// front door is unattended, shared and stealable, so the less it holds the
+// better. The store NAME is therefore denormalized onto the device account
+// beside the id, which costs one trade-off, stated plainly: rename a store and
+// the iPad keeps showing the old name until the owner re-saves that device's
+// store. The id — the thing actually stamped on hours — is never stale, and
+// the owner's own Users screen checks the pair against the live store list
+// (see kioskStoreIssue below), where the list IS readable.
+//
+// AN UNCONFIGURED KIOSK REFUSES TO PUNCH. It does NOT fall back to the default
+// store: silently filing Mississauga's first week into Brampton would go
+// unnoticed until payroll, while a kiosk that will not punch is a visible
+// problem somebody fixes in a minute. firestore.rules refuses the write too,
+// so this is not merely a screen being polite.
+//
+// A workspace with no stores at all is in the same position: its kiosk waits
+// to be told. That is a deliberate choice over the alternative — a device that
+// cannot tell "this shop has one shop" from "nobody has configured me" and
+// guesses — and the on-screen message says exactly what to do about it.
+
+export interface KioskStore {
+  /** The store to stamp on a punch. '' whenever punching is not allowed. */
+  locationId: string;
+  /** What the screen shows, large: the shop this iPad is standing in. */
+  name: string;
+  /** False blocks every punch. */
+  ready: boolean;
+}
+
+/** The device fields this resolution reads, and nothing else. */
+export type KioskDevice = { kioskLocationId?: string; kioskLocationName?: string };
+
+export const kioskStoreFor = (device: KioskDevice | null | undefined): KioskStore => {
+  const locationId = (device?.kioskLocationId || '').trim();
+  if (!locationId) return { locationId: '', name: '', ready: false };
+  return {
+    locationId,
+    // Falls back to a neutral label rather than an empty header: an older
+    // device record may carry the id without the denormalized name.
+    name: (device?.kioskLocationName || '').trim() || 'this store',
+    ready: true,
+  };
+};
+
+/** What to tell whoever is standing in front of a kiosk that will not punch. */
+export const KIOSK_NOT_SET_MESSAGE =
+  'This iPad has not been told which store it is in, so it cannot record hours yet — '
+  + 'they would be filed against the wrong shop. Please get the owner: it takes a minute '
+  + 'in Settings \u2192 Users \u2192 Clock-in kiosk.';
+
+/**
+ * THE OWNER'S SIDE of the same question, checked against the live store list.
+ *
+ * Run where the list is readable — the Users screen — so the owner sees a
+ * device pointing at a store that has been closed or that no longer exists,
+ * and a device still showing a store's old name. The kiosk itself cannot
+ * perform these checks (it does not read the store list, on purpose), which is
+ * exactly why they are surfaced to the person who can fix them.
+ */
+export type KioskStoreIssue = 'not-set' | 'unknown-store' | 'closed-store' | 'stale-name';
+
+export const kioskStoreIssue = (
+  device: KioskDevice | null | undefined,
+  locations: { id: string; name: string; active: boolean }[],
+): KioskStoreIssue | null => {
+  const id = (device?.kioskLocationId || '').trim();
+  if (!id) return 'not-set';
+  const found = (locations || []).find(l => l.id === id);
+  if (!found) return 'unknown-store';
+  if (!found.active) return 'closed-store';
+  if ((device?.kioskLocationName || '') !== found.name) return 'stale-name';
+  return null;
+};
+
+export const KIOSK_STORE_ISSUE_MESSAGE: Record<KioskStoreIssue, string> = {
+  'not-set': 'No store set — this iPad will refuse to record hours until you set one.',
+  'unknown-store': 'Set to a store that no longer exists. This iPad will refuse to record hours.',
+  'closed-store': 'Set to a closed store. Pick the store it is actually standing in.',
+  'stale-name': 'The store was renamed since this iPad was set up. Re-save its store so the punch screen shows the new name — hours are already being recorded against the right store.',
+};
+
 /* ---------------- Building the punch ---------------- */
 //
 // These return the record to WRITE. They are the same shapes App.tsx's
@@ -125,10 +223,23 @@ export const pinErrorMessage = (s: PinAttemptState, now: number): string => {
 // only addition is `source: 'kiosk'`, so a door punch and a phone punch are
 // told apart later in the Time Clock view and the audit log.
 
+/**
+ * `locationId` IS THE KIOSK'S, not the person's (multi-store stage 3).
+ *
+ * Stamped here, at clock-in, and nowhere else: the clock-out and break
+ * builders below simply carry whatever the shift already holds, so a device
+ * reconfigured mid-shift cannot rewrite where that shift happened. Omitted
+ * entirely in a workspace with no stores, which behaves exactly as before.
+ *
+ * `locationSource: 'kiosk'` records that a DEVICE vouched for it — a kiosk
+ * cannot change which store it claims to be (firestore.rules), so it is
+ * evidence in a way an app punch is not.
+ */
 export const buildKioskClockIn = (
-  person: Pick<KioskStaff, 'uid'>, id: string, now: number,
+  person: Pick<KioskStaff, 'uid'>, id: string, now: number, locationId?: string,
 ): TimeEntry => ({
   id, userId: person.uid, clockIn: now, breaks: [], createdAt: now, source: 'kiosk',
+  ...(locationId ? { locationId, locationSource: 'kiosk' as const } : {}),
 });
 
 export const buildKioskClockOut = (open: TimeEntry, now: number): TimeEntry => ({

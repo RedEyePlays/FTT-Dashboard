@@ -101,6 +101,8 @@ import { stampPickupWarranty } from './domain/warranty';
 import { expectedCashForDate, expectedCashForDateAt, cashDrawerSummary, drawerCarryOver, openDrawerPatch, ReconciliationInput, drawerStateChange, changesDrawerState, recomputedExpectedCash, recomputedVariance, DrawerAppends, closeDrawerPlan, correctFloatPlan } from './domain/reports';
 import { drawersAt, drawerOn, drawerIdFor, drawerLocationId } from './domain/drawerKey';
 import { locationName, defaultLocation } from './domain/locations';
+import { kioskStoreFor } from './domain/kiosk';
+import { clockInStoreChoices, canClockInAt } from './domain/shiftLocation';
 import { useActiveStore } from './hooks/useActiveStore';
 import { StorePicker } from './components/StorePicker';
 import { useToday } from './hooks/useToday';
@@ -515,6 +517,12 @@ const App: React.FC = () => {
     activeLocationId, activeLocation, permitted: permittedStores, setActiveLocationId,
   } = useActiveStore(appUser, locations);
   const defaultLocationId = useMemo(() => defaultLocation(locations)?.id || '', [locations]);
+  // WHICH STORE THIS IPAD IS, for a kiosk device account (multi-store stage
+  // 3). Resolved from the DEVICE'S OWN account record — never from the person
+  // punching, and never from the store list, which a kiosk deliberately does
+  // not read (domain/kiosk.ts). Empty and not-ready on every other role,
+  // which is correct: nothing else punches on behalf of somebody else.
+  const kioskStore = useMemo(() => kioskStoreFor(appUser), [appUser]);
   // The name shown on every cash screen. A till figure with no store against
   // it is the one that gets counted into the wrong day.
   const storeLabel = activeLocationId ? locationName(locations, activeLocationId) : '';
@@ -2225,6 +2233,33 @@ const App: React.FC = () => {
     audit('user.locations', 'user', targetUid, { locationIds: before }, { locationIds: known });
   };
 
+  /**
+   * WHICH STORE A KIOSK DEVICE IS (multi-store stage 3). OWNER ONLY.
+   *
+   * A staff member punching in must never be able to change which store the
+   * iPad claims to be — that is the whole integrity of the feature — so this
+   * is gated here, and server-side by the fact that the only firestore.rules
+   * branch which may write an arbitrary field on a user document is the
+   * owner's (a kiosk's own self-update branch is lastLogin/notifSeenTs).
+   *
+   * The NAME is denormalized alongside the id so the punch screen can show it
+   * without the kiosk reading the store list — see domain/kiosk.ts for that
+   * trade-off. The id is what gets stamped on hours; the name is for the
+   * header.
+   */
+  const handleSetKioskLocation = (deviceUid: string, locationId: string) => {
+    if (appUser?.role !== 'owner') return;
+    const target = workspaceUsers.find(u => u.id === deviceUid);
+    if (!target || target.role !== 'kiosk') return;
+    const store = locations.find(l => l.id === locationId);
+    if (!store) return;
+    updateUserDoc(deviceUid, { kioskLocationId: store.id, kioskLocationName: store.name })
+      .catch(e => writeFailed('That kiosk\'s store', e, 'It was not saved — the iPad still records hours against whatever it had before.'));
+    audit('kiosk.location', 'user', deviceUid,
+      { kioskLocationId: target.kioskLocationId, kioskLocationName: target.kioskLocationName },
+      { kioskLocationId: store.id, kioskLocationName: store.name });
+  };
+
   const handleInvite = (email: string, role: Role) => {
     if (!workspaceId) return;
     // Managers may only invite technicians; owners may invite any role.
@@ -2359,15 +2394,41 @@ const App: React.FC = () => {
   // --- Time clock ---
   // Every active staff member may clock in/out & take breaks (timeclock.use).
   // Each action mutates the caller's own open shift only.
-  const handleClockIn = () => {
+  /**
+   * THE APP PUNCH — a claim, not evidence (multi-store stage 3).
+   *
+   * The kiosk is not the only way in: an employee holds 'timeclock.use' and
+   * can clock in from any laptop or phone, where there is no device to vouch
+   * for where they are. So they are ASKED, from their own store list, and the
+   * answer is recorded as `locationSource: 'self_selected'` — surfaced at
+   * payroll beside missed clock-outs and corrections, because the owner
+   * should be able to tell which punches a person chose for themselves and
+   * which a device vouched for.
+   *
+   * `locationId` is REQUIRED when the workspace has stores: the picker has no
+   * default and this refuses rather than guessing. It is absent in a workspace
+   * with no stores, which punches exactly as it did before.
+   *
+   * Never checked against where their TILL access is (stage 2's locationIds
+   * governs both here only because they happen to be the same list — see
+   * domain/shiftLocation.ts; a person's store list must never DERIVE where
+   * their hours land, and nothing here derives it).
+   */
+  const handleClockIn = (locationId?: string) => {
     if (!uid || !appUser || !allow('timeclock.use')) return;
     if (openEntryFor(timeEntries, appUser.id)) return; // already clocked in
+    const stores = clockInStoreChoices(appUser, locations);
+    // A store exists but none was chosen: refuse. Filing hours against a
+    // guessed shop is the failure this stage exists to prevent.
+    if (stores.length > 0 && !canClockInAt(appUser, locations, locationId || '')) return;
     const entry: TimeEntry = {
       id: newId(), userId: appUser.id, userEmail: appUser.email,
       clockIn: Date.now(), breaks: [], createdAt: Date.now(),
+      ...(locationId ? { locationId, locationSource: 'self_selected' as const } : {}),
     };
     saveTimeEntry(uid, entry).catch(() => {});
-    audit('timeclock.clock_in', 'timeEntry', entry.id);
+    audit('timeclock.clock_in', 'timeEntry', entry.id, undefined,
+      locationId ? { locationId, locationSource: 'self_selected' } : undefined);
   };
   const handleClockOut = () => {
     if (!uid || !appUser || !allow('timeclock.use')) return;
@@ -2435,10 +2496,20 @@ const App: React.FC = () => {
   const handleKioskClockIn = async (person: KioskStaff) => {
     if (!uid || appUser?.role !== 'kiosk') return;
     if (openEntryFor(timeEntries, person.uid)) return; // already on shift
+    // AN UNCONFIGURED KIOSK TAKES NO PUNCHES. The screen already blocks the
+    // flow; this refuses again rather than trusting it, and firestore.rules
+    // refuses the write a third time. Stamping the default store instead
+    // would misfile a whole shop's hours invisibly.
+    if (!kioskStore.ready) {
+      punchAudit('timeclock.punch_rejected', 'none', person, { reason: 'kiosk-store-not-set' });
+      return;
+    }
     await kioskGuard.run(`in:${person.uid}`, async () => {
-      const entry = buildKioskClockIn(person, newId(), Date.now());
+      // The DEVICE's store, stamped at clock-in and never re-read after it
+      // (domain/kiosk.ts's builders carry it; they do not recompute it).
+      const entry = buildKioskClockIn(person, newId(), Date.now(), kioskStore.locationId);
       await saveTimeEntry(uid, entry);
-      punchAudit('timeclock.clock_in', entry.id, person);
+      punchAudit('timeclock.clock_in', entry.id, person, { locationId: kioskStore.locationId });
     });
   };
   const handleKioskClockOut = async (person: KioskStaff, open: TimeEntry) => {
@@ -3287,6 +3358,7 @@ const App: React.FC = () => {
           entries={timeEntries}
           paidBreakReasons={settings.operations.paidBreakReasons}
           shopName={settings.general.storeName}
+          store={kioskStore}
           onClockIn={handleKioskClockIn}
           onClockOut={handleKioskClockOut}
           onStartBreak={handleKioskStartBreak}
@@ -3794,6 +3866,7 @@ const App: React.FC = () => {
               onSetAllowProfit={handleSetAllowProfit}
               locations={locations}
               onSetLocations={appUser.role === 'owner' ? handleSetUserLocations : undefined}
+              onSetKioskLocation={appUser.role === 'owner' ? handleSetKioskLocation : undefined}
               onChangeRate={allow('users.manage') ? handleChangeRate : undefined}
               onSetPayGroup={allow('users.manage') ? handleSetPayGroup : undefined}
               payCycle={settings.payroll.cycle}
@@ -3827,6 +3900,7 @@ const App: React.FC = () => {
               payAnchorISO={settings.payroll.anchorISO}
               shopTimeZone={settings.general.timeZone}
               longShiftHours={settings.operations.longShiftHours}
+              locations={locations}
               canManagePayroll={allow('payroll.manage')}
               canMarkPaid={appUser.role === 'owner'}
               onClockIn={handleClockIn}

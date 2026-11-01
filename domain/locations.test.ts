@@ -230,26 +230,34 @@ describe('WHAT EACH STAGE DID, AND DID NOT, CHANGE', () => {
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/^\s*\/\/.*$/gm, '');
 
-  it('ONLY THE CASH DRAWER BRANCHES ON locationId — stages 4 and 5 have not started', () => {
-    // Stage 1's promise was that NOTHING read the field. Stage 2 deliberately
-    // ends that for one thing only: which store's cash drawer a record
-    // belongs to. Per-store inventory filtering (stage 4) and a per-store P&L
-    // (stage 5) have NOT started, and this list is what keeps them from
-    // starting by accident — a new file reading the field trips it.
+  it('ONLY THE CASH DRAWER AND THE TIME CLOCK BRANCH ON locationId — stages 4 and 5 have not started', () => {
+    // Stage 1's promise was that NOTHING read the field. Stage 2 ended that
+    // for the cash drawer; stage 3 ends it for a shift's store. Per-store
+    // inventory filtering and transfers (stage 4) and a per-store P&L (stage
+    // 5) have NOT started, and this list is what keeps them from starting by
+    // accident — a new file reading the field trips it.
     const allowed = [
-      // The field, the store list, and the drawer key built on them.
-      'types.ts', 'domain/locations.ts', 'domain/drawerKey.ts',
+      // The field, the store list, and the two keys built on them.
+      'types.ts', 'domain/locations.ts', 'domain/drawerKey.ts', 'domain/shiftLocation.ts',
       // The drawer's own arithmetic and its write path.
       'domain/reports.ts', 'services/firestoreDb.ts',
-      // The two owner-only screens: the store list, and who works where.
+      // Stage 3: the kiosk knows which store it is, and the Time Clock
+      // screen asks, filters and breaks hours down by store.
+      'domain/kiosk.ts', 'components/TimeClockView.tsx',
+      // The owner-only screens: the store list, who works where, and which
+      // store each iPad is.
       'components/LocationsPanel.tsx', 'components/UsersView.tsx',
-      // App.tsx resolves the active store and stamps it on a new sale.
+      // App.tsx resolves the active store, stamps it on a new sale, and
+      // stamps a punch with the kiosk's store.
       'App.tsx',
       // Tests.
       'domain/locations.test.ts', 'domain/drawerKey.test.ts', 'domain/drawerPerStore.test.ts',
+      'domain/shiftLocation.test.ts', 'domain/kioskStore.test.ts',
+      'components/TimeClockView.store.test.tsx',
       'services/locationBackfill.test.ts',
       'rules-tests/locations.rules.test.ts', 'rules-tests/cashDrawerStore.rules.test.ts',
-      'rules-tests/firestore.rules.test.ts',
+      'rules-tests/firestore.rules.test.ts', 'rules-tests/shiftLocation.rules.test.ts',
+      'rules-tests/kiosk.rules.test.ts',
     ];
     const hits = execSync(
       "grep -rln 'locationId' --include=*.ts --include=*.tsx . | grep -v node_modules || true",
@@ -287,28 +295,45 @@ describe('WHAT EACH STAGE DID, AND DID NOT, CHANGE', () => {
     expect(block).toMatch(/allow delete: if false;/);
   });
 
-  it('THE RULES GATE BY LOCATION FOR THE CASH DRAWER AND NOTHING ELSE', () => {
-    // Stage 2 tightens one collection. Tightening any other by location
-    // mid-migration would lock staff out of every record not yet backfilled,
-    // which is why the list of blocks allowed to mention the field is checked
-    // rather than assumed.
+  it('THE RULES GATE BY LOCATION FOR THE CASH DRAWER AND THE TIME CLOCK, AND NOTHING ELSE', () => {
+    // Stage 2 tightened the drawer; stage 3 tightens a punch. Tightening any
+    // OTHER collection by location mid-migration would lock staff out of
+    // every record not yet backfilled, so the blocks allowed to mention the
+    // field are checked rather than assumed.
     //
     // Comments are stripped first: the prose here quotes the very field name
     // being counted.
     const rules = readFileSync(join(__dirname, '..', 'firestore.rules'), 'utf8')
       .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
-    // Every per-collection block, by its match path.
     const blocks = [...rules.matchAll(/match \/([A-Za-z_]+)\/\{[^}]*\} \{([\s\S]*?)\n      \}/g)];
     expect(blocks.length).toBeGreaterThan(10);
-    const gated = blocks.filter(b => /locationId/.test(b[2])).map(b => b[1]);
+    // The drawer block names the field directly; the timeEntries block
+    // delegates to two named helpers, so it is checked by its call sites
+    // rather than by a substring.
+    const gated = blocks.filter(b => /locationId/.test(b[2])).map(b => b[1]).sort();
     expect(gated).toEqual(['cashReconciliations']);
-    // Outside that block, the ONLY mentions are its own two helpers — the key
-    // agreement check and the "may this person run this till" check. Strip
-    // those as well and the field does not appear in these rules at all.
+    const punch = blocks.find(b => b[1] === 'timeEntries')!;
+    expect(punch).toBeTruthy();
+    expect(punch[2]).toMatch(/kioskPunchLocationOk\(me\(\)\)/);
+    expect(punch[2]).toMatch(/selfPunchLocationOk\(me\(\)\)/);
+    // And no other block delegates to them either.
+    for (const b of blocks) {
+      if (b[1] === 'timeEntries') continue;
+      expect({ block: b[1], gated: /PunchLocationOk/.test(b[2]) }).toEqual({ block: b[1], gated: false });
+    }
+    // Outside those two blocks, the only mentions are their own helpers: the
+    // drawer's key-agreement and till checks, and the punch's two location
+    // checks. Strip those and the field does not appear in these rules at all.
     const outside = rules
       .replace(/match \/cashReconciliations\/\{[^}]*\} \{[\s\S]*?\n      \}/, '')
+      .replace(/match \/timeEntries\/\{[^}]*\} \{[\s\S]*?\n      \}/, '')
       .replace(/function drawerKeyAgrees\(id\) \{[\s\S]*?\n      \}/, '')
       .replace(/function tillAllowed\(prof, loc\) \{[\s\S]*?\n      \}/, '')
+      .replace(/function kioskStoreOf\(prof\) \{[^}]*\}/, '')
+      .replace(/function kioskPunchLocationOk\(prof\) \{[\s\S]*?\n    \}/, '')
+      .replace(/function selfPunchLocationOk\(prof\) \{[\s\S]*?\n    \}/, '')
+      .replace(/function kioskEntryKeys\(\) \{[^}]*\}/, '')
+      .replace(/function timeEntrySelfKeys\(\) \{[^}]*\}/, '')
       .match(/locationId/g) || [];
     expect(outside).toEqual([]);
   });

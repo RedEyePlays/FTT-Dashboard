@@ -112,7 +112,7 @@ service cloud.firestore {
     // are the owner/manager's job on a real screen with an audit trail.
     function withinLastDay(ms) { return ms > request.time.toMillis() - 86400000 && ms <= request.time.toMillis() + 600000; }
     // The only fields a kiosk-written entry may contain at all.
-    function kioskEntryKeys() { return ['id', 'userId', 'userEmail', 'clockIn', 'clockOut', 'breaks', 'createdAt', 'source']; }
+    function kioskEntryKeys() { return ['id', 'userId', 'userEmail', 'clockIn', 'clockOut', 'breaks', 'createdAt', 'source', 'locationId', 'locationSource']; }
     // The only fields a kiosk UPDATE may CHANGE — clock out, or start/end a
     // break. Never clockIn, never userId, never hours by any other route.
     function kioskUpdateKeys() { return ['clockOut', 'breaks']; }
@@ -159,7 +159,7 @@ service cloud.firestore {
     // — self-service creates/updates may touch ONLY these, so an employee or
     // technician writing directly (bypassing the UI) can't sneak in
     // `corrections`/audit fields that only the manager-correction flow may set.
-    function timeEntrySelfKeys() { return ['id', 'userId', 'userEmail', 'clockIn', 'clockOut', 'breaks', 'createdAt']; }
+    function timeEntrySelfKeys() { return ['id', 'userId', 'userEmail', 'clockIn', 'clockOut', 'breaks', 'createdAt', 'locationId', 'locationSource']; }
     // Fields a self-service UPDATE may actually CHANGE (not just carry over
     // unchanged from a prior manager correction) — clockIn and userId can
     // never change after creation via this path.
@@ -168,6 +168,52 @@ service cloud.firestore {
     // enough for a real device, tight enough that a self-service write can't
     // backdate a shift or extend a clock-out to inflate pay.
     function closeToNow(ms) { return ms > request.time.toMillis() - 600000 && ms < request.time.toMillis() + 600000; }
+
+    // ---- WHERE A SHIFT WAS WORKED (multi-store stage 3) ----
+    //
+    // A shift's location comes from the KIOSK it was punched on, and a kiosk
+    // must not be able to write a punch for a store it is not. That IS
+    // checkable here, because the binding lives on the device's own account
+    // (`users/{kioskUid}.kioskLocationId`) rather than in device-local
+    // storage: rules can read the authenticated account, so the punch's
+    // `locationId` is checked against the store the OWNER assigned that iPad.
+    // The device cannot move itself — no branch in the /users block below
+    // lets a kiosk write its own `kioskLocationId`; only the owner's branch
+    // writes arbitrary fields, and a kiosk's self-update branch is
+    // `hasOnly(['lastLogin', 'notifSeenTs'])`.
+    //
+    // AN UNCONFIGURED KIOSK CANNOT PUNCH AT ALL. With no store assigned the
+    // comparison below cannot be satisfied, so the write is refused — the
+    // same answer the punch screen gives, enforced rather than trusted. It
+    // must not fall back to the default store: filing one shop's first week
+    // into another would go unnoticed until payroll.
+    //
+    // ONE CONSEQUENCE, STATED: after this rule deploys, EVERY iPad must be
+    // assigned a store before it can take a punch, the existing one included.
+    function kioskStoreOf(prof) { return prof.get('kioskLocationId', ''); }
+    function kioskPunchLocationOk(prof) {
+      return kioskStoreOf(prof) is string
+          && kioskStoreOf(prof).size() > 0
+          && request.resource.data.get('locationId', '') == kioskStoreOf(prof)
+          // A device punch says so, so it can never be mistaken later for
+          // somebody's own claim about where they were.
+          && request.resource.data.get('locationSource', '') == 'kiosk';
+    }
+    // The APP punch is the weaker path, and it is checked for what it can be:
+    // a store the person actually works at (stage 2's list), and marked as
+    // their own claim rather than a device's. Optional, because a workspace
+    // with no stores has nothing to pick — and, as in stage 2, an EMPTY list
+    // is not narrowed: it means "the default store", which rules cannot
+    // resolve without a query, and locking somebody out of their own time
+    // clock over a field nobody has filled in would be worse than the
+    // restriction being advisory until the owner sets it.
+    function selfPunchLocationOk(prof) {
+      return !request.resource.data.keys().hasAny(['locationId'])
+          || (request.resource.data.locationId is string
+              && request.resource.data.get('locationSource', '') == 'self_selected'
+              && (prof.get('locationIds', []).size() == 0
+                  || prof.get('locationIds', []).hasAny([request.resource.data.locationId])));
+    }
 
     // Role rank for PIN assignment (domain/pin.ts mirrors this exactly): an
     // owner/manager may set a PIN only for someone STRICTLY below their own
@@ -390,6 +436,7 @@ service cloud.firestore {
           || (isSelfServiceStaffOf(ws)
               && request.resource.data.userId == request.auth.uid
               && request.resource.data.keys().hasOnly(timeEntrySelfKeys())
+              && selfPunchLocationOk(me())
               && closeToNow(request.resource.data.clockIn)
               // clockOut is optional on create (a fresh clock-in has none
               // yet), but if it IS set it must be skew-checked too — a
@@ -402,6 +449,7 @@ service cloud.firestore {
           || (isKioskOf(ws)
               && request.resource.data.keys().hasOnly(kioskEntryKeys())
               && request.resource.data.source == 'kiosk'
+              && kioskPunchLocationOk(me())
               && request.resource.data.userId is string
               && request.resource.data.userId != request.auth.uid
               && closeToNow(request.resource.data.clockIn)
