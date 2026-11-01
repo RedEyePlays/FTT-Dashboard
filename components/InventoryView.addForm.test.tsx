@@ -47,7 +47,7 @@ const codeField = (host: HTMLElement) =>
 
 const view = (props: Partial<React.ComponentProps<typeof InventoryView>> = {}) => (
   <InventoryView
-    inventory={[]} deviceBuyers={[]} activity={[]} section="devices"
+    inventory={[]} deviceBuyers={[]} activity={[]} section="phones"
     onSelectSection={() => {}} onSave={() => {}} onUpdate={() => {}} onDelete={() => {}}
     onGenerateSku={async () => 'PHN-000002'} {...props}
   />

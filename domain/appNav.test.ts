@@ -17,7 +17,7 @@ describe('viewPath', () => {
   });
 
   it('delegates inventory to its section path', () => {
-    expect(viewPath('grid')).toBe('/inventory/devices');
+    expect(viewPath('grid')).toBe('/inventory/phones');
     expect(viewPath('grid', 'sold')).toBe('/inventory/sold');
   });
 

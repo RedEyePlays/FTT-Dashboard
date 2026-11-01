@@ -39,7 +39,7 @@ function mount(ui: React.ReactElement) {
 
 const view = (props: Partial<React.ComponentProps<typeof InventoryView>> = {}) => (
   <InventoryView
-    inventory={[device()]} deviceBuyers={[]} activity={[]} section="devices"
+    inventory={[device()]} deviceBuyers={[]} activity={[]} section="phones"
     onSelectSection={() => {}} onSave={() => {}} onUpdate={() => {}} onDelete={() => {}}
     onGenerateSku={async () => 'PHN-000002'} {...props}
   />

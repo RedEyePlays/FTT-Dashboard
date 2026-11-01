@@ -47,7 +47,7 @@ function mount(ui: React.ReactElement) {
 
 const view = (props: Partial<React.ComponentProps<typeof InventoryView>> = {}) => (
   <InventoryView
-    inventory={[device()]} deviceBuyers={[]} activity={[]} section="devices"
+    inventory={[device()]} deviceBuyers={[]} activity={[]} section="phones"
     onSelectSection={() => {}} onSave={() => {}} onUpdate={() => {}} onDelete={() => {}}
     onGenerateSku={async () => 'PHN-000002'} {...props}
   />
@@ -98,7 +98,7 @@ describe('InventoryView: scanning an IMEI finds the device', () => {
 
   it('finds a SOLD device scanned from the in-stock Devices page, and says where it is', () => {
     const sold = device({ id: 'sold-1', imei: IMEI, soldDate: '2026-08-10', deviceStatus: 'sold', item: 'iPhone 12' });
-    const { host, unmount } = mount(view({ inventory: [device(), sold], section: 'devices' }));
+    const { host, unmount } = mount(view({ inventory: [device(), sold], section: 'phones' }));
 
     // Nothing in the Devices table matches — but the device is found anyway.
     type(host, IMEI);
@@ -118,7 +118,7 @@ describe('InventoryView: scanning an IMEI finds the device', () => {
 
   it('finds an ACCESSORY by its barcode while the Devices page is open', () => {
     const { host, unmount } = mount(view({
-      inventory: [device(), accessory()], section: 'devices',
+      inventory: [device(), accessory()], section: 'phones',
     }));
     type(host, '012345678905');
     expect(noteText(host)).toBe('Found in Accessories — outside your current filter.');
@@ -130,7 +130,7 @@ describe('InventoryView: scanning an IMEI finds the device', () => {
     // sold, so the filter would have hidden it.
     localStorage.setItem('inv_status_filter:u1', JSON.stringify('ready'));
     const sold = device({ id: 'sold-1', imei: IMEI, soldDate: '2026-08-10', deviceStatus: 'sold', item: 'iPhone 12' });
-    const { host, unmount } = mount(view({ inventory: [sold], section: 'devices', userId: 'u1' }));
+    const { host, unmount } = mount(view({ inventory: [sold], section: 'phones', userId: 'u1' }));
     type(host, IMEI);
     expect(host.textContent).toContain('iPhone 12');
     expect(noteText(host)).toContain('outside your current filter');
@@ -156,7 +156,7 @@ describe('InventoryView: scanning an IMEI finds the device', () => {
 
   it('a NAME search still respects the page — a sold device is not dragged onto Devices', () => {
     const sold = device({ id: 'sold-1', soldDate: '2026-08-10', deviceStatus: 'sold', item: 'iPhone 12' });
-    const { host, unmount } = mount(view({ inventory: [device(), sold], section: 'devices' }));
+    const { host, unmount } = mount(view({ inventory: [device(), sold], section: 'phones' }));
     type(host, 'iphone');
     // No escape-the-filter note, and the sold device stays on the Sold page.
     expect(noteText(host)).toBeUndefined();

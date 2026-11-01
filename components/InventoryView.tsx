@@ -19,6 +19,10 @@ const LabelModal = lazy(() => import('./LabelModal').then(m => ({ default: m.Lab
 import { useIsMobile } from '../hooks/useMediaQuery';
 import { ResponsiveDialog, EmptyState } from './responsive';
 import { InvSection, INV_SECTIONS } from '../domain/inventoryNav';
+import {
+  inTab, tabKind, tabAddsType, tabNeedsTypePicker, effectiveDeviceType,
+  laptopSpecLine, OTHER_DEVICE_TYPES, hasLaptopFields,
+} from '../domain/deviceSpecs';
 import { getDeviceDisplayName, priceFieldFor } from '../domain/inventory';
 import {
   isDerivedCostColumn, isCostEntryField, costAccessFor, RECORDED_LABEL, stripCostFields,
@@ -214,6 +218,10 @@ const itemLabel = getDeviceDisplayName;
 // Minimums are kept lean so the full default column set still fits within the
 // container (no horizontal scroll) even at ~1024px — the bounded fit shrinks
 // columns toward these mins. Notes is capped at 300 and opened via a drawer.
+// Every DeviceType, for the retype cell. Taken from the type rather than
+// retyped here, so a new one cannot be added to the model and forgotten here.
+const DEVICE_TYPE_OPTIONS: DeviceType[] = ['Phone', 'Laptop', 'Tablet', 'Watch', 'Console', 'Desktop PC', 'Other'];
+
 const DEVICE_COLS: Col[] = [
   // Frozen identity block — stays pinned to the left. Defaults are compact so the
   // full set leaves some unused width to grow into on wide screens; mins sum
@@ -231,12 +239,26 @@ const DEVICE_COLS: Col[] = [
   // the Item cell. All kept with hideCol so CSV export still round-trips them —
   // including `item`, which is now the primary name field.
   { key: 'item', label: 'Item Name', type: 'text', w: 170, hideCol: true },
-  { key: 'deviceType', label: 'Type', type: 'text', w: 76, hideCol: true },
+  // THE CHEAP RETYPE. Every device in the workspace is currently filed as a
+  // phone, correctly or not, and nothing in this change migrates that (a guess
+  // from the item name is right for "MacBook" and wrong for a Dell model
+  // number, and a wrong guess puts the wrong fields on the record). So the
+  // type is an editable cell: the shop retypes a row as it comes across it and
+  // it moves to the right tab, instead of needing a migration at all.
+  { key: 'deviceType', label: 'Type', type: 'select', w: 92, min: 64, max: 130, options: opt(DEVICE_TYPE_OPTIONS) },
   { key: 'brand', label: 'Brand', type: 'text', w: 100, hideCol: true },
   { key: 'model', label: 'Model', type: 'text', w: 140, hideCol: true },
   { key: 'storage', label: 'Storage', type: 'text', w: 84, min: 46, max: 120 },
   { key: 'color', label: 'Color', type: 'text', w: 90, min: 48, max: 150 },
   { key: 'batteryHealth', label: 'Battery', type: 'text', w: 68, min: 40, max: 110 },
+  // LAPTOP SPECS. Not in the grid — they would be five empty columns on the
+  // Phones tab — but carried here with hideCol so the CSV export still
+  // round-trips them, exactly as brand/model/item already are.
+  { key: 'cpu', label: 'CPU', type: 'text', w: 120, hideCol: true },
+  { key: 'ram', label: 'RAM', type: 'text', w: 80, hideCol: true },
+  { key: 'storageType', label: 'Storage Type', type: 'text', w: 90, hideCol: true },
+  { key: 'screenSize', label: 'Screen Size', type: 'text', w: 90, hideCol: true },
+  { key: 'gpu', label: 'GPU', type: 'text', w: 120, hideCol: true },
   { key: 'condition', label: 'Condition', type: 'select', w: 108, min: 80, max: 150, options: opt(CONDITIONS) },
   // 'Bought From' is no longer shown in the grid (or Columns menu). Kept here
   // with hideCol so the value still round-trips through CSV export and stays in
@@ -370,6 +392,9 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<Sort | null>(null);
   const [statusFilter, setStatusFilter] = usePersistedFilter<string>('inv_status_filter', userId, 'all');
+  // The Sold tab's own type filter — Sold holds every sold device, so this is
+  // how "which laptops did we sell" gets asked without splitting the tab.
+  const [soldType, setSoldType] = usePersistedFilter<string>('inv_sold_type', userId, 'all');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [hidden, setHidden] = useState<Record<'device' | 'accessory', string[]>>(() => loadLS(LS_HIDDEN, DEFAULT_HIDDEN));
   const [views, setViews] = useState<SavedView[]>(() => loadLS(LS_VIEWS, []));
@@ -393,13 +418,17 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
   // Reset pagination + selection whenever the active page or its filters change.
   useEffect(() => { setPageNum(1); setSelected(new Set()); setBulkResult(null); setBulkPriceOpen(false); }, [page, query, statusFilter, sort]);
 
+  // One count per tab, from the SAME predicate the tables filter by
+  // (domain/deviceSpecs.ts's inTab) — so a tab's badge can never disagree with
+  // what opening it shows. Sold crosses the device tabs: a sold laptop is
+  // counted under Sold and not under Laptops.
   const counts = useMemo(() => ({
     all: inventory.length,
-    // Devices tab = current stock only: a sold device is counted under Sold, not
-    // here (otherwise it would be double-counted).
-    devices: inventory.filter(i => kindOf(i) === 'device' && !isSold(i)).length,
-    accessories: inventory.filter(i => kindOf(i) === 'accessory').length,
-    sold: inventory.filter(isSold).length,
+    phones: inventory.filter(i => inTab(i, 'phones')).length,
+    laptops: inventory.filter(i => inTab(i, 'laptops')).length,
+    accessories: inventory.filter(i => inTab(i, 'accessories')).length,
+    other: inventory.filter(i => inTab(i, 'other')).length,
+    sold: inventory.filter(i => inTab(i, 'sold')).length,
     lowstock: inventory.filter(isLow).length,
   }), [inventory]);
 
@@ -453,6 +482,12 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
   // Devices tab = current stock only: once a device is sold it drops out of here
   // and lives only under the Sold tab.
   const devices = useMemo(() => deviceRows.filter(i => !isSold(i)), [deviceRows]);
+  // IN-STOCK devices split by type. The split is the whole point of the tabs:
+  // adding from a typed tab is what stops `deviceType` being left on its
+  // 'Phone' default (domain/deviceSpecs.ts).
+  const phones = useMemo(() => devices.filter(i => inTab(i, 'phones')), [devices]);
+  const laptops = useMemo(() => devices.filter(i => inTab(i, 'laptops')), [devices]);
+  const otherDevices = useMemo(() => devices.filter(i => inTab(i, 'other')), [devices]);
   const accessories = useMemo(() => {
     let r = inventory.filter(i => kindOf(i) === 'accessory' && matchesQuery(i)).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
     return applySort(r, ACCESSORY_COLS);
@@ -462,18 +497,23 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
   const lowAccessories = accessories.filter(isLow);
 
   // Rows/columns/kind for the currently open sub-page (a single table per page).
-  const activeKind: 'device' | 'accessory' = (page === 'accessories' || page === 'lowstock') ? 'accessory' : 'device';
+  const activeKind: 'device' | 'accessory' = tabKind(page);
   const activeCols = visibleCols(activeKind === 'device' ? DEVICE_COLS : ACCESSORY_COLS, canViewCost);
+  // SOLD IS ONE TAB FOR EVERYTHING SOLD, phones and laptops together, with its
+  // own type filter inside it — because "what did we sell" is the question, not
+  // "what did we sell that was a laptop".
+  const soldShown = useMemo(
+    () => (soldType === 'all' ? soldDevices : soldDevices.filter(i => effectiveDeviceType(i) === soldType)),
+    [soldDevices, soldType],
+  );
   const activeRows =
-    page === 'devices' ? devices :
-    page === 'sold' ? soldDevices :
+    page === 'phones' ? phones :
+    page === 'laptops' ? laptops :
+    page === 'other' ? otherDevices :
+    page === 'sold' ? soldShown :
     page === 'accessories' ? accessories :
     page === 'lowstock' ? lowAccessories : [];
-  const activeTitle =
-    page === 'devices' ? 'Devices' :
-    page === 'sold' ? 'Sold Devices' :
-    page === 'accessories' ? 'Accessories' :
-    page === 'lowstock' ? 'Low Stock' : '';
+  const activeTitle = INV_SECTIONS.find(x => x.id === page)?.label ?? '';
   const totalPages = Math.max(1, Math.ceil(activeRows.length / PAGE_SIZE));
   const clampedPage = Math.min(pageNum, totalPages);
   const pageRows = activeRows.slice((clampedPage - 1) * PAGE_SIZE, clampedPage * PAGE_SIZE);
@@ -542,7 +582,13 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
   // IMEI field, handles the scanner's Enter, runs the duplicate guard, and
   // WRITES NOTHING until Save.
   const [addKind, setAddKind] = useState<ItemKind | null>(null);
-  const openAddDevice = () => { setPage('devices'); setAddKind('device'); };
+  // The three tabs that replaced the single Devices tab. Everything that used
+  // to say `page === 'devices'` means "one of these" — the status filter, the
+  // quick-add row, the bulk actions.
+  const isDeviceStockTab = page === 'phones' || page === 'laptops' || page === 'other';
+  // Opening Add from outside a device tab lands on Phones, which is where the
+  // old Devices tab pointed.
+  const openAddDevice = () => { if (!isDeviceStockTab) setPage('phones'); setAddKind('device'); };
   const openAddAccessory = () => { setPage('accessories'); setAddKind('accessory'); };
 
   // The inline "Quick add row", kept for people who prefer typing straight into
@@ -552,7 +598,12 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
   const [draft, setDraft] = useState<InventoryItem | null>(null);
   const blankDevice = (): InventoryItem => ({ id: uid(), kind: 'device', sku: '', date: today(), item: '', imei: '', boughtFrom: '', purchaseCost: 0, repairCost: 0, soldDate: '', soldTo: '', salePrice: 0, deviceType: 'Phone', brand: '', model: '', storage: '', color: '', carrier: '', batteryHealth: '', condition: 'Good', purchaseSource: '', targetSalePrice: 0, deviceStatus: 'ready', notes: '' });
   const blankAccessory = (): InventoryItem => ({ id: uid(), kind: 'accessory', sku: '', date: today(), item: '', imei: '', boughtFrom: '', purchaseCost: 0, repairCost: 0, soldDate: '', soldTo: '', salePrice: 0, manufacturerBarcode: '', category: '', quantity: 1, costPerUnit: 0, sellingPrice: 0, lowStockThreshold: 3, notes: '' });
-  const addDeviceRow = async () => { setPage('devices'); setDraft(blankDevice()); };
+  // A quick-add row inherits the TAB's type, the same as the Add form — so a
+  // row typed straight into the Laptops table is a laptop.
+  const addDeviceRow = async () => {
+    if (!isDeviceStockTab) setPage('phones');
+    setDraft({ ...blankDevice(), deviceType: tabAddsType(page) ?? 'Phone' });
+  };
   const addAccessoryRow = async () => { setPage('accessories'); setDraft(blankAccessory()); };
 
   // The first edit to a draft row is what creates it. Until then it is not in
@@ -575,7 +626,7 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
   const junk = useMemo(() => blankRows(inventory), [inventory]);
   // The draft is shown at the top of the table it belongs to, and nowhere else.
   const draftOnThisPage = !!draft && kindOf(draft!) === activeKind
-    && (activeKind === 'device' ? page === 'devices' : page === 'accessories');
+    && (activeKind === 'device' ? isDeviceStockTab : page === 'accessories');
   const sheetRows = draftOnThisPage ? [draft!, ...pageRows] : pageRows;
   const duplicate = async (i: InventoryItem) => {
     const k = kindOf(i);
@@ -666,7 +717,7 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
     if (!name) return;
     setViews(v => [...v.filter(x => x.name !== name), { name, page, query, sort, statusFilter, hidden }]);
   };
-  const applyView = (v: SavedView) => { setPage(((v as any).page ?? 'devices') as Page); setQuery(v.query); setSort(v.sort); setStatusFilter(v.statusFilter); setHidden(v.hidden); setMenu(null); };
+  const applyView = (v: SavedView) => { setPage(((v as any).page === 'devices' ? 'phones' : (v as any).page ?? 'phones') as Page); setQuery(v.query); setSort(v.sort); setStatusFilter(v.statusFilter); setHidden(v.hidden); setMenu(null); };
 
   const onSortToggle = (key: string) => setSort(s => s?.key === key ? (s.dir === 'asc' ? { key, dir: 'desc' } : null) : { key, dir: 'asc' });
   const toggleCol = (kind: 'device' | 'accessory', key: string) =>
@@ -674,7 +725,7 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
 
   const visCols = (kind: 'device' | 'accessory', cols: Col[]) => cols.filter(c => !c.hideCol && !hidden[kind].includes(c.key));
 
-  const sectionCount: Record<InvSection, number> = { devices: counts.devices, accessories: counts.accessories, sold: counts.sold, lowstock: counts.lowstock };
+  const sectionCount: Record<InvSection, number> = { phones: counts.phones, laptops: counts.laptops, accessories: counts.accessories, other: counts.other, sold: counts.sold, lowstock: counts.lowstock };
 
   // Compact top navigation: switches inventory sections (not table filters).
   // A single horizontally-scrollable pill row serves both desktop and mobile,
@@ -702,7 +753,12 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
   // the inline draft row has no table to live in on this screen, so pointing
   // them at it would give a button that does nothing at all.
   const addForm = addKind ? (
-    <ItemFormModal initialKind={addKind} canViewCost={canViewCost} deviceBuyers={deviceBuyers}
+    // ADDING FROM A TAB SETS THE TYPE. This is the actual fix: the dropdown
+    // was never missing, it was just easy to leave on 'Phone'. Add from the
+    // Laptops tab and it is a laptop, with nothing to forget
+    // (domain/deviceSpecs.ts's tabAddsType).
+    <ItemFormModal initialKind={addKind} initialDeviceType={addKind === 'device' ? tabAddsType(page) : undefined}
+      canViewCost={canViewCost} deviceBuyers={deviceBuyers}
       inventory={inventory} customers={customers} onCreateCustomer={onCreateCustomer}
       onSave={(item) => { onSave(item); setAddKind(null); }}
       onGenerateSku={onGenerateSku}
@@ -740,6 +796,23 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
         <span className="text-sm text-slate-400">{activeRows.length}</span>
       </div>
 
+      {/* SOLD CROSSES THESE TABS, and that is the one thing about this layout
+          somebody could lose a device over: a laptop that sold is in Sold and
+          NOT in Laptops. Said on screen rather than left to be worked out. */}
+      {isDeviceStockTab && (
+        <p className="text-xs text-slate-400 -mt-2">
+          In stock only — anything sold moves to the{' '}
+          <button onClick={() => setPage('sold')} className="underline font-medium hover:text-indigo-500">Sold tab</button>
+          {counts.sold > 0 ? ` (${counts.sold})` : ''}.
+          {page === 'other' && ' Tablets, watches, consoles and desktop PCs.'}
+        </p>
+      )}
+      {page === 'sold' && (
+        <p className="text-xs text-slate-400 -mt-2">
+          Everything sold, every kind of device together. Filter by type below.
+        </p>
+      )}
+
           {/* Controls (scoped to this page) */}
           <div className="flex flex-wrap items-center gap-2">
             <div className="relative flex-1 min-w-[220px]">
@@ -751,14 +824,24 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
               <span className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1 text-[11px] text-slate-400"><ScanLine className="w-3.5 h-3.5" /> scanner ready</span>
             </div>
 
+            {/* The Sold tab's type filter. Sold is deliberately ONE tab — "what
+                did we sell" is the question — so the split lives inside it. */}
+            {page === 'sold' && (
+              <select aria-label="Sold device type" value={soldType} onChange={e => setSoldType(e.target.value)}
+                className="px-3 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-700 dark:text-slate-200">
+                <option value="all">All types</option>
+                {DEVICE_TYPE_OPTIONS.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+            )}
+
             {/* Mobile: selection-mode toggle */}
             <button onClick={() => { setSelectMode(m => !m); setSelected(new Set()); }} className="md:hidden flex items-center gap-2 px-3 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-700 dark:text-slate-200"><CheckSquare className="w-4 h-4" /> {selectMode ? 'Done' : 'Select'}</button>
 
             {/* Mobile filters/sort sheet trigger */}
-            <button onClick={() => setMobileFilter(true)} className="md:hidden flex items-center gap-2 px-3 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-700 dark:text-slate-200 hover:border-indigo-400"><SlidersHorizontal className="w-4 h-4" /> Sort{page === 'devices' && statusFilter !== 'all' && <span className="w-2 h-2 rounded-full bg-indigo-500" />}</button>
+            <button onClick={() => setMobileFilter(true)} className="md:hidden flex items-center gap-2 px-3 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-700 dark:text-slate-200 hover:border-indigo-400"><SlidersHorizontal className="w-4 h-4" /> Sort{isDeviceStockTab && statusFilter !== 'all' && <span className="w-2 h-2 rounded-full bg-indigo-500" />}</button>
 
-            {/* Desktop status filter (device page only) */}
-            {page === 'devices' && (
+            {/* Desktop status filter (device pages only) */}
+            {isDeviceStockTab && (
               <div className="relative hidden md:block" onClick={e => e.stopPropagation()}>
                 <button onClick={() => setMenu(menu === 'filter' ? null : 'filter')} className="flex items-center gap-2 px-3 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-700 dark:text-slate-200 hover:border-indigo-400"><SlidersHorizontal className="w-4 h-4" /> Filters{statusFilter !== 'all' && <span className="w-2 h-2 rounded-full bg-indigo-500" />}</button>
                 {menu === 'filter' && (
@@ -826,7 +909,7 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
             {/* Quick add row: for people who prefer typing straight into the
                 table. It is a local draft — nothing is written (and no SKU is
                 allocated) until the first field is filled in. */}
-            {(page === 'devices' || page === 'accessories') && (
+            {(isDeviceStockTab || page === 'accessories') && (
               <button onClick={() => (activeKind === 'device' ? addDeviceRow() : addAccessoryRow())} disabled={!!draft}
                 title="Add an empty row to type into. Nothing is saved until you fill something in."
                 className="hidden md:flex items-center gap-2 px-3 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-700 dark:text-slate-200 hover:border-indigo-400 disabled:opacity-40">
@@ -941,7 +1024,7 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
                 onHistory={(it, mode) => setHistoryItem({ item: it, mode })}
                 linkedRepairOf={linkedRepairOf} onCreateRepair={onCreateRepair} onOpenRepair={onOpenRepair} openRepairOf={openRepairOf}
                 widths={colW[activeKind]} onResize={(key, w) => setColumnWidth(activeKind, key, w)} onResetWidth={(key) => resetColumnWidth(activeKind, key)}
-                onAddRow={(page === 'devices' || page === 'accessories') ? (activeKind === 'device' ? addDeviceRow : addAccessoryRow) : undefined}
+                onAddRow={(isDeviceStockTab || page === 'accessories') ? (activeKind === 'device' ? addDeviceRow : addAccessoryRow) : undefined}
                 addLabel={activeKind === 'device' ? 'Add Device row' : 'Add Accessory row'} lowFlag={page === 'lowstock'} />
             </div>
           </div>
@@ -1004,7 +1087,7 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
       <ResponsiveDialog open={mobileFilter} onClose={() => setMobileFilter(false)} title="Filters & sort"
         footer={<button onClick={() => setMobileFilter(false)} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium">Done</button>}>
         <div className="space-y-4">
-          {page === 'devices' && (
+          {isDeviceStockTab && (
             <div>
               <p className="text-xs font-semibold text-slate-500 mb-1">Device Status</p>
               <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="w-full p-2.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm">
