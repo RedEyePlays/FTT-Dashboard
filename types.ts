@@ -182,17 +182,106 @@ export interface InventoryItem {
 
   notes: string;
   /**
-   * WHERE THE STOCK PHYSICALLY IS. A transfer (stage 4) moves this with the device and carries its cost along; the selling store takes the profit.
+   * WHERE THE STOCK PHYSICALLY IS.
    *
-   * Multi-store stage 1 — see Location.
+   * A TRANSFER MOVES THIS FIELD AND NOTHING ELSE (multi-store stage 4). The
+   * device keeps its id, its SKU, its purchase cost, its repair history, its
+   * warranty start and its photos — the whole reason this build exists rather
+   * than two separate workspaces. A transfer is never a delete-and-recreate
+   * and never a second row at the destination.
    *
-   * OPTIONAL, AND ABSENT MEANS "AS BEFORE". Every record written before the
-   * second store existed has none, and nothing in the app branches on it yet —
-   * which is what makes this stage invisible and reversible. The backfill
-   * (services/firestoreDb.ts's backfillLocationIds) assigns Brampton to the
-   * rows that predate the split, and only ever to rows with no location.
+   * It changes ON RECEIPT, not on dispatch: until the destination confirms,
+   * the device's last known place is where it was sent from, which is what
+   * makes a cancel a no-op on this field and a never-arrived device traceable
+   * to the store that still nominally holds it.
+   *
+   * COST TRAVELS WITH THE DEVICE and the SELLING store takes the profit. There
+   * is no internal transfer price and no profit split: a phone bought in
+   * Brampton for $200 and sold in Mississauga for $400 earns Mississauga $200.
+   * That falls out of this field moving on its own — `purchaseCost` is
+   * untouched, so margin stays right.
+   *
+   * Multi-store stage 1 — see Location. OPTIONAL, AND ABSENT MEANS "AS
+   * BEFORE": the backfill (services/firestoreDb.ts's backfillLocationIds)
+   * assigns Brampton to the rows that predate the split, and only ever to rows
+   * with no location.
    */
   locationId?: string;
+  /**
+   * THE TRANSFER THIS DEVICE IS CURRENTLY IN, while it is in transit.
+   *
+   * DELIBERATELY NOT A `deviceStatus` VALUE. `deviceStatus` is about the
+   * device's condition and sale state — a device in transit may also be
+   * `pending_repair`, and a single field cannot hold both without losing one
+   * of them. So transit is its own, orthogonal fact, and every existing
+   * status keeps meaning exactly what it meant.
+   *
+   * It is also what makes "is this sellable right now" a LOCAL question. A
+   * device in transit is on neither store's shelf, and the POS, the pickers
+   * and the inventory tabs all need to know that without joining against the
+   * transfers collection on every render. The transfers record is the
+   * accountability trail; this is the index into it.
+   *
+   * Set on dispatch, cleared on receipt or cancellation. Absent on every
+   * device that is not in a car right now, which is almost all of them.
+   */
+  inTransferId?: string;
+}
+
+/* ---------------- Moving stock between stores (multi-store stage 4) -------- */
+
+/**
+ * A device in transit is a real state with real money in it, which is why a
+ * transfer is its own record rather than a field flip: "it's at the other
+ * store now" is not good enough when a phone goes missing in a car.
+ *
+ *   'in_transit' — sent, not yet confirmed at the destination.
+ *   'received'   — confirmed by someone AT the destination. The devices'
+ *                  locationId moved at this moment and not before.
+ *   'cancelled'  — it never left, or it came back. The devices are unchanged
+ *                  and still belong to the store that sent them.
+ */
+export type TransferStatus = 'in_transit' | 'received' | 'cancelled';
+
+export interface InventoryTransfer {
+  id: string;
+  /** Inventory ids travelling together. A device is never split, obviously. */
+  itemIds: string[];
+  fromLocationId: string;
+  toLocationId: string;
+  status: TransferStatus;
+  /** Who put it in the car, and when. */
+  sentAt: number;
+  sentBy: string;
+  sentByEmail?: string;
+  /**
+   * Who confirmed it at the OTHER END, and when. Absent until then — and the
+   * receiving step is not a formality: it is the only thing that catches a
+   * device that never arrived, which is why nothing auto-receives and the
+   * sender cannot receive their own transfer.
+   */
+  receivedAt?: number;
+  receivedBy?: string;
+  receivedByEmail?: string;
+  cancelledAt?: number;
+  cancelledBy?: string;
+  cancelledByEmail?: string;
+  note?: string;
+  /**
+   * Devices that were RESERVED for a layaway and were sent anyway, by a
+   * deliberate override. Somebody has paid a deposit on each of these, so the
+   * override is recorded on the transfer rather than being a decision that
+   * leaves no trace.
+   */
+  reservedOverrides?: string[];
+  /**
+   * A SNAPSHOT of what each device cost when it was sent, for the devices in
+   * this transfer. Not used in any arithmetic — a transfer moves no money, and
+   * the device's own purchaseCost stays authoritative — but it makes a dispute
+   * about a device that vanished in transit answerable at the value it had at
+   * the time.
+   */
+  valueAtSend?: number;
 }
 
 // Who FUNDED the purchase — the store advancing money it is owed back, the

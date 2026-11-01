@@ -304,6 +304,84 @@ service cloud.firestore {
         allow create, update: if isStaffOf(ws);
         allow delete: if isManagerUp(ws);
       }
+      // ---- STOCK MOVING BETWEEN STORES (multi-store stage 4) ----
+      //
+      // A device in transit is a real state with real money in it, so a
+      // transfer is its own record. These rules decide WHO may move stock, and
+      // they follow stage 2's and stage 3's shape rather than inventing a new
+      // one: `users.locationIds` is the list of stores a person may act at, an
+      // EMPTY list means the DEFAULT store rather than no access, the owner
+      // holds every store, and rules cannot resolve WHICH store is the default
+      // (that needs a query), so an empty list is not narrowed. Compare
+      // tillAllowed in the cashReconciliations block and selfPunchLocationOk
+      // in timeEntries.
+      //
+      //   SENDING   — staff at the SENDING store.
+      //   RECEIVING — staff at the RECEIVING store, and NEVER the sender. The
+      //               two-step is the only thing that catches a device that
+      //               never arrived; a sender who could confirm their own
+      //               delivery would turn the receive back into the formality
+      //               it must not be.
+      //   CANCELLING — the SENDER or the OWNER. Cancel means "it never left",
+      //               which only the sending side can know, and it returns the
+      //               devices to the store that already had them. The
+      //               RECEIVING store is excluded on purpose: "it never
+      //               arrived, so I'll cancel it" is exactly the move that
+      //               erases a discrepancy somebody needs to chase.
+      //
+      // READ is every active member. In transit is where things get lost, and
+      // a device nobody is looking at is a device nobody chases — so both
+      // stores and the owner see every transfer, in or out.
+      //
+      // NOTHING HERE MOVES MONEY. A transfer is not a sale and not a purchase;
+      // these documents carry no price, and the P&L never reads them.
+      function actsAtStore(prof, loc) {
+        return prof.role == 'owner'
+            || prof.get('locationIds', []).size() == 0
+            || prof.get('locationIds', []).hasAny([loc]);
+      }
+      function transferSendOk(prof) {
+        return request.resource.data.status == 'in_transit'
+            && request.resource.data.get('fromLocationId', '') is string
+            && request.resource.data.get('toLocationId', '') is string
+            && request.resource.data.fromLocationId != request.resource.data.toLocationId
+            // Sent BY the person writing it: a dispatch somebody else's name
+            // is on is not a record of who put it in the car.
+            && request.resource.data.get('sentBy', '') == request.auth.uid
+            && actsAtStore(prof, request.resource.data.fromLocationId)
+            // Nothing is received or cancelled on the way in.
+            && !request.resource.data.keys().hasAny(['receivedAt', 'receivedBy', 'cancelledAt', 'cancelledBy']);
+      }
+      function transferReceiveOk(prof) {
+        return resource.data.status == 'in_transit'
+            && request.resource.data.status == 'received'
+            && request.resource.data.get('receivedBy', '') == request.auth.uid
+            && request.auth.uid != resource.data.get('sentBy', '')
+            && actsAtStore(prof, resource.data.toLocationId)
+            // Only the receipt fields move. Where it came from, where it is
+            // going, what is in it and who sent it are all fixed at dispatch.
+            && request.resource.data.diff(resource.data).affectedKeys()
+                 .hasOnly(['status', 'receivedAt', 'receivedBy', 'receivedByEmail']);
+      }
+      function transferCancelOk(prof) {
+        return resource.data.status == 'in_transit'
+            && request.resource.data.status == 'cancelled'
+            && request.resource.data.get('cancelledBy', '') == request.auth.uid
+            && (request.auth.uid == resource.data.get('sentBy', '') || prof.role == 'owner')
+            && request.resource.data.diff(resource.data).affectedKeys()
+                 .hasOnly(['status', 'cancelledAt', 'cancelledBy', 'cancelledByEmail']);
+      }
+      match /transfers/{id} {
+        allow read: if activeMemberOf(ws);
+        allow create: if isStaffOf(ws) && transferSendOk(me());
+        allow update: if isStaffOf(ws) && (transferReceiveOk(me()) || transferCancelOk(me()));
+        // A transfer is NEVER deleted, by anybody. It is the record of where a
+        // device went and who moved it; deleting one is how a device that
+        // vanished in transit stops being anybody's problem. A mistaken
+        // transfer is CANCELLED, which keeps both timestamps and both names.
+        allow delete: if false;
+      }
+
       // Auto-inventory identity index (domain/autoInventory.ts /
       // commitAutoInventory): one doc per normalized IMEI/serial, written only
       // from inside that transaction alongside the inventory record it points

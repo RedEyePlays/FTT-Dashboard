@@ -3,9 +3,9 @@ import {
   Search, Smartphone, Package, QrCode, Trash2, X, Plus, ScanLine, AlertTriangle,
   Columns3, SlidersHorizontal, Bookmark, Download, Upload, Copy, ChevronUp, ChevronDown,
   ChevronLeft, ChevronRight, CheckSquare, Square, Boxes,
-  Pencil, MoreVertical, Printer, History, ScrollText, Wrench, Tag, DollarSign, CheckCircle2, AlertCircle,
+  Pencil, MoreVertical, Printer, Truck, History, ScrollText, Wrench, Tag, DollarSign, CheckCircle2, AlertCircle,
 } from 'lucide-react';
-import { InventoryItem, DeviceBuyer, ItemKind, DeviceType, DeviceStatus, ActivityEntry, AuditEntry, Repair, Note, Role, Customer } from '../types';
+import { InventoryItem, DeviceBuyer, ItemKind, DeviceType, DeviceStatus, ActivityEntry, AuditEntry, Repair, Note, Role, Customer, Location, InventoryTransfer, AppUser } from '../types';
 import { CustomerDraft } from '../domain/customers';
 import { STOCK_PHOTO_NOTE, mainPhoto } from '../domain/devicePhotos';
 import { linkedRepairFor, REPAIR_STATUS_LABEL } from '../domain/repairs';
@@ -23,6 +23,10 @@ import {
   inTab, tabKind, tabAddsType, tabNeedsTypePicker, effectiveDeviceType,
   laptopSpecLine, OTHER_DEVICE_TYPES, hasLaptopFields,
 } from '../domain/deviceSpecs';
+import { TransferModal } from './TransferModal';
+import { InTransitPanel } from './InTransitPanel';
+import { actableStores, canSendFrom, checkSend, transferFor, transitLabel } from '../domain/transfers';
+import { locationName } from '../domain/locations';
 import { getDeviceDisplayName, priceFieldFor } from '../domain/inventory';
 import {
   isDerivedCostColumn, isCostEntryField, costAccessFor, RECORDED_LABEL, stripCostFields,
@@ -71,6 +75,19 @@ interface Props {
   notes?: Note[];                        // workspace notes, for the linked-notes panel
   noteRole?: Role;                       // viewer's role, gates which linked notes show
   onOpenNote?: (noteId: string) => void; // jump to a linked note in the Notes board
+  /**
+   * MOVING STOCK BETWEEN STORES (multi-store stage 4). All four are optional:
+   * a workspace with one store passes none of them and the In Transit tab
+   * stays empty, exactly as before.
+   */
+  locations?: Location[];
+  transfers?: InventoryTransfer[];
+  me?: AppUser | null;
+  /** The store this terminal is working at — where a send goes FROM. */
+  activeLocationId?: string;
+  onSendTransfer?: (input: { toLocationId: string; items: InventoryItem[]; note?: string; overriddenIds: string[] }) => void | Promise<unknown>;
+  onReceiveTransfer?: (transfer: InventoryTransfer) => void;
+  onCancelTransfer?: (transfer: InventoryTransfer) => void;
 }
 
 // Each section is an independent view with its own table, controls, pagination,
@@ -369,7 +386,9 @@ const PhotoThumb: React.FC<{ item: InventoryItem; onClick: () => void }> = ({ it
   );
 };
 
-export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activity, auditLogs = [], canViewCost = false, userId, section, onSelectSection, onSave, workspaceId, currentUserId, onFindStockPhoto, deviceWarrantyDays, onUpdate, onDelete, onGenerateSku, onSeed, repairs = [], customers, onCreateCustomer, onCreateRepair, onOpenRepair, notes, noteRole, onOpenNote }) => {
+export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activity, auditLogs = [], canViewCost = false, userId, section, onSelectSection, onSave, workspaceId, currentUserId, onFindStockPhoto, deviceWarrantyDays, onUpdate, onDelete, onGenerateSku, onSeed, repairs = [], customers, onCreateCustomer, onCreateRepair, onOpenRepair, notes, noteRole, onOpenNote,
+  locations = [], transfers = [], me, activeLocationId = '',
+  onSendTransfer, onReceiveTransfer, onCancelTransfer }) => {
   const linkedRepairOf = (id: string): Repair | undefined => linkedRepairFor(id, repairs);
   // Only a STILL-OPEN ticket flags the device as in repair; a completed/picked
   // up/cancelled one leaves the SKU cell exactly as it was.
@@ -428,6 +447,7 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
     laptops: inventory.filter(i => inTab(i, 'laptops')).length,
     accessories: inventory.filter(i => inTab(i, 'accessories')).length,
     other: inventory.filter(i => inTab(i, 'other')).length,
+    intransit: inventory.filter(i => inTab(i, 'intransit')).length,
     sold: inventory.filter(i => inTab(i, 'sold')).length,
     lowstock: inventory.filter(isLow).length,
   }), [inventory]);
@@ -488,6 +508,11 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
   const phones = useMemo(() => devices.filter(i => inTab(i, 'phones')), [devices]);
   const laptops = useMemo(() => devices.filter(i => inTab(i, 'laptops')), [devices]);
   const otherDevices = useMemo(() => devices.filter(i => inTab(i, 'other')), [devices]);
+  // IN TRANSIT: on neither store's shelf, and still the company's asset the
+  // whole time (domain/transfers.ts). Its own tab rather than a marker among
+  // sellable stock — a marker gets missed and the device gets promised to a
+  // customer.
+  const inTransit = useMemo(() => devices.filter(i => inTab(i, 'intransit')), [devices]);
   const accessories = useMemo(() => {
     let r = inventory.filter(i => kindOf(i) === 'accessory' && matchesQuery(i)).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
     return applySort(r, ACCESSORY_COLS);
@@ -510,6 +535,7 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
     page === 'phones' ? phones :
     page === 'laptops' ? laptops :
     page === 'other' ? otherDevices :
+    page === 'intransit' ? inTransit :
     page === 'sold' ? soldShown :
     page === 'accessories' ? accessories :
     page === 'lowstock' ? lowAccessories : [];
@@ -638,6 +664,18 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
     const allSel = rows.every(r => s.has(r.id));
     const n = new Set(s); rows.forEach(r => allSel ? n.delete(r.id) : n.add(r.id)); return n;
   });
+  // SENDING TO THE OTHER STORE. Offered only when there is another store this
+  // person may send to, and only from a tab holding sellable stock — a sold
+  // device is not the shop's to move and one already in transit is in a car.
+  const [sendOpen, setSendOpen] = useState(false);
+  const sendableSelection = useMemo(
+    () => checkSend(inventory.filter(i => selected.has(i.id))).sendable,
+    [inventory, selected],
+  );
+  const canSend = !!onSendTransfer
+    && canSendFrom(me || undefined, locations, activeLocationId)
+    && actableStores(me || undefined, locations).some(l => l.id !== activeLocationId);
+
   const bulkDelete = () => { selected.forEach(id => onDelete(id)); setSelected(new Set()); };
   const bulkStatus = (status: DeviceStatus) => { selected.forEach(id => { const it = inventory.find(x => x.id === id); if (it && kindOf(it) === 'device') onUpdate(id, 'deviceStatus', status); }); };
 
@@ -725,7 +763,7 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
 
   const visCols = (kind: 'device' | 'accessory', cols: Col[]) => cols.filter(c => !c.hideCol && !hidden[kind].includes(c.key));
 
-  const sectionCount: Record<InvSection, number> = { phones: counts.phones, laptops: counts.laptops, accessories: counts.accessories, other: counts.other, sold: counts.sold, lowstock: counts.lowstock };
+  const sectionCount: Record<InvSection, number> = { phones: counts.phones, laptops: counts.laptops, accessories: counts.accessories, other: counts.other, intransit: counts.intransit, sold: counts.sold, lowstock: counts.lowstock };
 
   // Compact top navigation: switches inventory sections (not table filters).
   // A single horizontally-scrollable pill row serves both desktop and mobile,
@@ -801,9 +839,18 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
           NOT in Laptops. Said on screen rather than left to be worked out. */}
       {isDeviceStockTab && (
         <p className="text-xs text-slate-400 -mt-2">
-          In stock only — anything sold moves to the{' '}
+          In stock here only — anything sold moves to the{' '}
           <button onClick={() => setPage('sold')} className="underline font-medium hover:text-indigo-500">Sold tab</button>
-          {counts.sold > 0 ? ` (${counts.sold})` : ''}.
+          {counts.sold > 0 ? ` (${counts.sold})` : ''}
+          {/* Multi-store stage 4: a device being moved between stores is on
+              neither shelf, so it is not in this list either. */}
+          {counts.intransit > 0 && (
+            <>
+              , and anything being moved between stores to{' '}
+              <button onClick={() => setPage('intransit')} className="underline font-medium hover:text-indigo-500">In Transit</button>
+              {` (${counts.intransit})`}
+            </>
+          )}.
           {page === 'other' && ' Tablets, watches, consoles and desktop PCs.'}
         </p>
       )}
@@ -811,6 +858,22 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
         <p className="text-xs text-slate-400 -mt-2">
           Everything sold, every kind of device together. Filter by type below.
         </p>
+      )}
+      {/* IN TRANSIT. On neither store's shelf and still the company's asset —
+          visible to both stores and the owner, because in transit is where
+          things get lost. */}
+      {page === 'intransit' && (
+        <>
+          <p className="text-xs text-slate-400 -mt-2">
+            Being moved between stores. Not sellable at either end until somebody at the
+            destination confirms it arrived — and still counted in inventory value the whole time.
+          </p>
+          {onReceiveTransfer && onCancelTransfer && (
+            <InTransitPanel transfers={transfers} inventory={inventory} locations={locations}
+              me={me} now={Date.now()}
+              onReceive={onReceiveTransfer} onCancel={onCancelTransfer} />
+          )}
+        </>
       )}
 
           {/* Controls (scoped to this page) */}
@@ -980,6 +1043,11 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
                   <button onClick={() => setBulkPriceOpen(true)} disabled={bulkBusy} className="text-sm px-2 py-1 rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-indigo-400 flex items-center gap-1 disabled:opacity-40"><DollarSign className="w-3.5 h-3.5" /> Update Price</button>
                 )}
                 <button onClick={bulkMarkListed} disabled={bulkBusy} className="text-sm px-2 py-1 rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-indigo-400 flex items-center gap-1 disabled:opacity-40"><Tag className="w-3.5 h-3.5" /> Mark Listed</button>
+                {canSend && activeKind === 'device' && isDeviceStockTab && (
+                  <button onClick={() => setSendOpen(true)} disabled={bulkBusy || sendableSelection.length === 0}
+                    title={sendableSelection.length === 0 ? 'Nothing in this selection can be sent' : 'Send to another store'}
+                    className="text-sm px-2 py-1 rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-indigo-400 flex items-center gap-1 disabled:opacity-40"><Truck className="w-3.5 h-3.5" /> Send to store</button>
+                )}
                 <button onClick={bulkPrintShelfTags} disabled={bulkBusy} className="text-sm px-2 py-1 rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-indigo-400 flex items-center gap-1 disabled:opacity-40"><Printer className="w-3.5 h-3.5" /> Print Shelf Tags</button>
                 <button onClick={() => exportCSV(inventory.filter(i => selected.has(i.id)), activeCols, 'selection')} className="text-sm px-2 py-1 rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-indigo-400 flex items-center gap-1"><Download className="w-3.5 h-3.5" /> Export</button>
                 <button onClick={bulkDelete} className="text-sm px-2 py-1 rounded-md bg-rose-50 text-rose-600 dark:bg-rose-900/30 dark:text-rose-300 hover:bg-rose-100 flex items-center gap-1"><Trash2 className="w-3.5 h-3.5" /> Delete</button>
@@ -1159,7 +1227,15 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
         </div>
       )}
 
-      {expandItem && <ItemFormModal initial={expandItem} canViewCost={canViewCost} deviceBuyers={deviceBuyers} onSave={onSave} onGenerateSku={onGenerateSku} onClose={closeItem}
+      {sendOpen && onSendTransfer && (
+        <TransferModal items={inventory.filter(i => selected.has(i.id))}
+          fromLocationId={activeLocationId} locations={locations}
+          destinations={actableStores(me || undefined, locations)}
+          onClose={() => setSendOpen(false)}
+          onSend={async input => { await onSendTransfer(input); setSelected(new Set()); }} />
+      )}
+
+      {expandItem && <ItemFormModal initial={expandItem} locations={locations} activeTransfer={transferFor(expandItem, transfers)} canViewCost={canViewCost} deviceBuyers={deviceBuyers} onSave={onSave} onGenerateSku={onGenerateSku} onClose={closeItem}
         workspaceId={workspaceId} currentUserId={currentUserId} onFindStockPhoto={onFindStockPhoto} deviceWarrantyDays={deviceWarrantyDays}
         linkedRepair={linkedRepairOf(expandItem.id)}
         onCreateRepair={onCreateRepair ? () => { onCreateRepair(expandItem); setExpandItem(null); } : undefined}

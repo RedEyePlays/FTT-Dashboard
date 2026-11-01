@@ -3,7 +3,7 @@ import {
 } from 'firebase/firestore';
 import { db } from './firebase';
 import {
-  InventoryItem, DeviceBuyer, DropOff, Settlement, Customer, SalesTransaction, ActivityEntry, Note, Task,
+  InventoryItem, InventoryTransfer, DeviceBuyer, DropOff, Settlement, Customer, SalesTransaction, ActivityEntry, Note, Task,
   AppUser, WorkspaceInvite, AuditEntry, TimeEntry, PayPeriodPaid, PayPeriodApproval, CashReconciliation, StaffNote, ListingPlatform, Repair,
   Expense, RecurringExpense, RefundPaidFrom, RefundSplit, StaffBonus, KioskStaff, Receipt, Location,
 } from '../types';
@@ -44,6 +44,12 @@ export const COLLECTIONS = [
   'receipts',
   // Custom PC builds (domain/pcBuild.ts).
   'pcBuilds',
+  // STOCK MOVING BETWEEN STORES (domain/transfers.ts). Multi-store stage 4.
+  // Its own collection because a device in transit is a real state with real
+  // money in it: "it's at the other store now" is not good enough when a
+  // phone goes missing in a car, and the record is what makes a never-arrived
+  // device chaseable.
+  'transfers',
   // The kiosk punch roster. Deliberately NOT in functions/src/backups.ts's
   // COLLECTIONS: it is a derived mirror of users/{uid} (rebuilt by the
   // syncKioskStaff trigger), and it holds PIN hashes, which have no business
@@ -690,6 +696,75 @@ function runDrawerTransaction(
     return { record, change, existed: !!existing, outcome: 'committed' as const };
   });
 }
+/* ---------------- Moving stock between stores (multi-store stage 4) -------- */
+
+/**
+ * ONE BATCH PER ACT, and that is the whole point of these three functions.
+ *
+ * A device marked in transit without the record that says where it is going is
+ * a device nobody can chase; a record saying "in transit" with the devices
+ * still on the shelf is a phantom. Each act writes the transfer and every
+ * device it touches in a SINGLE atomic commit, so the two can never disagree.
+ *
+ * NOT TRANSACTIONS, deliberately — a batch is queued by the offline cache and
+ * a transaction is not (the PR #197 reasoning that the drawer writes rest on).
+ * A transfer sent with the wifi down still lands on reconnect.
+ *
+ * NO MONEY MOVES HERE. There is no transaction, no expense and no drawer
+ * entry in any of these, and nothing touches salePrice, soldDate, purchaseCost
+ * or repairCost. A transfer is not a sale and not a purchase.
+ */
+export async function commitTransferSend(uid: string, payload: {
+  transfer: InventoryTransfer;
+  /** The devices, already patched by domain/transfers.ts's applySend. */
+  items: InventoryItem[];
+  activity?: ActivityEntry[];
+}) {
+  const batch = writeBatch(db);
+  batch.set(docRef(uid, 'transfers', payload.transfer.id), clean(payload.transfer));
+  payload.items.forEach(i => batch.set(docRef(uid, 'inventory', i.id), inventoryDoc(i)));
+  (payload.activity || []).forEach(a => batch.set(docRef(uid, 'activityLog', a.id), clean(a)));
+  await batch.commit();
+}
+
+/**
+ * RECEIVING. The devices' `locationId` moves here and nowhere else — this is
+ * the moment the destination store starts owning the eventual profit, with the
+ * purchase cost that travelled with the device untouched.
+ */
+export async function commitTransferReceive(uid: string, payload: {
+  transfer: InventoryTransfer;
+  /** Already patched by applyReceive — new locationId, no transit pointer. */
+  items: InventoryItem[];
+  activity?: ActivityEntry[];
+}) {
+  const batch = writeBatch(db);
+  batch.set(docRef(uid, 'transfers', payload.transfer.id), clean(payload.transfer));
+  payload.items.forEach(i => batch.set(docRef(uid, 'inventory', i.id), inventoryDoc(i)));
+  (payload.activity || []).forEach(a => batch.set(docRef(uid, 'activityLog', a.id), clean(a)));
+  await batch.commit();
+}
+
+/**
+ * CANCELLING. The devices are exactly as they were — `locationId` never moved
+ * on dispatch, so there is nothing to put back beyond clearing the pointer.
+ *
+ * The transfer record is KEPT, not deleted: a cancel five days after a send is
+ * something somebody should be able to see.
+ */
+export async function commitTransferCancel(uid: string, payload: {
+  transfer: InventoryTransfer;
+  /** Already patched by applyCancel. */
+  items: InventoryItem[];
+  activity?: ActivityEntry[];
+}) {
+  const batch = writeBatch(db);
+  batch.set(docRef(uid, 'transfers', payload.transfer.id), clean(payload.transfer));
+  payload.items.forEach(i => batch.set(docRef(uid, 'inventory', i.id), inventoryDoc(i)));
+  (payload.activity || []).forEach(a => batch.set(docRef(uid, 'activityLog', a.id), clean(a)));
+  await batch.commit();
+}
+
 export const deletePayPeriodPaid = (uid: string, id: string) => deleteItem(uid, 'payPeriods', id);
 
 /* ------------------------- Users / roles (top-level) ------------------------- */

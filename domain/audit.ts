@@ -73,6 +73,12 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   // the critical list below: it decides where every punch that iPad takes is
   // filed, and a wrong one misfiles a whole shop's hours.
   'kiosk.location': 'Kiosk store changed',
+  // Stock moving between stores (multi-store stage 4). All three are recorded
+  // with who did each: in transit is where things get lost, and "who sent it
+  // and who said it arrived" is the question afterwards.
+  'transfer.send': 'Stock sent to another store',
+  'transfer.receive': 'Stock received from another store',
+  'transfer.cancel': 'Stock transfer cancelled',
   'user.set_rate': 'Pay rate changed',
   // Written server-side by the setStaffPassword Cloud Function
   // (functions/src/staffPassword.ts), never by the client — and it never
@@ -116,7 +122,7 @@ export const auditActionLabel = (action: string): string =>
 // (see the exhaustive `audit(` grep this was built from), not guessed names.
 export const CRITICAL_AUDIT_ACTIONS: readonly string[] = [
   'sale.void', 'sale.return',
-  'user.create', 'user.set_pin', 'user.role_change', 'user.allow_profit', 'user.locations', 'kiosk.location',
+  'user.create', 'user.set_pin', 'user.role_change', 'user.allow_profit', 'user.locations', 'kiosk.location', 'transfer.cancel',
   'cash.reconcile', 'settings.update',
 ];
 

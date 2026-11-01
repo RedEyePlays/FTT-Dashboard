@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react';
-import { InventoryItem, SalesTransaction, ActivityEntry, Repair, RepairBatch, CashReconciliation, Settlement } from '../types';
+import { InventoryItem, SalesTransaction, ActivityEntry, Repair, RepairBatch, CashReconciliation, Settlement, InventoryTransfer } from '../types';
+import { staleTransfers, TRANSFER_STALE_DAYS } from '../domain/transfers';
 import { unreconciledDays, isRecognizedSale } from '../domain/reports';
 import { dashboardPeriods, settlementsIncluded } from '../domain/dashboardPeriods';
 import { PayrollDue } from '../domain/timeclock';
@@ -16,7 +17,7 @@ import {
   DollarSign, TrendingUp, CalendarDays, CalendarRange, Calendar, Smartphone, Package,
   Tag, Wrench, ShoppingCart, AlertTriangle, Clock, Receipt, Activity as ActivityIcon,
   Store, BarChart3, ArrowRight, ClipboardCheck, PackageSearch, PackageCheck, Building2, CheckCircle2, CalendarClock, Printer,
-  HandCoins,
+  HandCoins, Truck,
 } from 'lucide-react';
 
 interface DashboardProps {
@@ -44,6 +45,13 @@ interface DashboardProps {
    * Absent in a single-store workspace, where there is nothing to name.
    */
   drawerStoreName?: (rec: CashReconciliation) => string;
+  /**
+   * Stock moving between stores (multi-store stage 4). Only the UNRECEIVED
+   * ones matter here: a transfer nobody confirmed is a device nobody is
+   * chasing, and the shop already has 44 devices rotting in repair.
+   */
+  transfers?: InventoryTransfer[];
+  onViewInventoryTransfers?: () => void;
   // Payroll-due flag (owner/manager — same tier as payroll.manage). Omitted
   // for anyone who can't act on it, same reasoning as cashReconciliations.
   payrollDue?: PayrollDue | null;
@@ -92,7 +100,7 @@ const relTime = (ts: number) => {
 };
 const platformLabel = (p?: string) => (p && p !== 'None / In-Store' ? p : 'In-Store');
 
-export const Dashboard: React.FC<DashboardProps> = ({ data, salesTransactions, activity, repairs = [], repairBatches = [], canViewProfit = true, onViewAnalytics, onViewRepairs, cashReconciliations, drawerStoreName, onViewCash, onViewLayaways, payrollDue, onViewPayroll, booksStartDate, settlements, onScanReceipt }) => {
+export const Dashboard: React.FC<DashboardProps> = ({ data, salesTransactions, activity, repairs = [], repairBatches = [], canViewProfit = true, onViewAnalytics, onViewRepairs, cashReconciliations, drawerStoreName, transfers, onViewInventoryTransfers, onViewCash, onViewLayaways, payrollDue, onViewPayroll, booksStartDate, settlements, onScanReceipt }) => {
   const mask = (v: string) => (canViewProfit ? v : '•••');
   const staleCash = useMemo(
     () => (cashReconciliations ? unreconciledDays(cashReconciliations, todayISO(), booksStartDate) : []),
@@ -103,6 +111,12 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, salesTransactions, a
   // pool with nobody looking at it — same informational nudge treatment as the
   // unreconciled-cash flag below, never a blocking modal.
   const repairFlags = useMemo(() => pendingRepairIssues(data, repairs, Date.now()), [data, repairs]);
+  // Unreceived for longer than TRANSFER_STALE_DAYS — see domain/transfers.ts
+  // for why that threshold is the shortest in the app.
+  const lateTransfers = useMemo(
+    () => (transfers ? staleTransfers(transfers, Date.now()) : []),
+    [transfers],
+  );
 
   const rep = useMemo(() => {
     const todayStr = ymd(new Date());
@@ -241,6 +255,31 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, salesTransactions, a
             </span>
           </span>
           {onViewRepairs && <ArrowRight className="w-4 h-4 text-orange-600 dark:text-orange-400 shrink-0" />}
+        </button>
+      )}
+
+      {/* STOCK STILL IN A CAR. In transit is the one state with nobody
+          responsible for it: the sender thinks it is gone and the receiver
+          does not know it is coming. Unflagged, these rot exactly the way the
+          44 unresolved repairs did. */}
+      {lateTransfers.length > 0 && (
+        <button
+          onClick={onViewInventoryTransfers}
+          disabled={!onViewInventoryTransfers}
+          className={`w-full flex items-center gap-3 text-left rounded-xl border border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-900/20 px-4 py-3 ${onViewInventoryTransfers ? 'hover:border-amber-400 cursor-pointer' : 'cursor-default'}`}
+        >
+          <Truck className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0" />
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-semibold text-amber-800 dark:text-amber-200">
+              {lateTransfers.length === 1
+                ? '1 transfer has not been confirmed as arrived'
+                : `${lateTransfers.length} transfers have not been confirmed as arrived`}
+            </span>
+            <span className="block text-xs text-amber-700/80 dark:text-amber-300/80 truncate">
+              {lateTransfers.reduce((n, t) => n + t.itemIds.length, 0)} device(s) still in transit after {TRANSFER_STALE_DAYS}+ days — check they actually got there.
+            </span>
+          </span>
+          {onViewInventoryTransfers && <ArrowRight className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />}
         </button>
       )}
 

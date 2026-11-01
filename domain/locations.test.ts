@@ -230,12 +230,13 @@ describe('WHAT EACH STAGE DID, AND DID NOT, CHANGE', () => {
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/^\s*\/\/.*$/gm, '');
 
-  it('ONLY THE CASH DRAWER AND THE TIME CLOCK BRANCH ON locationId — stages 4 and 5 have not started', () => {
+  it('STAGE 5 HAS NOT STARTED — nothing filters the books or the dashboard by store', () => {
     // Stage 1's promise was that NOTHING read the field. Stage 2 ended that
-    // for the cash drawer; stage 3 ends it for a shift's store. Per-store
-    // inventory filtering and transfers (stage 4) and a per-store P&L (stage
-    // 5) have NOT started, and this list is what keeps them from starting by
-    // accident — a new file reading the field trips it.
+    // for the cash drawer, stage 3 for a shift's store, stage 4 for moving
+    // stock between stores. A per-store P&L and dashboard (stage 5) have NOT
+    // started, and this list is what keeps them from starting by accident —
+    // a new file reading the field trips it. Note what is NOT here:
+    // domain/reports.ts and domain/analytics.ts.
     const allowed = [
       // The field, the store list, and the two keys built on them.
       'types.ts', 'domain/locations.ts', 'domain/drawerKey.ts', 'domain/shiftLocation.ts',
@@ -250,6 +251,14 @@ describe('WHAT EACH STAGE DID, AND DID NOT, CHANGE', () => {
       // App.tsx resolves the active store, stamps it on a new sale, and
       // stamps a punch with the kiosk's store.
       'App.tsx',
+      // Stage 4: stock moving between stores.
+      'domain/transfers.ts', 'domain/transfers.test.ts',
+      'components/TransferModal.tsx', 'components/InTransitPanel.tsx',
+      'components/transfers.ui.test.tsx',
+      'hooks/useWorkspaceData.ts', 'components/InventoryView.laptops.test.tsx',
+      'rules-tests/transfers.rules.test.ts',
+      // The device's own screen says where it is, and where it is going.
+      'components/ItemFormModal.tsx',
       // Tests.
       'domain/locations.test.ts', 'domain/drawerKey.test.ts', 'domain/drawerPerStore.test.ts',
       'domain/shiftLocation.test.ts', 'domain/kioskStore.test.ts',
@@ -295,11 +304,12 @@ describe('WHAT EACH STAGE DID, AND DID NOT, CHANGE', () => {
     expect(block).toMatch(/allow delete: if false;/);
   });
 
-  it('THE RULES GATE BY LOCATION FOR THE CASH DRAWER AND THE TIME CLOCK, AND NOTHING ELSE', () => {
-    // Stage 2 tightened the drawer; stage 3 tightens a punch. Tightening any
-    // OTHER collection by location mid-migration would lock staff out of
-    // every record not yet backfilled, so the blocks allowed to mention the
-    // field are checked rather than assumed.
+  it('THE RULES GATE BY LOCATION FOR THE DRAWER, THE TIME CLOCK AND TRANSFERS, AND NOTHING ELSE', () => {
+    // Stage 2 tightened the drawer, stage 3 a punch, stage 4 a transfer.
+    // Tightening any OTHER collection by location mid-migration would lock
+    // staff out of every record not yet backfilled — in particular the
+    // `inventory` block is deliberately NOT gated by location, so the blocks
+    // allowed to mention the field are checked rather than assumed.
     //
     // Comments are stripped first: the prose here quotes the very field name
     // being counted.
@@ -312,6 +322,19 @@ describe('WHAT EACH STAGE DID, AND DID NOT, CHANGE', () => {
     // rather than by a substring.
     const gated = blocks.filter(b => /locationId/.test(b[2])).map(b => b[1]).sort();
     expect(gated).toEqual(['cashReconciliations']);
+    // Stage 4's transfers block delegates to its own named helpers, like the
+    // punch does — and the INVENTORY block is untouched, which is what keeps
+    // a half-finished backfill from locking anybody out of their own stock.
+    const transfersBlock = blocks.find(b => b[1] === 'transfers')!;
+    expect(transfersBlock).toBeTruthy();
+    expect(transfersBlock[2]).toMatch(/transferSendOk\(me\(\)\)/);
+    expect(transfersBlock[2]).toMatch(/transferReceiveOk\(me\(\)\)/);
+    // The inventory block is matched directly: the enclosing
+    // `match /user_data/{ws}` swallows it in the block list above, so it has
+    // to be pulled out by name rather than looked up there.
+    const invBlock = /match \/inventory\/\{id\} \{([\s\S]*?)\n      \}/.exec(rules);
+    expect(invBlock).toBeTruthy();
+    expect(invBlock![1]).not.toMatch(/location/i);
     const punch = blocks.find(b => b[1] === 'timeEntries')!;
     expect(punch).toBeTruthy();
     expect(punch[2]).toMatch(/kioskPunchLocationOk\(me\(\)\)/);
@@ -332,6 +355,10 @@ describe('WHAT EACH STAGE DID, AND DID NOT, CHANGE', () => {
       .replace(/function kioskStoreOf\(prof\) \{[^}]*\}/, '')
       .replace(/function kioskPunchLocationOk\(prof\) \{[\s\S]*?\n    \}/, '')
       .replace(/function selfPunchLocationOk\(prof\) \{[\s\S]*?\n    \}/, '')
+      .replace(/function actsAtStore\(prof, loc\) \{[\s\S]*?\n      \}/, '')
+      .replace(/function transferSendOk\(prof\) \{[\s\S]*?\n      \}/, '')
+      .replace(/function transferReceiveOk\(prof\) \{[\s\S]*?\n      \}/, '')
+      .replace(/function transferCancelOk\(prof\) \{[\s\S]*?\n      \}/, '')
       .replace(/function kioskEntryKeys\(\) \{[^}]*\}/, '')
       .replace(/function timeEntrySelfKeys\(\) \{[^}]*\}/, '')
       .match(/locationId/g) || [];

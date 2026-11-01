@@ -81,12 +81,19 @@ describe('every row lands in exactly one tab', () => {
 
   it('EVERY type, typed or not, sold or not, lands in exactly one tab', () => {
     // The structural guarantee: a device cannot fall between the tabs.
-    const homes: InvTab[] = ['phones', 'laptops', 'accessories', 'other', 'sold'];
+    const homes: InvTab[] = ['phones', 'laptops', 'accessories', 'other', 'intransit', 'sold'];
     for (const t of [...ALL_TYPES, undefined]) {
       for (const sold of [false, true]) {
-        const row = item({ deviceType: t, soldDate: sold ? '2026-11-01' : '' });
-        const hits = homes.filter(tab => inTab(row, tab));
-        expect({ t, sold, hits }).toEqual({ t, sold, hits: [inventoryTabOf(row)] });
+        // …and in transit or not, which stage 4 added.
+        for (const moving of [false, true]) {
+          const row = item({
+            deviceType: t,
+            soldDate: sold ? '2026-11-01' : '',
+            ...(moving ? { inTransferId: 't1' } : {}),
+          });
+          const hits = homes.filter(tab => inTab(row, tab));
+          expect({ t, sold, moving, hits }).toEqual({ t, sold, moving, hits: [inventoryTabOf(row)] });
+        }
       }
     }
   });
@@ -99,8 +106,11 @@ describe('every row lands in exactly one tab', () => {
     expect(inTab(item({ deviceType: 'Phone' }), 'lowstock')).toBe(false);
   });
 
-  it('the tab list is the five the shop asked for, plus Low Stock', () => {
-    expect(INV_SECTIONS.map(s => s.id)).toEqual(['phones', 'laptops', 'accessories', 'other', 'sold', 'lowstock']);
+  it('the tab list is the five the shop asked for, plus Low Stock and In Transit', () => {
+    // In Transit arrived with multi-store stage 4: a device being moved
+    // between stores is on neither shelf, so it needed a home that is not
+    // "sellable stock here" (domain/transfers.ts).
+    expect(INV_SECTIONS.map(s => s.id)).toEqual(['phones', 'laptops', 'accessories', 'other', 'intransit', 'sold', 'lowstock']);
   });
 
   it('is sold the same way the list has always decided it', () => {

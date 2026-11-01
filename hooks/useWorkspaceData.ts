@@ -4,7 +4,7 @@ import { doc, getDoc } from 'firebase/firestore';
 import {
   InventoryItem, Note, Task, DeviceBuyer, DropOff, Settlement, Customer, SalesTransaction,
   ActivityEntry, AppUser, WorkspaceInvite, AuditEntry, Repair, RepairBatch, PcBuild, TimeEntry, PayPeriodPaid, PayPeriodApproval, CashReconciliation, StaffNote,
-  Expense, RecurringExpense, StaffBonus, KioskStaff, Receipt, Location,
+  Expense, RecurringExpense, StaffBonus, KioskStaff, Receipt, Location, InventoryTransfer,
 } from '../types';
 import { decryptData } from '../services/security';
 import { AppSettings, mergeSettings } from '../domain/settings';
@@ -66,6 +66,9 @@ export function useWorkspaceData() {
   // The shop's stores (domain/locations.ts). Empty until an owner seeds them,
   // and nothing branches on it in stage 1.
   const [locations, setLocations] = useState<Location[]>([]);
+  // Stock moving between stores (multi-store stage 4). Empty in a single-store
+  // workspace, and empty until somebody sends something.
+  const [transfers, setTransfers] = useState<InventoryTransfer[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [salesTransactions, setSalesTransactions] = useState<SalesTransaction[]>([]);
   const [repairs, setRepairs] = useState<Repair[]>([]);
@@ -282,6 +285,13 @@ export function useWorkspaceData() {
       // mistake PR #209 made (see domain/subscriptionAccess.ts), so this is
       // onErrFor, not onErr.
       subscribeCollection<Location>(wsId, 'locations', setLocations, onErrFor('locations')),
+      // STOCK IN TRANSIT between stores (domain/transfers.ts). Core rather
+      // than deferred because the inventory screen needs it to say where an
+      // in-transit device is going, and OPTIONAL (onErrFor) for the same
+      // reason as locations: a workspace whose rules have not been deployed
+      // yet must not have its till and inventory blanked over a collection
+      // that is empty until somebody moves something.
+      subscribeCollection<InventoryTransfer>(wsId, 'transfers', setTransfers, onErrFor('transfers')),
       subscribeCollection<ActivityEntry>(wsId, 'activityLog', rows => setActivityLog(rows.sort((a, b) => b.ts - a.ts)), onErrFor('activityLog'), { orderByField: 'ts', limitTo: ACTIVITY_LIMIT }),
       subscribeMeta(wsId, m => { setNotes(m.notes || []); setTasks(m.tasks || []); setSkuCounters(m.skuCounters || {}); setLastBackup(m.lastBackup); setSettings(mergeSettings(m.settings)); }, onErrFor('meta')),
     ];
@@ -415,7 +425,7 @@ export function useWorkspaceData() {
     // collections
     devices, accessories, data, notes, setNotes, tasks, setTasks,
     deviceBuyers, dropOffs, settlements, settlementsLoaded, customers, salesTransactions,
-    repairs, repairBatches, pcBuilds, locations, timeEntries, payPeriods, payPeriodApprovals, staffBonuses, kioskStaff, cashReconciliations, staffNotes,
+    repairs, repairBatches, pcBuilds, locations, transfers, timeEntries, payPeriods, payPeriodApprovals, staffBonuses, kioskStaff, cashReconciliations, staffNotes,
     expenses, recurringExpenses, receipts,
     skuCounters, setSkuCounters, activityLog, lastBackup, settings,
     // connection status
