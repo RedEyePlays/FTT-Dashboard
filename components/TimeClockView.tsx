@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
   Clock, LogIn, LogOut, Coffee, Play, Check, DollarSign, CalendarDays, Undo2, X, AlertTriangle, Wrench, History,
-  ClipboardCheck, Printer, Download, ChevronDown, ChevronRight,
+  ClipboardCheck, Printer, Download, ChevronDown, ChevronRight, Store, UserCheck,
 } from 'lucide-react';
-import { AppUser, TimeEntry, PayPeriodPaid, PayPeriodApproval, BreakReason, StaffBonus, BonusPaidFrom } from '../types';
+import { AppUser, TimeEntry, PayPeriodPaid, PayPeriodApproval, BreakReason, StaffBonus, BonusPaidFrom, Location } from '../types';
 import {
   periodPayTotals, bonusesForPeriod, bonusesForUser, canSaveBonus,
   BONUS_PAID_FROM_LABEL, BONUS_PAID_FROM_OPTIONS,
@@ -22,6 +22,11 @@ import {
   deviceDiffersFromShop,
 } from '../domain/shopTime';
 import { paidBreakSettingNote } from '../domain/paidBreakChange';
+import {
+  shiftsAtStore, shiftLocationId, isSelfSelectedLocation,
+  visibleStoresFor, clockInStoreChoices, periodPayByStore, storeTotalsFor,
+} from '../domain/shiftLocation';
+import { locationName } from '../domain/locations';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 import { toCSV, triggerDownload } from '../services/backup';
 import { printPayrollSummary, printPayStub } from '../services/payrollPrint';
@@ -42,7 +47,13 @@ interface Props {
   payAnchorISO: string;
   canManagePayroll: boolean;     // owner + manager — see the pay-period summary
   canMarkPaid: boolean;          // owner only — sign a period off as paid
-  onClockIn: () => void;
+  /**
+   * `locationId` is the store the person PICKED (multi-store stage 3). The
+   * picker has no default: an app punch has no device to vouch for where
+   * somebody is, so they are asked, and a defaulted answer is a wrong answer
+   * waiting to be tapped past. Omitted only in a workspace with no stores.
+   */
+  onClockIn: (locationId?: string) => void;
   onClockOut: () => void;
   onStartBreak: (reason: BreakReason, note?: string) => void;
   onEndBreak: () => void;
@@ -80,6 +91,13 @@ interface Props {
   canAddBonus?: boolean;
   onSaveBonus?: (b: Omit<StaffBonus, 'id' | 'createdBy' | 'createdByEmail' | 'createdAt'>) => void;
   onDeleteBonus?: (bonusId: string) => void;
+  /**
+   * The shop's stores (multi-store stage 3). Drives the clock-in picker, the
+   * per-store filter on the hours tables, and the per-store wage breakdown.
+   * Empty in a workspace that has not been split, where every one of those
+   * degrades to exactly the single-shop screen it was.
+   */
+  locations?: Location[];
 }
 
 const fmtHours = (h: number): string => `${h.toFixed(2)} h`;
@@ -110,9 +128,35 @@ export const TimeClockView: React.FC<Props> = ({
   onClockIn, onClockOut, onStartBreak, onEndBreak, onApprovePeriod, onApproveAllPeriod, onMarkPaid, onUnmarkPaid, onCorrectClockOut, onOpenUsers,
   staffBonuses = [], canAddBonus = false, onSaveBonus, onDeleteBonus, paidBreakReasons = [],
   paidBreakReasonsUpdatedAt, shopTimeZone, longShiftHours = DEFAULT_LONG_SHIFT_HOURS,
+  locations = [],
 }) => {
   const now = useNow();
   const [showBreakPicker, setShowBreakPicker] = useState(false);
+  // THE APP PUNCH ASKS WHERE YOU ARE. No default, and a person with exactly
+  // one store is still asked — the consistency is worth more than the saved
+  // tap, and it is what keeps "self-selected" meaning "they chose it" rather
+  // than "they have two stores".
+  const [showStorePicker, setShowStorePicker] = useState(false);
+  const clockInStores = useMemo(() => clockInStoreChoices(me, locations), [me, locations]);
+  // The stores whose HOURS this viewer may look at: the owner sees every
+  // store, everyone else the stores they work at. Visibility only — it never
+  // decides where anybody's hours land.
+  const visibleStores = useMemo(() => visibleStoresFor(me, locations), [me, locations]);
+  const [storeFilter, setStoreFilter] = useState('');
+  const defaultLocationId = useMemo(
+    () => (locations.find(l => l.isDefault && l.active) || locations.find(l => l.isDefault) || visibleStores[0])?.id || '',
+    [locations, visibleStores],
+  );
+  // One store or both. '' is both — which for a non-owner means "every store
+  // they may see", never every store in the business.
+  const scopedEntries = useMemo(
+    () => (storeFilter
+      ? shiftsAtStore(entries, storeFilter, defaultLocationId)
+      : (visibleStores.length > 1 || visibleStores.length === 0
+          ? entries
+          : shiftsAtStore(entries, visibleStores[0].id, defaultLocationId))),
+    [entries, storeFilter, defaultLocationId, visibleStores],
+  );
   const [bonusFor, setBonusFor] = useState<{ user: AppUser; periodStart: string } | null>(null);
 
   const myOpen = openEntryFor(entries, me.id);
@@ -149,6 +193,15 @@ export const TimeClockView: React.FC<Props> = ({
                 Clocked in at {new Date(myOpen.clockIn).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                 {' · '}worked {fmtHours(workedHours(myOpen, now, paidBreakReasons))} this shift
               </p>
+              {/* WHERE THIS SHIFT IS BEING RECORDED. Fixed at clock-in for the
+                  life of the shift: clocking out from another device does not
+                  re-ask and does not change it. */}
+              {myOpen.locationId && locations.length > 0 && (
+                <p className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 flex items-center gap-1.5">
+                  <Store className="w-3.5 h-3.5" /> Recording at {locationName(locations, myOpen.locationId)}
+                  {isSelfSelectedLocation(myOpen) && <span className="font-normal text-slate-400">· you chose this</span>}
+                </p>
+              )}
 
               {onBreak ? (
                 <BigButton onClick={onEndBreak} tone="amber" icon={<Play className="w-6 h-6" />}>
@@ -171,7 +224,9 @@ export const TimeClockView: React.FC<Props> = ({
                 {fmtElapsed(0)}
               </div>
               <p className="text-xs text-slate-400">You’re not clocked in.</p>
-              <BigButton onClick={onClockIn} tone="emerald" icon={<LogIn className="w-6 h-6" />}>
+              <BigButton
+                onClick={() => (clockInStores.length > 0 ? setShowStorePicker(true) : onClockIn())}
+                tone="emerald" icon={<LogIn className="w-6 h-6" />}>
                 Clock In
               </BigButton>
             </>
@@ -186,7 +241,12 @@ export const TimeClockView: React.FC<Props> = ({
       </div>
 
       {/* --- Daily hours (owner/manager) ---------------------------------- */}
-      {canManagePayroll && <DailyHours users={users} entries={entries} now={now} onCorrectClockOut={onCorrectClockOut} paidBreakReasons={paidBreakReasons} zone={shopTimeZone} longShiftHours={longShiftHours} />}
+      {/* One store or both, for everything below (multi-store stage 3). */}
+      {canManagePayroll && visibleStores.length > 1 && (
+        <StoreScope stores={visibleStores} value={storeFilter} onChange={setStoreFilter} />
+      )}
+
+      {canManagePayroll && <DailyHours users={users} entries={scopedEntries} now={now} onCorrectClockOut={onCorrectClockOut} paidBreakReasons={paidBreakReasons} zone={shopTimeZone} longShiftHours={longShiftHours} />}
 
       {/* --- Payroll summary (owner/manager) ------------------------------ */}
       {canManagePayroll && (
@@ -194,7 +254,17 @@ export const TimeClockView: React.FC<Props> = ({
           zone={shopTimeZone}
           longShiftHours={longShiftHours}
           users={users}
+          // `entries` is the FULL list, deliberately — never the
+          // store-filtered one. Payroll is per PERSON: one employee, one
+          // approval, one pay stub covering every store they worked. Handing
+          // it the filtered list would put one store's hours beside an
+          // "Approve" button whose approval covers the whole period. The
+          // per-store breakdown inside is a breakdown OF these numbers.
           entries={entries}
+          locations={locations}
+          visibleStores={visibleStores}
+          storeFilter={storeFilter}
+          defaultLocationId={defaultLocationId}
           payPeriods={payPeriods}
           payPeriodApprovals={payPeriodApprovals}
           payCycle={payCycle}
@@ -224,6 +294,14 @@ export const TimeClockView: React.FC<Props> = ({
           payAnchorISO={payAnchorISO}
           onClose={() => setBonusFor(null)}
           onSave={b => { onSaveBonus(b); setBonusFor(null); }}
+        />
+      )}
+
+      {showStorePicker && (
+        <ClockInStoreModal
+          stores={clockInStores}
+          onClose={() => setShowStorePicker(false)}
+          onPick={id => { setShowStorePicker(false); onClockIn(id); }}
         />
       )}
 
@@ -274,6 +352,90 @@ const StatCard: React.FC<{ label: string; value: string }> = ({ label, value }) 
   <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-4">
     <p className="text-xs font-medium text-slate-400 uppercase tracking-wide">{label}</p>
     <p className="text-2xl font-bold text-slate-800 dark:text-slate-100 mt-1 tabular-nums">{value}</p>
+  </div>
+);
+
+/**
+ * WHERE ARE YOU? — the app punch's store picker (multi-store stage 3).
+ *
+ * The kiosk is not the only way in: an employee can clock in from a laptop or
+ * a phone, where there is no device to vouch for where they are standing. The
+ * owner's decision is to ask them.
+ *
+ * THERE IS NO DEFAULT AND NOTHING IS PRE-SELECTED. A defaulted picker is a
+ * wrong answer waiting to be tapped past, and this is pay. Only the stores on
+ * this person's own list are offered, so somebody who works Brampton alone
+ * cannot file hours to Mississauga.
+ *
+ * A PERSON WITH ONE STORE IS STILL ASKED. The saved tap is worth less than the
+ * consistency, and it is what keeps the self-selected flag meaningful: if
+ * one-store staff were stamped automatically, the flag would mean "has two
+ * stores" rather than "chose it themselves".
+ *
+ * It says plainly that the answer is recorded as their own — this is the
+ * weaker of the two punch paths, and the person making the claim should know
+ * it is a claim.
+ */
+const ClockInStoreModal: React.FC<{
+  stores: Location[];
+  onClose: () => void;
+  onPick: (locationId: string) => void;
+}> = ({ stores, onClose, onPick }) => {
+  useEscapeKey(onClose);
+  return (
+    <div className="fixed inset-0 z-[80] flex items-end sm:items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
+      <div className="relative w-full max-w-sm bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-700 p-5">
+        <div className="flex items-center justify-between mb-1">
+          <h3 className="font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
+            <Store className="w-4 h-4 text-indigo-500" /> Which store are you at?
+          </h3>
+          <button onClick={onClose} aria-label="Close"><X className="w-5 h-5 text-slate-400" /></button>
+        </div>
+        <p className="text-xs text-slate-500 dark:text-slate-400 mb-4">
+          Your hours are recorded against the store you pick, and it can&apos;t be changed
+          afterwards — a shift belongs to where it started. Punching at the shop&apos;s iPad
+          instead fills this in for you.
+        </p>
+        <div className="flex flex-col gap-2">
+          {stores.map(l => (
+            <button key={l.id} onClick={() => onPick(l.id)}
+              className="w-full text-left px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-700 hover:border-indigo-400 font-semibold text-slate-800 dark:text-slate-100">
+              {l.name}
+            </button>
+          ))}
+        </div>
+        <button onClick={onClose} className="mt-3 w-full text-xs text-slate-400 py-2">Cancel</button>
+      </div>
+    </div>
+  );
+};
+
+/**
+ * ONE STORE OR BOTH, for the hours tables below.
+ *
+ * The owner sees every store; everyone else sees the stores they work at. This
+ * is a VIEW filter and nothing more — it never decides where hours land, and
+ * it is deliberately not applied to the payroll rows, which are per person
+ * across every store they worked.
+ */
+const StoreScope: React.FC<{ stores: Location[]; value: string; onChange: (id: string) => void }> = ({ stores, value, onChange }) => (
+  <div className="flex items-center gap-2 flex-wrap">
+    <span className="text-xs font-semibold uppercase tracking-wide text-slate-400 flex items-center gap-1.5">
+      <Store className="w-3.5 h-3.5" /> Hours at
+    </span>
+    <div className="inline-flex rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden text-xs">
+      <button onClick={() => onChange('')}
+        className={`px-3 py-1.5 font-medium ${!value ? 'bg-indigo-600 text-white' : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300'}`}>
+        All stores
+      </button>
+      {stores.map(l => (
+        <button key={l.id} onClick={() => onChange(l.id)}
+          className={`px-3 py-1.5 font-medium border-l border-slate-200 dark:border-slate-700 ${value === l.id ? 'bg-indigo-600 text-white' : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300'}`}>
+          {l.name}
+        </button>
+      ))}
+    </div>
   </div>
 );
 
@@ -636,7 +798,13 @@ const PayrollSummary: React.FC<{
   // top of this file.
   zone?: string;
   longShiftHours?: number;
-}> = ({ users, entries, payPeriods, payPeriodApprovals, payCycle, payAnchorISO, now, canApprove, canMarkPaid, onApprovePeriod, onApproveAllPeriod, onMarkPaid, onUnmarkPaid, staffBonuses = [], canAddBonus = false, onAddBonus, onDeleteBonus, paidBreakReasons = [], paidBreakReasonsUpdatedAt, onOpenUsers, zone, longShiftHours = DEFAULT_LONG_SHIFT_HOURS }) => {
+  // Multi-store stage 3. `entries` above is the FULL list on purpose — see
+  // the call site: payroll is per person across every store they worked.
+  locations?: Location[];
+  visibleStores?: Location[];
+  storeFilter?: string;
+  defaultLocationId?: string;
+}> = ({ users, entries, payPeriods, payPeriodApprovals, payCycle, payAnchorISO, now, canApprove, canMarkPaid, onApprovePeriod, onApproveAllPeriod, onMarkPaid, onUnmarkPaid, staffBonuses = [], canAddBonus = false, onAddBonus, onDeleteBonus, paidBreakReasons = [], paidBreakReasonsUpdatedAt, onOpenUsers, zone, longShiftHours = DEFAULT_LONG_SHIFT_HOURS, locations = [], visibleStores = [], storeFilter = '', defaultLocationId = '' }) => {
   const days = PAY_CYCLE_DAYS[payCycle];
   // BOTH GROUPS' periods, newest first. On a bi-weekly cycle the two groups are
   // paid on alternating weeks (domain/payGroups.ts), so the picker interleaves
@@ -688,6 +856,14 @@ const PayrollSummary: React.FC<{
     [users, period, payCycle],
   );
 
+  // WHICH STORES THIS BREAKDOWN COVERS. With a filter on, just that one —
+  // the owner asked "what did Mississauga cost"; with it off, every store the
+  // viewer may see.
+  const breakdownStores = useMemo(
+    () => (storeFilter ? visibleStores.filter(l => l.id === storeFilter) : visibleStores).map(l => l.id),
+    [storeFilter, visibleStores],
+  );
+
   const rows = staff.map(u => {
     // paidBreakReasons matters here: without it this table showed gross pay
     // computed as if no break were ever paid, contradicting the breakdown
@@ -699,7 +875,16 @@ const PayrollSummary: React.FC<{
     const key = userPeriodKey(u.id, period);
     const paid = paidByKey.get(key);
     const approved = approvedByKey.get(key);
-    return { user: u, pay, paid, approved };
+    // PER STORE, from the same entries and the same pricing — a breakdown of
+    // `pay` above, never a replacement for it. Someone who worked both stores
+    // appears in both, with their own hours; their total stays one number and
+    // one approval (domain/shiftLocation.ts).
+    const byStore = breakdownStores.length > 1
+      ? periodPayByStore(entries, u, period, now, {
+          stores: breakdownStores, defaultLocationId, paidReasons: paidBreakReasons, rateAt: rateAtFor(u),
+        })
+      : [];
+    return { user: u, pay, paid, approved, byStore };
   });
   const totalHours = rows.reduce((s, r) => s + r.pay.hours, 0);
   const totalGross = rows.reduce((s, r) => s + r.pay.gross, 0);
@@ -709,6 +894,30 @@ const PayrollSummary: React.FC<{
   const flags = useMemo(
     () => payrollFlagsFor(entries, users, period, now, paidBreakReasons, longShiftHours),
     [entries, users, period, now, paidBreakReasons, longShiftHours],
+  );
+
+  // WHAT EACH STORE COST TO RUN this period — the question the owner is
+  // actually asking. Built from the per-person breakdown above, so every
+  // figure here traces back to the people in it.
+  const storeTotals = useMemo(
+    () => storeTotalsFor(rows.map(r => ({ user: r.user, byStore: r.byStore })), breakdownStores),
+    [rows, breakdownStores],
+  );
+
+  /**
+   * PUNCHES THE PERSON CHOSE THE STORE OF THEMSELVES.
+   *
+   * A kiosk punch is evidence: the iPad cannot change which store it claims
+   * to be. An app punch is a claim — somebody picked a store on their own
+   * phone. The owner should be able to tell which is which at payroll, so it
+   * sits here beside missed clock-outs and corrections rather than behind a
+   * tooltip. It blocks nothing: choosing your own store is the sanctioned way
+   * to punch away from the door.
+   */
+  const selfSelected = useMemo(
+    () => entries.filter(e =>
+      e.clockIn >= period.start && e.clockIn < period.end && isSelfSelectedLocation(e)),
+    [entries, period],
   );
 
   /**
@@ -826,8 +1035,16 @@ const PayrollSummary: React.FC<{
         </p>
       )}
 
-      {(flags.missedClockOuts.length > 0 || flags.correctedEntries.length > 0 || flags.noRateUsers.length > 0 || flags.longShifts.length > 0 || bonusMismatches.length > 0) && (
+      {(flags.missedClockOuts.length > 0 || flags.correctedEntries.length > 0 || flags.noRateUsers.length > 0 || flags.longShifts.length > 0 || bonusMismatches.length > 0 || selfSelected.length > 0) && (
         <div className="mx-4 mt-3 px-3 py-2 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg flex flex-col gap-1">
+          {/* A CLAIM RATHER THAN EVIDENCE — see selfSelected above. */}
+          {selfSelected.length > 0 && (
+            <p className="text-xs text-amber-800 dark:text-amber-300 flex items-center gap-1.5">
+              <UserCheck className="w-3.5 h-3.5 shrink-0" />
+              {selfSelected.length} shift{selfSelected.length !== 1 ? 's' : ''} where the person picked their own store
+              ({[...new Set(selfSelected.map(e => nameById.get(e.userId) || e.userId))].join(', ')}) — punched in the app, not at a shop iPad.
+            </p>
+          )}
           {flags.missedClockOuts.length > 0 && (
             <p className="text-xs text-amber-800 dark:text-amber-300 flex items-center gap-1.5"><AlertTriangle className="w-3.5 h-3.5 shrink-0" /> {flags.missedClockOuts.length} missed clock-out{flags.missedClockOuts.length !== 1 ? 's' : ''} in this period.</p>
           )}
@@ -879,7 +1096,7 @@ const PayrollSummary: React.FC<{
             </tr>
           </thead>
           <tbody>
-            {rows.map(({ user, pay, paid, approved }) => {
+            {rows.map(({ user, pay, paid, approved, byStore }) => {
               const isOpen = expanded === user.id;
               // "Hours pay + Bonus = Total". Only bonuses ATTACHED to this
               // period count here — a standalone one was paid on the side and
@@ -900,6 +1117,17 @@ const PayrollSummary: React.FC<{
                     </td>
                     <td className="py-2.5 pr-3 text-slate-700 dark:text-slate-200">
                       {nameOf(user)}
+                      {/* WHERE THEIR HOURS WERE WORKED. Somebody who worked
+                          both stores shows both, with their own hours in
+                          each — and the row's total beside it is still ONE
+                          number for ONE person. Only shown when more than
+                          one store is in view; a single-store period would
+                          just be restating the total. */}
+                      {byStore.length > 0 && (
+                        <span className="block text-[11px] text-slate-400 mt-0.5">
+                          {byStore.map(b => `${locationName(locations, b.locationId)} ${b.pay.hours.toFixed(2)} h`).join(' · ')}
+                        </span>
+                      )}
                       {!user.hourlyRate && (
                         onOpenUsers
                           ? <button onClick={onOpenUsers} className="ml-1 text-[11px] text-amber-500 underline hover:text-amber-600"
@@ -1054,6 +1282,34 @@ const PayrollSummary: React.FC<{
           )}
         </table>
       </div>
+
+      {/* --- WHAT EACH STORE COST TO RUN ---------------------------------
+          The owner's actual question. These add up to the period total above:
+          a person who worked both stores is counted in both, with the hours
+          they worked at each, and once in each store's headcount. It does NOT
+          split anybody's pay — approval and payment stay per person, one stub
+          each, however many stores they worked. */}
+      {storeTotals.length > 0 && (
+        <div className="px-4 pb-4">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2 flex items-center gap-1.5">
+            <Store className="w-3.5 h-3.5" /> Wage cost by store
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {storeTotals.map(t => (
+              <div key={t.locationId} className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg bg-slate-50 dark:bg-slate-800/50">
+                <span className="text-sm font-semibold text-slate-700 dark:text-slate-200">{locationName(locations, t.locationId)}</span>
+                <span className="text-xs text-slate-500 dark:text-slate-400 tabular-nums">
+                  {t.hours.toFixed(2)} h · {fmtMoney(t.gross)} · {t.people} {t.people === 1 ? 'person' : 'people'}
+                </span>
+              </div>
+            ))}
+          </div>
+          <p className="text-[11px] text-slate-400 mt-2">
+            Hours only — bonuses are paid per person, not per store. Somebody who worked both
+            stores appears in both and is still paid once.
+          </p>
+        </div>
+      )}
     </div>
   );
 };

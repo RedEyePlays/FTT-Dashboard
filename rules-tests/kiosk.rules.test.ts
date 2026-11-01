@@ -45,7 +45,12 @@ beforeEach(async () => {
     const db = ctx.firestore();
     await setDoc(doc(db, 'users', WORKSPACE), { id: WORKSPACE, email: 'owner@shop.test', role: 'owner', workspaceId: WORKSPACE, disabled: false });
     await setDoc(doc(db, 'users', 'employee-uid'), { id: 'employee-uid', email: 'employee@shop.test', role: 'employee', workspaceId: WORKSPACE, disabled: false });
-    await setDoc(doc(db, 'users', 'kiosk-uid'), { id: 'kiosk-uid', email: 'kiosk@shop.test', role: 'kiosk', workspaceId: WORKSPACE, disabled: false });
+    // CONFIGURED FOR A STORE. From multi-store stage 3 a kiosk punch must
+    // carry the store the owner assigned that iPad, so an unconfigured device
+    // takes no punches at all — see the two tests at the bottom of this file.
+    // That is a deliberate refusal, not a fallback to the default store.
+    await setDoc(doc(db, 'users', 'kiosk-uid'), { id: 'kiosk-uid', email: 'kiosk@shop.test', role: 'kiosk', workspaceId: WORKSPACE, disabled: false, kioskLocationId: 'brampton', kioskLocationName: 'Brampton' });
+    await setDoc(doc(db, 'users', 'kiosk-unset-uid'), { id: 'kiosk-unset-uid', email: 'newpad@shop.test', role: 'kiosk', workspaceId: WORKSPACE, disabled: false });
     await setDoc(doc(db, 'users', 'revoked-kiosk-uid'), { id: 'revoked-kiosk-uid', email: 'old@shop.test', role: 'kiosk', workspaceId: WORKSPACE, disabled: true });
 
     // A representative document in every collection the kiosk must not read.
@@ -65,7 +70,7 @@ beforeEach(async () => {
 
     openClockIn = Date.now() - 3600_000;
     await setDoc(doc(db, 'user_data', WORKSPACE, 'timeEntries', 'employee-open'),
-      { id: 'employee-open', userId: 'employee-uid', userEmail: 'employee@shop.test', clockIn: openClockIn, breaks: [], createdAt: openClockIn, source: 'kiosk' });
+      { id: 'employee-open', userId: 'employee-uid', userEmail: 'employee@shop.test', clockIn: openClockIn, breaks: [], createdAt: openClockIn, source: 'kiosk', locationId: 'brampton', locationSource: 'kiosk' });
     // A shift left open from two days ago — nobody fixes that at the iPad.
     const twoDaysAgo = Date.now() - 50 * 3600_000;
     await setDoc(doc(db, 'user_data', WORKSPACE, 'timeEntries', 'employee-stale'),
@@ -170,16 +175,33 @@ describe('a REVOKED kiosk loses access immediately', () => {
   });
   it('cannot punch', async () => {
     await assertFails(setDoc(doc(asRevokedKiosk(), 'user_data', WORKSPACE, 'timeEntries', 'revoked-punch'),
-      { id: 'revoked-punch', userId: 'employee-uid', clockIn: Date.now(), breaks: [], createdAt: Date.now(), source: 'kiosk' }));
+      { id: 'revoked-punch', userId: 'employee-uid', clockIn: Date.now(), breaks: [], createdAt: Date.now(), source: 'kiosk', locationId: 'brampton', locationSource: 'kiosk' }));
   });
 });
 
 /* ---------------- Punching: what it may and may not do ---------------- */
 
 describe('kiosk punches', () => {
+  it('AN UNCONFIGURED IPAD TAKES NO PUNCHES — multi-store stage 3', async () => {
+    // It must not fall back to the default store: filing one shop's hours
+    // into another goes unnoticed until payroll, while a kiosk that will not
+    // punch is fixed in a minute. The punch screen says so too; this is the
+    // half that cannot be bypassed.
+    //
+    // ONE-TIME CONSEQUENCE: after this rule deploys, every iPad needs a store
+    // assigned in Settings → Users → Clock-in kiosk — the existing one too.
+    await assertFails(setDoc(doc(testEnv.authenticatedContext('kiosk-unset-uid').firestore(), 'user_data', WORKSPACE, 'timeEntries', 'nostore'),
+      { id: 'nostore', userId: 'employee-uid', clockIn: Date.now(), breaks: [], createdAt: Date.now(), source: 'kiosk' }));
+  });
+
+  it('and a configured one may not punch for ANOTHER store', async () => {
+    await assertFails(setDoc(doc(asKiosk(), 'user_data', WORKSPACE, 'timeEntries', 'wrongstore'),
+      { id: 'wrongstore', userId: 'employee-uid', clockIn: Date.now(), breaks: [], createdAt: Date.now(), source: 'kiosk', locationId: 'mississauga', locationSource: 'kiosk' }));
+  });
+
   it('may CLOCK IN somebody else — the whole point of a shared door iPad', async () => {
     await assertSucceeds(setDoc(doc(asKiosk(), 'user_data', WORKSPACE, 'timeEntries', 'kiosk-in'),
-      { id: 'kiosk-in', userId: 'employee-uid', userEmail: 'employee@shop.test', clockIn: Date.now(), breaks: [], createdAt: Date.now(), source: 'kiosk' }));
+      { id: 'kiosk-in', userId: 'employee-uid', userEmail: 'employee@shop.test', clockIn: Date.now(), breaks: [], createdAt: Date.now(), source: 'kiosk', locationId: 'brampton', locationSource: 'kiosk' }));
   });
 
 
@@ -212,12 +234,12 @@ describe('kiosk punches', () => {
 
   it('may NOT back-date a clock-in on create', async () => {
     await assertFails(setDoc(doc(asKiosk(), 'user_data', WORKSPACE, 'timeEntries', 'backdated'),
-      { id: 'backdated', userId: 'employee-uid', clockIn: Date.now() - 8 * 3600_000, breaks: [], createdAt: Date.now(), source: 'kiosk' }));
+      { id: 'backdated', userId: 'employee-uid', clockIn: Date.now() - 8 * 3600_000, breaks: [], createdAt: Date.now(), source: 'kiosk', locationId: 'brampton', locationSource: 'kiosk' }));
   });
 
   it('may NOT create a shift that is already clocked out with inflated hours', async () => {
     await assertFails(setDoc(doc(asKiosk(), 'user_data', WORKSPACE, 'timeEntries', 'inflated'),
-      { id: 'inflated', userId: 'employee-uid', clockIn: Date.now(), clockOut: Date.now() + 8 * 3600_000, breaks: [], createdAt: Date.now(), source: 'kiosk' }));
+      { id: 'inflated', userId: 'employee-uid', clockIn: Date.now(), clockOut: Date.now() + 8 * 3600_000, breaks: [], createdAt: Date.now(), source: 'kiosk', locationId: 'brampton', locationSource: 'kiosk' }));
   });
 
   it('may NOT touch an entry from a PREVIOUS DAY', async () => {
@@ -234,7 +256,7 @@ describe('kiosk punches', () => {
 
   it('may NOT clock ITSELF in — a device has no shifts', async () => {
     await assertFails(setDoc(doc(asKiosk(), 'user_data', WORKSPACE, 'timeEntries', 'self'),
-      { id: 'self', userId: 'kiosk-uid', clockIn: Date.now(), breaks: [], createdAt: Date.now(), source: 'kiosk' }));
+      { id: 'self', userId: 'kiosk-uid', clockIn: Date.now(), breaks: [], createdAt: Date.now(), source: 'kiosk', locationId: 'brampton', locationSource: 'kiosk' }));
   });
 });
 
