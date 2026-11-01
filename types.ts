@@ -7,6 +7,11 @@ export type ItemKind = 'device' | 'accessory';
 // Money Trail, the Sales Ledger and search with no special-casing.
 export type DeviceType = 'Phone' | 'Tablet' | 'Laptop' | 'Console' | 'Watch' | 'Desktop PC' | 'Other';
 
+// A laptop's drive. The CAPACITY stays in `storage`, which phones and laptops
+// share; this is only the kind of drive it is. Absent on every record that is
+// not a laptop, and on laptops entered before it existed.
+export type StorageType = 'SSD' | 'HDD';
+
 // External marketplaces an item might ALSO be listed on while in-store —
 // see domain/listing.ts (labels, warning/reminder logic) and
 // InventoryItem.listedPlatforms.
@@ -58,9 +63,39 @@ export interface InventoryItem {
   model?: string;
   storage?: string;
   color?: string;
+  // --- PHONE-SHAPED FIELDS. Not shown on a laptop (domain/deviceSpecs.ts). ---
   carrier?: string;
   batteryHealth?: string;
   condition?: string;
+  /* --- LAPTOP SPEC FIELDS ---------------------------------------------------
+   *
+   * TOP-LEVEL AND OPTIONAL, not a nested `spec` object. The record is already
+   * a flat bag of type-specific optional fields — `carrier`, `batteryHealth`
+   * and `condition` directly above are phone-only and live here — and three
+   * things in the app are keyed on FLAT field names:
+   *
+   *   • the inventory grid's inline editing and its bulk actions, which call
+   *     onUpdate(id, field: keyof InventoryItem, value);
+   *   • the CSV export/round-trip, whose columns are field keys;
+   *   • the restore path, which reconciles documents field by field.
+   *
+   * A nested object would be invisible to all three without special-casing
+   * each one, so it would buy tidiness in the type and cost correctness in
+   * the app. `storage` is REUSED rather than duplicated — a laptop's capacity
+   * is the same field as a phone's.
+   *
+   * By the owner's decision a laptop has NO battery health and NO condition,
+   * and brand/model are left empty (the whole name goes in `item`, e.g.
+   * "Dell XPS 15"). Nothing requires them: every display path is item-first
+   * (domain/inventory.ts's getDeviceDisplayName), and the AI count key falls
+   * back to `item` when `model` is empty (domain/modelKey.ts).
+   */
+  cpu?: string;
+  ram?: string;
+  /** 'SSD' | 'HDD' — the capacity itself is `storage`, shared with phones. */
+  storageType?: StorageType;
+  screenSize?: string;
+  gpu?: string;
   purchaseSource?: string; // channel: Marketplace, Device Buyer, Trade-in, etc.
   targetSalePrice?: number;
   // OWNER-ONLY per-device floor, for the phone that needs its own answer.

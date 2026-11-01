@@ -2,7 +2,7 @@ import React, { useState, useMemo, useRef, useEffect, FocusEventHandler } from '
 import { X, Wand2, Smartphone, Package, Barcode, Camera, Tag } from 'lucide-react';
 import { printShelfTag } from '../services/shelfTag';
 import { getStoreProfile } from './SettingsModal';
-import { InventoryItem, ItemKind, DeviceType, DeviceStatus, DeviceBuyer, Repair, ListingPlatform, Note, Role, Customer } from '../types';
+import { InventoryItem, ItemKind, DeviceType, DeviceStatus, StorageType, DeviceBuyer, Repair, ListingPlatform, Note, Role, Customer } from '../types';
 import { SellerCustomerField } from './SellerCustomerField';
 import { useSellerLink } from '../hooks/useSellerLink';
 import { CustomerDraft } from '../domain/customers';
@@ -14,6 +14,10 @@ import { damagePhotoPrompt, wantsDamagePhoto } from '../domain/devicePhotos';
 import { REPAIR_STATUS_LABEL } from '../domain/repairs';
 import { LISTING_PLATFORMS } from '../domain/listing';
 import { findDuplicateDevice } from '../domain/autoInventory';
+import {
+  effectiveDeviceType, hasPhoneFields, hasLaptopFields, hasBrandModel, hasCondition,
+  requiresItemName, STORAGE_TYPES, strandedFields,
+} from '../domain/deviceSpecs';
 import { AlertTriangle, Sparkles } from 'lucide-react';
 import { ImeiScanner } from './ImeiScanner';
 import { Wrench } from 'lucide-react';
@@ -27,6 +31,18 @@ import { writeErrorMessage } from '../domain/writeErrors';
 interface Props {
   initial?: InventoryItem;
   initialKind?: ItemKind;
+  /**
+   * The device type an Add from the current inventory tab produces
+   * (domain/deviceSpecs.ts's tabAddsType). Add from the Laptops tab and this
+   * is 'Laptop' — the type picker is then not rendered at all, which is the
+   * point: the dropdown was never missing, it was just easy to leave on its
+   * 'Phone' default, and that is why every laptop in the workspace is
+   * currently filed as a phone.
+   *
+   * Undefined means "ask" — the Other tab covers four kinds, and editing an
+   * existing item always shows the picker so a mistyped row can be fixed.
+   */
+  initialDeviceType?: DeviceType;
   // reports.profit.detailed. Without it, a cost that is already RECORDED shows
   // as a word rather than a figure and is read-only; a BLANK one is still
   // enterable, which is the point — an employee adding a device must be able
@@ -121,7 +137,7 @@ const CostField: React.FC<{
   return <Field label={label} value={value} onChange={onChange} type="number" onFocus={onFocus} />;
 };
 
-export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, canViewCost = false, deviceBuyers, onSave, onGenerateSku, onClose, linkedRepair, onCreateRepair, onOpenRepair, inventory = [], customers, onCreateCustomer, notes, noteRole, onOpenNote, onOpenDuplicate, workspaceId, currentUserId, onFindStockPhoto, deviceWarrantyDays }) => {
+export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, initialDeviceType, canViewCost = false, deviceBuyers, onSave, onGenerateSku, onClose, linkedRepair, onCreateRepair, onOpenRepair, inventory = [], customers, onCreateCustomer, notes, noteRole, onOpenNote, onOpenDuplicate, workspaceId, currentUserId, onFindStockPhoto, deviceWarrantyDays }) => {
   const [findingStock, setFindingStock] = useState(false);
   const [listingOpen, setListingOpen] = useState(false);
   // The device document is updated by the Cloud Function, so the new photo
@@ -136,12 +152,24 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, canViewCo
     id: uid(), kind: initialKind ?? 'device', sku: '', manufacturerBarcode: '',
     date: today(), item: '', imei: '', boughtFrom: '', purchaseCost: 0, repairCost: 0,
     soldDate: '', soldTo: '', salePrice: 0, notes: '',
-    deviceType: 'Phone', brand: '', model: '', storage: '', color: '', carrier: '',
-    batteryHealth: '', condition: 'Good', purchaseSource: '', targetSalePrice: 0,
+    // The TAB's type, not a hardcoded 'Phone'. A laptop also starts with no
+    // Condition: it does not have one (domain/deviceSpecs.ts's hasCondition),
+    // so seeding 'Good' would store a field the form never shows.
+    deviceType: initialDeviceType ?? 'Phone', brand: '', model: '', storage: '', color: '', carrier: '',
+    batteryHealth: '', condition: (initialDeviceType === 'Laptop' ? '' : 'Good'),
+    purchaseSource: '', targetSalePrice: 0,
     deviceStatus: 'ready', quantity: 1, costPerUnit: 0, sellingPrice: 0, lowStockThreshold: 3,
   });
 
   const set = <K extends keyof InventoryItem>(k: K, v: InventoryItem[K]) => setF(p => ({ ...p, [k]: v }));
+  // Which fields this record has at all — one source of truth, shared with the
+  // inventory tabs and the tests (domain/deviceSpecs.ts).
+  const deviceType = effectiveDeviceType(f);
+  const isLaptop = hasLaptopFields(deviceType);
+  // Asked when it is genuinely a question: an existing item (so a mistyped row
+  // can be retyped here too) or an Add from a tab covering several kinds.
+  const showTypePicker = !!initial || !initialDeviceType;
+  const stranded = strandedFields(f);
   const [showImeiScanner, setShowImeiScanner] = useState(false);
   const toggleListedPlatform = (p: ListingPlatform) => setF(prev => {
     const cur = prev.listedPlatforms || [];
@@ -222,6 +250,9 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, canViewCo
         item.deviceStatus = undefined;
         item.imei = '';
       } else {
+        // A laptop has no brand or model to build a name from, so `item` is
+        // all there is — and canSave below refuses to save one without it.
+        // For everything else this is unchanged.
         item.item = f.item || [f.brand, f.model, f.storage].filter(Boolean).join(' ');
       }
       // AWAITED. Closing the modal is this screen's "saved" — it must not
@@ -236,7 +267,16 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, canViewCo
     }
   };
 
-  const canSave = (kind === 'device' ? !!(f.item || f.brand || f.model || f.imei) : !!f.item) && !duplicate && !saving;
+  // A LAPTOP NEEDS ITS NAME. It has no Brand or Model field by the owner's
+  // decision, so without `item` the record would have no identity at all —
+  // it would read as "Laptop" in the till, on a receipt and in a customer's
+  // history (domain/inventory.ts's getDeviceDisplayName falls back to the
+  // type). Every other kind is unchanged: a phone still saves on an IMEI
+  // alone.
+  const hasIdentity = kind === 'device'
+    ? (requiresItemName(deviceType) ? !!(f.item || '').trim() : !!(f.item || f.brand || f.model || f.imei))
+    : !!f.item;
+  const canSave = hasIdentity && !duplicate && !saving;
 
   // Text/date fields go straight through; number fields parse to a number.
   const setText = (k: keyof InventoryItem) => (v: string) => set(k, v as any);
@@ -322,33 +362,92 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, canViewCo
 
           {kind === 'device' ? (
             <>
+              {/* THE DEVICE ATTRIBUTE BLOCK IS TYPE-SHAPED.
+                  A laptop has a CPU, RAM, a drive type, a screen and a GPU; it
+                  does not have a carrier, a battery-health reading or a
+                  Condition, and by the owner's decision it has no Brand or
+                  Model either — the whole name goes in Item Name ("Dell XPS
+                  15"). Each of those is one predicate in
+                  domain/deviceSpecs.ts, so this form, the grid and the tests
+                  cannot disagree about which fields a type has. */}
               <div className="grid grid-cols-3 gap-4">
-                <div>
-                  <label className={lbl}>Device Type</label>
-                  <select className={inp} value={f.deviceType} onChange={e => set('deviceType', e.target.value as DeviceType)}>
-                    {DEVICE_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-                  </select>
-                </div>
-                <Field label="Brand" value={f.brand} onChange={setText('brand')} placeholder="Apple" />
-                <Field label="Model" value={f.model} onChange={setText('model')} placeholder="iPhone 14 Pro" />
-                <Field label="Storage" value={f.storage} onChange={setText('storage')} placeholder="256GB" />
+                {/* The picker appears when the type is genuinely a question:
+                    editing an existing item (so a mistyped row can be fixed
+                    here as well as in the grid), or adding from a tab that
+                    covers more than one kind. Adding from Phones or Laptops
+                    shows the type as a fact instead. */}
+                {showTypePicker ? (
+                  <div>
+                    <label className={lbl}>Device Type</label>
+                    <select className={inp} value={f.deviceType} onChange={e => set('deviceType', e.target.value as DeviceType)}>
+                      {DEVICE_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                    </select>
+                  </div>
+                ) : (
+                  <div>
+                    <label className={lbl}>Device Type</label>
+                    <p className="px-3 py-2 text-sm font-semibold text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg">
+                      {deviceType}
+                    </p>
+                  </div>
+                )}
+                {hasBrandModel(deviceType) && <Field label="Brand" value={f.brand} onChange={setText('brand')} placeholder="Apple" />}
+                {hasBrandModel(deviceType) && <Field label="Model" value={f.model} onChange={setText('model')} placeholder="iPhone 14 Pro" />}
+
+                {/* --- Laptop specs. `storage` is the SAME field a phone uses
+                    for its capacity, reused rather than duplicated. --- */}
+                {isLaptop && <Field label="CPU" value={f.cpu} onChange={setText('cpu')} placeholder="i7-1165G7" />}
+                {isLaptop && <Field label="RAM" value={f.ram} onChange={setText('ram')} placeholder="16GB" />}
+                <Field label="Storage" value={f.storage} onChange={setText('storage')} placeholder={isLaptop ? '512GB' : '256GB'} />
+                {isLaptop && (
+                  <div>
+                    <label className={lbl}>Storage Type</label>
+                    <select className={inp} value={f.storageType ?? ''} onChange={e => set('storageType', (e.target.value || undefined) as StorageType | undefined)}>
+                      <option value="">—</option>
+                      {STORAGE_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                    </select>
+                  </div>
+                )}
+                {isLaptop && <Field label="Screen Size" value={f.screenSize} onChange={setText('screenSize')} placeholder={'15.6"'} />}
+                {isLaptop && <Field label="GPU" value={f.gpu} onChange={setText('gpu')} placeholder="RTX 3060" />}
+
                 <Field label="Color" value={f.color} onChange={setText('color')} placeholder="Space Black" />
-                <Field label="Carrier" value={f.carrier} onChange={setText('carrier')} placeholder="Unlocked" />
-                <Field label="Battery Health" value={f.batteryHealth} onChange={setText('batteryHealth')} placeholder="92%" />
-                <div>
-                  <label className={lbl}>Condition</label>
-                  <select className={inp} value={f.condition} onChange={e => set('condition', e.target.value)}>
-                    {CONDITIONS.map(c => <option key={c} value={c}>{c}</option>)}
-                  </select>
-                </div>
+                {hasPhoneFields(deviceType) && <Field label="Carrier" value={f.carrier} onChange={setText('carrier')} placeholder="Unlocked" />}
+                {hasPhoneFields(deviceType) && <Field label="Battery Health" value={f.batteryHealth} onChange={setText('batteryHealth')} placeholder="92%" />}
+                {hasCondition(deviceType) && (
+                  <div>
+                    <label className={lbl}>Condition</label>
+                    <select className={inp} value={f.condition} onChange={e => set('condition', e.target.value)}>
+                      {CONDITIONS.map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                  </div>
+                )}
                 <div>
                   <label className={lbl}>Status</label>
                   <select className={inp} value={f.deviceStatus} onChange={e => set('deviceStatus', e.target.value as DeviceStatus)}>
                     {DEVICE_STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
                   </select>
                 </div>
-                <Field label="Item Name (override)" value={f.item} onChange={setText('item')} placeholder="Auto from brand/model" />
+                {/* With no Brand or Model, this is a laptop's ONLY identity —
+                    so it is the one thing the form insists on. A phone can
+                    still be saved on an IMEI alone, exactly as before. */}
+                <Field label={isLaptop ? 'Item Name' : 'Item Name (override)'} value={f.item} onChange={setText('item')}
+                  placeholder={isLaptop ? 'Dell XPS 15' : 'Auto from brand/model'} />
               </div>
+              {isLaptop && !(f.item || '').trim() && (
+                <p className="text-xs text-amber-600 dark:text-amber-400 -mt-1">
+                  Give the laptop a name — it has no Brand or Model field, so this is what it is called everywhere.
+                </p>
+              )}
+              {/* A retyped row keeps whatever was typed into it; nothing is
+                  cleared behind the owner's back. But a value the form no
+                  longer shows must not be invisible, or the record quietly
+                  disagrees with the screen. */}
+              {stranded.length > 0 && (
+                <p className="text-xs text-slate-400 -mt-1">
+                  Kept from before this was a {deviceType.toLowerCase()}: {stranded.join(', ')}. Nothing was deleted — retype it back to see those fields again.
+                </p>
+              )}
               <div className="grid grid-cols-3 gap-4">
                 <SellerCustomerField
                   label="Bought From (seller)"

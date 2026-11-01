@@ -74,6 +74,21 @@ export interface DeviceFacts {
   /** Plain words, never a grade code — see plainCondition. */
   condition?: string;
   batteryHealth?: string;
+  /**
+   * LAPTOP SPECS. A laptop's CPU, RAM, drive type, screen and GPU are the
+   * facts a buyer actually asks for, and they are exactly what used to be
+   * lost inside the item name. Each is added EXPLICITLY here and to
+   * DEVICE_FACT_KEYS below — the allow-list is additive on purpose, because a
+   * subtractive one fails open: add a field to the record next year and it
+   * would ship to the model unreviewed.
+   *
+   * Absent on a phone, which has none of them.
+   */
+  cpu?: string;
+  ram?: string;
+  storageType?: string;
+  screenSize?: string;
+  gpu?: string;
   warrantyDays: number;
   price?: number;
   /** Whether the listing can promise photos. Never the photos themselves. */
@@ -126,6 +141,7 @@ export type ListingFacts = DeviceFacts | BuildFacts;
  */
 export const DEVICE_FACT_KEYS = [
   'kind', 'brand', 'model', 'storage', 'colour', 'condition', 'batteryHealth',
+  'cpu', 'ram', 'storageType', 'screenSize', 'gpu',
   'warrantyDays', 'price', 'hasPhotos', 'shareLine',
 ] as const;
 
@@ -196,6 +212,17 @@ export const deviceFacts = (item: InventoryItem, input: FactsInput): DeviceFacts
   if (condition) out.condition = condition;
   const battery = str(item.batteryHealth);
   if (battery) out.batteryHealth = battery;
+  // Only ever what the record actually holds: a phone sets none of these.
+  const cpu = str(item.cpu);
+  if (cpu) out.cpu = cpu;
+  const ram = str(item.ram);
+  if (ram) out.ram = ram;
+  const storageType = str(item.storageType);
+  if (storageType) out.storageType = storageType;
+  const screenSize = str(item.screenSize);
+  if (screenSize) out.screenSize = screenSize;
+  const gpu = str(item.gpu);
+  if (gpu) out.gpu = gpu;
   if (input.options.includePrice) {
     const price = pos(item.targetSalePrice);
     if (price != null) out.price = price;

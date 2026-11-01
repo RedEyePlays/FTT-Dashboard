@@ -192,7 +192,19 @@ export function customerDevices(stats: CustomerStats, inventory: InventoryItem[]
 
   // Repairs carry IMEI/serial + device name directly.
   for (const r of stats.repairs) {
-    const name = [r.brand, r.model].filter(Boolean).join(' ') || r.deviceType || 'Device';
+    // A LAPTOP HAS NO BRAND OR MODEL — the whole name lives in `item` by the
+    // owner's decision (domain/deviceSpecs.ts), and a Repair has no `item` of
+    // its own. So when the ticket is linked to an inventory record, that
+    // record's name is used first: a linked laptop refurb read as a bare
+    // "Laptop" here before, which is the type and not the device.
+    //
+    // Unlinked tickets are unchanged: brand + model, then the device type,
+    // then "Device" — the fallback chain this screen has always had.
+    const linked = r.inventoryId ? invById.get(r.inventoryId) : undefined;
+    const name = (linked?.item || '').trim()
+      || [r.brand, r.model].filter(Boolean).join(' ')
+      || r.deviceType
+      || 'Device';
     const id = r.imei || `${name}`.toLowerCase();
     const d = ensure(id, name, r.imei, r.imei);
     const ts = r.createdAt || dateMs(r.date);
