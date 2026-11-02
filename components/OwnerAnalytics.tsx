@@ -7,12 +7,17 @@ import {
   BarChart3, DollarSign, TrendingUp, Percent, ShoppingCart, Wrench, Smartphone, CheckCircle2,
   CreditCard, Package, Clock, Users as UsersIcon, Download, FileText, Activity, AlertTriangle,
 } from 'lucide-react';
-import { SalesTransaction, Repair, InventoryItem, Customer, AuditEntry, ActivityEntry, Settlement } from '../types';
+import { SalesTransaction, Repair, InventoryItem, Customer, AuditEntry, ActivityEntry, Settlement, Location } from '../types';
 import { jsPDF } from 'jspdf';
 import {
   computeAnalytics, presetRange, RangePreset, eodRows, eodCsv, AnalyticsInput,
 } from '../domain/analytics';
 import { todayISO } from '../domain/dates';
+import {
+  ALL_STORES_SCOPE, StoreScope, defaultStoreId, inTransitNote, inTransitValue, isAllStores,
+  scopeAnalyticsInput, scopeHeading, scopeLabel,
+} from '../domain/storeScope';
+import { ScopeBadge, ScopeNote, StoreScopePicker } from './StoreScopePicker';
 
 interface Props {
   salesTransactions: SalesTransaction[];
@@ -26,6 +31,21 @@ interface Props {
   darkMode: boolean;
   // settings.operations.booksStartDate — clamps every figure's window start.
   booksStartDate?: string;
+  /* ---------------- Multi-store stage 5: whose numbers ---------------- */
+  /**
+   * The SHARED reporting scope (hooks/useReportScope.ts) — the same one the
+   * Dashboard and the Reports tabs use, so this screen and the P&L can never
+   * be showing different shops while looking the same.
+   *
+   * Scoping happens by FILTERING THE INPUT ARRAYS and handing them to the
+   * unchanged `computeAnalytics` (domain/storeScope.ts). For the combined
+   * books the arrays are passed through by reference, so every figure here is
+   * the same computation it is today.
+   */
+  locations?: Location[];
+  scope?: StoreScope;
+  scopeChoices?: StoreScope[];
+  onChangeScope?: (s: StoreScope) => void;
 }
 
 const money = (n: number) => `$${(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -38,22 +58,42 @@ const PRESETS: { id: RangePreset; label: string }[] = [
 
 const card = 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl';
 
-export const OwnerAnalytics: React.FC<Props> = ({ salesTransactions, repairs, inventory, customers, auditLogs, activity, settlements, booksStartDate, darkMode }) => {
+export const OwnerAnalytics: React.FC<Props> = ({
+  salesTransactions, repairs, inventory, customers, auditLogs, activity, settlements, booksStartDate, darkMode,
+  locations = [], scope = ALL_STORES_SCOPE, scopeChoices = [], onChangeScope,
+}) => {
   const [preset, setPreset] = useState<RangePreset>('today');
   const [custom, setCustom] = useState({ start: '', end: '' });
 
   const range = useMemo(() => presetRange(preset, Date.now(), custom), [preset, custom]);
-  const input: AnalyticsInput = { salesTransactions, repairs, inventory, customers, auditLogs, activity, settlements };
-  const a = useMemo(() => computeAnalytics(range, { ...input, booksStartDate }), [range, salesTransactions, repairs, inventory, customers, auditLogs, activity, settlements, booksStartDate]);
+  const fullInput: AnalyticsInput = { salesTransactions, repairs, inventory, customers, auditLogs, activity, settlements };
+  const input = useMemo(
+    () => scopeAnalyticsInput(fullInput, scope, { locations }),
+    // Deps are the pieces of `fullInput`, which is rebuilt every render.
+    [salesTransactions, repairs, inventory, customers, auditLogs, activity, settlements, scope, locations],
+  );
+  const a = useMemo(() => computeAnalytics(range, { ...input, booksStartDate }), [range, input, booksStartDate]);
+  // Stock on its way to the other shop is still THIS shop's asset until the
+  // other shop accepts it (stage 4 leaves `locationId` at the sender), so it
+  // is inside the inventory figure — and said out loud rather than folded in.
+  const transit = useMemo(
+    () => inTransitNote(inTransitValue(input.inventory, scope, defaultStoreId(locations))),
+    [input.inventory, scope, locations],
+  );
 
   const axis = darkMode ? '#94a3b8' : '#64748b';
   const grid = darkMode ? '#1e293b' : '#e2e8f0';
 
+  // An exported End of Day is detached from the screen it came from, so the
+  // scope goes in the file and in its name — a single store's close-out must
+  // never be read as the company's day.
+  const scopeSlug = isAllStores(scope) ? 'all-stores' : scopeLabel(scope, locations).replace(/[^a-z0-9]+/gi, '-').toLowerCase();
   const exportCsv = () => {
-    const blob = new Blob([eodCsv(a.eod)], { type: 'text/csv;charset=utf-8;' });
+    const body = locations.length ? `Scope,"${scopeHeading(scope, locations)}"\n${eodCsv(a.eod)}` : eodCsv(a.eod);
+    const blob = new Blob([body], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    link.href = url; link.download = `ftt-eod-${todayISO()}.csv`; link.click();
+    link.href = url; link.download = `ftt-eod-${scopeSlug}-${todayISO()}.csv`; link.click();
     URL.revokeObjectURL(url);
   };
   const exportPdf = () => {
@@ -61,25 +101,39 @@ export const OwnerAnalytics: React.FC<Props> = ({ salesTransactions, repairs, in
     pdf.setFont('helvetica', 'bold'); pdf.setFontSize(18); pdf.text('FlipThatTech — End of Day', 40, 54);
     pdf.setFont('helvetica', 'normal'); pdf.setFontSize(10); pdf.text(`${a.eod.label} · generated ${new Date().toLocaleString()}`, 40, 72);
     let y = 104;
+    if (locations.length) {
+      // On the printed page, under the title, before any figure.
+      pdf.setFontSize(9);
+      pdf.splitTextToSize(scopeHeading(scope, locations), 520).forEach((line: string) => {
+        pdf.text(line, 40, y); y += 13;
+      });
+      pdf.setFontSize(10); y += 10;
+    }
     eodRows(a.eod).forEach(([k, v]) => {
       const val = /^-?\d+\.\d{2}$/.test(v) ? `$${Number(v).toLocaleString(undefined, { minimumFractionDigits: 2 })}` : v;
       pdf.setFont('helvetica', 'bold'); pdf.text(k, 40, y);
       pdf.setFont('helvetica', 'normal'); pdf.text(String(val), 300, y); y += 22;
     });
-    pdf.save(`ftt-eod-${todayISO()}.pdf`);
+    pdf.save(`ftt-eod-${scopeSlug}-${todayISO()}.pdf`);
   };
 
   return (
     <div className="flex flex-col gap-4">
       {/* Header + range */}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-2xl font-bold text-slate-900 dark:text-white flex items-center gap-2"><BarChart3 className="w-6 h-6 text-indigo-500" /> Owner Analytics</h1>
+        <h1 className="text-2xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
+          <BarChart3 className="w-6 h-6 text-indigo-500" /> Owner Analytics
+          {locations.length > 0 && <ScopeBadge scope={scope} locations={locations} />}
+        </h1>
         <div className="flex flex-wrap items-center gap-1.5">
           {PRESETS.map(p => (
             <button key={p.id} onClick={() => setPreset(p.id)} className={`px-3 py-1.5 rounded-lg text-xs font-medium border ${preset === p.id ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:border-indigo-400'}`}>{p.label}</button>
           ))}
         </div>
       </div>
+      {scopeChoices.length > 1 && onChangeScope && (
+        <StoreScopePicker scope={scope} choices={scopeChoices} locations={locations} onChange={onChangeScope} />
+      )}
       {preset === 'custom' && (
         <div className="flex items-center gap-2 text-sm">
           <input type="date" value={custom.start} onChange={e => setCustom(c => ({ ...c, start: e.target.value }))} className="px-2 py-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg" />
@@ -179,8 +233,13 @@ export const OwnerAnalytics: React.FC<Props> = ({ salesTransactions, repairs, in
           <Line2 label="Potential Profit" value={money0(a.potentialProfit)} strong />
           <Line2 label="Low Stock" value={String(a.lowStock)} />
           <Line2 label="Out of Stock" value={String(a.outOfStock)} />
+          {transit && <p className="text-[11px] text-slate-400 mt-2">{transit}</p>}
         </Panel>
       </div>
+      {/* Beneath the figures, where somebody comparing the two shops is
+          looking: a store's numbers here are its own, before the costs that
+          belong to neither. */}
+      {locations.length > 0 && <ScopeNote scope={scope} />}
 
       {/* Category table */}
       <Panel title="Category Breakdown">

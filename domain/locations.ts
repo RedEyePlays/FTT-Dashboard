@@ -273,21 +273,30 @@ export const LOCATION_TAGGED_COLLECTIONS = [
 export type LocationTaggedCollection = typeof LOCATION_TAGGED_COLLECTIONS[number];
 
 /**
- * The collections the backfill assigns Brampton to BY DEFAULT.
+ * The collections the backfill assigns Brampton to BY DEFAULT: all of them.
  *
- * `expenses` is deliberately NOT here. Every other record predating the second
- * store genuinely happened at Brampton, but an expense did not necessarily
- * BELONG to it: the owner's decision is that parts orders, the app's own costs
- * and the owner's pay are COMPANY costs, and nothing in a stored expense says
- * which is which. Defaulting them all to Brampton would make Brampton bear
- * company costs in stage 5's per-store P&L — a wrong number presented as a
- * fact, which is worse than an untagged row that shows in the combined P&L
- * only, exactly as it does today.
+ * `expenses` USED TO BE EXCLUDED HERE, and stage 5 deliberately reversed that.
+ * The original reasoning was sound on its own terms — nothing in a stored
+ * expense says whether a parts order was a store cost or a company one, so
+ * assigning them all to Brampton makes Brampton bear company costs. What
+ * changed is the alternative. Stage 5 resolves an UNTAGGED expense to the
+ * default store anyway (domain/storeScope.ts: an untagged record must land in
+ * exactly one store and can never vanish), so leaving them untagged no longer
+ * keeps them out of Brampton's P&L — it only keeps them INVISIBLE, which is
+ * strictly worse: the figure is the same and nobody can see why or fix it.
  *
- * It stays available to run explicitly, so the owner can tag historical
- * expenses once stage 5 lets them see what it changes.
+ * So the owner's decision stands, and stage 5 serves it the other way round:
+ * every expense is tagged to Brampton where the owner can SEE it, and the
+ * Expenses ledger lists anything untagged with a one-tap retag to Company
+ * (which takes it out of both stores and leaves it in the combined figures).
+ * The backfill UI still offers an explicit opt-out for an owner who would
+ * rather not write the field at all.
  */
 export const DEFAULT_BACKFILL_COLLECTIONS: LocationTaggedCollection[] =
+  [...LOCATION_TAGGED_COLLECTIONS];
+
+/** The same list without `expenses`, for the backfill's opt-out. */
+export const BACKFILL_COLLECTIONS_WITHOUT_EXPENSES: LocationTaggedCollection[] =
   LOCATION_TAGGED_COLLECTIONS.filter(c => c !== 'expenses');
 
 /** Does this collection carry a location at all? */

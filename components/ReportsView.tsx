@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { Wallet, Receipt, Download, Save, AlertTriangle, CheckCircle2, Plus, Trash2, Scale, FileArchive, Truck, DoorOpen, History, LockOpen, Banknote, Pencil, Repeat, SkipForward, ClipboardList, Search } from 'lucide-react';
-import { SalesTransaction, CashReconciliation, CashDrawerEntry, InventoryItem, PayPeriodPaid, Settlement, DeviceBuyer, Repair, Customer, AuditEntry, ActivityEntry, TimeEntry, AppUser, Expense, RecurringExpense, ExpensePaymentMethod, RecurringFrequency, RecurringAmountMode, StaffBonus } from '../types';
+import { SalesTransaction, CashReconciliation, CashDrawerEntry, InventoryItem, PayPeriodPaid, Settlement, DeviceBuyer, Repair, Customer, AuditEntry, ActivityEntry, TimeEntry, AppUser, Expense, RecurringExpense, ExpensePaymentMethod, RecurringFrequency, RecurringAmountMode, StaffBonus, Location, COMPANY_LOCATION_ID } from '../types';
 import {
   ExpenseCategory, duePeriodsFor, DuePeriod, isVariableRecurring, lastAmountsForRecurring,
   visibleExpensesFor, canMutateExpense,
@@ -28,6 +28,13 @@ import { toCSV, triggerDownload } from '../services/backup';
 import { newId } from '../domain/ids';
 import { toISODate, todayISO, clampToBooksStart } from '../domain/dates';
 import { StoreTag, StoreBanner } from './StoreTag';
+import { ScopeBadge, ScopeNote, StoreScopePicker } from './StoreScopePicker';
+import {
+  ALL_STORES_SCOPE, StoreScope, EXPENSE_STORE_REQUIRED, defaultStoreId, expenseNeedsStore,
+  expenseScopeOptions, isAllStores, scopeHeading, scopeLabel, scopeProfitLossInput,
+  untaggedExpenses,
+} from '../domain/storeScope';
+import { locationName } from '../domain/locations';
 
 type SaveReconciliation = (r: ReconciliationInput) => void;
 
@@ -109,6 +116,24 @@ interface Props {
   activity: ActivityEntry[];
   timeEntries: TimeEntry[];
   users: AppUser[];
+  /* ---------------- Multi-store stage 5: whose numbers ---------------- */
+  /**
+   * The store list, for naming a scope. Empty in a single-store workspace,
+   * where the picker renders nothing and every figure is the combined one —
+   * i.e. exactly what it is today.
+   */
+  locations?: Location[];
+  /**
+   * The SHARED reporting scope (hooks/useReportScope.ts), not this terminal's
+   * active store. Deliberately lifted out of this component so the Dashboard,
+   * Owner Analytics and these tabs cannot disagree about whose numbers are on
+   * screen. Absent/'' means the combined books.
+   */
+  reportScope?: StoreScope;
+  scopeChoices?: StoreScope[];
+  onChangeScope?: (s: StoreScope) => void;
+  /** An expense's store tag, written by the ledger's picker. */
+  onRetagExpense?: (e: Expense, locationId: string) => void;
 }
 
 type TabId = 'history' | 'cash' | 'ledger' | 'tax' | 'pnl' | 'expenses' | 'yearend' | 'settlements' | 'belowmin';
@@ -157,6 +182,7 @@ export const ReportsView: React.FC<Props> = ({
   canViewDetailedProfit = false,
   onSaveExpense, onDeleteExpense,
   onSaveRecurringExpense, onDeleteRecurringExpense, onGenerateRecurringExpense, onSkipRecurringPeriod,
+  locations = [], reportScope = ALL_STORES_SCOPE, scopeChoices = [], onChangeScope, onRetagExpense,
 }) => {
   const perms = { canReconcile, canViewProfit, canAddExpense, canViewAllExpenses };
   // A single-store workspace passes neither, and behaves exactly as before.
@@ -175,9 +201,57 @@ export const ReportsView: React.FC<Props> = ({
   // profit must keep subtracting every workspace expense. The own-entries
   // filter lives exclusively in ExpensesTab (via visibleExpensesFor); it must
   // never be applied to ProfitLossInput.
-  const plInput: ProfitLossInput = { transactions: salesTransactions, inventory, payPeriods, cashReconciliations, settlements, expenses, expenseCategories, bonuses: staffBonuses, booksStartDate };
+  const fullPlInput: ProfitLossInput = { transactions: salesTransactions, inventory, payPeriods, cashReconciliations, settlements, expenses, expenseCategories, bonuses: staffBonuses, booksStartDate };
+  /* ---------------- Multi-store stage 5: whose numbers ----------------
+   *
+   * ONE place where the scope is applied, and it applies by FILTERING THE
+   * INPUT ARRAYS (domain/storeScope.ts) — never by teaching `profitAndLoss`
+   * or `salesLedger` what a store is. For the combined books the scoping
+   * functions return the very arrays passed in, so there is no second code
+   * path that could drift from today's figures.
+   *
+   * WHICH TABS ARE SCOPED, and the two deliberate exceptions:
+   *
+   *   Profit & Loss, Year-End, Expenses, Sales Ledger, Sold Below Minimum,
+   *   Device Buyer Settlements — scoped. These are the "how did this shop
+   *   do" questions the owner asked for.
+   *
+   *   Sales Tax — NOT scoped, deliberately. One corporation files one HST
+   *     return; a per-store remittance figure is not a thing anybody files,
+   *     and showing one would invite it being filed.
+   *   Cash Reconciliation and Daily History — NOT scoped by this control.
+   *     They are ALREADY per store, through stage 2's drawer (`storeDrawers`
+   *     / `storeLabel`), which follows the TERMINAL's till rather than the
+   *     report scope. Counting a till is a physical act at one shop, and it
+   *     must not change because somebody is reading the other shop's P&L.
+   */
+  const defaultLocationId = useMemo(() => defaultStoreId(locations), [locations]);
+  const scopeCtx = useMemo(
+    () => ({ locations, timeEntries, paidReasons: paidBreakReasons }),
+    [locations, timeEntries, paidBreakReasons],
+  );
+  const plInput = useMemo(
+    () => scopeProfitLossInput(fullPlInput, reportScope, scopeCtx),
+    // Deps are the pieces of `fullPlInput`, which is rebuilt every render.
+    [salesTransactions, inventory, payPeriods, cashReconciliations, settlements, expenses, expenseCategories, staffBonuses, booksStartDate, reportScope, scopeCtx],
+  );
+  // The sales-side tabs read the same scoped transaction set the P&L does, so
+  // a store's ledger can always be added up to its P&L revenue.
+  const scopedSales = plInput.transactions;
+  const scopedSettlements = plInput.settlements;
+  const scopedExpenses = plInput.expenses;
   return (
     <div className="max-w-5xl mx-auto space-y-6">
+      {scopeChoices.length > 1 && onChangeScope && (
+        <StoreScopePicker
+          scope={reportScope} choices={scopeChoices} locations={locations}
+          onChange={onChangeScope}
+          // Every scoped tab shows the caveat beside its own figures, where it
+          // is read; one more copy at the top of the page is noise.
+          showNote={false}
+          className={`${card} p-4`}
+        />
+      )}
       <div className="flex flex-wrap items-center gap-2">
         {tabs.map(t => (
           <button key={t.id} onClick={() => setTab(t.id)} className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium ${tab === t.id ? 'bg-indigo-600 text-white' : 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200'}`}>
@@ -199,24 +273,26 @@ export const ReportsView: React.FC<Props> = ({
       )}
       {tab === 'cash' && tabAllowed('cash', perms) && <CashReconTab salesTransactions={salesTransactions} cashReconciliations={drawers} storeLabel={storeLabel} cashSalesFor={cashSalesOn} onSave={onSaveReconciliation} />}
       {tab === 'tax' && tabAllowed('tax', perms) && <TaxReportTab salesTransactions={salesTransactions} booksStartDate={booksStartDate} />}
-      {tab === 'pnl' && tabAllowed('pnl', perms) && <ProfitLossTab plInput={plInput} repairs={repairs} showExpenseCategories={canViewAllExpenses} />}
+      {tab === 'pnl' && tabAllowed('pnl', perms) && <ProfitLossTab plInput={plInput} repairs={repairs} showExpenseCategories={canViewAllExpenses} scope={reportScope} locations={locations} />}
       {tab === 'expenses' && tabAllowed('expenses', perms) && (
         <ExpensesTab
-          expenses={expenses} categories={expenseCategories} recurringExpenses={recurringExpenses}
+          expenses={scopedExpenses} allExpenses={expenses} categories={expenseCategories} recurringExpenses={recurringExpenses}
           canViewAll={canViewAllExpenses} currentUserId={currentUserId}
           onSaveExpense={onSaveExpense} onDeleteExpense={onDeleteExpense}
           onSaveRecurringExpense={onSaveRecurringExpense} onDeleteRecurringExpense={onDeleteRecurringExpense}
           onGenerateRecurringExpense={onGenerateRecurringExpense} onSkipRecurringPeriod={onSkipRecurringPeriod}
           booksStartDate={booksStartDate}
+          scope={reportScope} locations={locations} onRetagExpense={onRetagExpense}
         />
       )}
-      {tab === 'settlements' && tabAllowed('settlements', perms) && <SettlementsTab settlements={settlements} deviceBuyers={deviceBuyers} booksStartDate={booksStartDate} />}
+      {tab === 'settlements' && tabAllowed('settlements', perms) && <SettlementsTab settlements={scopedSettlements} deviceBuyers={deviceBuyers} booksStartDate={booksStartDate} scope={reportScope} locations={locations} />}
       {tab === 'ledger' && tabAllowed('ledger', perms) && (
-        <SalesLedgerTab salesTransactions={salesTransactions} inventory={inventory}
-          canViewCost={canViewDetailedProfit} booksStartDate={booksStartDate} />
+        <SalesLedgerTab salesTransactions={scopedSales} inventory={inventory}
+          canViewCost={canViewDetailedProfit} booksStartDate={booksStartDate}
+          scope={reportScope} locations={locations} />
       )}
-      {tab === 'belowmin' && tabAllowed('belowmin', perms) && <BelowMinimumTab salesTransactions={salesTransactions} canViewCost={canViewDetailedProfit} booksStartDate={booksStartDate} />}
-      {tab === 'yearend' && tabAllowed('yearend', perms) && <YearEndTab plInput={plInput} showExpenseCategories={canViewAllExpenses} />}
+      {tab === 'belowmin' && tabAllowed('belowmin', perms) && <BelowMinimumTab salesTransactions={scopedSales} canViewCost={canViewDetailedProfit} booksStartDate={booksStartDate} scope={reportScope} locations={locations} />}
+      {tab === 'yearend' && tabAllowed('yearend', perms) && <YearEndTab plInput={plInput} showExpenseCategories={canViewAllExpenses} scope={reportScope} locations={locations} />}
     </div>
   );
 };
@@ -966,7 +1042,10 @@ const BooksStartNote: React.FC<{ from: string }> = ({ from }) => (
   </p>
 );
 
-const ProfitLossTab: React.FC<{ plInput: ProfitLossInput; repairs: Repair[]; showExpenseCategories: boolean }> = ({ plInput, repairs, showExpenseCategories }) => {
+const ProfitLossTab: React.FC<{
+  plInput: ProfitLossInput; repairs: Repair[]; showExpenseCategories: boolean;
+  scope: StoreScope; locations: Location[];
+}> = ({ plInput, repairs, showExpenseCategories, scope, locations }) => {
   const [start, setStart] = useState(monthStartISO());
   const [end, setEnd] = useState(todayISO());
   const pl = useMemo(() => profitAndLoss(plInput, start, end), [plInput, start, end]);
@@ -978,11 +1057,20 @@ const ProfitLossTab: React.FC<{ plInput: ProfitLossInput; repairs: Repair[]; sho
   // was sold. Subtracting it here would count the same dollars twice.
   const warranty = useMemo(() => warrantyCostRows(repairs, pl.start, pl.end), [repairs, pl.start, pl.end]);
   const warrantyTotal = useMemo(() => Math.round(warranty.reduce((n, r) => n + r.cost, 0) * 100) / 100, [warranty]);
+  // THE SCOPE GOES IN THE FILE, AS THE FIRST ROW AND IN THE FILENAME. A P&L
+  // CSV gets emailed to an accountant detached from the screen it was exported
+  // from; one that does not say it is a single store, before company overhead,
+  // reads as the whole company's books.
   const exportCsv = () => triggerDownload(
-    `profit-loss_${pl.start}_to_${pl.end}.csv`,
+    `profit-loss_${isAllStores(scope) ? 'all-stores' : scopeLabel(scope, locations).replace(/[^a-z0-9]+/gi, '-').toLowerCase()}_${pl.start}_to_${pl.end}.csv`,
     toCSV([
+      { Line: 'Scope', Amount: scopeHeading(scope, locations) },
       ...profitLossCsvRows(pl, showExpenseCategories),
-      { label: 'Warranty work (informational — already in cost of goods via repairs)', value: warrantyTotal },
+      // NOTE: this row used `label`/`value` while every other row uses
+      // `Line`/`Amount`. `toCSV` unions the keys it is given, so the export
+      // carried two extra empty columns and put the warranty figure in its
+      // own. Corrected here while adding the scope row above.
+      { Line: 'Warranty work (informational — already in cost of goods via repairs)', Amount: warrantyTotal.toFixed(2) },
     ]),
     'text/csv;charset=utf-8;',
   );
@@ -997,17 +1085,29 @@ const ProfitLossTab: React.FC<{ plInput: ProfitLossInput; repairs: Repair[]; sho
         </RangeControls>
       </div>
       <div className={`${card} p-5`}>
-        <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200 mb-3">Profit &amp; Loss · {pl.start} → {pl.end}</h3>
+        <div className="flex flex-wrap items-center gap-2 mb-3">
+          <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200">Profit &amp; Loss · {pl.start} → {pl.end}</h3>
+          {/* On the report itself, not only on the picker above it: this is
+              the block that gets screenshotted and forwarded. */}
+          <ScopeBadge scope={scope} locations={locations} />
+        </div>
         {pl.clampedToBooksStart && <BooksStartNote from={pl.start} />}
+        <div className="mb-3"><ScopeNote scope={scope} /></div>
         <div className="text-sm">
           <PLRow label="Revenue" value={pl.revenue} />
           <PLRow label="Cost of goods sold" value={pl.costOfGoods} negative />
           <PLRow label="Gross profit" value={pl.grossProfit} bold />
-          <PLRow label="Payroll" value={pl.payroll} negative />
+          {/* Under a store scope this is the share of each paid period that
+              the person's STAMPED shifts (stage 3) put at this store. The
+              paid total is never re-priced — the shares are shares of it. */}
+          <PLRow label={isAllStores(scope) ? 'Payroll' : 'Payroll (this store\'s stamped shifts)'} value={pl.payroll} negative />
           {/* Separate from Payroll (hours × rate, which the accountant
               reconciles against timesheets) and from Expenses (whose Wages
-              category is excluded from the P&L by design). */}
-          <PLRow label="Staff bonuses" value={pl.bonuses} negative />
+              category is excluded from the P&L by design).
+              A BONUS CARRIES NO STORE and is treated as a company cost, so
+              under a store scope this line is always zero and says why rather
+              than looking like a month with no bonuses paid. */}
+          <PLRow label={isAllStores(scope) ? 'Staff bonuses' : 'Staff bonuses (company — see All stores)'} value={pl.bonuses} negative />
           {showExpenseCategories
             ? pl.expensesByCategory.map(c => (
                 <PLRow key={c.category} label={`Expense: ${c.label}${c.excludedFromPL ? ' (informational)' : ''}`} value={c.total} negative={!c.excludedFromPL} />
@@ -1038,7 +1138,10 @@ const ProfitLossTab: React.FC<{ plInput: ProfitLossInput; repairs: Repair[]; sho
 };
 
 /* ---------------- Device buyer settlement history ---------------- */
-const SettlementsTab: React.FC<{ settlements: Settlement[]; deviceBuyers: DeviceBuyer[]; booksStartDate?: string }> = ({ settlements, deviceBuyers, booksStartDate }) => {
+const SettlementsTab: React.FC<{
+  settlements: Settlement[]; deviceBuyers: DeviceBuyer[]; booksStartDate?: string;
+  scope: StoreScope; locations: Location[];
+}> = ({ settlements, deviceBuyers, booksStartDate, scope, locations }) => {
   const [start, setStart] = useState(monthStartISO());
   const [end, setEnd] = useState(todayISO());
   const h = useMemo(() => settlementHistory(settlements, deviceBuyers, start, end, booksStartDate), [settlements, deviceBuyers, start, end, booksStartDate]);
@@ -1057,6 +1160,10 @@ const SettlementsTab: React.FC<{ settlements: Settlement[]; deviceBuyers: Device
       'Settlement total': h.totalAmount.toFixed(2),
       Model: '',
     });
+    rows.unshift({
+      Date: 'Scope', DeviceBuyer: scopeHeading(scope, locations),
+      'Service fee (income)': '', 'Principal repaid': '', 'Settlement total': '', Model: '',
+    });
     triggerDownload(`device buyer-settlements_${h.start}_to_${h.end}.csv`, toCSV(rows), 'text/csv;charset=utf-8;');
   };
 
@@ -1072,7 +1179,10 @@ const SettlementsTab: React.FC<{ settlements: Settlement[]; deviceBuyers: Device
 
       <div className={`${card} p-5`}>
         <div className="flex items-baseline justify-between mb-4">
-          <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200">Device buyer settlements · {h.start} → {h.end}</h3>
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200">Device buyer settlements · {h.start} → {h.end}</h3>
+            <ScopeBadge scope={scope} locations={locations} />
+          </div>
           <div className="text-right"><p className="text-xs text-slate-400">Service fees (income)</p><p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">{money(h.totalFees)}</p></div>
         </div>
         {h.perBuyer.length === 0 ? <p className="text-sm text-slate-400 py-6 text-center">No settlements in this range.</p> : (
@@ -1130,12 +1240,24 @@ const SettlementsTab: React.FC<{ settlements: Settlement[]; deviceBuyers: Device
 };
 
 /* ---------------- Year-end accountant export ---------------- */
-const YearEndTab: React.FC<{ plInput: ProfitLossInput; showExpenseCategories: boolean }> = ({ plInput, showExpenseCategories }) => {
+const YearEndTab: React.FC<{
+  plInput: ProfitLossInput; showExpenseCategories: boolean;
+  scope: StoreScope; locations: Location[];
+}> = ({ plInput, showExpenseCategories, scope, locations }) => {
   const thisYear = new Date().getFullYear();
   const [year, setYear] = useState(thisYear);
   const summary = useMemo(() => yearEndSummary(plInput, year), [plInput, year]);
   const years = Array.from({ length: 6 }, (_, i) => thisYear - i);
-  const exportCsv = () => triggerDownload(`year-end-summary_${year}.csv`, toCSV(yearEndCsvRows(summary, showExpenseCategories)), 'text/csv;charset=utf-8;');
+  // Same reasoning as the P&L export: this file is handed to an accountant,
+  // so it states its scope before it states a single figure.
+  const exportCsv = () => triggerDownload(
+    `year-end-summary_${isAllStores(scope) ? 'all-stores' : scopeLabel(scope, locations).replace(/[^a-z0-9]+/gi, '-').toLowerCase()}_${year}.csv`,
+    toCSV([
+      { Metric: 'Scope', Value: scopeHeading(scope, locations) },
+      ...yearEndCsvRows(summary, showExpenseCategories),
+    ]),
+    'text/csv;charset=utf-8;',
+  );
 
   const rows: { label: string; value: number; strong?: boolean }[] = [
     { label: 'Revenue', value: summary.revenue },
@@ -1171,7 +1293,11 @@ const YearEndTab: React.FC<{ plInput: ProfitLossInput; showExpenseCategories: bo
         <p className="mt-3 text-xs text-slate-400">One consolidated annual summary to hand to your accountant — revenue, profit, payroll, cash expenses, device buyer service fee income and sales tax collected for {year}.</p>
       </div>
       <div className={`${card} p-5`}>
-        <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200 mb-3">{year} year-end summary</h3>
+        <div className="flex flex-wrap items-center gap-2 mb-3">
+          <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200">{year} year-end summary</h3>
+          <ScopeBadge scope={scope} locations={locations} />
+        </div>
+        <div className="mb-3"><ScopeNote scope={scope} /></div>
         <div className="text-sm">
           {rows.map(r => (
             <div key={r.label} className="flex items-center justify-between py-1.5">
@@ -1203,16 +1329,62 @@ const emptyExpenseDraft = (categories: ExpenseCategory[]): Omit<Expense, 'id' | 
   date: todayISO(), amount: 0, category: categories.find(c => !c.archived)?.key || 'other', paymentMethod: 'cash', payee: '', note: '',
 });
 
+/**
+ * WHICH STORE A COST BELONGS TO. MULTI-STORE STAGE 5.
+ *
+ * DELIBERATELY STARTS UNSET, WITH NO PRE-SELECTION. A defaulted tag is how
+ * rent ends up on the wrong store, and nothing in a stored expense says
+ * whether a $400 parts order was for the Brampton bench or a bulk buy for
+ * both. The person entering it is the only one who knows, so they are asked,
+ * and Save stays disabled until they answer.
+ *
+ * Company is an option, not a fallback: it means the cost belongs to NEITHER
+ * shop (the app's own running costs, overseas parts orders, the owner's pay)
+ * and is why a store's P&L and the combined one differ.
+ *
+ * Renders nothing in a single-store workspace — there is no question to ask.
+ */
+const ExpenseStoreField: React.FC<{
+  locations: Location[];
+  value?: string;
+  onChange: (id: string) => void;
+}> = ({ locations, value, onChange }) => {
+  const options = expenseScopeOptions(locations);
+  if (!options.length || options.length === 1) return null;
+  return (
+    <div className="col-span-2">
+      <label className={label}>Which store does this cost belong to?</label>
+      <select
+        value={value || ''}
+        onChange={e => onChange(e.target.value)}
+        className={`${input} w-full ${!value ? 'ring-2 ring-amber-400' : ''}`}
+      >
+        {/* Not a selectable value: it is the "you have not answered" state. */}
+        <option value="">— pick one —</option>
+        {options.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+      </select>
+      {!value && <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-1">{EXPENSE_STORE_REQUIRED}</p>}
+      {value === COMPANY_LOCATION_ID && (
+        <p className="text-[11px] text-slate-400 mt-1">
+          A company cost appears in the combined P&amp;L only, never in one store's.
+        </p>
+      )}
+    </div>
+  );
+};
+
 const ExpenseModal: React.FC<{
   categories: ExpenseCategory[];
   initial?: Expense;
+  locations: Location[];
   onClose: () => void;
   onSave: (e: Expense, isNew: boolean) => void;
-}> = ({ categories, initial, onClose, onSave }) => {
+}> = ({ categories, initial, locations, onClose, onSave }) => {
   const [draft, setDraft] = useState(initial || { id: newId(), ...emptyExpenseDraft(categories), enteredBy: '', enteredByEmail: '', createdAt: 0 } as Expense);
   useEscapeKey(onClose);
   const activeCategories = categories.filter(c => !c.archived || c.key === draft.category);
-  const save = () => { if (draft.amount > 0 && draft.category) { onSave(draft, !initial); onClose(); } };
+  const needsStore = expenseNeedsStore(draft, locations);
+  const save = () => { if (draft.amount > 0 && draft.category && !needsStore) { onSave(draft, !initial); onClose(); } };
   return (
     <div className="fixed inset-0 z-[80] flex items-center justify-center p-4 bg-black/40">
       <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-3">
@@ -1244,13 +1416,14 @@ const ExpenseModal: React.FC<{
           </div>
           <div className="col-span-2"><label className={label}>Payee / vendor (optional)</label><input value={draft.payee || ''} onChange={e => setDraft(d => ({ ...d, payee: e.target.value }))} className={`${input} w-full`} /></div>
           <div className="col-span-2"><label className={label}>Note (optional)</label><input value={draft.note || ''} onChange={e => setDraft(d => ({ ...d, note: e.target.value }))} className={`${input} w-full`} /></div>
+          <ExpenseStoreField locations={locations} value={draft.locationId} onChange={id => setDraft(d => ({ ...d, locationId: id }))} />
         </div>
         {draft.paymentMethod === 'cash' && !initial && (
           <p className="text-xs text-amber-600 dark:text-amber-400">This will also log a cash-out entry against {draft.date}'s drawer.</p>
         )}
         <div className="flex justify-end gap-2 pt-2">
           <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800">Cancel</button>
-          <button onClick={save} disabled={!(draft.amount > 0)} className="px-4 py-2 rounded-lg text-sm font-medium bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white">Save</button>
+          <button onClick={save} disabled={!(draft.amount > 0) || needsStore} className="px-4 py-2 rounded-lg text-sm font-medium bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white">Save</button>
         </div>
       </div>
     </div>
@@ -1259,9 +1432,10 @@ const ExpenseModal: React.FC<{
 
 const RecurringModal: React.FC<{
   categories: ExpenseCategory[];
+  locations: Location[];
   onClose: () => void;
   onSave: (r: RecurringExpense, isNew: boolean) => void;
-}> = ({ categories, onClose, onSave }) => {
+}> = ({ categories, locations, onClose, onSave }) => {
   const [draft, setDraft] = useState<Omit<RecurringExpense, 'id' | 'createdBy' | 'createdByEmail' | 'createdAt'>>({
     category: categories.find(c => !c.archived)?.key || 'other', amount: 0, amountMode: 'fixed', paymentMethod: 'etransfer',
     payee: '', note: '', frequency: 'monthly', startDate: todayISO(), active: true,
@@ -1270,7 +1444,10 @@ const RecurringModal: React.FC<{
   const variable = draft.amountMode === 'variable';
   // A fixed template needs its amount up front; a variable one deliberately
   // has none — its estimate is optional and is only ever a prefill hint.
-  const valid = variable || draft.amount > 0;
+  // The store tag is required on the same terms as a one-off expense: rent is
+  // the canonical recurring cost AND the canonical per-store one, and an
+  // untagged template would post an untagged expense every month.
+  const valid = (variable || draft.amount > 0) && !expenseNeedsStore(draft, locations);
   const save = () => {
     if (!valid) return;
     // Never carry a stale fixed amount onto a variable template: `amount` is
@@ -1318,6 +1495,7 @@ const RecurringModal: React.FC<{
           </div>
           <div><label className={label}>Start date</label><input type="date" value={draft.startDate} onChange={e => setDraft(d => ({ ...d, startDate: e.target.value }))} className={`${input} w-full`} /></div>
           <div><label className={label}>Payee / vendor (optional)</label><input value={draft.payee || ''} onChange={e => setDraft(d => ({ ...d, payee: e.target.value }))} className={`${input} w-full`} /></div>
+          <ExpenseStoreField locations={locations} value={draft.locationId} onChange={id => setDraft(d => ({ ...d, locationId: id }))} />
         </div>
         <p className="text-xs text-slate-400">
           {variable
@@ -1392,7 +1570,19 @@ const ExpensesTab: React.FC<{
   onGenerateRecurringExpense: (r: RecurringExpense, period: DuePeriod, enteredAmount?: number) => void;
   onSkipRecurringPeriod: (r: RecurringExpense, periodKey: string) => void;
   booksStartDate?: string;
-}> = ({ expenses, categories, recurringExpenses, canViewAll, currentUserId, onSaveExpense, onDeleteExpense, onSaveRecurringExpense, onDeleteRecurringExpense, onGenerateRecurringExpense, onSkipRecurringPeriod, booksStartDate }) => {
+  /* ---------------- Multi-store stage 5 ---------------- */
+  /**
+   * `expenses` is this tab's SCOPED list (the same filtering the P&L uses), so
+   * the ledger a store shows always adds up to that store's P&L expense line.
+   * `allExpenses` is the unfiltered workspace array, used ONLY by the "needs a
+   * store" panel: untagged rows are precisely the ones a scoped list cannot
+   * show, and hiding them behind the filter is how they stay untagged forever.
+   */
+  allExpenses?: Expense[];
+  scope?: StoreScope;
+  locations?: Location[];
+  onRetagExpense?: (e: Expense, locationId: string) => void;
+}> = ({ expenses, categories, recurringExpenses, canViewAll, currentUserId, onSaveExpense, onDeleteExpense, onSaveRecurringExpense, onDeleteRecurringExpense, onGenerateRecurringExpense, onSkipRecurringPeriod, booksStartDate, allExpenses, scope = ALL_STORES_SCOPE, locations = [], onRetagExpense }) => {
   const [start, setStart] = useState(monthStartISO());
   const [end, setEnd] = useState(todayISO());
   const [editing, setEditing] = useState<Expense | null | 'new'>(null);
@@ -1408,10 +1598,33 @@ const ExpensesTab: React.FC<{
   const total = inRange.reduce((s, e) => s + e.amount, 0);
   const categoryLabel = (key: string) => categories.find(c => c.key === key)?.label || key;
 
+  const storeOf = (e: Expense) => (e.locationId
+    ? locationName(locations, e.locationId)
+    : (locations.length ? 'Not set' : ''));
   const exportCsv = () => {
-    const rows = inRange.map(e => ({ Date: e.date, Category: categoryLabel(e.category), Amount: e.amount.toFixed(2), 'Payment method': PAYMENT_METHOD_LABEL[e.paymentMethod], Payee: e.payee || '', Note: e.note || '' }));
-    triggerDownload(`expenses_${start}_to_${end}.csv`, toCSV(rows), 'text/csv;charset=utf-8;');
+    const rows = inRange.map(e => ({ Date: e.date, Category: categoryLabel(e.category), Amount: e.amount.toFixed(2), 'Payment method': PAYMENT_METHOD_LABEL[e.paymentMethod], Payee: e.payee || '', Note: e.note || '', ...(locations.length ? { Store: storeOf(e) } : {}) }));
+    triggerDownload(`expenses_${start}_to_${end}.csv`, toCSV(
+      locations.length ? [{ Date: 'Scope', Category: scopeHeading(scope, locations) }, ...rows] : rows,
+    ), 'text/csv;charset=utf-8;');
   };
+
+  /**
+   * EXPENSES THAT HAVE NOT BEEN TOLD WHERE THEY BELONG.
+   *
+   * These read as the DEFAULT store in a per-store P&L (domain/storeScope.ts),
+   * so no figure is missing — but any of them that are really company costs
+   * are sitting on Brampton's bottom line, and the owner is the only person
+   * who can say which. So they get their own panel with a one-tap retag,
+   * drawn from the UNSCOPED array and shown whatever scope is selected: a row
+   * that needs attention must not be hidden by the filter that makes it
+   * matter. Owner-only, like the rest of the full ledger.
+   */
+  const needsStore = useMemo(
+    () => (canViewAll && locations.length
+      ? untaggedExpenses(allExpenses || expenses).sort((a, b) => b.date.localeCompare(a.date))
+      : []),
+    [allExpenses, expenses, canViewAll, locations.length],
+  );
 
   const now = Date.now();
   // Recurring templates are owner-only configuration, so a manager never sees
@@ -1463,9 +1676,44 @@ const ExpensesTab: React.FC<{
         </div>
       )}
 
+      {needsStore.length > 0 && onRetagExpense && (
+        <div className={`${card} p-5 border-amber-300 dark:border-amber-700`}>
+          <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200 mb-1 flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-amber-500" /> {needsStore.length} expense{needsStore.length === 1 ? '' : 's'} with no store
+          </h3>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mb-3">
+            These are counted in the combined P&amp;L and, because they have no tag, in {locationName(locations, defaultStoreId(locations)) || 'the default store'}'s.
+            Anything that really belongs to neither shop should be tagged Company, which takes it out of both stores and leaves it in the combined figures.
+          </p>
+          <div className="divide-y divide-slate-100 dark:divide-slate-800 max-h-80 overflow-y-auto">
+            {needsStore.map(e => (
+              <div key={e.id} className="flex flex-wrap items-center gap-2 py-2">
+                <span className="text-xs text-slate-400 tabular-nums w-20 shrink-0">{e.date}</span>
+                <span className="text-sm text-slate-700 dark:text-slate-200 min-w-0 truncate flex-1">
+                  {categoryLabel(e.category)}{e.payee ? ` · ${e.payee}` : ''}
+                </span>
+                <span className="text-sm font-semibold tabular-nums text-slate-800 dark:text-slate-100">{money(e.amount)}</span>
+                <select
+                  defaultValue=""
+                  onChange={ev => { if (ev.target.value) onRetagExpense(e, ev.target.value); }}
+                  className={`${input} py-1 text-xs`}
+                  aria-label={`Tag the ${e.date} expense`}
+                >
+                  <option value="">Tag as…</option>
+                  {expenseScopeOptions(locations).map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+                </select>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className={`${card} p-5`}>
         <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200">{canViewAll ? 'Expenses' : 'My submitted expenses'} · {start} → {end}</h3>
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200">{canViewAll ? 'Expenses' : 'My submitted expenses'} · {start} → {end}</h3>
+            {locations.length > 0 && <ScopeBadge scope={scope} locations={locations} />}
+          </div>
           {/* The workspace expense total is part of expenses.viewAll — a
               manager sees their own rows but no aggregate spend figure. */}
           {canViewAll && <span className="text-sm font-bold text-slate-900 dark:text-white tabular-nums">{money(total)}</span>}
@@ -1478,6 +1726,7 @@ const ExpensesTab: React.FC<{
               <thead><tr className="text-left text-slate-500 dark:text-slate-400 border-b border-slate-200 dark:border-slate-800">
                 <th className="py-2 pr-3 font-medium">Date</th><th className="py-2 pr-3 font-medium">Category</th>
                 <th className="py-2 pr-3 font-medium">Payee</th><th className="py-2 pr-3 font-medium">Method</th>
+                {locations.length > 0 && <th className="py-2 pr-3 font-medium">Store</th>}
                 <th className="py-2 px-2 font-medium text-right">Amount</th><th className="py-2 pl-2 font-medium text-right">Actions</th>
               </tr></thead>
               <tbody>
@@ -1487,6 +1736,9 @@ const ExpensesTab: React.FC<{
                     <td className="py-2 pr-3 text-slate-700 dark:text-slate-200">{categoryLabel(e.category)}{e.recurringId && <Repeat className="w-3 h-3 inline ml-1 text-indigo-400" aria-label="recurring" />}</td>
                     <td className="py-2 pr-3 text-slate-500 dark:text-slate-400">{e.payee || '—'}</td>
                     <td className="py-2 pr-3 text-slate-500 dark:text-slate-400">{PAYMENT_METHOD_LABEL[e.paymentMethod]}</td>
+                    {locations.length > 0 && (
+                      <td className={`py-2 pr-3 ${e.locationId ? 'text-slate-500 dark:text-slate-400' : 'text-amber-600 dark:text-amber-400 font-medium'}`}>{storeOf(e)}</td>
+                    )}
                     <td className="py-2 px-2 text-right tabular-nums font-semibold text-slate-800 dark:text-slate-100">{money(e.amount)}</td>
                     <td className="py-2 pl-2 text-right">
                       {/* Redundant with the list filter above (a manager only
@@ -1518,6 +1770,13 @@ const ExpensesTab: React.FC<{
               <div key={r.id} className="flex items-center justify-between py-2 gap-2">
                 <span className={`text-sm ${r.active ? 'text-slate-700 dark:text-slate-200' : 'text-slate-400 line-through'}`}>
                   {categoryLabel(r.category)}{r.payee ? ` · ${r.payee}` : ''} — {recurringAmountLabel(r)}/{FREQUENCY_LABEL[r.frequency].toLowerCase()}
+                  {/* Named on the template, because this is what every future
+                      month it posts will be tagged with. */}
+                  {locations.length > 0 && (
+                    <span className={r.locationId ? 'text-slate-400' : 'text-amber-600 dark:text-amber-400'}>
+                      {' · '}{r.locationId ? locationName(locations, r.locationId) : 'no store set'}
+                    </span>
+                  )}
                 </span>
                 <div className="flex items-center gap-2">
                   <button onClick={() => onSaveRecurringExpense({ ...r, active: !r.active }, false)} className="text-xs text-slate-500 hover:text-indigo-600">{r.active ? 'Pause' : 'Resume'}</button>
@@ -1533,12 +1792,13 @@ const ExpensesTab: React.FC<{
         <ExpenseModal
           categories={categories}
           initial={editing === 'new' ? undefined : editing}
+          locations={locations}
           onClose={() => setEditing(null)}
           onSave={onSaveExpense}
         />
       )}
       {addingRecurring && (
-        <RecurringModal categories={categories} onClose={() => setAddingRecurring(false)} onSave={onSaveRecurringExpense} />
+        <RecurringModal categories={categories} locations={locations} onClose={() => setAddingRecurring(false)} onSave={onSaveRecurringExpense} />
       )}
       {enteringVariable && (
         <VariableAmountModal
@@ -1598,7 +1858,9 @@ const SalesLedgerTab: React.FC<{
   inventory: InventoryItem[];
   canViewCost: boolean;
   booksStartDate?: string;
-}> = ({ salesTransactions, inventory, canViewCost, booksStartDate }) => {
+  scope: StoreScope;
+  locations: Location[];
+}> = ({ salesTransactions, inventory, canViewCost, booksStartDate, scope, locations }) => {
   // Defaults to THIS MONTH, which is what somebody opening the tab wants nine
   // times out of ten; the custom range is right there for the tenth.
   const thisMonth = monthOf(todayISO());
@@ -1639,9 +1901,11 @@ const SalesLedgerTab: React.FC<{
   const toggle = <T,>(list: T[], v: T, set: (n: T[]) => void) =>
     set(list.includes(v) ? list.filter(x => x !== v) : [...list, v]);
 
+  // The ledger is the line-by-line backing for the P&L's revenue, so it is
+  // scoped by the same filter and says which scope it was exported under.
   const exportCsv = () => triggerDownload(
     `sales-ledger_${ledger.start}_${ledger.end}.csv`,
-    toCSV(salesLedgerCsvRows(ledger, canViewCost)),
+    toCSV([{ Date: 'Scope', Item: scopeHeading(scope, locations) }, ...salesLedgerCsvRows(ledger, canViewCost)]),
     'text/csv;charset=utf-8;',
   );
 
@@ -1653,6 +1917,11 @@ const SalesLedgerTab: React.FC<{
   return (
     <div className="space-y-6">
       <div className={`${card} p-5 space-y-4`}>
+        <div className="flex flex-wrap items-center gap-2">
+          <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200">Sales ledger</h3>
+          <ScopeBadge scope={scope} locations={locations} />
+        </div>
+        <ScopeNote scope={scope} />
         <div className="flex flex-wrap items-end gap-4">
           {!custom ? (
             <div>
@@ -1823,7 +2092,9 @@ const BelowMinimumTab: React.FC<{
   salesTransactions: SalesTransaction[];
   canViewCost: boolean;
   booksStartDate?: string;
-}> = ({ salesTransactions, canViewCost, booksStartDate }) => {
+  scope: StoreScope;
+  locations: Location[];
+}> = ({ salesTransactions, canViewCost, booksStartDate, scope, locations }) => {
   const [start, setStart] = useState(monthStartISO());
   const [end, setEnd] = useState(todayISO());
 
@@ -1866,9 +2137,12 @@ const BelowMinimumTab: React.FC<{
       </div>
 
       <div className={`${card} p-5`}>
-        <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200 mb-3">
-          {belowFloorCountLabel(rows.length) || 'No sales below minimum'}
-        </h3>
+        <div className="flex flex-wrap items-center gap-2 mb-3">
+          <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200">
+            {belowFloorCountLabel(rows.length) || 'No sales below minimum'}
+          </h3>
+          <ScopeBadge scope={scope} locations={locations} />
+        </div>
         {rows.length === 0 ? (
           <p className="text-sm text-slate-400">Nothing went out under its minimum price in this range.</p>
         ) : (
