@@ -62,6 +62,21 @@ interface Props {
   onUpdate: (id: string, field: keyof InventoryItem, value: any) => void | Promise<void>;
   onDelete: (id: string) => void;
   onGenerateSku: (kind: ItemKind, deviceType?: DeviceType) => Promise<string>;
+  /**
+   * THE SKU THIS ROW WOULD GET — shown in a quick-add row before anything is
+   * typed, so the owner sees `FTT-000318` sitting there and can only replace
+   * it deliberately.
+   *
+   * A PREVIEW, NOT A RESERVATION. It is computed from the local counter mirror
+   * (services/sku.ts's pure `nextSku`) and allocates nothing, because an
+   * abandoned quick-add row must still leave nothing behind — reserving a
+   * number to display it would burn one on every row somebody started and
+   * walked away from, and `nextSku` never reuses a number. The real,
+   * atomic allocation still happens on the first real edit.
+   *
+   * Optional: without it the row starts blank, exactly as before.
+   */
+  previewSku?: (kind: ItemKind, deviceType?: DeviceType) => string;
   onSeed?: () => void;
   // Internal repair linking (owner/manager): start a repair ticket for a device,
   // and open the ticket already linked to one.
@@ -268,14 +283,22 @@ const DEVICE_COLS: Col[] = [
   { key: 'storage', label: 'Storage', type: 'text', w: 84, min: 46, max: 120 },
   { key: 'color', label: 'Color', type: 'text', w: 90, min: 48, max: 150 },
   { key: 'batteryHealth', label: 'Battery', type: 'text', w: 68, min: 40, max: 110 },
-  // LAPTOP SPECS. Not in the grid — they would be five empty columns on the
-  // Phones tab — but carried here with hideCol so the CSV export still
-  // round-trips them, exactly as brand/model/item already are.
-  { key: 'cpu', label: 'CPU', type: 'text', w: 120, hideCol: true },
-  { key: 'ram', label: 'RAM', type: 'text', w: 80, hideCol: true },
-  { key: 'storageType', label: 'Storage Type', type: 'text', w: 90, hideCol: true },
-  { key: 'screenSize', label: 'Screen Size', type: 'text', w: 90, hideCol: true },
-  { key: 'gpu', label: 'GPU', type: 'text', w: 120, hideCol: true },
+  // LAPTOP SPECS — REAL COLUMNS NOW, not hideCol.
+  //
+  // They shipped as hideCol so they would not be five empty columns on the
+  // Phones tab, which solved that and created a worse problem: `hideCol`
+  // removes a column from the COLUMNS MENU as well (see the menu's
+  // `activeCols.filter(c => !c.hideCol)`), so the specs the laptop work was
+  // for were not hidden-by-default — they were unreachable. The grid showed a
+  // laptop its STORAGE, COLOR and BATTERY and no way at all to see its CPU.
+  //
+  // So they are ordinary columns, available in the menu on every tab, and
+  // which ones START visible is now decided per tab (TAB_HIDDEN_DEFAULT).
+  { key: 'cpu', label: 'CPU', type: 'text', w: 120, min: 70, max: 200 },
+  { key: 'ram', label: 'RAM', type: 'text', w: 80, min: 48, max: 130 },
+  { key: 'storageType', label: 'Storage Type', type: 'text', w: 90, min: 56, max: 140 },
+  { key: 'screenSize', label: 'Screen Size', type: 'text', w: 90, min: 56, max: 140 },
+  { key: 'gpu', label: 'GPU', type: 'text', w: 120, min: 70, max: 200 },
   { key: 'condition', label: 'Condition', type: 'select', w: 108, min: 80, max: 150, options: opt(CONDITIONS) },
   // 'Bought From' is no longer shown in the grid (or Columns menu). Kept here
   // with hideCol so the value still round-trips through CSV export and stays in
@@ -320,6 +343,69 @@ const ACCESSORY_COLS: Col[] = [
 // and Condition hidden by default — still toggleable in the Columns menu).
 const LS_HIDDEN = 'inv_hidden_cols_v2';
 const DEFAULT_HIDDEN: Record<'device' | 'accessory', string[]> = { device: ['condition'], accessory: [] };
+
+/* ---------------- DEFAULT COLUMNS FOLLOW THE TAB ---------------- */
+//
+// The tabs landed and the columns did not: the Laptops tab showed STORAGE,
+// COLOR and BATTERY — a column that is always blank on a laptop — and none of
+// the specs the laptop work was for. The form got this right and the grid did
+// not.
+//
+// THIS CHANGES THE DEFAULT, NOT THE CEILING. Every column stays in the Columns
+// menu on every tab, and the owner's own choice always wins (see
+// `hiddenFor` — a tab the owner has never touched takes the default; one they
+// have takes theirs, forever).
+
+/** The laptop spec columns, named once so the per-tab lists cannot drift. */
+const SPEC_COLS = ['cpu', 'ram', 'storageType', 'screenSize', 'gpu'];
+
+const TAB_HIDDEN_DEFAULT: Partial<Record<InvSection, string[]>> = {
+  // PHONES: exactly today's layout. The five spec columns are new, so hiding
+  // them here is not a change to what anybody currently sees.
+  phones: ['condition', ...SPEC_COLS],
+  // LAPTOPS: the specs, and none of the phone fields.
+  //
+  // `batteryHealth` and `color` go because they are ALWAYS BLANK on a laptop —
+  // the owner records neither — and a column that can only ever be empty is
+  // worse than no column: it reads as missing data. `condition` is hidden for
+  // the same reason it is hidden on phones, and because a laptop has no
+  // Condition at all (domain/deviceSpecs.ts's hasCondition).
+  //
+  // There is no `carrier` column in this grid to hide — carrier is a form
+  // field only, so the brief's third phone column does not apply here.
+  laptops: ['condition', 'color', 'batteryHealth'],
+  // OTHER spans tablets, watches, consoles and desktop PCs — four shapes with
+  // little in common. The shared answer is the PHONE-ISH set: storage, colour
+  // and battery health are all real on a tablet and a watch, and a console or
+  // a PC simply leaves them blank. The laptop specs are hidden because four of
+  // five of those kinds have no use for them; a desktop PC that does is one
+  // toggle away, and a build's parts live on the build itself.
+  other: ['condition', ...SPEC_COLS],
+  // SOLD spans every type, so it keeps a NEUTRAL set — today's columns. Any
+  // type-specific guess here would be wrong for most of the rows in it.
+  sold: ['condition', ...SPEC_COLS],
+  // IN TRANSIT spans types for the same reason Sold does — a phone and a
+  // laptop can be in the same car (multi-store stage 4) — so it takes the
+  // same neutral set. Without an entry here it would fall through to the
+  // legacy per-kind default, which no longer hides the spec columns now that
+  // they are real, and the tab would show CPU and GPU on a list of phones.
+  intransit: ['condition', ...SPEC_COLS],
+};
+
+/**
+ * THE TYPE COLUMN IS GONE FROM PHONES AND LAPTOPS — removed, not hidden.
+ *
+ * Everything on Phones is a phone and everything on Laptops is a laptop, so an
+ * inline type dropdown there is noise, and a mis-click silently moves an item
+ * to a tab the owner will not think to look in. It stays on OTHER, which
+ * genuinely spans four kinds, and on SOLD, which spans everything.
+ *
+ * Retyping an item is still possible — the item form's own Type dropdown
+ * (components/ItemFormModal.tsx, shown whenever an existing item is opened),
+ * which is now the only route and is covered by its own test.
+ */
+const TYPELESS_TABS: InvSection[] = ['phones', 'laptops'];
+const LS_HIDDEN_BY_TAB = 'inv_hidden_cols_by_tab_v1';
 const LS_VIEWS = 'inv_saved_views_v1';
 // Per-column width overrides from drag-resizing, kept per kind (device/accessory)
 // and per column key. Empty = use the column's default width.
@@ -386,7 +472,7 @@ const PhotoThumb: React.FC<{ item: InventoryItem; onClick: () => void }> = ({ it
   );
 };
 
-export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activity, auditLogs = [], canViewCost = false, userId, section, onSelectSection, onSave, workspaceId, currentUserId, onFindStockPhoto, deviceWarrantyDays, onUpdate, onDelete, onGenerateSku, onSeed, repairs = [], customers, onCreateCustomer, onCreateRepair, onOpenRepair, notes, noteRole, onOpenNote,
+export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activity, auditLogs = [], canViewCost = false, userId, section, onSelectSection, onSave, workspaceId, currentUserId, onFindStockPhoto, deviceWarrantyDays, onUpdate, onDelete, onGenerateSku, previewSku, onSeed, repairs = [], customers, onCreateCustomer, onCreateRepair, onOpenRepair, notes, noteRole, onOpenNote,
   locations = [], transfers = [], me, activeLocationId = '',
   onSendTransfer, onReceiveTransfer, onCancelTransfer }) => {
   const linkedRepairOf = (id: string): Repair | undefined => linkedRepairFor(id, repairs);
@@ -416,6 +502,18 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
   const [soldType, setSoldType] = usePersistedFilter<string>('inv_sold_type', userId, 'all');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [hidden, setHidden] = useState<Record<'device' | 'accessory', string[]>>(() => loadLS(LS_HIDDEN, DEFAULT_HIDDEN));
+  /**
+   * THE OWNER'S OWN COLUMN CHOICE, PER TAB — and the thing that distinguishes
+   * "never touched it" from "deliberately set" is simply WHETHER THERE IS AN
+   * ENTRY. An absent tab takes the tab's default; the moment the owner toggles
+   * a column on a tab, that tab's set is stored and the default stops applying
+   * to it, for good.
+   *
+   * Stored under its own key, so the pre-tabs layout in LS_HIDDEN is still
+   * there and still readable (see hiddenFor below) rather than being migrated
+   * or stamped over.
+   */
+  const [hiddenByTab, setHiddenByTab] = useState<Partial<Record<InvSection, string[]>>>(() => loadLS(LS_HIDDEN_BY_TAB, {}));
   const [views, setViews] = useState<SavedView[]>(() => loadLS(LS_VIEWS, []));
   const [menu, setMenu] = useState<null | 'cols' | 'views' | 'filter'>(null);
   const [expandItem, setExpandItem] = useState<InventoryItem | null>(null);
@@ -425,6 +523,7 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { localStorage.setItem(LS_HIDDEN, JSON.stringify(hidden)); }, [hidden]);
+  useEffect(() => { localStorage.setItem(LS_HIDDEN_BY_TAB, JSON.stringify(hiddenByTab)); }, [hiddenByTab]);
   useEffect(() => { localStorage.setItem(LS_VIEWS, JSON.stringify(views)); }, [views]);
   useEffect(() => { localStorage.setItem(LS_COLW, JSON.stringify(colW)); }, [colW]);
 
@@ -622,24 +721,57 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
   // field is filled in, at which point it is saved for real (SKU allocated
   // then). An abandoned draft leaves nothing behind.
   const [draft, setDraft] = useState<InventoryItem | null>(null);
+  /**
+   * The previewed SKU the current draft row is showing.
+   *
+   * Kept beside the draft rather than on it, so `commitDraft` can tell an
+   * UNTOUCHED preview from a SKU the owner typed on purpose: if the field
+   * still holds this, nobody chose it and the real number is allocated; if it
+   * holds anything else, that is a deliberate custom SKU and it is kept.
+   */
+  const [draftSku, setDraftSku] = useState('');
   const blankDevice = (): InventoryItem => ({ id: uid(), kind: 'device', sku: '', date: today(), item: '', imei: '', boughtFrom: '', purchaseCost: 0, repairCost: 0, soldDate: '', soldTo: '', salePrice: 0, deviceType: 'Phone', brand: '', model: '', storage: '', color: '', carrier: '', batteryHealth: '', condition: 'Good', purchaseSource: '', targetSalePrice: 0, deviceStatus: 'ready', notes: '' });
   const blankAccessory = (): InventoryItem => ({ id: uid(), kind: 'accessory', sku: '', date: today(), item: '', imei: '', boughtFrom: '', purchaseCost: 0, repairCost: 0, soldDate: '', soldTo: '', salePrice: 0, manufacturerBarcode: '', category: '', quantity: 1, costPerUnit: 0, sellingPrice: 0, lowStockThreshold: 3, notes: '' });
   // A quick-add row inherits the TAB's type, the same as the Add form — so a
   // row typed straight into the Laptops table is a laptop.
+  // THE SKU IS FILLED IN THE MOMENT THE ROW APPEARS. The SKU column sits at
+  // the front of the row and used to render empty, so typing there was the
+  // natural first move — and it silently replaced the generated number.
+  const startDraft = (row: InventoryItem) => {
+    const sku = previewSku ? previewSku(kindOf(row), row.deviceType) : '';
+    setDraftSku(sku);
+    setDraft({ ...row, sku });
+  };
   const addDeviceRow = async () => {
     if (!isDeviceStockTab) setPage('phones');
-    setDraft({ ...blankDevice(), deviceType: tabAddsType(page) ?? 'Phone' });
+    startDraft({ ...blankDevice(), deviceType: tabAddsType(page) ?? 'Phone' });
   };
-  const addAccessoryRow = async () => { setPage('accessories'); setDraft(blankAccessory()); };
+  const addAccessoryRow = async () => { setPage('accessories'); startDraft(blankAccessory()); };
 
   // The first edit to a draft row is what creates it. Until then it is not in
   // the database at all.
   const commitDraft = async (field: keyof InventoryItem, value: any) => {
     if (!draft) return;
-    const kind = kindOf(draft);
-    const sku = await onGenerateSku(kind, draft.deviceType);
-    onSave({ ...draft, sku, [field]: value });
+    // THE EDIT IS APPLIED FIRST, and the SKU decided after it.
+    //
+    // THE BUG THIS FIXES: this used to spread `sku` and THEN `[field]: value`,
+    // so when the field being edited WAS `sku`, the typed text overwrote the
+    // number that had just been allocated — and because `nextSku` never
+    // reuses a number, the counter had already advanced and that SKU was gone.
+    // The owner typed into the SKU column (the first column, rendering empty)
+    // and got an item called `eee` with no auto-number, silently.
+    const next = { ...draft, [field]: value } as InventoryItem;
+    const typed = (next.sku || '').trim();
+    // UNTOUCHED PREVIEW → allocate for real. The preview is not a
+    // reservation, so the authoritative number comes from the atomic
+    // allocator here, which is also what keeps two rows in a row distinct.
+    // ANYTHING ELSE → the owner typed a SKU on purpose, and it is kept.
+    const sku = typed && typed !== draftSku
+      ? typed
+      : await onGenerateSku(kindOf(next), next.deviceType);
+    onSave({ ...next, sku });
     setDraft(null);
+    setDraftSku('');
   };
   const updateRow = (id: string, field: keyof InventoryItem, value: any) => {
     if (draft && id === draft.id) return commitDraft(field, value);
@@ -753,15 +885,73 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
   const saveView = () => {
     const name = prompt('Save current view as:');
     if (!name) return;
-    setViews(v => [...v.filter(x => x.name !== name), { name, page, query, sort, statusFilter, hidden }]);
+    // A saved view has always been per PAGE, so it stores the column set of
+    // the page it was saved on — now read through hiddenFor, so a view saved
+    // on Laptops captures the laptop columns rather than the legacy per-kind
+    // set it would have captured before.
+    setViews(v => [...v.filter(x => x.name !== name), {
+      name, page, query, sort, statusFilter,
+      hidden: { ...hidden, [tabKind(page)]: hiddenFor(page) },
+    }]);
   };
-  const applyView = (v: SavedView) => { setPage(((v as any).page === 'devices' ? 'phones' : (v as any).page ?? 'phones') as Page); setQuery(v.query); setSort(v.sort); setStatusFilter(v.statusFilter); setHidden(v.hidden); setMenu(null); };
+  const applyView = (v: SavedView) => {
+    const target = ((v as any).page === 'devices' ? 'phones' : (v as any).page ?? 'phones') as Page;
+    setPage(target); setQuery(v.query); setSort(v.sort); setStatusFilter(v.statusFilter);
+    setHidden(v.hidden);
+    // Applied to the view's OWN tab as a deliberate choice, so it survives the
+    // per-tab defaults — a saved view is as explicit as a toggle.
+    setHiddenByTab(h => ({ ...h, [target]: v.hidden[tabKind(target)] ?? [] }));
+    setMenu(null);
+  };
 
   const onSortToggle = (key: string) => setSort(s => s?.key === key ? (s.dir === 'asc' ? { key, dir: 'desc' } : null) : { key, dir: 'asc' });
-  const toggleCol = (kind: 'device' | 'accessory', key: string) =>
-    setHidden(h => ({ ...h, [kind]: h[kind].includes(key) ? h[kind].filter(k => k !== key) : [...h[kind], key] }));
 
-  const visCols = (kind: 'device' | 'accessory', cols: Col[]) => cols.filter(c => !c.hideCol && !hidden[kind].includes(c.key));
+  /**
+   * WHICH COLUMNS ARE HIDDEN ON THE TAB IN FRONT OF YOU.
+   *
+   * In order:
+   *   1. THE OWNER'S OWN SET for this tab, if they have ever toggled a column
+   *      on it. Presence of the entry IS the record that they chose — nothing
+   *      here ever overwrites it.
+   *   2. For ACCESSORIES (and Low Stock, its view), the existing per-kind
+   *      set — those columns are unchanged by this work, so they keep
+   *      behaving exactly as they did.
+   *   3. A LEGACY CUSTOMISED SET on the PHONES tab. Anybody who trimmed the
+   *      old single Devices tab made that choice about the list Phones is the
+   *      direct successor of, so it is honoured there — and NOT propagated to
+   *      Laptops, which would be the "stamping over" problem in reverse:
+   *      their old choice would hide the laptop specs they have never seen.
+   *   4. The tab's default.
+   */
+  const legacyCustomised = JSON.stringify([...hidden.device].sort()) !== JSON.stringify([...DEFAULT_HIDDEN.device].sort());
+  const hiddenFor = (tab: InvSection): string[] => {
+    const own = hiddenByTab[tab];
+    if (own) return own;
+    if (tabKind(tab) === 'accessory') return hidden.accessory;
+    if (tab === 'phones' && legacyCustomised) return hidden.device;
+    return TAB_HIDDEN_DEFAULT[tab] ?? hidden.device;
+  };
+  const activeHidden = hiddenFor(page);
+
+  /**
+   * The columns that EXIST on this tab at all — before anything is hidden.
+   *
+   * Only one thing is removed rather than hidden: the inline Type dropdown on
+   * Phones and Laptops, where every row is already that type (TYPELESS_TABS).
+   */
+  const colsOnTab = (tab: InvSection, cols: Col[]): Col[] =>
+    (TYPELESS_TABS.includes(tab) ? cols.filter(c => c.key !== 'deviceType') : cols);
+
+  const toggleCol = (tab: InvSection, key: string) =>
+    setHiddenByTab(h => {
+      const cur = h[tab] ?? hiddenFor(tab);
+      return { ...h, [tab]: cur.includes(key) ? cur.filter(k => k !== key) : [...cur, key] };
+    });
+
+  const visCols = (tab: InvSection, cols: Col[]) => {
+    const hide = hiddenFor(tab);
+    return colsOnTab(tab, cols).filter(c => !c.hideCol && !hide.includes(c.key));
+  };
 
   const sectionCount: Record<InvSection, number> = { phones: counts.phones, laptops: counts.laptops, accessories: counts.accessories, other: counts.other, intransit: counts.intransit, sold: counts.sold, lowstock: counts.lowstock };
 
@@ -927,10 +1117,14 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
               <button onClick={() => setMenu(menu === 'cols' ? null : 'cols')} className="flex items-center gap-2 px-3 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-700 dark:text-slate-200 hover:border-indigo-400"><Columns3 className="w-4 h-4" /> Columns</button>
               {menu === 'cols' && (
                 <div className="absolute right-0 mt-1 w-64 max-h-80 overflow-y-auto bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shadow-lg z-30 p-3 space-y-1">
-                  <p className="text-xs font-semibold text-slate-500 mb-1 capitalize">{activeKind} columns</p>
-                  {activeCols.filter(c => !c.hideCol).map(c => (
+                  {/* EVERY column this tab has, still available — the per-tab
+                      defaults change which START visible, never which exist.
+                      The one exception is the inline Type dropdown on Phones
+                      and Laptops, which is removed from those two tabs. */}
+                  <p className="text-xs font-semibold text-slate-500 mb-1">{activeTitle} columns</p>
+                  {colsOnTab(page, activeCols).filter(c => !c.hideCol).map(c => (
                     <label key={c.key} className="flex items-center gap-2 text-sm py-0.5 cursor-pointer text-slate-600 dark:text-slate-300">
-                      <input type="checkbox" checked={!hidden[activeKind].includes(c.key)} onChange={() => toggleCol(activeKind, c.key)} className="rounded" /> {c.label}
+                      <input type="checkbox" checked={!activeHidden.includes(c.key)} onChange={() => toggleCol(page, c.key)} className="rounded" /> {c.label}
                     </label>
                   ))}
                   <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
@@ -1085,9 +1279,9 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
           {/* Desktop: single table for this page */}
           <div className="hidden md:flex flex-1 flex-col gap-3 overflow-hidden">
             <div className="flex-1 overflow-auto min-w-0">
-              <Sheet title={activeTitle} total={activeRows.length} cols={visCols(activeKind, activeCols)} rows={sheetRows} canViewCost={canViewCost}
+              <Sheet title={activeTitle} total={activeRows.length} cols={visCols(page, activeCols)} rows={sheetRows} canViewCost={canViewCost}
                 sort={sort} onSort={onSortToggle} selected={selected} onToggleSel={toggleSel} onToggleAll={toggleSelAll}
-                onUpdate={updateRow} onDelete={(id: string) => { if (draft && id === draft.id) { setDraft(null); return; } onDelete(id); }}
+                onUpdate={updateRow} onDelete={(id: string) => { if (draft && id === draft.id) { setDraft(null); setDraftSku(''); return; } onDelete(id); }}
                 onDuplicate={duplicate} onExpand={(it: InventoryItem) => openItem(it)} onLabel={setLabelItem}
                 onHistory={(it, mode) => setHistoryItem({ item: it, mode })}
                 linkedRepairOf={linkedRepairOf} onCreateRepair={onCreateRepair} onOpenRepair={onOpenRepair} openRepairOf={openRepairOf}

@@ -18,7 +18,7 @@ import { InventoryItem } from '../types';
  *  • a phone's form is exactly what it was;
  *  • a sold laptop is in Sold, not in Laptops, and the screen says so;
  *  • Sold filters by type within the tab;
- *  • retyping an existing row is one control away.
+ *  • retyping an existing row is one control away (the item form).
  */
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -332,17 +332,25 @@ describe('the tabs', () => {
 });
 
 describe('retyping an existing row', () => {
-  it('is an editable Type cell in the grid', () => {
-    const onUpdate = vi.fn();
-    const v = mount(view({ inventory: [device({ id: 'p1', item: 'MacBook Pro', deviceType: 'Phone' })], section: 'phones', onUpdate }));
-    const cell = v.selects().find(s => Array.from(s.options).some(o => o.value === 'Laptop')
-      && Array.from(s.options).some(o => o.value === 'Phone'));
-    expect(cell).toBeTruthy();
+  // The inline Type cell has been REMOVED from Phones and Laptops — every row
+  // on those tabs is already that type, so the dropdown was noise and a
+  // mis-click moved an item to a tab the owner would not look in. The item
+  // form's own Type dropdown is now the only route, and it is the test above
+  // ("OFFERS THE TYPE PICKER") that guards it. The per-tab column behaviour
+  // lives in InventoryView.columns.test.tsx.
+  it('is the item form\'s Type dropdown, which is still there', () => {
+    const v = mount(
+      <ItemFormModal initial={device({ deviceType: 'Phone', item: 'MacBook Pro 14' })} deviceBuyers={[]}
+        onSave={vi.fn()} onGenerateSku={async () => 'INV-000002'} onClose={() => {}} />,
+    );
+    const typeSelect = v.selects().find(s => Array.from(s.options).some(o => o.value === 'Laptop'));
+    expect(typeSelect).toBeTruthy();
     act(() => {
-      cell!.value = 'Laptop';
-      cell!.dispatchEvent(new Event('change', { bubbles: true }));
+      typeSelect!.value = 'Laptop';
+      typeSelect!.dispatchEvent(new Event('change', { bubbles: true }));
     });
-    expect(onUpdate).toHaveBeenCalledWith('p1', 'deviceType', 'Laptop');
+    // The form now shows laptop fields, which is the proof the change took.
+    expect(v.labels()).toContain('CPU');
     v.unmount();
   });
 });

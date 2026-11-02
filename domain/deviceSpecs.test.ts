@@ -299,6 +299,7 @@ describe('A LAPTOP IS STILL AN ORDINARY INVENTORY DEVICE', () => {
       'components/ItemFormModal.tsx', // the form
       'components/InventoryView.tsx', // the list
       'components/InventoryView.laptops.test.tsx',
+      'components/InventoryView.columns.test.tsx',
       'types.ts',                     // DeviceType itself
     ];
     const files = execSync(

@@ -1046,6 +1046,30 @@ const App: React.FC = () => {
     }
   };
 
+  /**
+   * THE SKU A NEW ROW WOULD GET, without allocating it.
+   *
+   * The inventory grid's quick-add row shows this the moment it appears, so
+   * the number is visible before anything is typed and can only be replaced
+   * deliberately. It runs the SAME pure `nextSku` the allocator runs, against
+   * the local counter mirror and the live inventory.
+   *
+   * IT RESERVES NOTHING, deliberately. An abandoned quick-add row must leave
+   * nothing behind, and `nextSku` never reuses a number — so allocating one
+   * just to display it would burn a number on every row somebody started and
+   * walked away from. The authoritative number is still allocated atomically
+   * on the first real edit (handleGenerateSku above), which is also what makes
+   * two rows in a row get different SKUs.
+   *
+   * The only cost is that another terminal allocating in between makes the
+   * preview one number stale. The row still saves with a correct, unique SKU —
+   * it is just not always the one that was on screen, which is the right way
+   * round: a visible number that is occasionally off by one beats a blank
+   * field that silently eats the real one.
+   */
+  const previewSku = (kind: ItemKind, deviceType?: DeviceType): string =>
+    nextSku(skuPrefix(kind, deviceType), skuRef.current, dataRef.current).sku;
+
   // Add or update a single inventory item (device or accessory) from InventoryView
   const handleSaveInventoryItem = async (raw: InventoryItem) => {
     if (!uid) return;
@@ -3899,6 +3923,7 @@ const App: React.FC = () => {
               onUpdate={handleUpdateItem}
               onDelete={handleDeleteItem}
               onGenerateSku={handleGenerateSku}
+              previewSku={previewSku}
               onSeed={handleSeedSampleData}
               repairs={repairs}
               onCreateRepair={allow('repairs.manage') ? handleCreateInternalRepair : undefined}
