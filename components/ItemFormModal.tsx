@@ -2,7 +2,7 @@ import React, { useState, useMemo, useRef, useEffect, FocusEventHandler } from '
 import { X, Wand2, Smartphone, Package, Barcode, Camera, Tag } from 'lucide-react';
 import { printShelfTag } from '../services/shelfTag';
 import { getStoreProfile } from './SettingsModal';
-import { InventoryItem, ItemKind, DeviceType, DeviceStatus, StorageType, DeviceBuyer, Repair, ListingPlatform, Note, Role, Customer } from '../types';
+import { InventoryItem, ItemKind, DeviceType, DeviceStatus, StorageType, DeviceBuyer, Repair, ListingPlatform, Note, Role, Customer, Location, InventoryTransfer } from '../types';
 import { SellerCustomerField } from './SellerCustomerField';
 import { useSellerLink } from '../hooks/useSellerLink';
 import { CustomerDraft } from '../domain/customers';
@@ -18,6 +18,8 @@ import {
   effectiveDeviceType, hasPhoneFields, hasLaptopFields, hasBrandModel, hasCondition,
   requiresItemName, STORAGE_TYPES, strandedFields,
 } from '../domain/deviceSpecs';
+import { locationName } from '../domain/locations';
+import { isInTransit, transitLabel } from '../domain/transfers';
 import { AlertTriangle, Sparkles } from 'lucide-react';
 import { ImeiScanner } from './ImeiScanner';
 import { Wrench } from 'lucide-react';
@@ -82,6 +84,14 @@ interface Props {
   deviceWarrantyDays?: number;
   /** Ask the Cloud Function for a stock photo for this brand/model. */
   onFindStockPhoto?: (item: InventoryItem) => Promise<boolean>;
+  /**
+   * WHERE THIS DEVICE IS, and where it is going (multi-store stage 4). The
+   * device's own screen answers both, so "where is it" is on the record
+   * rather than only on the transfers screen. Optional: a single-store
+   * workspace passes neither and nothing is shown.
+   */
+  locations?: Location[];
+  activeTransfer?: InventoryTransfer;
 }
 
 const DEVICE_TYPES: DeviceType[] = ['Phone', 'Tablet', 'Laptop', 'Console', 'Watch', 'Desktop PC', 'Other'];
@@ -137,7 +147,7 @@ const CostField: React.FC<{
   return <Field label={label} value={value} onChange={onChange} type="number" onFocus={onFocus} />;
 };
 
-export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, initialDeviceType, canViewCost = false, deviceBuyers, onSave, onGenerateSku, onClose, linkedRepair, onCreateRepair, onOpenRepair, inventory = [], customers, onCreateCustomer, notes, noteRole, onOpenNote, onOpenDuplicate, workspaceId, currentUserId, onFindStockPhoto, deviceWarrantyDays }) => {
+export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, initialDeviceType, canViewCost = false, deviceBuyers, onSave, onGenerateSku, onClose, linkedRepair, onCreateRepair, onOpenRepair, inventory = [], customers, onCreateCustomer, notes, noteRole, onOpenNote, onOpenDuplicate, workspaceId, currentUserId, onFindStockPhoto, deviceWarrantyDays, locations = [], activeTransfer }) => {
   const [findingStock, setFindingStock] = useState(false);
   const [listingOpen, setListingOpen] = useState(false);
   // The device document is updated by the Cloud Function, so the new photo
@@ -428,6 +438,23 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, initialDe
                     {DEVICE_STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
                   </select>
                 </div>
+                {/* WHERE IT IS. In transit says where it is GOING and how long
+                    it has been on the way — the device's own screen should not
+                    make somebody open the transfers list to find out it is in
+                    a car. `deviceStatus` above is untouched by a transfer, so
+                    a device can be both in transit and in repair. */}
+                {locations.length > 0 && (
+                  <div>
+                    <label className={lbl}>Where it is</label>
+                    <p className={`px-3 py-2 text-sm font-semibold rounded-lg border ${isInTransit(f)
+                      ? 'bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300'
+                      : 'bg-slate-100 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200'}`}>
+                      {isInTransit(f)
+                        ? transitLabel(activeTransfer, id => locationName(locations, id) || id, Date.now())
+                        : (locationName(locations, f.locationId) || 'Not set')}
+                    </p>
+                  </div>
+                )}
                 {/* With no Brand or Model, this is a laptop's ONLY identity —
                     so it is the one thing the form insists on. A phone can
                     still be saved on an IMEI alone, exactly as before. */}

@@ -1,4 +1,5 @@
 import { DeviceType, InventoryItem, ItemKind, StorageType } from '../types';
+import { isInTransit } from './transfers';
 
 /**
  * WHICH FIELDS A DEVICE ACTUALLY HAS, AND WHICH TAB IT LIVES IN.
@@ -24,7 +25,7 @@ import { DeviceType, InventoryItem, ItemKind, StorageType } from '../types';
 
 /* ---------------- The tabs ---------------- */
 
-export type InvTab = 'phones' | 'laptops' | 'accessories' | 'other' | 'sold' | 'lowstock';
+export type InvTab = 'phones' | 'laptops' | 'accessories' | 'other' | 'intransit' | 'sold' | 'lowstock';
 
 /**
  * The device types the "Other" tab covers: everything that is a device but not
@@ -58,17 +59,33 @@ export const isSoldDevice = (item: Pick<InventoryItem, 'kind' | 'soldDate' | 'de
 /**
  * THE ONE TAB A ROW BELONGS IN — exactly one, for every row, always.
  *
- * SOLD CROSSES THE OTHER TABS. A sold laptop is in Sold and NOT in Laptops,
- * which is the one thing about this layout somebody could lose a device over,
- * so the Laptops tab says so on screen rather than leaving them to wonder.
+ * SOLD AND IN TRANSIT CROSS THE TYPE TABS. A sold laptop is in Sold and not in
+ * Laptops; a laptop in a car is in In Transit and not in Laptops. Both are the
+ * kind of thing somebody could lose a device over, so the type tabs say so on
+ * screen rather than leaving them to wonder.
+ *
+ * WHY IN TRANSIT IS ITS OWN TAB (multi-store stage 4). A device in transit is
+ * on neither store's shelf. Left in Phones with a marker beside it, it would
+ * sit in the list a staff member scans to answer "what can I sell" — markers
+ * get missed, and the failure is somebody promising a customer a phone that is
+ * in a car on the 410. It cannot simply disappear either: a device findable
+ * only through the transfers screen is a device nobody looks at. So the type
+ * tabs mean SELLABLE STOCK HERE, and transit is a state of its own, visible to
+ * both stores and the owner.
+ *
+ * SOLD IS CHECKED FIRST. A device with a sale recorded against it belongs in
+ * Sold even if a transfer was never received — the money is real, and the
+ * unreceived transfer is surfaced by the stale-transfer flag rather than by
+ * hiding the sale.
  *
  * `lowstock` is not returned here: it is a VIEW of the accessories tab (the
  * ones at or below their threshold), not a home of its own, so an accessory
  * that is low appears in both.
  */
-export const inventoryTabOf = (item: Pick<InventoryItem, 'kind' | 'deviceType' | 'soldDate' | 'deviceStatus'>): InvTab => {
+export const inventoryTabOf = (item: Pick<InventoryItem, 'kind' | 'deviceType' | 'soldDate' | 'deviceStatus' | 'inTransferId'>): InvTab => {
   if ((item.kind ?? 'device') === 'accessory') return 'accessories';
   if (isSoldDevice(item)) return 'sold';
+  if (isInTransit(item)) return 'intransit';
   const t = effectiveDeviceType(item);
   if (t === 'Laptop') return 'laptops';
   if (t === 'Phone') return 'phones';
@@ -77,7 +94,7 @@ export const inventoryTabOf = (item: Pick<InventoryItem, 'kind' | 'deviceType' |
 
 /** Does this row belong in the given tab? `lowstock` is handled by the caller. */
 export const inTab = (
-  item: Pick<InventoryItem, 'kind' | 'deviceType' | 'soldDate' | 'deviceStatus'>,
+  item: Pick<InventoryItem, 'kind' | 'deviceType' | 'soldDate' | 'deviceStatus' | 'inTransferId'>,
   tab: InvTab,
 ): boolean => (tab === 'lowstock' ? (item.kind ?? 'device') === 'accessory' : inventoryTabOf(item) === tab);
 
@@ -97,6 +114,14 @@ export const tabAddsType = (tab: InvTab): DeviceType | undefined => {
   if (tab === 'laptops') return 'Laptop';
   return undefined;
 };
+
+/**
+ * Tabs that hold SELLABLE STOCK AT A STORE — the ones an Add belongs on, and
+ * the ones whose counts answer "what can we sell". Sold and In Transit are
+ * states, not shelves: nothing is added to either.
+ */
+export const isStockTab = (tab: InvTab): boolean =>
+  tab === 'phones' || tab === 'laptops' || tab === 'other';
 
 /** Does an Add from this tab still need to ask which kind of device it is? */
 export const tabNeedsTypePicker = (tab: InvTab): boolean => tab === 'other';

@@ -21,6 +21,11 @@ export const INV_SECTIONS: { id: InvSection; label: string; slug: string }[] = [
   { id: 'laptops', label: 'Laptops', slug: 'laptops' },
   { id: 'accessories', label: 'Accessories', slug: 'accessories' },
   { id: 'other', label: 'Other', slug: 'other' },
+  // Multi-store stage 4. Its own tab because a device in a car is on neither
+  // store's shelf: left among the sellable stock it would be promised to a
+  // customer, and left out of every tab it would be findable only through the
+  // transfers screen. See domain/deviceSpecs.ts's inventoryTabOf.
+  { id: 'intransit', label: 'In Transit', slug: 'in-transit' },
   { id: 'sold', label: 'Sold', slug: 'sold' },
   { id: 'lowstock', label: 'Low Stock', slug: 'low-stock' },
 ];

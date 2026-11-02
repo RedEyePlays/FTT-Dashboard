@@ -268,7 +268,7 @@ describe('the tabs', () => {
 
   it('AND SAYS WHERE THE SOLD ONE WENT, rather than leaving someone to wonder', () => {
     const v = mount(view({ inventory: all, section: 'laptops' }));
-    expect(v.text()).toMatch(/In stock only/i);
+    expect(v.text()).toMatch(/In stock here only/i);
     expect(v.text()).toMatch(/Sold tab/i);
     v.unmount();
   });

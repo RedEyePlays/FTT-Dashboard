@@ -43,7 +43,7 @@ const PcBuildsView = lazy(() => import('./components/PcBuildsView').then(m => ({
 // Lazy like every other route: the Firebase Storage SDK and the image
 // resizing only load for the people who actually scan receipts.
 const ReceiptsView = lazy(() => import('./components/ReceiptsView').then(m => ({ default: m.ReceiptsView })));
-import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, DeviceBuyer, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission, Repair, RepairBatch, TimeEntry, PayPeriodPaid, PayPeriodApproval, BreakReason, SalesTransaction, CashReconciliation, StaffNote, BalancePayment, Expense, RecurringExpense, RefundSplit, StaffBonus, KioskStaff, CashDrawerEntry, AppUser, PcBuild, Receipt, ReceiptEntered } from './types';
+import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, DeviceBuyer, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission, Repair, RepairBatch, TimeEntry, PayPeriodPaid, PayPeriodApproval, BreakReason, SalesTransaction, CashReconciliation, StaffNote, BalancePayment, Expense, RecurringExpense, RefundSplit, StaffBonus, KioskStaff, CashDrawerEntry, AppUser, PcBuild, Receipt, ReceiptEntered, InventoryTransfer } from './types';
 import { skuPrefix, nextSku } from './services/sku';
 import { BUILD_STATUS_LABEL, buildToInventoryItem } from './domain/pcBuild';
 import { REPAIR_PREFIX, BATCH_PREFIX, applyTechEdit, techUpdateAuditPlan, repairSalePrefill, completeRepair, completeRepairSale, dateToEpochMs, isRepairOpen, flagDeviceForRepair, restoredDeviceStatus } from './domain/repairs';
@@ -75,6 +75,7 @@ import { switchUser as callSwitchUser, switchErrorMessage } from './services/swi
 import {
   saveMeta, saveItem, saveItemSettled, deleteItem, deleteInventoryItem, syncArray, allocateSku,
   logActivityDoc, commitSale, voidSale, returnSale, collectLayawayBalance, commitCashReconciliation, seedSampleData,
+  commitTransferSend, commitTransferReceive, commitTransferCancel,
   updateUserDoc, setInvite, deleteInvite,
   logAudit, exportWorkspaceData, recordBackup, saveSettings,
   saveTimeEntry, savePayPeriodPaid, deletePayPeriodPaid, savePayPeriodApproval, deletePayPeriodApproval,
@@ -102,6 +103,10 @@ import { expectedCashForDate, expectedCashForDateAt, cashDrawerSummary, drawerCa
 import { drawersAt, drawerOn, drawerIdFor, drawerLocationId } from './domain/drawerKey';
 import { locationName, defaultLocation } from './domain/locations';
 import { kioskStoreFor } from './domain/kiosk';
+import {
+  buildTransfer, applySend, applyReceive, applyCancel, markReceived, markCancelled,
+  canReceive as canReceiveTransfer, canCancel as canCancelTransfer, checkSend, staleTransfers,
+} from './domain/transfers';
 import { clockInStoreChoices, canClockInAt } from './domain/shiftLocation';
 import { useActiveStore } from './hooks/useActiveStore';
 import { StorePicker } from './components/StorePicker';
@@ -177,7 +182,7 @@ const App: React.FC = () => {
     data, notes, setNotes, tasks, setTasks,
     deviceBuyers, dropOffs, settlements, settlementsLoaded, salesTransactions, customers, repairs, repairBatches, pcBuilds,
     timeEntries, payPeriods, payPeriodApprovals, staffBonuses, kioskStaff, cashReconciliations, staffNotes, expenses, recurringExpenses,
-    skuCounters, setSkuCounters, activityLog, lastBackup, settings, receipts, locations,
+    skuCounters, setSkuCounters, activityLog, lastBackup, settings, receipts, locations, transfers,
     dbLoading, dbError, reconnect, refusedCollections, enableExtendedData, enableCashData,
     deviceBuyersRef, dropOffsRef, settlementsRef, customersRef, salesTransactionsRef,
     repairsRef, repairBatchesRef, skuRef, dataRef,
@@ -1950,6 +1955,110 @@ const App: React.FC = () => {
   ), [storeDrawers, storeCashSalesFor, todayCarryOver, today]);
   const todayRecon = storeDrawers.find(r => r.date === today);
 
+  /* ---------------- Moving stock between stores (multi-store stage 4) ------ */
+  //
+  // THREE ACTS, each one atomic. The transfer record and every device it
+  // touches are written in a single batch (services/firestoreDb.ts), so a
+  // device can never be marked in transit without the record that says where
+  // it is going, and a record can never claim a device that is still on the
+  // shelf.
+  //
+  // NO MONEY MOVES. None of these writes a transaction, an expense or a
+  // drawer entry, and none touches salePrice, soldDate, purchaseCost or
+  // repairCost — a transfer is not a sale and not a purchase. The only P&L
+  // effect is indirect: the eventual sale lands at whichever store the device
+  // is at by then, with the cost that travelled with it.
+
+  const handleSendTransfer = async (input: {
+    toLocationId: string; items: InventoryItem[]; note?: string; overriddenIds: string[];
+  }) => {
+    if (!uid || !appUser || !allow('inventory.edit')) return;
+    if (!activeLocationId || !input.toLocationId || input.toLocationId === activeLocationId) return;
+    // Re-checked here, not merely in the dialog: a reserved device needs the
+    // deliberate override, and a sold or already-moving one never goes.
+    const { sendable, overridden } = checkSend(input.items, { overrideReservedIds: input.overriddenIds });
+    if (sendable.length === 0) return;
+    const now = Date.now();
+    const transfer = buildTransfer({
+      id: newId(), items: sendable, fromLocationId: activeLocationId, toLocationId: input.toLocationId,
+      actor: { id: appUser.id, email: appUser.email }, now, note: input.note,
+      overriddenIds: overridden.map(i => i.id),
+    });
+    const patched = sendable.map(i => applySend(i, transfer.id));
+    try {
+      await commitTransferSend(uid, {
+        transfer, items: patched,
+        activity: [mkActivity(`${sendable.length} device${sendable.length === 1 ? '' : 's'} sent to ${locationName(locations, input.toLocationId)}`)],
+      });
+    } catch (e) {
+      writeFailed('That transfer', e, 'Nothing was sent — the devices are still on the shelf.');
+      return;
+    }
+    audit('transfer.send', 'transfer', transfer.id, undefined, {
+      from: activeLocationId, to: input.toLocationId, itemIds: transfer.itemIds,
+      count: sendable.length, valueAtSend: transfer.valueAtSend,
+      reservedOverrides: transfer.reservedOverrides,
+    });
+  };
+
+  const handleReceiveTransfer = async (transfer: InventoryTransfer) => {
+    if (!uid || !appUser || !allow('inventory.edit')) return;
+    // THE SENDER CANNOT RECEIVE THEIR OWN TRANSFER, and only staff at the
+    // destination can receive at all. firestore.rules says the same —
+    // the receive is the only step that catches a device that never arrived.
+    if (!canReceiveTransfer(appUser, locations, transfer)) return;
+    const now = Date.now();
+    const items = transfer.itemIds
+      .map(id => dataRef.current.find(i => i.id === id))
+      .filter((i): i is InventoryItem => !!i)
+      // THE LOCATION MOVES HERE AND NOWHERE ELSE.
+      .map(i => applyReceive(i, transfer.toLocationId));
+    try {
+      await commitTransferReceive(uid, {
+        transfer: markReceived(transfer, { id: appUser.id, email: appUser.email }, now),
+        items,
+        activity: [mkActivity(`${items.length} device${items.length === 1 ? '' : 's'} received at ${locationName(locations, transfer.toLocationId)}`)],
+      });
+    } catch (e) {
+      writeFailed('That receipt', e, 'The transfer is still showing as in transit.');
+      return;
+    }
+    audit('transfer.receive', 'transfer', transfer.id, { status: 'in_transit' }, {
+      status: 'received', to: transfer.toLocationId, itemIds: transfer.itemIds, count: items.length,
+    });
+  };
+
+  const handleCancelTransfer = async (transfer: InventoryTransfer) => {
+    if (!uid || !appUser || !allow('inventory.edit')) return;
+    // The sender or the owner — never the receiving store, whose "it never
+    // arrived so I'll cancel it" would erase a discrepancy somebody needs to
+    // chase (domain/transfers.ts).
+    if (!canCancelTransfer(appUser, transfer)) return;
+    if (!window.confirm(
+      `Cancel this transfer?\n\nThe ${transfer.itemIds.length} device${transfer.itemIds.length === 1 ? '' : 's'} go back on ${locationName(locations, transfer.fromLocationId)}'s shelf, unchanged. `
+      + 'Only do this if they never left — if they were sent and have not arrived, chase them instead.',
+    )) return;
+    const now = Date.now();
+    const items = transfer.itemIds
+      .map(id => dataRef.current.find(i => i.id === id))
+      .filter((i): i is InventoryItem => !!i)
+      .map(applyCancel);
+    try {
+      await commitTransferCancel(uid, {
+        transfer: markCancelled(transfer, { id: appUser.id, email: appUser.email }, now),
+        items,
+        activity: [mkActivity(`Transfer to ${locationName(locations, transfer.toLocationId)} cancelled`)],
+      });
+    } catch (e) {
+      writeFailed('That cancellation', e, 'The transfer is still showing as in transit.');
+      return;
+    }
+    audit('transfer.cancel', 'transfer', transfer.id, { status: 'in_transit' }, {
+      status: 'cancelled', from: transfer.fromLocationId, to: transfer.toLocationId,
+      itemIds: transfer.itemIds, daysInTransit: Math.floor((now - transfer.sentAt) / 86_400_000),
+    });
+  };
+
   const handleBulkImport = (items: InventoryItem[]) => {
     if (uid) items.forEach(it => saveItem(uid, collectionFor(it), it));
     goInventory(DEFAULT_INV_SECTION);
@@ -3571,6 +3680,8 @@ const App: React.FC = () => {
               ? <Dashboard data={data} salesTransactions={salesTransactions} activity={activityLog} repairs={repairs} repairBatches={repairBatches} canViewProfit={allow('reports.profit.summary')} onViewAnalytics={() => navigate('analytics')} onViewRepairs={allow('repairs.manage') ? () => navigate('repairs') : undefined} booksStartDate={settings.operations.booksStartDate}
                   cashReconciliations={allow('cash.reconcile') ? cashReconciliations : undefined}
                   drawerStoreName={locations.length > 1 ? (r => locationName(locations, drawerLocationId(r, defaultLocationId))) : undefined}
+                  transfers={transfers}
+                  onViewInventoryTransfers={() => goInventory('intransit')}
                   onViewCash={allow('cash.reconcile') ? () => navigate('reports') : undefined}
                   onViewLayaways={allow('cash.reconcile') ? () => navigate('layaways') : undefined}
                   payrollDue={allow('payroll.manage') ? dashboardPayrollDue : undefined}
@@ -3777,6 +3888,13 @@ const App: React.FC = () => {
               userId={appUser.id}
               section={invSection}
               onSelectSection={goInventory}
+              locations={locations}
+              transfers={transfers}
+              me={appUser}
+              activeLocationId={activeLocationId}
+              onSendTransfer={allow('inventory.edit') ? handleSendTransfer : undefined}
+              onReceiveTransfer={allow('inventory.edit') ? handleReceiveTransfer : undefined}
+              onCancelTransfer={allow('inventory.edit') ? handleCancelTransfer : undefined}
               onSave={handleSaveInventoryItem}
               onUpdate={handleUpdateItem}
               onDelete={handleDeleteItem}
