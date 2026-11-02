@@ -109,6 +109,7 @@ import {
 } from './domain/transfers';
 import { clockInStoreChoices, canClockInAt } from './domain/shiftLocation';
 import { useActiveStore } from './hooks/useActiveStore';
+import { useReportScope } from './hooks/useReportScope';
 import { StorePicker } from './components/StorePicker';
 import { useToday } from './hooks/useToday';
 import { duePeriodsFor, buildRecurringExpense, canMutateExpense } from './domain/expenses';
@@ -522,6 +523,19 @@ const App: React.FC = () => {
     activeLocationId, activeLocation, permitted: permittedStores, setActiveLocationId,
   } = useActiveStore(appUser, locations);
   const defaultLocationId = useMemo(() => defaultLocation(locations)?.id || '', [locations]);
+  /* ------------- WHOSE NUMBERS THE REPORTS SHOW (multi-store stage 5) -------------
+   *
+   * ONE scope for the Dashboard, Owner Analytics and the Reports tabs, so no
+   * two money screens can disagree about which shop is on display. It is
+   * DELIBERATELY SEPARATE from `activeLocationId` above: that is a physical
+   * fact about where this iPad is and which till it writes to, and reading the
+   * other shop's P&L must not move it. See hooks/useReportScope.ts.
+   *
+   * With no store list this resolves to '' — the combined books, which is
+   * exactly what every figure is today.
+   */
+  const { scope: reportScope, choices: scopeChoices, setScope: setReportScope } =
+    useReportScope(appUser, locations);
   // WHICH STORE THIS IPAD IS, for a kiosk device account (multi-store stage
   // 3). Resolved from the DEVICE'S OWN account record — never from the person
   // punching, and never from the store list, which a kiosk deliberately does
@@ -1732,6 +1746,26 @@ const App: React.FC = () => {
     }
     saveExpense(uid, next).catch(e => writeFailed('The expense', e, 'It is not in the books.'));
     audit(isNew ? 'expense.create' : 'expense.update', 'expense', next.id, before, next);
+  };
+
+  /**
+   * RETAG ONE EXPENSE'S STORE (multi-store stage 5).
+   *
+   * Its own handler rather than a path through handleSaveExpense, because it
+   * is the ONLY expense edit an owner may make to a row somebody else
+   * submitted: the whole point is sorting historical and company costs out of
+   * the default store's P&L, and most of those rows were entered by whoever
+   * was on shift. Owner-only (`expenses.viewAll`), audited like any other
+   * expense change, and it touches NOTHING but the tag — not the amount, not
+   * the date, not the drawer link, so no money moves.
+   */
+  const handleRetagExpense = (expense: Expense, locationId: string) => {
+    if (!uid || !allow('expenses.viewAll') || !locationId) return;
+    const before = expenses.find(e => e.id === expense.id);
+    if (!before) return;
+    const next: Expense = { ...before, locationId };
+    saveExpense(uid, next).catch(e => writeFailed('That store tag', e, 'It was not saved.'));
+    audit('expense.update', 'expense', next.id, { locationId: before.locationId }, { locationId });
   };
 
 
@@ -3711,7 +3745,8 @@ const App: React.FC = () => {
                   payrollDue={allow('payroll.manage') ? dashboardPayrollDue : undefined}
                   onViewPayroll={allow('payroll.manage') ? () => navigate('timeclock') : undefined}
                   settlements={allow('reports.profit.summary') && settlementsLoaded ? settlements : undefined}
-                  onScanReceipt={allow('expenses.add') ? () => navigate('receipts') : undefined} />
+                  onScanReceipt={allow('expenses.add') ? () => navigate('receipts') : undefined}
+                  locations={locations} scope={reportScope} scopeChoices={scopeChoices} onChangeScope={setReportScope} />
               : <div className="text-center text-slate-400 py-20">You don't have access to reports.</div>
           )}
           {view === 'layaways' && allow('sales.complete') && (
@@ -3726,7 +3761,8 @@ const App: React.FC = () => {
           )}
           {view === 'analytics' && (
             (appUser.role === 'owner' || appUser.role === 'manager') && allow('reports.profit.detailed')
-              ? <OwnerAnalytics salesTransactions={salesTransactions} repairs={repairs} inventory={data} customers={customers} auditLogs={auditLogs} activity={activityLog} settlements={settlements} booksStartDate={settings.operations.booksStartDate} darkMode={darkMode} />
+              ? <OwnerAnalytics salesTransactions={salesTransactions} repairs={repairs} inventory={data} customers={customers} auditLogs={auditLogs} activity={activityLog} settlements={settlements} booksStartDate={settings.operations.booksStartDate} darkMode={darkMode}
+                  locations={locations} scope={reportScope} scopeChoices={scopeChoices} onChangeScope={setReportScope} />
               : <div className="text-center text-slate-400 py-20">Owner analytics are restricted to owners (and managers granted financial access).</div>
           )}
           {view === 'reports' && (
@@ -3747,7 +3783,9 @@ const App: React.FC = () => {
                   canViewDetailedProfit={allow('reports.profit.detailed')}
                   onSaveExpense={handleSaveExpense} onDeleteExpense={handleDeleteExpense}
                   onSaveRecurringExpense={handleSaveRecurringExpense} onDeleteRecurringExpense={handleDeleteRecurringExpense}
-                  onGenerateRecurringExpense={handleGenerateRecurringExpense} onSkipRecurringPeriod={handleSkipRecurringPeriod} />
+                  onGenerateRecurringExpense={handleGenerateRecurringExpense} onSkipRecurringPeriod={handleSkipRecurringPeriod}
+                  locations={locations} reportScope={reportScope} scopeChoices={scopeChoices} onChangeScope={setReportScope}
+                  onRetagExpense={allow('expenses.viewAll') ? handleRetagExpense : undefined} />
               : <div className="text-center text-slate-400 py-20">Reports are restricted to owners and managers.</div>
           )}
           {view === 'customers' && allow('reports.view') && (

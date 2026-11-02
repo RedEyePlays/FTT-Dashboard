@@ -204,6 +204,12 @@ export const buildRecurringExpense = (
     createdAt: now,
     recurringId: r.id,
     recurringPeriod: period.key,
+    // The template's store tag travels with every expense it posts — so a
+    // tagged rent template never generates an untagged month, and an
+    // untagged template keeps behaving exactly as it did (multi-store
+    // stage 5). Omitted entirely rather than set to '', since Firestore
+    // rejects undefined and an empty string is not a store.
+    ...(r.locationId ? { locationId: r.locationId } : {}),
   };
 };
 

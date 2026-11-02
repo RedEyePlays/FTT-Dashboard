@@ -616,9 +616,16 @@ export interface Expense {
    * and are tagged to the COMPANY, as are the app's own running costs and the
    * owner's pay. Company costs appear only in the combined P&L.
    *
-   * OPTIONAL, AND ABSENT MEANS "AS BEFORE" — an untagged expense behaves
-   * exactly as it does today and shows in the combined P&L only. Historical
-   * expenses are deliberately NOT backfilled: see backfillLocationIds.
+   * OPTIONAL. An untagged expense is counted in the combined P&L and, because
+   * stage 5 resolves an untagged record to the DEFAULT store, in that store's
+   * too — it can never vanish from either. The Expenses ledger lists every
+   * untagged row with a one-tap retag so a company cost can be moved out of
+   * both stores; the backfill assigns historical expenses to the default
+   * store so they are visible there rather than silently counted.
+   *
+   * NEW EXPENSES ARE NEVER UNTAGGED: the entry form requires an answer and
+   * offers no default (domain/storeScope.ts's expenseNeedsStore). A defaulted
+   * tag is how rent ends up on the wrong store.
    */
   locationId?: string;
 }
@@ -766,6 +773,21 @@ export interface RecurringExpense {
   createdAt: number;
   generatedPeriods?: string[];    // period keys already turned into an Expense
   skippedPeriods?: string[];      // period keys explicitly skipped for this template
+  /**
+   * WHICH STORE THIS RECURRING COST BELONGS TO, or COMPANY_LOCATION_ID for one
+   * that belongs to neither (multi-store stage 5). Copied onto every Expense
+   * the template generates (domain/expenses.ts's buildRecurringExpense).
+   *
+   * THE TEMPLATE IS WHERE THIS MATTERS MOST. Rent is the canonical recurring
+   * expense and the canonical per-store cost; a template with no tag would
+   * quietly post an untagged expense every single month, so the tag is asked
+   * for once, at the template, rather than re-asked on every period.
+   *
+   * OPTIONAL, AND ABSENT MEANS "AS BEFORE" — templates created before this
+   * generate untagged expenses exactly as they did, which read as the default
+   * store (see domain/storeScope.ts) and can be retagged in the ledger.
+   */
+  locationId?: string;
 }
 
 export interface ActivityEntry {

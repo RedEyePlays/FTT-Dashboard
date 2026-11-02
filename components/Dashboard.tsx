@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { InventoryItem, SalesTransaction, ActivityEntry, Repair, RepairBatch, CashReconciliation, Settlement, InventoryTransfer } from '../types';
+import { InventoryItem, SalesTransaction, ActivityEntry, Repair, RepairBatch, CashReconciliation, Settlement, InventoryTransfer, Location } from '../types';
 import { staleTransfers, TRANSFER_STALE_DAYS } from '../domain/transfers';
 import { unreconciledDays, isRecognizedSale } from '../domain/reports';
 import { dashboardPeriods, settlementsIncluded } from '../domain/dashboardPeriods';
@@ -13,6 +13,11 @@ import { isSoldDevice } from '../domain/repairVisibility';
 import { pendingRepairIssues, PENDING_REPAIR_STALE_DAYS } from '../domain/alerts';
 import { printSalesReceipt } from '../services/salesReceipt';
 import { getStoreProfile } from './SettingsModal';
+import {
+  ALL_STORES_SCOPE, StoreScope, allTxnInventoryIds, defaultStoreId, inTransitNote, inTransitValue,
+  scopeInventory, scopeRepairs, scopeSettlements, scopeTransactions, indexInventory,
+} from '../domain/storeScope';
+import { ScopeBadge, StoreScopePicker } from './StoreScopePicker';
 import {
   DollarSign, TrendingUp, CalendarDays, CalendarRange, Calendar, Smartphone, Package,
   Tag, Wrench, ShoppingCart, AlertTriangle, Clock, Receipt, Activity as ActivityIcon,
@@ -79,6 +84,24 @@ interface DashboardProps {
   // archive the paper never makes it into. Omitted for anyone without
   // 'expenses.add' (domain/receipt.ts's canUseReceipts).
   onScanReceipt?: () => void;
+  /* ---------------- Multi-store stage 5: whose numbers ----------------
+   *
+   * The SHARED reporting scope (hooks/useReportScope.ts) — the same one Owner
+   * Analytics and the Reports tabs use. It scopes the MONEY and STOCK tiles,
+   * the period cards, the repair counts and the recent-sales list, by
+   * filtering the arrays handed to the unchanged `dashboardPeriods` and the
+   * same inline snapshot as before (domain/storeScope.ts).
+   *
+   * THE ALERTS ARE DELIBERATELY NOT SCOPED, and each says which store it
+   * means: an uncounted till, a stuck repair or an unreceived transfer at the
+   * OTHER shop is exactly what nobody would otherwise notice, and a filter
+   * that hides it makes the flag worse than useless. Payroll-due is per
+   * person and spans both shops by design.
+   */
+  locations?: Location[];
+  scope?: StoreScope;
+  scopeChoices?: StoreScope[];
+  onChangeScope?: (s: StoreScope) => void;
   // settings.operations.booksStartDate — drawer alerts ignore days before it
   // (the shop wasn't running the till through the app then, so flagging them
   // is a permanent, unactionable warning).
@@ -100,8 +123,36 @@ const relTime = (ts: number) => {
 };
 const platformLabel = (p?: string) => (p && p !== 'None / In-Store' ? p : 'In-Store');
 
-export const Dashboard: React.FC<DashboardProps> = ({ data, salesTransactions, activity, repairs = [], repairBatches = [], canViewProfit = true, onViewAnalytics, onViewRepairs, cashReconciliations, drawerStoreName, transfers, onViewInventoryTransfers, onViewCash, onViewLayaways, payrollDue, onViewPayroll, booksStartDate, settlements, onScanReceipt }) => {
+export const Dashboard: React.FC<DashboardProps> = ({ data: allData, salesTransactions: allSales, activity, repairs: allRepairs = [], repairBatches = [], canViewProfit = true, onViewAnalytics, onViewRepairs, cashReconciliations, drawerStoreName, transfers, onViewInventoryTransfers, onViewCash, onViewLayaways, payrollDue, onViewPayroll, booksStartDate, settlements: allSettlements, onScanReceipt, locations = [], scope = ALL_STORES_SCOPE, scopeChoices = [], onChangeScope }) => {
   const mask = (v: string) => (canViewProfit ? v : '•••');
+  /* ---------------- The scoped arrays everything below reads ----------------
+   *
+   * For the combined books these are the very arrays that were passed in, by
+   * reference — so there is no second code path and every tile is the same
+   * figure it is today. The unscoped originals stay available under their
+   * `all*` names for the alerts, which must keep seeing both shops.
+   */
+  const defaultLocationId = useMemo(() => defaultStoreId(locations), [locations]);
+  const data = useMemo(
+    () => scopeInventory(allData, scope, defaultLocationId, allTxnInventoryIds(allSales)),
+    [allData, allSales, scope, defaultLocationId],
+  );
+  const salesTransactions = useMemo(
+    () => scopeTransactions(allSales, scope, indexInventory(allData), defaultLocationId),
+    [allSales, allData, scope, defaultLocationId],
+  );
+  const repairs = useMemo(() => scopeRepairs(allRepairs, scope, defaultLocationId), [allRepairs, scope, defaultLocationId]);
+  const settlements = useMemo(
+    () => (allSettlements ? scopeSettlements(allSettlements, scope, defaultLocationId) : undefined),
+    [allSettlements, scope, defaultLocationId],
+  );
+  // Stock on its way to the other shop is still this shop's asset until the
+  // other shop accepts it (stage 4 leaves `locationId` at the sender), so it
+  // is INSIDE the stock figures below — and named rather than folded in.
+  const transitNote = useMemo(
+    () => inTransitNote(inTransitValue(data, scope, defaultLocationId)),
+    [data, scope, defaultLocationId],
+  );
   const staleCash = useMemo(
     () => (cashReconciliations ? unreconciledDays(cashReconciliations, todayISO(), booksStartDate) : []),
     [cashReconciliations, booksStartDate],
@@ -110,7 +161,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, salesTransactions, a
   // whose ticket no longer exists. Both mean stock silently out of the sellable
   // pool with nobody looking at it — same informational nudge treatment as the
   // unreconciled-cash flag below, never a blocking modal.
-  const repairFlags = useMemo(() => pendingRepairIssues(data, repairs, Date.now()), [data, repairs]);
+  // UNSCOPED on purpose, like the unreconciled-cash flag beside it: stock
+  // silently out of the sellable pool at the other shop is precisely what
+  // nobody would otherwise look at.
+  const repairFlags = useMemo(() => pendingRepairIssues(allData, allRepairs, Date.now()), [allData, allRepairs]);
   // Unreceived for longer than TRANSFER_STALE_DAYS — see domain/transfers.ts
   // for why that threshold is the shortest in the app.
   const lateTransfers = useMemo(
@@ -227,7 +281,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, salesTransactions, a
       {/* Header */}
       <div className="flex items-center justify-between gap-4">
         <div>
-          <h2 className="text-2xl font-bold text-slate-900 dark:text-white">Dashboard</h2>
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-2xl font-bold text-slate-900 dark:text-white">Dashboard</h2>
+            {locations.length > 0 && <ScopeBadge scope={scope} locations={locations} />}
+          </div>
           <p className="text-slate-500 dark:text-slate-400 text-sm">Your store at a glance.</p>
         </div>
         {onViewAnalytics && (
@@ -236,6 +293,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, salesTransactions, a
           </button>
         )}
       </div>
+
+      {scopeChoices.length > 1 && onChangeScope && (
+        <StoreScopePicker scope={scope} choices={scopeChoices} locations={locations} onChange={onChangeScope} />
+      )}
 
       {/* Devices left flagged in repair — a long-open ticket, or none at all. */}
       {repairFlags.length > 0 && (
@@ -362,6 +423,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, salesTransactions, a
         <Tile icon={<DollarSign className="w-5 h-5" />} accent="slate" label="Inventory Cost" value={money(m.invCost)} />
         <Tile icon={<Tag className="w-5 h-5" />} accent="blue" label="Inventory Value" value={money(m.invValue)} />
       </div>
+      {transitNote && <p className="text-xs text-slate-500 dark:text-slate-400 -mt-3">{transitNote}</p>}
 
       {/* Attention + expected profit */}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">

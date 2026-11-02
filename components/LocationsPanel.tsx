@@ -4,6 +4,7 @@ import {
 } from 'lucide-react';
 import { Location } from '../types';
 import {
+  BACKFILL_COLLECTIONS_WITHOUT_EXPENSES,
   DEFAULT_BACKFILL_COLLECTIONS, LOCATION_PROBLEM_MESSAGE, LOCATION_TAGGED_COLLECTIONS,
   LocationTaggedCollection, activeLocations, canDeactivate, checkLocation,
   deactivateLocation, defaultLocation, reactivateLocation, renameLocation,
@@ -52,7 +53,10 @@ export const LocationsPanel: React.FC<{
   const [error, setError] = useState<string | null>(null);
 
   const [running, setRunning] = useState(false);
-  const [withExpenses, setWithExpenses] = useState(false);
+  // ON by default since multi-store stage 5 — see DEFAULT_BACKFILL_COLLECTIONS
+  // in domain/locations.ts for why that default was reversed, and the Expenses
+  // ledger for how a company cost is moved back out of a store afterwards.
+  const [withExpenses, setWithExpenses] = useState(true);
   const [progress, setProgress] = useState<Record<string, { scanned: number; written: number; skipped: number }>>({});
   const [finished, setFinished] = useState(false);
 
@@ -123,8 +127,8 @@ export const LocationsPanel: React.FC<{
   const runBackfill = async () => {
     if (!workspaceId || !target) return;
     const collections: LocationTaggedCollection[] = withExpenses
-      ? [...LOCATION_TAGGED_COLLECTIONS]
-      : DEFAULT_BACKFILL_COLLECTIONS;
+      ? DEFAULT_BACKFILL_COLLECTIONS
+      : BACKFILL_COLLECTIONS_WITHOUT_EXPENSES;
     if (!window.confirm(
       `Assign ${collections.length} collections to ${target.name}?\n\n`
       + 'This rewrites every device, sale, repair, drop-off, settlement, shift and drawer record that does not already have a store.\n\n'
@@ -280,14 +284,17 @@ export const LocationsPanel: React.FC<{
           <label className="flex items-start gap-2 text-[11px] text-slate-600 dark:text-slate-300">
             <input type="checkbox" className="mt-0.5" checked={withExpenses}
               onChange={e => setWithExpenses(e.target.checked)} />
-            {/* Off by default, and the reason is stated rather than buried:
-                nothing in a stored expense says whether it was a store cost or
-                a company cost. */}
+            {/* ON by default since stage 5. Leaving an expense untagged no
+                longer keeps it out of the default store's P&L — it only hides
+                it there, which is worse. The retag is one tap in the ledger. */}
             <span>
-              Also assign historical <strong>expenses</strong> to {target.name}. Off by default: parts
-              orders, the app's own costs and your own pay are company costs, not {target.name}'s, and
-              nothing in an old expense says which is which. Left off, they stay untagged and keep
-              showing in the combined P&amp;L exactly as they do today.
+              Also assign historical <strong>expenses</strong> to {target.name}. <strong>Recommended.</strong>{' '}
+              Parts orders, the app's own costs and your own pay are company costs rather than
+              {' '}{target.name}'s, and nothing in an old expense says which is which — so they are tagged
+              to {target.name} where you can SEE them, and the Expenses tab lists anything untagged with a
+              one-tap <em>Company</em> retag that takes a cost out of both stores' P&amp;L and leaves it in
+              the combined one. Turning this off does NOT keep them out of {target.name}'s figures: an
+              untagged expense is counted there either way — it just stays invisible.
             </span>
           </label>
           <button onClick={() => void runBackfill()} disabled={running || !workspaceId}

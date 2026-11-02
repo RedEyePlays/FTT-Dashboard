@@ -4,6 +4,7 @@ import { join } from 'path';
 import { execSync } from 'child_process';
 import { COMPANY_LOCATION_ID, Location } from '../types';
 import {
+  BACKFILL_COLLECTIONS_WITHOUT_EXPENSES,
   DEFAULT_BACKFILL_COLLECTIONS, LOCATION_TAGGED_COLLECTIONS, activeLocations,
   canDeactivate, canDeleteLocation, checkLocation, deactivateLocation,
   defaultLocation, hasLocations, isLocationTagged, locationName,
@@ -207,17 +208,27 @@ describe('which collections carry a location — and the omissions', () => {
     }
   });
 
-  it('EXPENSES ARE NOT BACKFILLED BY DEFAULT', () => {
-    // Everything else predating the second store genuinely happened at
-    // Brampton. An expense did not necessarily BELONG to it: parts orders, the
-    // app's own costs and the owner's pay are company costs, and nothing in a
-    // stored expense says which is which. Defaulting them all to Brampton
-    // would make Brampton bear company costs in stage 5's per-store P&L — a
-    // wrong number presented as a fact.
+  it('EXPENSES ARE BACKFILLED TOO — stage 5 reversed stage 1 on this, deliberately', () => {
+    // STAGE 1 EXCLUDED THEM, and the reasoning was sound on its own terms:
+    // parts orders, the app's own costs and the owner's pay are company costs,
+    // nothing in a stored expense says which is which, and tagging them all
+    // Brampton makes Brampton bear company costs.
+    //
+    // WHAT CHANGED IS THE ALTERNATIVE. Stage 5 resolves an UNTAGGED record to
+    // the default store (domain/storeScope.ts — a record must land in exactly
+    // one store and can never vanish), so leaving an expense untagged no
+    // longer keeps it out of Brampton's P&L. It only keeps it INVISIBLE: same
+    // figure, nobody able to see it or fix it. So they are tagged where the
+    // owner can see them, and the ledger offers a one-tap Company retag.
     expect(isLocationTagged('expenses')).toBe(true);
-    expect(DEFAULT_BACKFILL_COLLECTIONS).not.toContain('expenses');
-    // Everything else is in.
-    expect(DEFAULT_BACKFILL_COLLECTIONS.length).toBe(LOCATION_TAGGED_COLLECTIONS.length - 1);
+    expect(DEFAULT_BACKFILL_COLLECTIONS).toContain('expenses');
+    expect(DEFAULT_BACKFILL_COLLECTIONS.length).toBe(LOCATION_TAGGED_COLLECTIONS.length);
+    // The opt-out still exists for an owner who would rather not write it.
+    expect(BACKFILL_COLLECTIONS_WITHOUT_EXPENSES).not.toContain('expenses');
+    // And the retag path the reversal depends on is real, not a plan.
+    const scope = readFileSync(join(__dirname, 'storeScope.ts'), 'utf8');
+    expect(scope).toMatch(/export const untaggedExpenses/);
+    expect(scope).toMatch(/export const expenseNeedsStore/);
   });
 });
 
@@ -230,13 +241,22 @@ describe('WHAT EACH STAGE DID, AND DID NOT, CHANGE', () => {
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/^\s*\/\/.*$/gm, '');
 
-  it('STAGE 5 HAS NOT STARTED — nothing filters the books or the dashboard by store', () => {
+  it('EVERY FILE THAT READS A RECORD\'S STORE IS ON THIS LIST', () => {
     // Stage 1's promise was that NOTHING read the field. Stage 2 ended that
     // for the cash drawer, stage 3 for a shift's store, stage 4 for moving
-    // stock between stores. A per-store P&L and dashboard (stage 5) have NOT
-    // started, and this list is what keeps them from starting by accident —
-    // a new file reading the field trips it. Note what is NOT here:
-    // domain/reports.ts and domain/analytics.ts.
+    // stock between stores, and stage 5 for the books and the dashboard.
+    //
+    // THE LIST IS STILL THE POINT. It is now an inventory of everywhere the
+    // field is read rather than a claim that almost nowhere is, and a new file
+    // reading it still trips this test — which is what forces the decision to
+    // be argued in a review instead of appearing in a diff.
+    //
+    // NOTE WHAT IS STILL NOT HERE, and must not be: domain/reports.ts does
+    // appear (the drawer's own arithmetic, from stage 2) but neither it nor
+    // domain/analytics.ts contains a word about SCOPING. Stage 5 filters the
+    // arrays those functions are given — it never taught them what a store
+    // is, which is the whole reason the unfiltered figures cannot drift. The
+    // assertion below pins that directly.
     const allowed = [
       // The field, the store list, and the two keys built on them.
       'types.ts', 'domain/locations.ts', 'domain/drawerKey.ts', 'domain/shiftLocation.ts',
@@ -267,6 +287,15 @@ describe('WHAT EACH STAGE DID, AND DID NOT, CHANGE', () => {
       'rules-tests/locations.rules.test.ts', 'rules-tests/cashDrawerStore.rules.test.ts',
       'rules-tests/firestore.rules.test.ts', 'rules-tests/shiftLocation.rules.test.ts',
       'rules-tests/kiosk.rules.test.ts',
+      // Stage 5: seeing one store's numbers. The filtering lives in ONE
+      // module; the money screens read the scope and name it.
+      'domain/storeScope.ts', 'domain/storeScope.test.ts',
+      'components/StoreScopePicker.tsx', 'hooks/useReportScope.ts',
+      'components/ReportsView.tsx', 'components/OwnerAnalytics.tsx',
+      'components/Dashboard.tsx',
+      // A recurring template carries the tag its generated expenses get.
+      'domain/expenses.ts', 'domain/expenses.test.ts',
+      'components/reportsStoreScope.test.tsx',
     ];
     const hits = execSync(
       "grep -rln 'locationId' --include=*.ts --include=*.tsx . | grep -v node_modules || true",
@@ -274,6 +303,25 @@ describe('WHAT EACH STAGE DID, AND DID NOT, CHANGE', () => {
     ).trim().split('\n').filter(Boolean).map(f => f.replace(/^\.\//, ''));
 
     expect(hits.filter(f => !allowed.includes(f))).toEqual([]);
+  });
+
+  it('STAGE 5 FILTERS THE INPUTS — it never taught the reports what a store is', () => {
+    // The load-bearing structural claim of the whole stage. `profitAndLoss`
+    // and `computeAnalytics` take arrays and know nothing about locations;
+    // stage 5 filters those arrays and calls them unchanged. That is what
+    // makes "with no filter applied, every figure is identical" true by
+    // construction rather than by a test that could go stale.
+    //
+    // If either of these ever needs a location, the per-store figures stop
+    // being a view of the same books and start being a second computation —
+    // so it has to be a deliberate, argued change, not a convenience.
+    expect(code('domain/analytics.ts')).not.toMatch(/locationId/);
+    // reports.ts reads a DRAWER's store (stage 2) and nothing else: no scope,
+    // no company sentinel, no store filtering of revenue, payroll or expenses.
+    const reports = code('domain/reports.ts');
+    expect(reports).not.toMatch(/StoreScope|scopeProfitLossInput|COMPANY_LOCATION_ID/);
+    // And the dependency runs one way: the filter imports nothing from them.
+    expect(code('domain/storeScope.ts')).not.toMatch(/from '\.\/(reports|analytics)'/);
   });
 
   it('A RECORD WITH NO LOCATION STILL BEHAVES, everywhere that reads one', () => {
