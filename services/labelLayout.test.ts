@@ -1,7 +1,9 @@
+import { laptopPrintSpecs } from '../domain/deviceSpecs';
 import { describe, it, expect } from 'vitest';
 import {
   labelPrintDoc, LabelMedia, LabelContent, LabelImages, LabelOpts, MAX_PUSH_DOWN_MM, maxSafePushDownMm,
-  shortLabelSku, nonDymoQrSizeMm, nonDymoFontSizesMm, estimateTextWidthMm, textColumnWidthMm, deviceSubLine,
+  shortLabelSku, nonDymoQrSizeMm, nonDymoFontSizesMm, estimateTextWidthMm,
+  estimateProportionalTextWidthMm, textColumnWidthMm, deviceSubLine,
   shortRepairCode, issueRowWidthMm, ISSUE_MAX_LINES,
 } from './labelLayout';
 import { INVENTORY_SKU_PREFIX } from './sku';
@@ -598,5 +600,131 @@ describe('wholesale repair label — no line number, smaller text, a readable is
     // silently ignored (which is how content ends up printing off the edge).
     const noIssue = maxSafePushDownMm(size2x1, { ...wholesale, issue: undefined }, { showBarcode: false, hasBarcodeImage: false, variant: 'repairWholesale' });
     expect(noIssue).toBeGreaterThan(head);
+  });
+});
+
+/* ======================================================================== *
+ * A LAPTOP'S DEVICE LABEL
+ *
+ * The second half of "printed labels still think every device is a phone".
+ * The shelf tag (services/shelfTag.test.ts) carries all four laptop specs;
+ * this label is the tighter format, and what it DROPS is as much the point as
+ * what it prints. Both read the split from the one shared definition
+ * (domain/deviceSpecs.ts's laptopPrintSpecs) so they cannot disagree.
+ * ======================================================================== */
+
+const LAPTOP = {
+  deviceType: 'Laptop', cpu: 'i7-12700H', ram: '32GB', storage: '1TB', storageType: 'SSD',
+  screenSize: '15.6"', gpu: 'RTX 3050 Ti',
+  // A real record keeps whatever was typed into it — nothing clears phone
+  // fields off a retyped device (domain/deviceSpecs.ts's strandedFields).
+  color: 'Silver', batteryHealth: '89%',
+};
+
+describe('deviceSubLine — a laptop gets laptop content, a phone gets phone content', () => {
+  it('a laptop reads CPU · RAM · Storage', () => {
+    expect(deviceSubLine(LAPTOP)).toBe('i7-12700H · 32GB · 1TB SSD');
+  });
+
+  it('and never the phone fields, even when the record still carries them', () => {
+    const sub = deviceSubLine(LAPTOP)!;
+    expect(sub).not.toContain('Silver');
+    expect(sub).not.toContain('Batt');
+    expect(sub).not.toContain('89%');
+  });
+
+  it('a phone is untouched, and so is an untyped legacy record', () => {
+    const phone = { storage: '256GB', color: 'Silver', batteryHealth: '89%' };
+    expect(deviceSubLine({ ...phone, deviceType: 'Phone' })).toBe('256GB · Silver · Batt 89%');
+    expect(deviceSubLine(phone)).toBe('256GB · Silver · Batt 89%');
+  });
+
+  it('an ACCESSORY never takes the laptop branch, whatever deviceType it carries', () => {
+    expect(deviceSubLine({ kind: 'accessory', deviceType: 'Laptop', storage: '256GB', color: 'Silver' }))
+      .toBe('256GB · Silver');
+  });
+
+  it('every other device type still reads the phone line — a KNOWN gap, not a forgotten one', () => {
+    // Tablets, watches, consoles and Desktop PCs fall through deliberately;
+    // each needs its own answer and none was asked for. Stated in the PR.
+    for (const deviceType of ['Tablet', 'Watch', 'Desktop PC']) {
+      expect(deviceSubLine({ deviceType, storage: '256GB', batteryHealth: '89%' })).toBe('256GB · Batt 89%');
+    }
+  });
+
+  it('collapses cleanly when a laptop has nothing filled in', () => {
+    expect(deviceSubLine({ deviceType: 'Laptop' })).toBeUndefined();
+    expect(deviceSubLine({ deviceType: 'Laptop', cpu: '  ' })).toBeUndefined();
+  });
+
+  it('leaves no stray separator around a missing spec', () => {
+    expect(deviceSubLine({ deviceType: 'Laptop', ram: '16GB' })).toBe('16GB');
+    expect(deviceSubLine({ deviceType: 'Laptop', cpu: 'i5-1135G7', storage: '512GB' })).toBe('i5-1135G7 · 512GB');
+    expect(deviceSubLine({ deviceType: 'Laptop', storageType: 'SSD' })).toBe('SSD');
+  });
+
+  it('reads the SAME string the shelf tag prints on its spec line — one definition, two surfaces', () => {
+    expect(deviceSubLine(LAPTOP)).toBe(laptopPrintSpecs(LAPTOP).main);
+  });
+
+  it('DROPS the GPU and the screen size, and that is a measured line budget', () => {
+    // Both are real specs and both are on the shelf tag. They are not here
+    // because they do not fit and this label ellipsises rather than wraps:
+    // with the GPU appended the sub line measures 60.5mm against the Dymo's
+    // 51.1mm text column and 68.5mm against the 4x6's 61.1mm. There is no
+    // sixth line to give them either — org/code/device/sub/serial are all in
+    // use and maxSafePushDownMm already models exactly that budget — and no
+    // free corner, since the QR is a flex sibling filling the row's height.
+    const sub = deviceSubLine(LAPTOP)!;
+    expect(sub).not.toContain('RTX');
+    expect(sub).not.toContain('15.6');
+  });
+
+  it('the laptop line FITS the real text column on the Dymo and the 4x6, with a long CPU name', () => {
+    // Re-derived from the same geometry helpers labelBody renders with, so
+    // this stays true if the QR size or padding is ever retuned. The numbers
+    // were confirmed in headless Chromium against the real rendered label —
+    // see the PR description for the measured table.
+    const worst = deviceSubLine({ deviceType: 'Laptop', cpu: 'Ryzen 7 5800H', ram: '32GB', storage: '1TB', storageType: 'SSD' })!;
+    expect(worst).toBe('Ryzen 7 5800H · 32GB · 1TB SSD');
+    for (const m of [{ id: 'dymo-36x89', w: 3.5039370078740157, h: 1.4173228346456694, label: 'Dymo', dymo: true },
+                     { id: '4x6', w: 4, h: 6, label: '4 x 6' }]) {
+      const col = textColumnWidthMm(m, { showQr: true });
+      const { fSub } = nonDymoFontSizesMm(m);
+      // The Dymo layout sets its own sub size (3.0mm) rather than reading
+      // nonDymoFontSizesMm; use the smaller of the two so this is the
+      // conservative check on both templates.
+      const font = m.dymo ? 3.0 : fSub;
+      // The PROPORTIONAL estimator — the sub line is Inter/Arial, not the
+      // monospace SKU/serial that estimateTextWidthMm is calibrated for.
+      expect(estimateProportionalTextWidthMm(worst, font), `${m.id} sub line must fit its column`).toBeLessThan(col);
+    }
+  });
+
+  it('the proportional estimator over-estimates the real rendered widths it is calibrated against', () => {
+    // Reference points measured in headless Chromium at these exact sizes,
+    // against the real font stack ('Inter', system-ui, Arial). Pinned so the
+    // ratio cannot be "tuned" later into under-estimating, which would turn a
+    // fit check into a false pass and put clipped text on paper.
+    const measured: [string, number, number][] = [
+      ['512GB · Unlocked · Battery 89%', 4.6, 71.68],
+      ['i7-12700H · 32GB · 1TB SSD', 3.0, 39.88],
+      ['Ryzen 7 5800H · 32GB · 1TB SSD', 3.0, 47.17],
+      ['Ryzen 7 5800H · 32GB · 1TB SSD', 3.4, 53.47],
+      ['256GB · Silver · Batt 89%', 3.0, 36.36],
+    ];
+    for (const [text, font, realMm] of measured) {
+      const est = estimateProportionalTextWidthMm(text, font);
+      expect(est, `${text} @${font}mm must not be under-estimated`).toBeGreaterThanOrEqual(realMm);
+      // …and not so far over that it rejects content that prints fine.
+      expect(est).toBeLessThan(realMm * 1.2);
+    }
+  });
+
+  it('the laptop spec line reaches the actual rendered label document', () => {
+    const html = labelPrintDoc('t', { id: '2x1', w: 2, h: 1, label: '2 x 1' },
+      { org: 'FlipThatTech', code: '0000029', device: 'Dell XPS 15 9520', sub: deviceSubLine(LAPTOP) },
+      {}, { showBarcode: false, showStatus: false });
+    expect(html).toContain('i7-12700H · 32GB · 1TB SSD');
   });
 });

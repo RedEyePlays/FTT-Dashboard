@@ -5,6 +5,7 @@ import {
   effectiveDeviceType, isSoldDevice, OTHER_DEVICE_TYPES,
   hasPhoneFields, hasLaptopFields, hasBrandModel, hasCondition, requiresItemName,
   laptopSpecLine, strandedFields, LAPTOP_SPEC_FIELDS,
+  laptopPrintSpecs, printsLaptopLayout,
 } from './deviceSpecs';
 import { INV_SECTIONS } from './inventoryNav';
 import { readFileSync } from 'fs';
@@ -322,5 +323,90 @@ describe('A LAPTOP IS STILL AN ORDINARY INVENTORY DEVICE', () => {
   it('and there is no laptop collection', () => {
     const db = readFileSync(join(__dirname, '..', 'services/firestoreDb.ts'), 'utf8');
     expect(db).not.toMatch(/'laptops'/);
+  });
+});
+
+/* ======================================================================== *
+ * A LAPTOP'S SPECS, SPLIT FOR PRINT
+ *
+ * `laptopSpecLine` above is for a screen that can scroll sideways. A printed
+ * label's width is fixed in millimetres and anything too long is silently
+ * ellipsised, so the two print surfaces (services/shelfTag.ts and the device
+ * label in services/labelLayout.ts) take the specs as three slots and place
+ * each where their own geometry allows. ONE definition, so they cannot
+ * disagree about what a laptop says.
+ * ======================================================================== */
+
+describe('laptopPrintSpecs', () => {
+  const full = {
+    cpu: 'i7-12700H', ram: '32GB', storage: '1TB', storageType: 'SSD' as const,
+    screenSize: '15.6"', gpu: 'RTX 3050 Ti',
+  };
+
+  it('splits into the machine\'s identity, the GPU, and the screen', () => {
+    expect(laptopPrintSpecs(full)).toEqual({
+      main: 'i7-12700H · 32GB · 1TB SSD',
+      gpu: 'RTX 3050 Ti',
+      screen: '15.6"',
+    });
+  });
+
+  it('keeps the screen size and the GPU OUT of the main line — they are placed separately', () => {
+    const { main } = laptopPrintSpecs(full);
+    expect(main).not.toContain('15.6');
+    expect(main).not.toContain('RTX');
+    // Unlike laptopSpecLine, which deliberately puts all five on one line.
+    expect(laptopSpecLine(full)).toContain('RTX 3050 Ti');
+    expect(laptopSpecLine(full)).toContain('15.6"');
+  });
+
+  it('storage type rides with the capacity rather than taking its own separator', () => {
+    expect(laptopPrintSpecs({ storage: '512GB', storageType: 'HDD' }).main).toBe('512GB HDD');
+    expect(laptopPrintSpecs({ storage: '512GB' }).main).toBe('512GB');
+    // A type with no capacity recorded is still worth saying.
+    expect(laptopPrintSpecs({ storageType: 'SSD' }).main).toBe('SSD');
+  });
+
+  it('returns EMPTY strings, never a dash or a stray separator, for what is not recorded', () => {
+    expect(laptopPrintSpecs({})).toEqual({ main: '', gpu: '', screen: '' });
+    expect(laptopPrintSpecs({ cpu: 'i5-1135G7' }).main).toBe('i5-1135G7');
+    expect(laptopPrintSpecs({ ram: '16GB' }).main).toBe('16GB');
+    expect(laptopPrintSpecs({ cpu: 'i5', storage: '512GB' }).main).toBe('i5 · 512GB');
+  });
+
+  it('treats whitespace as unset, so a field somebody spaced out prints nothing', () => {
+    expect(laptopPrintSpecs({ cpu: '  ', ram: '\t', gpu: ' ', screenSize: '  ' }))
+      .toEqual({ main: '', gpu: '', screen: '' });
+  });
+
+  it('trims what it does print', () => {
+    expect(laptopPrintSpecs({ cpu: ' i7 ', gpu: ' RTX ', screenSize: ' 14" ' }))
+      .toEqual({ main: 'i7', gpu: 'RTX', screen: '14"' });
+  });
+});
+
+describe('printsLaptopLayout — which rows take the laptop printout', () => {
+  it('a laptop does', () => {
+    expect(printsLaptopLayout({ kind: 'device', deviceType: 'Laptop' })).toBe(true);
+  });
+
+  it('a phone, an untyped legacy record and every other type do NOT', () => {
+    expect(printsLaptopLayout({ kind: 'device', deviceType: 'Phone' })).toBe(false);
+    expect(printsLaptopLayout({ kind: 'device' })).toBe(false);
+    for (const t of OTHER_DEVICE_TYPES) {
+      expect(printsLaptopLayout({ kind: 'device', deviceType: t })).toBe(false);
+    }
+  });
+
+  it('an ACCESSORY never does, even carrying a stray deviceType', () => {
+    // An accessory has no deviceType, so effectiveDeviceType would read it as
+    // a phone — the explicit kind check is what stops a stray value changing
+    // an accessory's layout.
+    expect(printsLaptopLayout({ kind: 'accessory', deviceType: 'Laptop' })).toBe(false);
+    expect(printsLaptopLayout({ kind: 'accessory' })).toBe(false);
+  });
+
+  it('a row with no kind is treated as a device, like everywhere else in the app', () => {
+    expect(printsLaptopLayout({ deviceType: 'Laptop' })).toBe(true);
   });
 });

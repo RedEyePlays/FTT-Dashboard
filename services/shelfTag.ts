@@ -1,6 +1,7 @@
 import QRCode from 'qrcode';
 import { InventoryItem } from '../types';
 import { kindOf, getDeviceDisplayName } from '../domain/inventory';
+import { laptopPrintSpecs, printsLaptopLayout } from '../domain/deviceSpecs';
 import { BUILT_IN_LABEL_SIZES } from '../domain/settings';
 import { PRINT_PREVIEW_BAR_STYLE, PRINT_PREVIEW_BAR_HTML } from './printPreview';
 
@@ -46,6 +47,29 @@ const shelfPrice = (i: InventoryItem): number =>
 // need a DOM window and can't run in the plain node test environment).
 export const tagBody = (item: InventoryItem, store: string, qr?: string): string => {
   const name = getDeviceDisplayName(item);
+  // A LAPTOP'S SPECS *ARE* THE DIFFERENCE between two machines on a shelf, in
+  // a way a phone's are not, so it gets its own layout rather than the phone
+  // one with blanks in it. Carrier and battery health are deliberately absent:
+  // they are phone fields, a laptop never has them, and reaching for them was
+  // what made a laptop tag print its storage and nothing else.
+  //
+  // Every OTHER device type still takes the phone layout — a known gap, stated
+  // in the PR, not a forgotten one.
+  if (printsLaptopLayout(item)) {
+    const { main, gpu, screen } = laptopPrintSpecs(item);
+    return `
+    <div class="tag-page-inner">
+      <div class="tag-body laptop">
+        <div class="store">${esc(store)}</div>
+        <div class="name">${esc(name)}</div>
+        ${main ? `<div class="specs">${esc(main)}</div>` : ''}
+        ${gpu ? `<div class="specs gpu">${esc(gpu)}</div>` : ''}
+        <div class="price">${money(shelfPrice(item))}</div>
+      </div>
+      ${qr ? `<img class="tag-qr" src="${qr}" alt="" />` : ''}
+      ${screen ? `<div class="tag-screen">${esc(screen)}</div>` : ''}
+    </div>`;
+  }
   // Color dropped from the specs line (owner request) — storage/carrier/
   // battery are what actually help someone pick the right unit off a shelf
   // of otherwise-identical devices; color is visible on the device itself.
@@ -124,6 +148,52 @@ export const TAG_STYLE = `
      what made the QR look rough/jagged. Smooth (default) scaling reads far
      cleaner at this size. */
   .tag-qr { position: absolute; top: 1.2mm; right: 1.2mm; width: 20mm; height: 20mm; }
+
+  /* ---------------- The laptop tag ----------------
+     Everything below applies ONLY to .tag-body.laptop, so the phone tag's
+     rendered markup and CSS are untouched — a phone tag prints byte-for-byte
+     what it printed before (asserted in shelfTag.test.ts).
+
+     WHY A LAPTOP NEEDS ITS OWN SIZES, measured on the real 89 × 36 mm stock
+     (65 × 31 mm of text box after the padding above; see the PR for the full
+     table):
+
+       • a laptop's spec line is far longer than a phone's. "Ryzen 7 5800H ·
+         32GB · 1TB SSD" is 73.0mm at the phone's 4.6mm — 8mm wider than the
+         column, i.e. silently ellipsised. At 3.7mm it is 58.7mm, with 6.3mm
+         of real spare for a longer CPU string. 4.0mm was measured too and
+         left only 1.5mm, which is not margin.
+       • the GPU cannot share that line AT ALL: 94.0mm at 4.6mm, and still
+         69.5mm at 3.4mm against a 65mm column. So it gets its own line, and
+         only when one is recorded.
+       • that second line costs vertical room the stack does not have — the
+         phone stack is 28.9mm in a 31mm box, i.e. 2.1mm spare. It is paid for
+         by spending the laptop's top padding (the "push down" margin) back
+         down to 2.4mm, which is the value this tag used before that pass, and
+         by line-height:1 on the two spec lines (the .store line above already
+         prints at line-height:1). Nothing is shrunk to fit and nothing
+         clips — the fit margin is re-measured in the tests. */
+  .tag-body.laptop { padding-top: 2.4mm; }
+  .laptop .specs { font-size: 3.7mm; line-height: 1; }
+  /* The GPU line: lighter than the CPU/RAM/storage line above it, because it
+     is supplementary rather than part of the machine's identity. */
+  .laptop .specs.gpu { font-weight: 700; color: #444; margin-top: 0.3mm; }
+
+  /* SCREEN SIZE — the BOTTOM-right corner, and the corner choice is the whole
+     point. The QR already owns the top-right (1.2mm inset, 20mm square, so it
+     runs to 21.2mm down a 36mm label) and it is load-bearing: it encodes the
+     identifier that gets scanned. Below it, from 21.2mm to the bottom edge,
+     there is roughly 20 × 14mm of genuinely empty label — inside the 22mm
+     right gutter .tag-body already reserves, so this can collide with neither
+     the QR above it nor the centred text to its left. '15.6"' measures 11.1mm
+     at this size against 20mm of room. Measured, not assumed, and asserted in
+     shelfTag.test.ts rather than left to drift. */
+  .tag-screen {
+    position: absolute; bottom: 1.2mm; right: 1.2mm; width: 20mm;
+    font-family: 'Inter', system-ui, Arial, sans-serif;
+    font-size: 4.2mm; font-weight: 800; line-height: 1; color: #000;
+    text-align: center; white-space: nowrap; overflow: hidden;
+  }
 `;
 
 // Wraps tag content for the DYMO portrait-native page: one .tag-page per
