@@ -1,4 +1,10 @@
 import { INVENTORY_SKU_PREFIX } from './sku';
+// The ONE definition of how a laptop's specs split for print, shared with the
+// shelf tag so the two printouts can never disagree about what a laptop says
+// (domain/deviceSpecs.ts). Type-only as far as the bundle is concerned beyond
+// this one function — it brings no runtime dependency on ../types with it,
+// which is what the `deviceSubLine` note below is really protecting.
+import { laptopPrintSpecs, printsLaptopLayout } from '../domain/deviceSpecs';
 
 // Shared label rendering for the Inventory and Repair label modals so both stay
 // identical. All geometry is expressed in millimetres; the on-screen preview
@@ -305,6 +311,30 @@ const MONO_CHAR_WIDTH_RATIO = 0.6;
 export const estimateTextWidthMm = (text: string, fontSizeMm: number): number =>
   +(text.length * fontSizeMm * MONO_CHAR_WIDTH_RATIO).toFixed(2);
 
+/**
+ * The same estimate for the PROPORTIONAL lines — org, device, sub.
+ *
+ * `estimateTextWidthMm` above is for the monospace lines (the SKU and the
+ * serial, both 'Courier New'), and 0.6 is right for those. Applying it to an
+ * Inter/Arial line over-estimates by about 15%, which is enough to fail a fit
+ * check on content that fits comfortably — which is exactly what it did when
+ * the laptop sub line was first checked against it.
+ *
+ * 0.55 is calibrated against headless-Chromium measurements of this app's real
+ * label strings at the real font sizes (storage/carrier/battery lines and
+ * CPU/RAM/storage lines at 3.0, 3.4 and 4.6 mm, weights 600 and 800), which
+ * came out between 0.510 and 0.524 of font-size per character. So this still
+ * over-estimates that content, by roughly 5% — the safe direction for a fit
+ * check — while no longer rejecting lines that print fine.
+ *
+ * It is an estimate for SPEC-LINE content: letters, digits and separators. A
+ * line of capital Ws would be wider than this says, and no label in this app
+ * prints one.
+ */
+const PROP_CHAR_WIDTH_RATIO = 0.55;
+export const estimateProportionalTextWidthMm = (text: string, fontSizeMm: number): number =>
+  +(text.length * fontSizeMm * PROP_CHAR_WIDTH_RATIO).toFixed(2);
+
 // The text column's available width on a non-Dymo template: label width
 // minus padding on both sides, minus the QR (+ its row gap) when one is
 // shown — mirrors the subtraction labelBody's flex row performs, computed
@@ -376,7 +406,47 @@ export function shortRepairCode(repairNumber: string): string {
 // otherwise-identical listings), so it belongs on the printed label itself,
 // not just in the app. Takes plain strings (not InventoryItem) so this file
 // doesn't need to depend on ../types.
-export function deviceSubLine(parts: { storage?: string; color?: string; batteryHealth?: string }): string | undefined {
+//
+// A LAPTOP GETS ITS OWN CONTENT: CPU · RAM · Storage, never carrier or battery
+// health, which are phone fields a laptop does not have (the owner's decision
+// — see domain/deviceSpecs.ts). Keyed on `deviceType` so a phone, an untyped
+// legacy row and an accessory all keep byte-identical output.
+//
+// WHAT A LAPTOP'S LABEL DROPS, AND WHY — the GPU and the screen size. This is
+// a line budget, not an oversight. Measured against the real text column on
+// each template (the column is the label width minus padding minus the QR,
+// which is a flex sibling filling the full height of the row — there is no
+// free corner on this label the way there is on the shelf tag):
+//
+//                      column   CPU·RAM·Storage        + GPU
+//   dymo-36x89         51.1mm   39.9mm (11.2 spare)    60.5mm — over by 9.4
+//   4x6                61.1mm   45.2mm (15.9 spare)    68.5mm — over by 7.4
+//
+// Adding the GPU overflows every template, and this label's lines are
+// `text-overflow:ellipsis`, so "add it anyway" means silently truncating it.
+// The five line slots (org/code/device/sub/serial) are all in use and
+// `maxSafePushDownMm` already models exactly that budget, so there is no sixth
+// line to give it either. Both specs survive on the SHELF TAG, which is the
+// customer-facing printout and does have the room — see services/shelfTag.ts.
+//
+// The rule is unconditional rather than "include the GPU when it happens to
+// fit": output that changes shape with the length of a CPU name is harder to
+// trust than a label that always says the same four things.
+export function deviceSubLine(parts: {
+  storage?: string; color?: string; batteryHealth?: string;
+  deviceType?: string; kind?: string;
+  cpu?: string; ram?: string; storageType?: string;
+}): string | undefined {
+  // Through the shared predicate, never a local `=== 'Laptop'`: PR #230's own
+  // guarantee test (domain/deviceSpecs.test.ts, "NOTHING OUTSIDE THE FORM AND
+  // THE TABS BRANCHES ON A LAPTOP") exists to keep that decision in one place,
+  // and it caught this line when it was written as a literal comparison.
+  if (printsLaptopLayout(parts)) {
+    // `.main` only — the same string the shelf tag prints on its spec line,
+    // from the same function, so the two surfaces cannot drift. `.gpu` and
+    // `.screen` are deliberately unused here; see the budget above.
+    return laptopPrintSpecs(parts).main || undefined;
+  }
   return [parts.storage, parts.color, parts.batteryHealth && `Batt ${parts.batteryHealth}`].filter(Boolean).join(' · ') || undefined;
 }
 

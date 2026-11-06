@@ -189,6 +189,87 @@ export const laptopSpecLine = (item: Pick<InventoryItem, 'cpu' | 'ram' | 'storag
 };
 
 /**
+ * A LAPTOP'S SPECS, SPLIT FOR PRINT.
+ *
+ * `laptopSpecLine` above puts all five on one line, which is right for a list
+ * row on a screen that can scroll sideways and wrong for a printed label,
+ * where the width is fixed in millimetres and anything too long is silently
+ * ellipsised. Measured on the real 89 × 36 mm Dymo stock (see the PR
+ * description for the numbers): CPU · RAM · Storage uses about 50 of the shelf
+ * tag's 65 mm of text column, and adding the GPU to that line needs 94 mm. It
+ * cannot share a line at any legible size, so it does not.
+ *
+ * So the print surfaces get the specs as THREE SLOTS and place each where
+ * their own geometry allows:
+ *
+ *   main   — CPU · RAM · Storage. The identity of the machine, and what
+ *            somebody comparing two otherwise-identical laptops reads first.
+ *   gpu    — its own line, and ONLY when one is recorded. Most laptops are
+ *            integrated graphics and the field is blank; an empty slot or a
+ *            dash reads as missing data, where an absent line reads as "no
+ *            discrete GPU".
+ *   screen — a corner badge, not part of the spec line. It is the one spec
+ *            that is a single short token, so it fits where nothing else
+ *            would, and it is the lowest-priority of the four: the format
+ *            that has no corner drops it rather than squeezing it in.
+ *
+ * ONE function for both printouts, so the shelf tag and the device label can
+ * never disagree about what a laptop's printed specs are.
+ *
+ * `storageType` rides with the capacity ("1TB SSD") exactly as it does in
+ * `laptopSpecLine` — SSD vs HDD is a selling point on a used laptop and costs
+ * no separator of its own.
+ */
+export interface LaptopPrintSpecs {
+  /** "i7-12700H · 32GB · 1TB SSD" — '' when none of the three is filled in. */
+  main: string;
+  /** "RTX 3050 Ti" — '' when no discrete GPU is recorded. */
+  gpu: string;
+  /** '15.6"' — '' when not recorded. */
+  screen: string;
+}
+
+/**
+ * The fields this needs, as PLAIN STRINGS rather than Pick<InventoryItem>.
+ * An `InventoryItem` satisfies it (its `storageType` union widens to string),
+ * and so does the label renderer's own content shape — which is what lets
+ * services/labelLayout.ts share this one definition without taking on a
+ * dependency on ../types that it has deliberately never had.
+ */
+export interface LaptopSpecFields {
+  cpu?: string; ram?: string; storage?: string;
+  storageType?: string; screenSize?: string; gpu?: string;
+}
+
+export const laptopPrintSpecs = (item: LaptopSpecFields): LaptopPrintSpecs => {
+  const t = (v?: string) => (v || '').toString().trim();
+  const drive = [t(item.storage), t(item.storageType)].filter(Boolean).join(' ');
+  return {
+    main: [t(item.cpu), t(item.ram), drive].filter(Boolean).join(' · '),
+    gpu: t(item.gpu),
+    screen: t(item.screenSize),
+  };
+};
+
+/**
+ * Does this row print the LAPTOP layout?
+ *
+ * An accessory is excluded explicitly rather than left to `deviceType`: an
+ * accessory has none, so `effectiveDeviceType` would read it as a phone, and
+ * a future accessory row carrying a stray `deviceType` must not take a device
+ * layout. Every other device type (Tablet, Watch, Desktop PC, …) still prints
+ * the phone layout — see the PR description: that is a known gap, not a
+ * forgotten one, and each of them needs its own answer.
+ */
+export const printsLaptopLayout = (
+  // Plain strings rather than Pick<InventoryItem>, for the same reason
+  // LaptopSpecFields is: services/labelLayout.ts shares this one predicate
+  // without taking on a dependency on ../types.
+  item: { kind?: string; deviceType?: string },
+): boolean => (item.kind ?? 'device') === 'device'
+  && effectiveDeviceType({ deviceType: item.deviceType as InventoryItem['deviceType'] }) === 'Laptop';
+
+/**
  * The spec fields a row carries that its TYPE has no use for.
  *
  * Nothing clears them — a record keeps whatever was typed into it, and a
