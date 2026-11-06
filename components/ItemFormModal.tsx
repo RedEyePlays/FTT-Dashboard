@@ -16,7 +16,7 @@ import { LISTING_PLATFORMS } from '../domain/listing';
 import { findDuplicateDevice } from '../domain/autoInventory';
 import {
   effectiveDeviceType, hasPhoneFields, hasLaptopFields, hasBrandModel, hasCondition,
-  requiresItemName, STORAGE_TYPES, strandedFields,
+  requiresItemName, STORAGE_TYPES, strandedFields, screenSizeWarning,
 } from '../domain/deviceSpecs';
 import { locationName } from '../domain/locations';
 import { isInTransit, transitLabel } from '../domain/transfers';
@@ -418,7 +418,23 @@ export const ItemFormModal: React.FC<Props> = ({ initial, initialKind, initialDe
                     </select>
                   </div>
                 )}
-                {isLaptop && <Field label="Screen Size" value={f.screenSize} onChange={setText('screenSize')} placeholder={'15.6"'} />}
+                {isLaptop && (
+                  <div>
+                    <Field label="Screen Size" value={f.screenSize} onChange={setText('screenSize')} placeholder={'15.6"'} />
+                    {/* A WARNING, NOT A BLOCK. A real label went out reading
+                        5.6" for a 15.6" laptop — a dropped digit in a free-text
+                        field that had nothing to say about it. The owner may
+                        still know something the app does not, so the record
+                        saves either way; but a wrong number on a
+                        customer-facing label is worse than a blank one, so it
+                        is said here, at the point of entry. */}
+                    {screenSizeWarning(f.screenSize) && (
+                      <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-400">
+                        {screenSizeWarning(f.screenSize)}
+                      </p>
+                    )}
+                  </div>
+                )}
                 {isLaptop && <Field label="GPU" value={f.gpu} onChange={setText('gpu')} placeholder="RTX 3060" />}
 
                 <Field label="Color" value={f.color} onChange={setText('color')} placeholder="Space Black" />
