@@ -164,6 +164,22 @@ export interface LabelOpts {
 
 const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
 
+// The status pill's own box, shared by the renderer below and the height
+// model above so the two cannot disagree about how tall the org row is.
+const PILL_FONT_MM = 2.2;
+const PILL_PAD_MM = 0.4;
+const PILL_BORDER_MM = 0.3;
+
+/**
+ * Slack added to every height estimate, so the model errs HIGH.
+ *
+ * 0.4mm, against a measured worst-case under-estimate of 0.29mm. A model that
+ * reads low says "this fits" about content that does not, which is the exact
+ * failure being fixed here; one that reads high at worst drops a line of
+ * supplementary spec a hair earlier than it strictly had to.
+ */
+const FIT_MARGIN_MM = 0.4;
+
 // Where the label modals persist the owner's last-selected label template
 // (localStorage, per-browser — not Firestore). Named here rather than inline
 // in components/LabelModal.tsx so every label TYPE on this system prints on
@@ -253,9 +269,141 @@ const BASE_PAD_MM = 0.85;
 export const extraSpecLine = (c: Pick<LabelContent, 'gpu' | 'screen'>): string =>
   [(c.gpu || '').trim(), (c.screen || '').trim()].filter(Boolean).join(' · ');
 
+/**
+ * ─────────────────────────────────────────────────────────────────────────
+ * WHAT ACTUALLY FITS ON THIS MEDIA. The overflow guard.
+ *
+ * WHY THIS EXISTS. A laptop printed at 2 × 1" on a Zebra came out across TWO
+ * labels: the first held the text, the second held the QR and the screen size
+ * alone. On a roll printer that burns a label every time and the person at
+ * the printer does not notice until the roll is gone.
+ *
+ * THE ROOT CAUSE IS NOT WHAT IT LOOKS LIKE. `maxSafePushDownMm` below already
+ * reserved a line for the laptop's extra spec, so the budget "knew" about it
+ * — but all that function has ever done with the answer is CLAMP THE PUSH-DOWN
+ * OFFSET. When content exceeds the media it returns 0 and stops. It was never
+ * an overflow guard, and nothing else was one either: the layout simply
+ * emitted every line it was given and left the rest to `overflow:hidden`.
+ *
+ * AND `overflow:hidden` IS NOT A GUARANTEE ON A LABEL PRINTER. In Chromium's
+ * own print pipeline it holds — every media/content pair in this file renders
+ * to exactly one PDF page, verified. The physical Zebra did something else,
+ * which is entirely consistent with what this file already documents twice:
+ * real label-printer drivers flatten HTML through a simplified, box-model-only
+ * renderer, and this codebase has already been bitten by one ignoring
+ * `transform`, and by another shrink-to-fitting an overcrowded 2 × 1".
+ *
+ * So the fix cannot be "clip harder". THE CONTENT HAS TO ACTUALLY FIT, and
+ * the layout has to be the thing that decides — which is what this function
+ * and `fitExtraSpec` below are for.
+ *
+ * ACCURACY MATTERS IN ONE DIRECTION. A model that under-estimates says "fits"
+ * about something that does not, which is the failure being fixed. The
+ * earlier model under-estimated by 0.69–4.96mm depending on media, for two
+ * concrete reasons now handled here:
+ *
+ *   • the org line is not `fOrg` tall — it is a flex ROW holding the org and
+ *     the status pill, and the pill (font + padding + border) is taller;
+ *   • the code and serial lines WRAP. Both are `overflow-wrap:anywhere` with
+ *     a two-line `max-height`, and on 2 × 2" the big QR squeezes the column
+ *     to 20.9mm, which is narrower than a 10-character serial — so that line
+ *     is 7.56mm, not 3.78mm. Missing that is missing a whole line.
+ *
+ * Measured against real rendered geometry for every built-in media: the model
+ * now tracks the browser to within 0.18–0.29mm (it was 0.69–4.96mm out). What
+ * remains is a rounding residue from the mm→px emitter, and FIT_MARGIN_MM
+ * below covers it so the model errs high — the only safe direction, since an
+ * under-estimate says "fits" about something that does not.
+ */
+export function labelTextHeightMm(
+  m: LabelMedia,
+  // `org` is deliberately absent: that row always exists, and only its HEIGHT
+  // matters here, which the status pill decides.
+  c: Pick<LabelContent, 'code' | 'device' | 'sub' | 'serial' | 'status' | 'gpu' | 'screen'>,
+  opts: { padMm?: number; lineGapMm?: number; showQr: boolean; showStatus: boolean; variant?: LabelVariant },
+): number {
+  const variant = opts.variant ?? 'inventory';
+  const lineGap = clamp(opts.lineGapMm ?? 1.1, 0, 1.5);
+  const { fOrg, fCode, fDevice, fSub, fSerial } = nonDymoFontSizesMm(m, variant);
+  const colW = textColumnWidthMm(m, { padMm: opts.padMm, showQr: opts.showQr, variant });
+
+  // The pill's own box: font-size + padding + border, exactly as `pill` sets
+  // them. The org ROW is the taller of the two.
+  const pillH = opts.showStatus && c.status ? PILL_FONT_MM + PILL_PAD_MM * 2 + PILL_BORDER_MM * 2 : 0;
+  const lines: number[] = [Math.max(fOrg * 1, pillH)];
+  // A monospace line that is wider than the column wraps to a second line and
+  // is capped there by its own max-height.
+  const wrapped = (text: string, f: number) =>
+    f * 1.05 * Math.min(2, Math.max(1, Math.ceil(estimateTextWidthMm(text, f) / Math.max(1, colW))));
+  if (c.code) lines.push(wrapped(c.code, fCode) / 1.05);   // the code line sets line-height:1.05 too
+  if (c.device) lines.push(fDevice * 1.05);
+  if (c.sub) lines.push(fSub * 1);
+  if (extraSpecLine(c)) lines.push(fSub * 1);
+  if (c.serial) lines.push(wrapped(c.serial, fSerial));
+  return +(BASE_PAD_MM + FIT_MARGIN_MM + lines.reduce((a, b) => a + b, 0) + lineGap * (lines.length - 1)).toFixed(2);
+}
+
+/**
+ * The height the text column actually has, after padding, barcode and issue
+ * row. Only `issue` is read; it takes the same content shape as the functions
+ * either side of it so a caller passes one object to all three.
+ */
+export function labelTextRoomMm(
+  m: LabelMedia,
+  c: Pick<LabelContent, 'code' | 'device' | 'sub' | 'serial' | 'status' | 'gpu' | 'screen' | 'issue'>,
+  opts: { padMm?: number; showBarcode: boolean; hasBarcodeImage: boolean; variant?: LabelVariant },
+): number {
+  const { h } = mmOf(m);
+  const pad = opts.padMm ?? 2.0;
+  const showBarcode = opts.showBarcode && opts.hasBarcodeImage;
+  const bcH = showBarcode ? h * 0.14 : 0;
+  const { fIssue } = nonDymoFontSizesMm(m, opts.variant ?? 'inventory');
+  const issueH = c.issue ? fIssue * ISSUE_MAX_LINES * 1.15 + 1 : 0;
+  return +((h - pad * 2) - (showBarcode ? bcH + 1 : 0) - issueH).toFixed(2);
+}
+
+/**
+ * DOES THE LAPTOP'S EXTRA SPEC LINE FIT THIS MEDIA?
+ *
+ * The one piece of content this layout is allowed to omit, and the order is
+ * the owner's: the GPU and the screen size are the newest additions and the
+ * least critical, the shelf tag carries both, and 2 × 1" is the smallest
+ * stock. Everything else stays:
+ *
+ *   • THE QR IS NEVER DROPPED — it is how the device gets scanned. It is
+ *     already small on the tightest media (11.94mm at 2 × 1") and shrinking
+ *     it further would not help anyway: the overflow is VERTICAL and the QR
+ *     sits beside the text, not above it.
+ *   • the device name keeps truncating, which it already did and which the
+ *     owner has accepted ("HP Pavillion 255 ...").
+ *   • org, SKU, spec line and serial are what the label is for.
+ *
+ * Returns false whenever the content as a whole will not fit, not only when
+ * this line is the sole cause — which matters, because it is not always the
+ * cause. At 2 × 1" the five shared lines plus the status pill already exceed
+ * the media on their own, for a PHONE as much as a laptop (measured: 3.01mm
+ * over, before any laptop content). This line is the only thing the layout is
+ * permitted to drop, so it drops it there and the label returns to exactly
+ * the footprint a phone has always had on that stock. The residual is a
+ * pre-existing, separate problem and is written up in the PR rather than
+ * fixed by quietly re-cutting every phone label in the shop.
+ *
+ * A media with room keeps the line — this is a fit rule, not a ban on small
+ * stock. 2 × 2", 2 × 3", 4 × 6" and the DYMO all keep it.
+ */
+export function fitsExtraSpec(
+  m: LabelMedia,
+  c: Pick<LabelContent, 'code' | 'device' | 'sub' | 'serial' | 'status' | 'gpu' | 'screen' | 'issue'>,
+  opts: { padMm?: number; lineGapMm?: number; showQr: boolean; showStatus: boolean; showBarcode: boolean; hasBarcodeImage: boolean; variant?: LabelVariant },
+): boolean {
+  if (!extraSpecLine(c)) return false;
+  const room = labelTextRoomMm(m, c, opts);
+  return labelTextHeightMm(m, c, opts) <= room;
+}
+
 export function maxSafePushDownMm(
   m: LabelMedia,
-  c: Pick<LabelContent, 'code' | 'device' | 'sub' | 'serial' | 'issue' | 'gpu' | 'screen'>,
+  c: Pick<LabelContent, 'code' | 'device' | 'sub' | 'serial' | 'issue' | 'gpu' | 'screen' | 'status'>,
   opts: { padMm?: number; lineGapMm?: number; showBarcode: boolean; hasBarcodeImage: boolean; variant?: LabelVariant },
   ceilingMm: number = MAX_PUSH_DOWN_MM,
 ): number {
@@ -287,7 +435,13 @@ export function maxSafePushDownMm(
   if (c.sub) lineHeights.push(fSub * 1);
   // The laptop's combined GPU/screen line (see extraSpecLine) — reserved here
   // exactly as labelBody renders it, so push-down can never overrun it.
-  if (extraSpecLine(c)) lineHeights.push(fSub * 1);
+  // Only when it will actually be rendered — `labelBody` omits it on media
+  // where it does not fit, and reserving room for a line that is not there
+  // would needlessly suppress push-down.
+  if (extraSpecLine(c) && fitsExtraSpec(m, c, {
+    padMm: opts.padMm, lineGapMm: opts.lineGapMm, showQr: true,
+    showStatus: true, showBarcode: opts.showBarcode, hasBarcodeImage: opts.hasBarcodeImage, variant,
+  })) lineHeights.push(fSub * 1);
   if (c.serial) lineHeights.push(fSerial * 1.05);
   const gaps = lineGap * (lineHeights.length - 1);
   const needed = BASE_PAD_MM + lineHeights.reduce((a, b) => a + b, 0) + gaps;
@@ -535,7 +689,7 @@ function labelBody(u: U, m: LabelMedia, c: LabelContent, img: LabelImages, o: La
   const noClip = 'overflow-wrap:anywhere;word-break:break-all;';
 
   const pill = showStatus
-    ? `<span style="align-self:flex-start;border:${u(0.3)} solid #000;border-radius:${u(1.4)};padding:${u(0.4)} ${u(1.2)};font-size:${u(dymo ? 2.6 : 2.2)};font-weight:800;text-transform:uppercase;letter-spacing:.4px;line-height:1;white-space:nowrap;">${esc(c.status)}</span>`
+    ? `<span style="align-self:flex-start;border:${u(PILL_BORDER_MM)} solid #000;border-radius:${u(1.4)};padding:${u(PILL_PAD_MM)} ${u(1.2)};font-size:${u(dymo ? 2.6 : PILL_FONT_MM)};font-weight:800;text-transform:uppercase;letter-spacing:.4px;line-height:1;white-space:nowrap;">${esc(c.status)}</span>`
     : '';
 
   if (dymo) {
@@ -687,12 +841,19 @@ function labelBody(u: U, m: LabelMedia, c: LabelContent, img: LabelImages, o: La
   // ONE combined line on the inch templates, not two.
   //
   // These have no free corner the way the Dymo does — the QR is a flex
-  // sibling filling the row's height — and the tightest of them (2 × 1") is
-  // already the one that clips a sub line today. So the GPU and the screen
-  // size share a line here rather than taking two, and the line collapses to
-  // whichever of them exists, or disappears. `maxSafePushDownMm` is given the
-  // same line so the push-down ceiling cannot overrun it.
-  const extraSpec = extraSpecLine(c);
+  // sibling filling the row's height — so the GPU and the screen size share a
+  // line here rather than taking two, and the line collapses to whichever of
+  // them exists, or disappears.
+  //
+  // AND IT IS OMITTED OUTRIGHT WHEN IT DOES NOT FIT THE MEDIA. This is the
+  // overflow guard: the LAYOUT decides what goes on the label, rather than
+  // emitting everything and trusting `overflow:hidden` — which a real Zebra
+  // driver did not honour, printing a laptop across two labels. See
+  // `fitsExtraSpec` for the order of what gives and why.
+  const extraSpec = fitsExtraSpec(m, c, {
+    padMm: o.padMm, lineGapMm: o.lineGapMm, showQr: !!img.qr, showStatus: showStatus,
+    showBarcode: o.showBarcode, hasBarcodeImage: !!img.barcode, variant,
+  }) ? extraSpecLine(c) : '';
   const basePad = BASE_PAD_MM;
   const pushDown = clamp(
     o.pushDownMm ?? 0, 0,
