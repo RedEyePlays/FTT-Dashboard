@@ -5,7 +5,7 @@ import {
   effectiveDeviceType, isSoldDevice, OTHER_DEVICE_TYPES,
   hasPhoneFields, hasLaptopFields, hasBrandModel, hasCondition, requiresItemName,
   laptopSpecLine, strandedFields, LAPTOP_SPEC_FIELDS,
-  laptopPrintSpecs, printsLaptopLayout,
+  laptopPrintSpecs, printsLaptopLayout, storageRamSlot,
 } from './deviceSpecs';
 import { INV_SECTIONS } from './inventoryNav';
 import { readFileSync } from 'fs';
@@ -345,10 +345,36 @@ describe('laptopPrintSpecs', () => {
 
   it('splits into the machine\'s identity, the GPU, and the screen', () => {
     expect(laptopPrintSpecs(full)).toEqual({
-      main: 'i7-12700H · 32GB · 1TB SSD',
+      main: 'i7-12700H · 1TB/32GB',
       gpu: 'RTX 3050 Ti',
       screen: '15.6"',
     });
+  });
+
+  it('STORAGE FIRST, RAM SECOND — the owner\'s convention, not the usual one', () => {
+    // Most spec sheets write RAM first. This one does not, deliberately, and
+    // the test exists so nobody "corrects" it.
+    expect(storageRamSlot('256GB', '16GB')).toBe('256GB/16GB');
+    expect(laptopPrintSpecs({ cpu: 'i7', storage: '256GB', ram: '16GB' }).main).toBe('i7 · 256GB/16GB');
+    // The first value is the DRIVE. Swap the inputs and the output swaps too.
+    expect(storageRamSlot('16GB', '256GB')).toBe('16GB/256GB');
+  });
+
+  it('prints whatever unit was typed — it neither strips one nor invents one', () => {
+    // Both fields are free text and the real records carry units.
+    expect(storageRamSlot('256GB', '16GB')).toBe('256GB/16GB');
+    // Bare numbers stay bare — this is where the owner's "256/16" comes from.
+    expect(storageRamSlot('256', '16')).toBe('256/16');
+    // Mixed is passed through as typed rather than normalised either way.
+    expect(storageRamSlot('256GB', '16')).toBe('256GB/16');
+  });
+
+  it('must NOT strip units: "1TB" would become "1" and read as a tenth of the disk', () => {
+    // "1TB" is a real stored value in this workspace. Unit-stripped it reads
+    // "1/16" — 1GB of disk beside 16GB of memory. This is the concrete reason
+    // the format keeps whatever was typed.
+    expect(storageRamSlot('1TB', '16GB')).toBe('1TB/16GB');
+    expect(storageRamSlot('1TB', '16GB')).not.toBe('1/16');
   });
 
   it('keeps the screen size and the GPU OUT of the main line — they are placed separately', () => {
@@ -360,23 +386,57 @@ describe('laptopPrintSpecs', () => {
     expect(laptopSpecLine(full)).toContain('15.6"');
   });
 
-  it('storage type rides with the capacity rather than taking its own separator', () => {
-    expect(laptopPrintSpecs({ storage: '512GB', storageType: 'HDD' }).main).toBe('512GB HDD');
-    expect(laptopPrintSpecs({ storage: '512GB' }).main).toBe('512GB');
-    // A type with no capacity recorded is still worth saying.
-    expect(laptopPrintSpecs({ storageType: 'SSD' }).main).toBe('SSD');
+  it('ONE OF THE PAIR ALONE IS LABELLED, because a bare number is ambiguous', () => {
+    // The slash only works as a pair. Half of one reads as a rendering fault,
+    // and "256" alone could be either a drive or memory — so the lone value
+    // gets the word the entry form itself uses.
+    expect(storageRamSlot('256GB', undefined)).toBe('Storage 256GB');
+    expect(storageRamSlot(undefined, '16GB')).toBe('RAM 16GB');
+    // Never a half-pair.
+    for (const v of [storageRamSlot('256GB'), storageRamSlot(undefined, '16GB')]) {
+      expect(v).not.toMatch(/\//);
+    }
+  });
+
+  it('storage type is NOT printed any more, on either surface', () => {
+    // The new format is two numbers and a slash with no words; there is no
+    // slot for SSD/HDD that does not break that or appear inconsistently.
+    // It is still on the record and still in the app's own laptopSpecLine.
+    expect(laptopPrintSpecs({ storage: '512GB', storageType: 'HDD' }).main).toBe('Storage 512GB');
+    expect(laptopPrintSpecs({ cpu: 'i7', storage: '512GB', ram: '16GB', storageType: 'SSD' }).main)
+      .toBe('i7 · 512GB/16GB');
+    // A storageType with nothing else says nothing at all.
+    expect(laptopPrintSpecs({ storageType: 'SSD' }).main).toBe('');
+    // …but the on-screen line still carries it.
+    expect(laptopSpecLine({ storage: '512GB', storageType: 'SSD' })).toContain('SSD');
   });
 
   it('returns EMPTY strings, never a dash or a stray separator, for what is not recorded', () => {
     expect(laptopPrintSpecs({})).toEqual({ main: '', gpu: '', screen: '' });
     expect(laptopPrintSpecs({ cpu: 'i5-1135G7' }).main).toBe('i5-1135G7');
-    expect(laptopPrintSpecs({ ram: '16GB' }).main).toBe('16GB');
-    expect(laptopPrintSpecs({ cpu: 'i5', storage: '512GB' }).main).toBe('i5 · 512GB');
+    expect(laptopPrintSpecs({ ram: '16GB' }).main).toBe('RAM 16GB');
+    expect(laptopPrintSpecs({ cpu: 'i5', storage: '512GB' }).main).toBe('i5 · Storage 512GB');
+    expect(storageRamSlot('', '')).toBe('');
+    expect(storageRamSlot()).toBe('');
+  });
+
+  it("THE OWNER'S LAPTOPS TODAY — added before these fields existed — print cleanly", () => {
+    // Every laptop currently in the workspace (see constants.ts) has storage
+    // and nothing else. This is the common case, not an edge case, and it is
+    // what the owner will be looking at first.
+    const today = { storage: '256GB' };
+    expect(laptopPrintSpecs(today)).toEqual({ main: 'Storage 256GB', gpu: '', screen: '' });
+    const { main } = laptopPrintSpecs(today);
+    expect(main).not.toMatch(/·|\/|-|—/);   // no separator of any kind
+    expect(main.trim()).toBe(main);          // no leading/trailing gap
   });
 
   it('treats whitespace as unset, so a field somebody spaced out prints nothing', () => {
     expect(laptopPrintSpecs({ cpu: '  ', ram: '\t', gpu: ' ', screenSize: '  ' }))
       .toEqual({ main: '', gpu: '', screen: '' });
+    expect(storageRamSlot('  ', '\t')).toBe('');
+    // A spaced-out RAM must not turn the pair into a half-pair.
+    expect(storageRamSlot('256GB', '  ')).toBe('Storage 256GB');
   });
 
   it('trims what it does print', () => {

@@ -39,7 +39,20 @@ export interface LabelContent {
   // Inventory and accessory labels always pass a real value, so their rendered
   // output is byte-for-byte unchanged by this being optional.
   device?: string;
-  sub?: string;     // storage · color · battery health, or repair type
+  sub?: string;     // storage · color · battery health, or CPU · storage/RAM
+  /**
+   * LAPTOP ONLY, and the reason this label grew (see the Dymo branch below).
+   *
+   * THE QR LABEL IS CUSTOMER-FACING. The owner puts these on laptops in the
+   * showcase, so the person reading one is a customer deciding what to buy,
+   * not only staff finding a unit. PR #234 dropped both of these for line
+   * budget on the assumption that the shelf tag was the customer's printout;
+   * that was the wrong call about how this label is actually used.
+   *
+   * Absent on every other label, so nothing else's output changes by a byte.
+   */
+  gpu?: string;
+  screen?: string;
   serial?: string;  // IMEI / serial — large, bold, high-contrast
   status?: string;  // status badge label
   // Reported issue — WHOLESALE REPAIR LABEL ONLY. Rendered as a full-width
@@ -186,6 +199,16 @@ export function selectedLabelMedia<T extends LabelMedia>(sizes: T[]): T | undefi
 // arbitrary shove.
 export const MAX_PUSH_DOWN_MM = 6;
 
+/**
+ * The QR's size on a LAPTOP's Dymo label, in mm.
+ *
+ * Shrunk from the full-height 33.4mm at the owner's explicit request, to make
+ * room for the full customer-facing spec set. Named here rather than inlined
+ * because it is the number the scan test decodes at — if it ever changes, that
+ * test is what has to agree with it.
+ */
+export const DYMO_LAPTOP_QR_MM = 22;
+
 // The base (pushDownMm=0) top offset for content on the non-Dymo templates —
 // see the long comment above its use in labelBody. Exported so
 // maxSafePushDownMm can compute the SAME baseline the real render uses.
@@ -218,9 +241,21 @@ const BASE_PAD_MM = 0.85;
  * use. Either way, font size and content are NEVER touched — only how far
  * this function says it's safe to push is.
  */
+/**
+ * The inch templates' single combined laptop line: "RTX 3050 Ti · 15.6\"".
+ *
+ * Collapses to whichever piece exists and to '' when neither does, so a
+ * laptop with no GPU prints no empty slot and no orphaned separator — which
+ * is the normal case for this workspace, whose laptops predate these fields.
+ * Shared by labelBody and maxSafePushDownMm so the rendered line and the
+ * budget that reserves room for it can never disagree.
+ */
+export const extraSpecLine = (c: Pick<LabelContent, 'gpu' | 'screen'>): string =>
+  [(c.gpu || '').trim(), (c.screen || '').trim()].filter(Boolean).join(' · ');
+
 export function maxSafePushDownMm(
   m: LabelMedia,
-  c: Pick<LabelContent, 'code' | 'device' | 'sub' | 'serial' | 'issue'>,
+  c: Pick<LabelContent, 'code' | 'device' | 'sub' | 'serial' | 'issue' | 'gpu' | 'screen'>,
   opts: { padMm?: number; lineGapMm?: number; showBarcode: boolean; hasBarcodeImage: boolean; variant?: LabelVariant },
   ceilingMm: number = MAX_PUSH_DOWN_MM,
 ): number {
@@ -250,6 +285,9 @@ export function maxSafePushDownMm(
   if (c.code) lineHeights.push(fCode * 1);
   if (c.device) lineHeights.push(fDevice * 1.05);
   if (c.sub) lineHeights.push(fSub * 1);
+  // The laptop's combined GPU/screen line (see extraSpecLine) — reserved here
+  // exactly as labelBody renders it, so push-down can never overrun it.
+  if (extraSpecLine(c)) lineHeights.push(fSub * 1);
   if (c.serial) lineHeights.push(fSerial * 1.05);
   const gaps = lineGap * (lineHeights.length - 1);
   const needed = BASE_PAD_MM + lineHeights.reduce((a, b) => a + b, 0) + gaps;
@@ -407,31 +445,17 @@ export function shortRepairCode(repairNumber: string): string {
 // not just in the app. Takes plain strings (not InventoryItem) so this file
 // doesn't need to depend on ../types.
 //
-// A LAPTOP GETS ITS OWN CONTENT: CPU · RAM · Storage, never carrier or battery
+// A LAPTOP GETS ITS OWN CONTENT: CPU · storage/RAM, never carrier or battery
 // health, which are phone fields a laptop does not have (the owner's decision
 // — see domain/deviceSpecs.ts). Keyed on `deviceType` so a phone, an untyped
 // legacy row and an accessory all keep byte-identical output.
 //
-// WHAT A LAPTOP'S LABEL DROPS, AND WHY — the GPU and the screen size. This is
-// a line budget, not an oversight. Measured against the real text column on
-// each template (the column is the label width minus padding minus the QR,
-// which is a flex sibling filling the full height of the row — there is no
-// free corner on this label the way there is on the shelf tag):
-//
-//                      column   CPU·RAM·Storage        + GPU
-//   dymo-36x89         51.1mm   39.9mm (11.2 spare)    60.5mm — over by 9.4
-//   4x6                61.1mm   45.2mm (15.9 spare)    68.5mm — over by 7.4
-//
-// Adding the GPU overflows every template, and this label's lines are
-// `text-overflow:ellipsis`, so "add it anyway" means silently truncating it.
-// The five line slots (org/code/device/sub/serial) are all in use and
-// `maxSafePushDownMm` already models exactly that budget, so there is no sixth
-// line to give it either. Both specs survive on the SHELF TAG, which is the
-// customer-facing printout and does have the room — see services/shelfTag.ts.
-//
-// The rule is unconditional rather than "include the GPU when it happens to
-// fit": output that changes shape with the length of a CPU name is harder to
-// trust than a label that always says the same four things.
+// The GPU and the screen size are NOT on this line. They are no longer
+// dropped either — they are their own pieces of LabelContent (`gpu`,
+// `screen`), placed by the Dymo branch below, because the QR label turned out
+// to be the customer-facing one. Keeping them off `sub` is what lets the
+// label give the screen size a corner of its own and collapse the GPU line
+// cleanly when there is none.
 export function deviceSubLine(parts: {
   storage?: string; color?: string; batteryHealth?: string;
   deviceType?: string; kind?: string;
@@ -444,10 +468,29 @@ export function deviceSubLine(parts: {
   if (printsLaptopLayout(parts)) {
     // `.main` only — the same string the shelf tag prints on its spec line,
     // from the same function, so the two surfaces cannot drift. `.gpu` and
-    // `.screen` are deliberately unused here; see the budget above.
+    // `.screen` are placed separately by the caller (see `deviceLabelSpecs`).
     return laptopPrintSpecs(parts).main || undefined;
   }
   return [parts.storage, parts.color, parts.batteryHealth && `Batt ${parts.batteryHealth}`].filter(Boolean).join(' · ') || undefined;
+}
+
+/**
+ * The laptop spec slots a device label carries, ready to spread into
+ * LabelContent. One call so every caller places the same three pieces.
+ *
+ * Empty for everything that is not a laptop, so a phone's LabelContent is
+ * byte-identical to what it was — `gpu` and `screen` are simply absent.
+ */
+export function deviceLabelSpecs(item: {
+  kind?: string; deviceType?: string;
+  cpu?: string; ram?: string; storage?: string; storageType?: string;
+  screenSize?: string; gpu?: string;
+}): { gpu?: string; screen?: string } {
+  if (!printsLaptopLayout(item)) return {};
+  // From the SAME function the shelf tag reads, so the two printouts cannot
+  // drift — which is the whole reason laptopPrintSpecs was extracted.
+  const { gpu, screen } = laptopPrintSpecs(item);
+  return { ...(gpu ? { gpu } : {}), ...(screen ? { screen } : {}) };
 }
 
 // A unit emitter: mm for print, px (scaled) for the preview.
@@ -502,7 +545,45 @@ function labelBody(u: U, m: LabelMedia, c: LabelContent, img: LabelImages, o: La
     // inventory label's separately-tuned DYMO sizes are literally unchanged.
     const ts = VARIANT_TEXT_SCALE[variant] ?? 1;
     const t = (n: number) => +(n * ts).toFixed(2);
-    const fOrg = t(2.7), fCode = t(7.2), fDevice = t(4.4), fSub = t(3.0), fSerial = t(4.2);
+    /* ---------------- The laptop showcase label ----------------
+     *
+     * THE QR LABEL IS CUSTOMER-FACING. The owner puts these on laptops in the
+     * showcase, so it carries the full spec set: name, CPU · storage/RAM, the
+     * GPU when there is one, and the screen size — which is one of the first
+     * things anybody asks about a laptop.
+     *
+     * THE LABEL WAS ALREADY FULL. Measured on the real 89 × 36 mm stock: the
+     * text column is 51.06mm wide in a 33.41mm-tall row, and the six existing
+     * items (org, SKU, name, sub, serial, status pill) use 31.35mm of it —
+     * 2.06mm spare. Two more 3.0mm lines plus their gaps cost 8.2mm, so the
+     * room had to come from somewhere. It comes from three places, and every
+     * one of them is LAPTOP-ONLY, so no other label moves by a pixel:
+     *
+     *   • the QR shrinks from 33.4mm to 22mm. The owner asked for this
+     *     explicitly. 22mm is not a guess: the payload is an 11-character
+     *     SKU, which encodes as a VERSION 1 symbol — 21 modules plus a
+     *     1-module quiet zone — so 22mm gives 0.957mm PER MODULE. That is
+     *     roughly double the ~0.5mm where phone cameras start to struggle,
+     *     and about 11 printer dots per module at 300dpi. It is DECODED at
+     *     that exact printed size in labelLayout.test.ts, not assumed.
+     *   • shrinking the QR frees a 22 × ~11mm corner UNDER it, which is where
+     *     the screen size goes — the same treatment the shelf tag gives it,
+     *     so the two printouts read the same way round.
+     *   • the SKU line, by far the biggest thing on the label at 7.2mm, drops
+     *     to 5.2mm. Still larger than the device name; it is a code, and it
+     *     was outsized rather than merely prominent. The column gap tightens
+     *     from 1.1mm to 0.7mm.
+     *
+     * Measured result: the worst realistic laptop — longest CPU, "1TB/32GB",
+     * "GeForce RTX 4060 Laptop", a 17.3" screen — uses 31.05mm of the 33.41mm
+     * row, 2.36mm spare, nothing clipped. That is MORE margin than the phone
+     * label has today (2.06mm), on the same stock.
+     *
+     * That leaves the GPU as the only new LINE, and it collapses entirely
+     * when there is none. NOTHING WAS DROPPED to make room.
+     */
+    const laptop = !!(c.gpu || c.screen);
+    const fOrg = t(2.7), fCode = t(laptop ? 5.2 : 7.2), fDevice = t(4.4), fSub = t(3.0), fSerial = t(4.2);
     const fIssue = t(3.0);
     const gap = 1.0;
     const bcH = showBarcode ? 5.5 : 0;
@@ -513,20 +594,27 @@ function labelBody(u: U, m: LabelMedia, c: LabelContent, img: LabelImages, o: La
     const issueH = c.issue ? +(fIssue * ISSUE_MAX_LINES * 1.15).toFixed(2) : 0;
     // QR fills the height of the top region (label height − padding − barcode
     // − issue row), then scales by the variant's QR factor.
-    const qrS = +((h - pad * 2 - (bcH ? bcH + gap : 0) - (issueH ? issueH + gap : 0)) * (VARIANT_QR_SCALE[variant] ?? 1)).toFixed(2);
+    const fullQr = +((h - pad * 2 - (bcH ? bcH + gap : 0) - (issueH ? issueH + gap : 0)) * (VARIANT_QR_SCALE[variant] ?? 1)).toFixed(2);
+    const qrS = laptop ? Math.min(fullQr, DYMO_LAPTOP_QR_MM) : fullQr;
+    const colGap = laptop ? 0.7 : 1.1;
     return `
       <div style="box-sizing:border-box;width:100%;height:100%;padding:${u(pad)};background:#fff;color:#000;
         font-family:'Inter',system-ui,Arial,sans-serif;display:flex;flex-direction:column;gap:${u(gap)};overflow:hidden;">
         <div style="flex:1;min-height:0;display:flex;gap:${u(2)};">
-          <div style="flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:${u(1.1)};">
+          <div style="flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:${u(colGap)};">
             <div style="font-weight:800;font-size:${u(fOrg)};letter-spacing:.5px;line-height:1;">${esc(c.org)}</div>
             ${c.code ? `<div style="font-family:'Courier New',monospace;font-weight:800;font-size:${u(fCode)};line-height:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(c.code)}</div>` : ''}
             ${c.device ? `<div style="font-weight:700;font-size:${u(fDevice)};line-height:1.05;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(c.device)}</div>` : ''}
-            ${c.sub ? `<div style="font-size:${u(fSub)};font-weight:600;color:#000;line-height:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(c.sub)}</div>` : ''}
+            ${c.sub ? `<div style="font-size:${u(fSub)};font-weight:600;color:#000;line-height:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(c.sub)}</div>` : ''}${c.gpu ? `
+            <div style="font-size:${u(fSub)};font-weight:600;color:#000;line-height:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(c.gpu)}</div>` : ''}
             ${c.serial ? `<div style="font-family:'Courier New',monospace;font-weight:800;font-size:${u(fSerial)};color:#000;line-height:1.05;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(c.serial)}</div>` : ''}
             ${pill}
           </div>
-          ${img.qr ? `<img src="${img.qr}" style="width:${u(qrS)};height:${u(qrS)};flex-shrink:0;align-self:center;image-rendering:pixelated;" />` : ''}
+          ${img.qr && !laptop ? `<img src="${img.qr}" style="width:${u(qrS)};height:${u(qrS)};flex-shrink:0;align-self:center;image-rendering:pixelated;" />` : ''}${laptop ? `
+          <div style="flex-shrink:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:${u(1)};width:${u(qrS)};">
+            ${img.qr ? `<img src="${img.qr}" style="width:${u(qrS)};height:${u(qrS)};flex-shrink:0;image-rendering:pixelated;" />` : ''}
+            ${c.screen ? `<div style="flex-shrink:0;font-weight:800;font-size:${u(4.2)};line-height:1;white-space:nowrap;">${esc(c.screen)}</div>` : ''}
+          </div>` : ''}
         </div>
         ${c.issue ? `<div style="flex-shrink:0;font-weight:600;font-size:${u(fIssue)};line-height:1.15;max-height:${u(fIssue * ISSUE_MAX_LINES * 1.15)};${noClip}overflow:hidden;">${esc(c.issue)}</div>` : ''}
         ${showBarcode ? `<img src="${img.barcode}" style="width:100%;height:${u(bcH)};object-fit:fill;" />` : ''}
@@ -596,6 +684,15 @@ function labelBody(u: U, m: LabelMedia, c: LabelContent, img: LabelImages, o: La
   // content has before its last line would extend past the available
   // height, and clamping to that (see maxSafePushDownMm's own comment for
   // the full derivation and the PR description for measured geometry).
+  // ONE combined line on the inch templates, not two.
+  //
+  // These have no free corner the way the Dymo does — the QR is a flex
+  // sibling filling the row's height — and the tightest of them (2 × 1") is
+  // already the one that clips a sub line today. So the GPU and the screen
+  // size share a line here rather than taking two, and the line collapses to
+  // whichever of them exists, or disappears. `maxSafePushDownMm` is given the
+  // same line so the push-down ceiling cannot overrun it.
+  const extraSpec = extraSpecLine(c);
   const basePad = BASE_PAD_MM;
   const pushDown = clamp(
     o.pushDownMm ?? 0, 0,
@@ -626,7 +723,8 @@ function labelBody(u: U, m: LabelMedia, c: LabelContent, img: LabelImages, o: La
           </div>
           ${c.code ? `<div style="flex-shrink:0;font-family:'Courier New',monospace;font-weight:800;font-size:${u(fCode)};line-height:1.05;max-height:${u(fCode * 2.1)};overflow-wrap:anywhere;word-break:break-all;overflow:hidden;">${esc(c.code)}</div>` : ''}
           ${c.device ? `<div style="flex-shrink:0;font-weight:700;font-size:${u(fDevice)};line-height:1.05;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(c.device)}</div>` : ''}
-          ${c.sub ? `<div style="flex-shrink:0;font-size:${u(fSub)};font-weight:600;color:#000;line-height:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(c.sub)}</div>` : ''}
+          ${c.sub ? `<div style="flex-shrink:0;font-size:${u(fSub)};font-weight:600;color:#000;line-height:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(c.sub)}</div>` : ''}${extraSpec ? `
+          <div style="flex-shrink:0;font-size:${u(fSub)};font-weight:600;color:#000;line-height:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(extraSpec)}</div>` : ''}
           ${c.serial ? `<div style="flex-shrink:0;font-family:'Courier New',monospace;font-weight:800;font-size:${u(fSerial)};color:#000;line-height:1.05;max-height:${u(fSerial * 2.1)};overflow-wrap:anywhere;word-break:break-all;overflow:hidden;">${esc(c.serial)}</div>` : ''}
         </div>
         ${img.qr ? `<img src="${img.qr}" style="width:${u(qrS)};height:${u(qrS)};flex-shrink:0;align-self:center;image-rendering:pixelated;" />` : ''}

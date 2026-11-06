@@ -5,7 +5,7 @@ import JsBarcode from 'jsbarcode';
 import { jsPDF } from 'jspdf';
 import { InventoryItem, DeviceStatus } from '../types';
 import { getDeviceDisplayName, kindOf } from '../domain/inventory';
-import { LabelContent, labelPreview, labelPrintDoc, mmOf, maxSafePushDownMm, shortLabelSku, nonDymoQrSizeMm, deviceSubLine, LABEL_PREFS_KEY } from '../services/labelLayout';
+import { LabelContent, labelPreview, labelPrintDoc, mmOf, maxSafePushDownMm, shortLabelSku, nonDymoQrSizeMm, deviceSubLine, deviceLabelSpecs, LABEL_PREFS_KEY } from '../services/labelLayout';
 import { getLabelSizes, getStoreProfile, getLabelSpacing } from './SettingsModal';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 
@@ -127,6 +127,10 @@ export const LabelModal: React.FC<Props> = ({ item, onClose }) => {
     code: shortLabelSku(isAccessory ? (upc || sku) : sku),
     device: name,
     sub: deviceSubLine(item),
+    // A laptop's GPU and screen size (multi-surface: the shelf tag prints the
+    // same two). Empty object for everything else, so a phone's content shape
+    // is unchanged.
+    ...deviceLabelSpecs(item),
     serial: item.imei || undefined,
     status: status || undefined,
   };
