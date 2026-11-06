@@ -202,7 +202,7 @@ export const laptopSpecLine = (item: Pick<InventoryItem, 'cpu' | 'ram' | 'storag
  * So the print surfaces get the specs as THREE SLOTS and place each where
  * their own geometry allows:
  *
- *   main   — CPU · RAM · Storage. The identity of the machine, and what
+ *   main   — CPU · storage/RAM. The identity of the machine, and what
  *            somebody comparing two otherwise-identical laptops reads first.
  *   gpu    — its own line, and ONLY when one is recorded. Most laptops are
  *            integrated graphics and the field is blank; an empty slot or a
@@ -216,12 +216,45 @@ export const laptopSpecLine = (item: Pick<InventoryItem, 'cpu' | 'ram' | 'storag
  * ONE function for both printouts, so the shelf tag and the device label can
  * never disagree about what a laptop's printed specs are.
  *
- * `storageType` rides with the capacity ("1TB SSD") exactly as it does in
- * `laptopSpecLine` — SSD vs HDD is a selling point on a used laptop and costs
- * no separator of its own.
+ * ─────────────────────────────────────────────────────────────────────────
+ * STORAGE AND RAM SHARE ONE SLOT: "256/16", STORAGE FIRST.
+ *
+ * The owner's own convention, and it is the OPPOSITE of how most spec sheets
+ * write it (those put RAM first). It is written down here, and tested, so
+ * nobody "corrects" it later: the FIRST number is the drive, the SECOND is
+ * the memory.
+ *
+ * WHATEVER UNIT THEY TYPED IS WHAT PRINTS. Both fields are free text
+ * (components/ItemFormModal.tsx), and the real records in this workspace
+ * carry units — "256GB", "512GB", "1TB". So the line normally reads
+ * "256GB/16GB" rather than the bare "256/16"; nothing is stripped and nothing
+ * is appended.
+ *
+ * Stripping would not merely be a liberty, it would be WRONG: "1TB" is a real
+ * stored value, and a unit-stripped "1" beside a RAM of "16" reads as 1 GB of
+ * disk and 16 GB of memory — a laptop with a tenth of the storage it has.
+ * There is no safe way to drop a unit without parsing and re-deriving it,
+ * which is a much bigger decision than a label format.
+ *
+ * ONE OF THE TWO ALONE IS LABELLED, because a bare "256" could be either.
+ * The slash is what makes the pair readable, and it only works as a pair, so
+ * a lone value gets the word instead — "Storage 256GB", "RAM 16GB", using the
+ * same two words the entry form itself uses. Never "256/" or "/16": half a
+ * pair reads as a rendering fault, which is the thing this most needs to
+ * avoid, since most laptops in the workspace predate these fields and have
+ * only the storage filled in.
+ *
+ * `storageType` (SSD/HDD) IS NO LONGER PRINTED, on either surface. The new
+ * format is deliberately compact — two numbers and a slash, no words — and
+ * there is no slot for it that does not either break that convention or make
+ * the line appear inconsistently (present on a laptop with one spec, absent
+ * on a laptop with two, which reads as a bug). It is still on the record, in
+ * the inventory list's `laptopSpecLine` and in listings; only print drops it.
+ * If the owner wants it back on paper it needs its own place, which is their
+ * call, not a silent reinstatement here.
  */
 export interface LaptopPrintSpecs {
-  /** "i7-12700H · 32GB · 1TB SSD" — '' when none of the three is filled in. */
+  /** "i7-12700H · 256GB/16GB" — '' when none of the three is filled in. */
   main: string;
   /** "RTX 3050 Ti" — '' when no discrete GPU is recorded. */
   gpu: string;
@@ -238,14 +271,31 @@ export interface LaptopPrintSpecs {
  */
 export interface LaptopSpecFields {
   cpu?: string; ram?: string; storage?: string;
-  storageType?: string; screenSize?: string; gpu?: string;
+  /** Accepted and deliberately NOT printed — see the note above. */
+  storageType?: string;
+  screenSize?: string; gpu?: string;
 }
+
+/** The two words the entry form uses, for a storage or RAM value printed alone. */
+export const STORAGE_ALONE_LABEL = 'Storage';
+export const RAM_ALONE_LABEL = 'RAM';
+
+/**
+ * "256GB/16GB", or a labelled single value, or ''. Storage first — see above.
+ */
+export const storageRamSlot = (storage?: string, ram?: string): string => {
+  const s = (storage || '').toString().trim();
+  const r = (ram || '').toString().trim();
+  if (s && r) return `${s}/${r}`;
+  if (s) return `${STORAGE_ALONE_LABEL} ${s}`;
+  if (r) return `${RAM_ALONE_LABEL} ${r}`;
+  return '';
+};
 
 export const laptopPrintSpecs = (item: LaptopSpecFields): LaptopPrintSpecs => {
   const t = (v?: string) => (v || '').toString().trim();
-  const drive = [t(item.storage), t(item.storageType)].filter(Boolean).join(' ');
   return {
-    main: [t(item.cpu), t(item.ram), drive].filter(Boolean).join(' · '),
+    main: [t(item.cpu), storageRamSlot(item.storage, item.ram)].filter(Boolean).join(' · '),
     gpu: t(item.gpu),
     screen: t(item.screenSize),
   };

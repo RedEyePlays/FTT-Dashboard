@@ -175,9 +175,10 @@ const lap = (p: Partial<InventoryItem> = {}): InventoryItem => dev({
 } as Partial<InventoryItem>);
 
 describe('a laptop shelf tag prints laptop specs', () => {
-  it('shows CPU, RAM and storage — the specs ARE the difference on a shelf of laptops', () => {
+  it('shows CPU and storage/RAM — the specs ARE the difference on a shelf of laptops', () => {
     const html = tagBody(lap(), 'FlipThatTech');
-    expect(html).toContain('i7-12700H · 32GB · 1TB SSD');
+    // Storage first, RAM second — the owner's convention (domain/deviceSpecs.ts).
+    expect(html).toContain('i7-12700H · 1TB/32GB');
     expect(html).toContain('Dell XPS 15 9520');   // the owner's own name, unchanged
     expect(html).toContain('$1899.99');
   });
@@ -202,7 +203,7 @@ describe('a laptop shelf tag prints laptop specs', () => {
     // slot reads as missing data; an absent line reads as "no discrete GPU".
     const html = tagBody(lap({ gpu: '' }), 'FlipThatTech');
     expect(html).not.toContain('specs gpu');
-    expect(html).toContain('i7-12700H · 32GB · 1TB SSD');
+    expect(html).toContain('i7-12700H · 1TB/32GB');
     // No orphaned separator anywhere, and nothing standing in for the GPU.
     expect(html).not.toMatch(/·\s*<\//);
     expect(html).not.toMatch(/>\s*·/);
@@ -227,14 +228,27 @@ describe('a laptop shelf tag prints laptop specs', () => {
 
   it('partial specs collapse cleanly rather than printing separators around a gap', () => {
     const html = tagBody(lap({ cpu: '', ram: '', gpu: '' }), 'FlipThatTech');
-    expect(html).toContain('<div class="specs">1TB SSD</div>');  // storage alone, no leading ·
+    // Storage alone, labelled so it cannot be read as RAM, no leading · and
+    // no half of a slash pair.
+    expect(html).toContain('<div class="specs">Storage 1TB</div>');
     expect(html).not.toMatch(/"specs">\s*·/);
+    expect(html).not.toContain('1TB/');
   });
 
-  it('storage type rides with the capacity rather than taking a separator of its own', () => {
-    expect(tagBody(lap({ storageType: 'HDD' }), 'FlipThatTech')).toContain('1TB HDD');
-    // …and a capacity with no type recorded is just the capacity.
-    expect(tagBody(lap({ storageType: undefined }), 'FlipThatTech')).toContain('32GB · 1TB<');
+  it("the owner's laptops TODAY — storage only, nothing else — print a clean line", () => {
+    // Every laptop currently in the workspace predates these fields.
+    const html = tagBody(lap({ cpu: '', ram: '', gpu: '', screenSize: '', storage: '256GB', storageType: undefined }), 'FlipThatTech');
+    expect(html).toContain('<div class="specs">Storage 256GB</div>');
+    expect(html).not.toContain('specs gpu');
+    expect(html).not.toContain('tag-screen');
+    expect(html).not.toContain('·');
+  });
+
+  it('storage type is no longer printed on the tag', () => {
+    // Dropped from print with the new compact format — still on the record.
+    expect(tagBody(lap({ storageType: 'HDD' }), 'FlipThatTech')).not.toContain('HDD');
+    expect(tagBody(lap({ storageType: 'SSD' }), 'FlipThatTech')).not.toContain('SSD');
+    expect(tagBody(lap({ storageType: 'SSD' }), 'FlipThatTech')).toContain('1TB/32GB');
   });
 });
 
@@ -243,8 +257,8 @@ describe('screen size goes in the corner the QR does not already own', () => {
     const html = tagBody(lap(), 'FlipThatTech');
     // esc() escapes only < > & — a quote in a screen size passes through.
     expect(html).toContain('<div class="tag-screen">15.6"</div>');
-    // Not on the spec line — that line is CPU/RAM/storage only.
-    expect(html).toMatch(/<div class="specs">i7-12700H · 32GB · 1TB SSD<\/div>/);
+    // Not on the spec line — that line is CPU and storage/RAM only.
+    expect(html).toMatch(/<div class="specs">i7-12700H · 1TB\/32GB<\/div>/);
   });
 
   it('and is omitted entirely when not recorded', () => {
@@ -332,9 +346,10 @@ describe('the laptop tag fits the 36mm label too — the second spec line is pai
   });
 
   it('the laptop spec font is smaller than the phone\'s, because its line is far longer', () => {
-    // Measured: "Ryzen 7 5800H · 32GB · 1TB SSD" is 73.0mm at the phone's
-    // 4.6mm against a 65mm column — 8mm of silent ellipsis. At 3.7mm it is
-    // 58.7mm, 6.3mm clear.
+    // Measured: the old "Ryzen 7 5800H · 32GB · 1TB SSD" was 73.0mm at the
+    // phone's 4.6mm against a 65mm column — 8mm of silent ellipsis. At 3.7mm
+    // it was 58.7mm, 6.3mm clear. The new "Ryzen 7 5800H · 1TB/32GB" is
+    // shorter still, so the margin only grew.
     const lapSpecs = TAG_STYLE.match(/\.laptop \.specs\s*\{[^}]*\}/)![0];
     expect(parseFloat(lapSpecs.match(/font-size:\s*([\d.]+)mm/)![1])).toBeLessThan(sizeOf('.specs'));
   });

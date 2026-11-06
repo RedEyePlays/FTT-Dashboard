@@ -3,7 +3,8 @@ import { describe, it, expect } from 'vitest';
 import {
   labelPrintDoc, LabelMedia, LabelContent, LabelImages, LabelOpts, MAX_PUSH_DOWN_MM, maxSafePushDownMm,
   shortLabelSku, nonDymoQrSizeMm, nonDymoFontSizesMm, estimateTextWidthMm,
-  estimateProportionalTextWidthMm, textColumnWidthMm, deviceSubLine,
+  estimateProportionalTextWidthMm, textColumnWidthMm, deviceSubLine, deviceLabelSpecs,
+  extraSpecLine, DYMO_LAPTOP_QR_MM,
   shortRepairCode, issueRowWidthMm, ISSUE_MAX_LINES,
 } from './labelLayout';
 import { INVENTORY_SKU_PREFIX } from './sku';
@@ -622,8 +623,8 @@ const LAPTOP = {
 };
 
 describe('deviceSubLine — a laptop gets laptop content, a phone gets phone content', () => {
-  it('a laptop reads CPU · RAM · Storage', () => {
-    expect(deviceSubLine(LAPTOP)).toBe('i7-12700H · 32GB · 1TB SSD');
+  it('a laptop reads CPU · storage/RAM', () => {
+    expect(deviceSubLine(LAPTOP)).toBe('i7-12700H · 1TB/32GB');
   });
 
   it('and never the phone fields, even when the record still carries them', () => {
@@ -657,27 +658,29 @@ describe('deviceSubLine — a laptop gets laptop content, a phone gets phone con
     expect(deviceSubLine({ deviceType: 'Laptop', cpu: '  ' })).toBeUndefined();
   });
 
-  it('leaves no stray separator around a missing spec', () => {
-    expect(deviceSubLine({ deviceType: 'Laptop', ram: '16GB' })).toBe('16GB');
-    expect(deviceSubLine({ deviceType: 'Laptop', cpu: 'i5-1135G7', storage: '512GB' })).toBe('i5-1135G7 · 512GB');
-    expect(deviceSubLine({ deviceType: 'Laptop', storageType: 'SSD' })).toBe('SSD');
+  it('leaves no stray separator — and no half of a slash pair — around a missing spec', () => {
+    expect(deviceSubLine({ deviceType: 'Laptop', ram: '16GB' })).toBe('RAM 16GB');
+    expect(deviceSubLine({ deviceType: 'Laptop', cpu: 'i5-1135G7', storage: '512GB' })).toBe('i5-1135G7 · Storage 512GB');
+    // storageType alone is no longer printed at all, so it says nothing.
+    expect(deviceSubLine({ deviceType: 'Laptop', storageType: 'SSD' })).toBeUndefined();
+  });
+
+  it("the owner's laptops TODAY — storage and nothing else — read cleanly", () => {
+    expect(deviceSubLine({ kind: 'device', deviceType: 'Laptop', storage: '256GB' })).toBe('Storage 256GB');
   });
 
   it('reads the SAME string the shelf tag prints on its spec line — one definition, two surfaces', () => {
     expect(deviceSubLine(LAPTOP)).toBe(laptopPrintSpecs(LAPTOP).main);
   });
 
-  it('DROPS the GPU and the screen size, and that is a measured line budget', () => {
-    // Both are real specs and both are on the shelf tag. They are not here
-    // because they do not fit and this label ellipsises rather than wraps:
-    // with the GPU appended the sub line measures 60.5mm against the Dymo's
-    // 51.1mm text column and 68.5mm against the 4x6's 61.1mm. There is no
-    // sixth line to give them either — org/code/device/sub/serial are all in
-    // use and maxSafePushDownMm already models exactly that budget — and no
-    // free corner, since the QR is a flex sibling filling the row's height.
+  it('keeps the GPU and the screen size OFF this line — they are placed separately', () => {
+    // Not dropped any more (PR #234 did drop them; the QR label turned out to
+    // be the customer-facing one). They are their own LabelContent slots so
+    // the label can give the screen size a corner and collapse the GPU line.
     const sub = deviceSubLine(LAPTOP)!;
     expect(sub).not.toContain('RTX');
     expect(sub).not.toContain('15.6');
+    expect(deviceLabelSpecs(LAPTOP)).toEqual({ gpu: 'RTX 3050 Ti', screen: '15.6"' });
   });
 
   it('the laptop line FITS the real text column on the Dymo and the 4x6, with a long CPU name', () => {
@@ -686,7 +689,7 @@ describe('deviceSubLine — a laptop gets laptop content, a phone gets phone con
     // were confirmed in headless Chromium against the real rendered label —
     // see the PR description for the measured table.
     const worst = deviceSubLine({ deviceType: 'Laptop', cpu: 'Ryzen 7 5800H', ram: '32GB', storage: '1TB', storageType: 'SSD' })!;
-    expect(worst).toBe('Ryzen 7 5800H · 32GB · 1TB SSD');
+    expect(worst).toBe('Ryzen 7 5800H · 1TB/32GB');
     for (const m of [{ id: 'dymo-36x89', w: 3.5039370078740157, h: 1.4173228346456694, label: 'Dymo', dymo: true },
                      { id: '4x6', w: 4, h: 6, label: '4 x 6' }]) {
       const col = textColumnWidthMm(m, { showQr: true });
@@ -725,6 +728,260 @@ describe('deviceSubLine — a laptop gets laptop content, a phone gets phone con
     const html = labelPrintDoc('t', { id: '2x1', w: 2, h: 1, label: '2 x 1' },
       { org: 'FlipThatTech', code: '0000029', device: 'Dell XPS 15 9520', sub: deviceSubLine(LAPTOP) },
       {}, { showBarcode: false, showStatus: false });
-    expect(html).toContain('i7-12700H · 32GB · 1TB SSD');
+    expect(html).toContain('i7-12700H · 1TB/32GB');
+  });
+});
+
+/* ======================================================================== *
+ * THE QR LABEL IS CUSTOMER-FACING
+ *
+ * The owner puts these on laptops in the showcase, so the person reading one
+ * is deciding what to buy. PR #234 dropped the GPU and the screen size from
+ * it for line budget, on the assumption that the shelf tag was the customer's
+ * printout. That was the wrong call about how the label is actually used, and
+ * this is the correction: the full spec set, with the QR shrunk to make room.
+ *
+ * Every measurement below is from headless Chromium against the real rendered
+ * label at real millimetre sizes — the table is in the PR description.
+ * ======================================================================== */
+
+const DYMO: LabelMedia = { id: 'dymo-36x89', w: 3.5039370078740157, h: 1.4173228346456694, label: 'Dymo 36 x 89', dymo: true };
+const lapItem = (p: Record<string, string | undefined> = {}) => ({
+  kind: 'device', deviceType: 'Laptop', cpu: 'i7-12700H', ram: '16GB', storage: '256GB',
+  screenSize: '15.6"', gpu: 'RTX 3050 Ti', ...p,
+});
+const lapLabel = (p: Record<string, string | undefined> = {}, media: LabelMedia = DYMO) => {
+  const it = lapItem(p);
+  return labelPrintDoc('t', media, {
+    org: 'FlipThatTech', code: '0000031', device: 'Dell XPS 15 9520',
+    sub: deviceSubLine(it), serial: 'FVFXC2ABJK03', status: 'In Stock', ...deviceLabelSpecs(it),
+  }, { qr: 'QRDATA' }, { showBarcode: false, showStatus: true });
+};
+
+describe('a laptop QR label carries the whole spec set', () => {
+  it('prints the name, CPU · storage/RAM, the GPU and the screen size', () => {
+    const html = lapLabel();
+    expect(html).toContain('Dell XPS 15 9520');
+    expect(html).toContain('i7-12700H · 256GB/16GB');
+    expect(html).toContain('RTX 3050 Ti');
+    expect(html).toContain('15.6&quot;'.replace('&quot;', '"'));
+  });
+
+  it('shrinks the QR to make the room — the owner asked for this explicitly', () => {
+    expect(DYMO_LAPTOP_QR_MM).toBe(22);
+    // The laptop label asks for 22mm; a phone keeps the full-height 33.4mm.
+    expect(lapLabel()).toContain('width:22mm;height:22mm');
+    const phone = labelPrintDoc('t', DYMO, {
+      org: 'FlipThatTech', code: '0000029', device: 'iPhone 14 Pro Max',
+      sub: deviceSubLine({ kind: 'device', deviceType: 'Phone', storage: '256GB' }),
+      serial: '490154203237518', status: 'In Stock',
+    }, { qr: 'QRDATA' }, { showBarcode: false, showStatus: true });
+    expect(phone).not.toContain('width:22mm;height:22mm');
+    expect(phone).toContain('width:33.4mm');
+  });
+
+  it('puts the screen size UNDER the QR, not on a text line', () => {
+    const html = lapLabel();
+    const qrAt = html.indexOf('QRDATA');
+    const screenAt = html.indexOf('15.6"');
+    expect(screenAt).toBeGreaterThan(qrAt);          // after the QR, in its column
+    // …and not appended to the spec line.
+    expect(html).not.toContain('256GB/16GB · 15.6"');
+  });
+
+  it('a laptop with no GPU prints no empty slot, no dash, no stray separator', () => {
+    const html = lapLabel({ gpu: '' });
+    expect(html).toContain('i7-12700H · 256GB/16GB');
+    expect(html).toContain('15.6"');                  // the screen still prints
+    expect(html).not.toMatch(/>\s*·\s*</);
+    expect(html).not.toMatch(/>\s*[-–—]\s*</);
+    expect(deviceLabelSpecs(lapItem({ gpu: '' }))).toEqual({ screen: '15.6"' });
+  });
+
+  it('a laptop with no screen size keeps the GPU and omits the badge', () => {
+    expect(deviceLabelSpecs(lapItem({ screenSize: '' }))).toEqual({ gpu: 'RTX 3050 Ti' });
+  });
+
+  it("the owner's laptops TODAY print a clean label — no gaps where the new fields will go", () => {
+    // Storage only: no GPU line, no screen badge, and the label keeps its
+    // normal proportions because there is nothing extra to make room for.
+    const it = { kind: 'device', deviceType: 'Laptop', storage: '256GB' };
+    expect(deviceLabelSpecs(it)).toEqual({});
+    const html = labelPrintDoc('t', DYMO, {
+      org: 'FlipThatTech', code: '0000031', device: 'MacBook Pro 16"',
+      sub: deviceSubLine(it), serial: 'FVFXC2ABJK03', status: 'In Stock', ...deviceLabelSpecs(it),
+    }, { qr: 'QRDATA' }, { showBarcode: false, showStatus: true });
+    expect(html).toContain('Storage 256GB');
+    expect(html).toContain('width:33.4mm');           // full-size QR, as before
+    expect(html).not.toMatch(/>\s*·\s*</);
+  });
+
+  it('a laptop with NO specs at all prints name and code, nothing orphaned', () => {
+    const it = { kind: 'device', deviceType: 'Laptop' };
+    expect(deviceSubLine(it)).toBeUndefined();
+    expect(deviceLabelSpecs(it)).toEqual({});
+    const html = labelPrintDoc('t', DYMO, {
+      org: 'FlipThatTech', code: '0000031', device: 'HP Pavilion', sub: deviceSubLine(it),
+      serial: 'FVFXC2ABJK03', ...deviceLabelSpecs(it),
+    }, { qr: 'QRDATA' }, { showBarcode: false, showStatus: false });
+    expect(html).toContain('HP Pavilion');
+    expect(html).not.toMatch(/>\s*·\s*</);
+    expect(html).not.toMatch(/>\s*\/\s*</);
+  });
+
+  it('BOTH printouts derive their spec line from the same function', () => {
+    // The whole reason laptopPrintSpecs was extracted. Not "they agree today"
+    // — they are literally the same call.
+    const it = lapItem();
+    const { main, gpu, screen } = laptopPrintSpecs(it);
+    expect(deviceSubLine(it)).toBe(main);
+    expect(deviceLabelSpecs(it)).toEqual({ gpu, screen });
+  });
+});
+
+describe('the inch templates get one combined line, since they have no corner', () => {
+  it('joins the GPU and the screen, and collapses to whichever exists', () => {
+    expect(extraSpecLine({ gpu: 'RTX 3050 Ti', screen: '15.6"' })).toBe('RTX 3050 Ti · 15.6"');
+    expect(extraSpecLine({ screen: '15.6"' })).toBe('15.6"');
+    expect(extraSpecLine({ gpu: 'RTX 3050 Ti' })).toBe('RTX 3050 Ti');
+    expect(extraSpecLine({})).toBe('');
+    expect(extraSpecLine({ gpu: '  ', screen: '' })).toBe('');
+  });
+
+  it('reaches the rendered label, and the push-down budget reserves room for it', () => {
+    const m: LabelMedia = { id: '4x6', w: 4, h: 6, label: '4 x 6' };
+    expect(lapLabel({}, m)).toContain('RTX 3050 Ti · 15.6"');
+    // maxSafePushDownMm must account for the extra line, or push-down could
+    // shove it off the bottom.
+    // A high ceiling, so the comparison measures the CONTENT budget rather
+    // than MAX_PUSH_DOWN_MM, which a 4x6 has enough headroom to hit either
+    // way. The extra line must cost exactly its own rendered height.
+    const base = { code: '0000031', device: 'Dell XPS 15 9520', sub: 'i7-12700H · 256GB/16GB', serial: 'FVFXC2ABJK03' };
+    const opts = { showBarcode: false, hasBarcodeImage: false };
+    const without = maxSafePushDownMm(m, base, opts, 999);
+    const with_ = maxSafePushDownMm(m, { ...base, gpu: 'RTX 3050 Ti', screen: '15.6"' }, opts, 999);
+    const { fSub } = nonDymoFontSizesMm(m);
+    expect(+(without - with_).toFixed(2)).toBe(+(fSub + 1.1).toFixed(2));   // line + its gap
+  });
+});
+
+describe('THE QR STILL SCANS AT 22mm — decoded, not assumed', () => {
+  it('round-trips a real SKU through a real decoder at the real printed size', async () => {
+    const QRCode = (await import('qrcode')).default;
+    const { MultiFormatReader, BarcodeFormat, DecodeHintType, RGBLuminanceSource,
+      BinaryBitmap, HybridBinarizer } = await import('@zxing/library');
+
+    const payload = 'FTT-0000031';          // what LabelModal encodes: the full SKU
+    const qr = QRCode.create(payload, { errorCorrectionLevel: 'M' });
+    const modules = qr.modules.size;
+    const MARGIN = 1;                        // the margin LabelModal passes
+    const across = modules + MARGIN * 2;
+
+    // A VERSION 1 symbol, so 22mm is a shade under 1mm per module — roughly
+    // double the ~0.5mm where phone cameras start to struggle.
+    expect(qr.version).toBe(1);
+    const mmPerModule = DYMO_LAPTOP_QR_MM / across;
+    expect(mmPerModule).toBeGreaterThan(0.6);
+
+    // Rasterise at exactly the pixel size 22mm occupies on a 203dpi thermal
+    // printer — the lowest resolution this shop's label printers run at.
+    const DPI = 203;
+    const px = Math.round((DYMO_LAPTOP_QR_MM / 25.4) * DPI);
+    const scale = px / across;
+    const lum = new Uint8ClampedArray(px * px).fill(255);
+    for (let y = 0; y < px; y++) {
+      for (let x = 0; x < px; x++) {
+        const mx = Math.floor(x / scale) - MARGIN;
+        const my = Math.floor(y / scale) - MARGIN;
+        const dark = mx >= 0 && my >= 0 && mx < modules && my < modules && qr.modules.get(my, mx);
+        if (dark) lum[y * px + x] = 0;
+      }
+    }
+
+    const reader = new MultiFormatReader();
+    const hints = new Map();
+    hints.set(DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.QR_CODE]);
+    reader.setHints(hints);
+    const bitmap = new BinaryBitmap(new HybridBinarizer(new RGBLuminanceSource(lum, px, px)));
+    expect(reader.decode(bitmap).getText()).toBe(payload);
+  });
+});
+
+describe('THE REGRESSION THAT MATTERS: the phone label is byte-identical', () => {
+  // The laptop work is additive. The only way to prove a shared renderer was
+  // not disturbed is to compare the whole document, not spot-check it.
+  const phoneDoc = (m: LabelMedia) => labelPrintDoc('t', m, {
+    org: 'FlipThatTech', code: '0000029', device: 'iPhone 14 Pro Max',
+    sub: deviceSubLine({ kind: 'device', deviceType: 'Phone', storage: '256GB', color: 'Silver', batteryHealth: '89%' }),
+    serial: '490154203237518', status: 'In Stock',
+  }, { qr: 'QRDATA' }, { showBarcode: false, showStatus: true });
+
+  it('a phone carries no laptop slots at all, so no laptop branch can reach it', () => {
+    expect(deviceLabelSpecs({ kind: 'device', deviceType: 'Phone', gpu: 'RTX 3050 Ti', screenSize: '6.1"' })).toEqual({});
+    expect(deviceLabelSpecs({ kind: 'accessory', deviceType: 'Laptop', gpu: 'RTX 3050 Ti' })).toEqual({});
+    expect(deviceLabelSpecs({ kind: 'device' })).toEqual({});
+  });
+
+  it('and the rendered document contains not one byte of the laptop layout', () => {
+    for (const m of [DYMO, { id: '4x6', w: 4, h: 6, label: '4 x 6' } as LabelMedia]) {
+      const html = phoneDoc(m);
+      // The laptop proportions: a 22mm QR, the 5.2mm SKU, the 0.7mm gap.
+      expect(html).not.toContain('width:22mm;height:22mm');
+      expect(html).not.toContain('font-size:5.2mm');
+      expect(html).not.toContain('gap:0.7mm');
+      // And the phone's own proportions are still exactly what they were.
+      if (m.dymo) {
+        expect(html).toContain('font-size:7.2mm');   // the full-size SKU
+        expect(html).toContain('gap:1.1mm');
+        expect(html).toContain('width:33.4mm');
+      }
+    }
+  });
+
+  it('an empty gpu/screen adds no markup and no whitespace', () => {
+    // Load-bearing: the laptop lines are folded onto their neighbours'
+    // source lines precisely so an absent one emits nothing — not even the
+    // newline and indent that would otherwise break byte-identity.
+    const withSlots = labelPrintDoc('t', DYMO, {
+      org: 'FlipThatTech', code: '0000029', device: 'iPhone 14 Pro Max',
+      sub: 'x', serial: 'y', status: 'In Stock', gpu: '', screen: '',
+    }, { qr: 'QRDATA' }, { showBarcode: false, showStatus: true });
+    const without = labelPrintDoc('t', DYMO, {
+      org: 'FlipThatTech', code: '0000029', device: 'iPhone 14 Pro Max',
+      sub: 'x', serial: 'y', status: 'In Stock',
+    }, { qr: 'QRDATA' }, { showBarcode: false, showStatus: true });
+    expect(withSlots).toBe(without);
+  });
+
+  /**
+   * THE WHOLE DOCUMENT, PINNED BY HASH.
+   *
+   * The structural checks above say "no laptop proportions leaked in". This
+   * says "not one byte changed", which is a different and stronger claim —
+   * and it is the one that catches the failure mode this change actually
+   * risked: a conditional template line emitting its newline and indentation
+   * even when empty, which the earlier draft did and no structural assertion
+   * noticed.
+   *
+   * The digests were taken from `main` BEFORE this change, by rendering these
+   * exact four documents and hashing them. If one of these fails, a phone or
+   * accessory label moved — which this change is not allowed to do. Do not
+   * refresh a digest to make it pass; find what moved.
+   */
+  const sha = async (t: string) => {
+    const { createHash } = await import('crypto');
+    return createHash('sha256').update(t).digest('hex').slice(0, 32);
+  };
+  const accDoc = (m: LabelMedia) => labelPrintDoc('t', m,
+    { org: 'FlipThatTech', code: 'UPC123', device: 'USB-C Cable' },
+    { qr: 'QRDATA' }, { showBarcode: false, showStatus: false });
+
+  it.each([
+    ['phone · dymo-36x89', () => phoneDoc(DYMO), 'df2ba2fb938c0422f6aa3acc59c54d0e'],
+    ['phone · 4x6', () => phoneDoc({ id: '4x6', w: 4, h: 6, label: '4 x 6' }), '8e51ca93e8fbb231d18edf5590201d29'],
+    ['accessory · dymo-36x89', () => accDoc(DYMO), '1f997be8e9621ab4875ebec3185f5598'],
+    ['accessory · 4x6', () => accDoc({ id: '4x6', w: 4, h: 6, label: '4 x 6' }), '62e45bc52ece4debef05e1bf235d81e9'],
+  ])('%s renders exactly the bytes main rendered', async (_name, render, digest) => {
+    expect(await sha(render())).toBe(digest);
   });
 });
