@@ -315,9 +315,33 @@ const DEVICE_COLS: Col[] = [
   // Profit is only real once the device has actually sold (Date Sold set). Until
   // then show '—' — never compute a profit against an unrealized/placeholder price.
   { key: '__profit', label: 'Profit', type: 'computed', w: 84, min: 48, max: 130, align: 'right', compute: i => i.soldDate ? money(profitOf(i)) : '—', sortVal: i => (i.soldDate ? profitOf(i) : 0) },
-  // Sale group. (The device Status column is intentionally not shown in the
-  // grid — status is still stored and driven via the Filters, the item form,
-  // bulk actions, sold detection and analytics.)
+  /* ---------------- STATUS IS A REAL COLUMN NOW ----------------
+   *
+   * It used to say here that Status was "intentionally not shown in the grid"
+   * because the Filters, the form and analytics all carried it. That held for
+   * the SCREEN and was never true of the FILE: an export had no status at all,
+   * so a device on the repair bench, one reserved against a layaway and one
+   * sitting ready on the shelf came out identical. Anybody working from the
+   * sheet could not tell a bench from stock.
+   *
+   * HIDDEN BY DEFAULT ON EVERY TAB, ALWAYS IN THE EXPORT.
+   *
+   * On Sold and In Transit it is the same word on every row by definition. On
+   * Phones, Laptops and Other it is "ready" for most rows, and the grid
+   * already surfaces the exceptions far better than a column would — the
+   * status Filter, and the two stale-repair flags beside it. So on screen it
+   * is a toggle away in the Columns menu rather than ~90px of mostly-identical
+   * text on a grid that is already tight at 1024px.
+   *
+   * The file is the opposite case: there are no filters in a spreadsheet, so
+   * the column is always written. `activeCols` is cost-filtered only, never
+   * hidden-filtered, which is what makes that true — see `exportTab`.
+   *
+   * The cell renderer for this key (the coloured pill with STATUS_SHORT) was
+   * already written and sitting unused; this is the column it was waiting for.
+   */
+  { key: 'deviceStatus', label: 'Status', type: 'select', w: 104, min: 64, max: 150, options: STATUS_OPTS },
+  // Sale group.
   { key: 'soldDate', label: 'Date Sold', type: 'date', w: 96, min: 50, max: 150 },
   // Notes before Customer: `soldTo` is only filled in after a sale, so it reads
   // last. Both columns keep every property they had — this is a reorder only,
@@ -359,10 +383,24 @@ const DEFAULT_HIDDEN: Record<'device' | 'accessory', string[]> = { device: ['con
 /** The laptop spec columns, named once so the per-tab lists cannot drift. */
 const SPEC_COLS = ['cpu', 'ram', 'storageType', 'screenSize', 'gpu'];
 
+/**
+ * Status, hidden by default on every device tab — see DEVICE_COLS for why.
+ *
+ * DELIBERATELY NOT ADDED TO `DEFAULT_HIDDEN.device`, which looks like the
+ * obvious place and is a trap. That constant is also the yardstick
+ * `legacyCustomised` measures a stored layout against: adding a key to it
+ * would make every owner whose saved set is the old `['condition']` suddenly
+ * read as "has customised their columns", which flips the Phones tab onto a
+ * different branch of `hiddenFor` for people who have never touched a column.
+ * The per-tab lists below are the right place, and `hiddenFor` adds it to the
+ * legacy branch explicitly.
+ */
+const STATUS_COL = 'deviceStatus';
+
 const TAB_HIDDEN_DEFAULT: Partial<Record<InvSection, string[]>> = {
   // PHONES: exactly today's layout. The five spec columns are new, so hiding
   // them here is not a change to what anybody currently sees.
-  phones: ['condition', ...SPEC_COLS],
+  phones: [STATUS_COL, 'condition', ...SPEC_COLS],
   // LAPTOPS: the specs, and none of the phone fields.
   //
   // `batteryHealth` and `color` go because they are ALWAYS BLANK on a laptop —
@@ -373,23 +411,23 @@ const TAB_HIDDEN_DEFAULT: Partial<Record<InvSection, string[]>> = {
   //
   // There is no `carrier` column in this grid to hide — carrier is a form
   // field only, so the brief's third phone column does not apply here.
-  laptops: ['condition', 'color', 'batteryHealth'],
+  laptops: [STATUS_COL, 'condition', 'color', 'batteryHealth'],
   // OTHER spans tablets, watches, consoles and desktop PCs — four shapes with
   // little in common. The shared answer is the PHONE-ISH set: storage, colour
   // and battery health are all real on a tablet and a watch, and a console or
   // a PC simply leaves them blank. The laptop specs are hidden because four of
   // five of those kinds have no use for them; a desktop PC that does is one
   // toggle away, and a build's parts live on the build itself.
-  other: ['condition', ...SPEC_COLS],
+  other: [STATUS_COL, 'condition', ...SPEC_COLS],
   // SOLD spans every type, so it keeps a NEUTRAL set — today's columns. Any
   // type-specific guess here would be wrong for most of the rows in it.
-  sold: ['condition', ...SPEC_COLS],
+  sold: [STATUS_COL, 'condition', ...SPEC_COLS],
   // IN TRANSIT spans types for the same reason Sold does — a phone and a
   // laptop can be in the same car (multi-store stage 4) — so it takes the
   // same neutral set. Without an entry here it would fall through to the
   // legacy per-kind default, which no longer hides the spec columns now that
   // they are real, and the tab would show CPU and GPU on a list of phones.
-  intransit: ['condition', ...SPEC_COLS],
+  intransit: [STATUS_COL, 'condition', ...SPEC_COLS],
 };
 
 /**
@@ -430,8 +468,8 @@ const visibleCols = (cols: Col[], canViewCost: boolean): Col[] =>
 // own: a masked column with an exportable value underneath is a mask in name
 // only. Every row goes through stripCostFields first, which replaces a
 // recorded cost with the word rather than the figure.
-const toCSV = (rows: InventoryItem[], cols: Col[], canViewCost: boolean): string => {
-  const headers = ['kind', ...cols.filter(c => c.type !== 'computed').map(c => c.key)];
+const toCSV = (rows: InventoryItem[], cols: Col[], canViewCost: boolean, withKind = true): string => {
+  const headers = [...(withKind ? ['kind'] : []), ...cols.filter(c => c.type !== 'computed').map(c => c.key)];
   const esc = (v: any) => `"${String(v ?? '').replace(/"/g, '""')}"`;
   const lines = rows.map(r => {
     const safe = stripCostFields(r as unknown as Record<string, unknown>, canViewCost);
@@ -439,6 +477,28 @@ const toCSV = (rows: InventoryItem[], cols: Col[], canViewCost: boolean): string
   });
   return [headers.join(','), ...lines].join('\n');
 };
+/**
+ * WHICH KIND A CSV ROW IS.
+ *
+ * `kind` when the column is there — unchanged, so every file exported before
+ * this imports exactly as it did.
+ *
+ * WHEN IT IS ABSENT, INFER IT. A per-tab export has no `kind` column (every
+ * row in it is the same kind, so the column would be a constant), and the old
+ * rule treated a missing value as 'device' — which would have quietly turned
+ * a re-imported Accessories sheet into devices. The giveaway is a column only
+ * an accessory has; none of these appears in DEVICE_COLS, so a device sheet
+ * can never match.
+ *
+ * This WIDENS what import accepts rather than changing it: a row carrying
+ * `kind` is read from `kind`, exactly as before.
+ */
+const ACCESSORY_ONLY_KEYS = ['quantity', 'costPerUnit', 'sellingPrice', 'lowStockThreshold', 'category', 'manufacturerBarcode'];
+export const importedKind = (r: Record<string, string>): ItemKind => {
+  if (r.kind) return r.kind === 'accessory' ? 'accessory' : 'device';
+  return ACCESSORY_ONLY_KEYS.some(k => k in r) ? 'accessory' : 'device';
+};
+
 const parseCSV = (text: string): Record<string, string>[] => {
   const rows: string[][] = [];
   let cur: string[] = [], val = '', q = false;
@@ -515,7 +575,7 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
    */
   const [hiddenByTab, setHiddenByTab] = useState<Partial<Record<InvSection, string[]>>>(() => loadLS(LS_HIDDEN_BY_TAB, {}));
   const [views, setViews] = useState<SavedView[]>(() => loadLS(LS_VIEWS, []));
-  const [menu, setMenu] = useState<null | 'cols' | 'views' | 'filter'>(null);
+  const [menu, setMenu] = useState<null | 'cols' | 'views' | 'filter' | 'export'>(null);
   const [expandItem, setExpandItem] = useState<InventoryItem | null>(null);
   const [labelItem, setLabelItem] = useState<InventoryItem | null>(null);
   const [colW, setColW] = useState<ColWidths>(() => loadLS(LS_COLW, { device: {}, accessory: {} }));
@@ -850,17 +910,69 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
     printShelfTagsBatch(items, { storeName: getStoreProfile().storeName });
   };
 
-  const exportCSV = (rows: InventoryItem[], cols: Col[], name: string) => {
-    const blob = new Blob([toCSV(rows, cols, canViewCost)], { type: 'text/csv;charset=utf-8;' });
+  const exportCSV = (rows: InventoryItem[], cols: Col[], name: string, withKind = true) => {
+    const blob = new Blob([toCSV(rows, cols, canViewCost, withKind)], { type: 'text/csv;charset=utf-8;' });
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `${name}_${today()}.csv`; a.click();
   };
-  const exportAll = () => exportCSV(inventory, visibleCols([...DEVICE_COLS, ...ACCESSORY_COLS], canViewCost), 'inventory');
+
+  /* ---------------- EXPORT WHAT IS ON THE SCREEN ----------------
+   *
+   * The export used to hand `exportCSV` the raw `inventory` array and the
+   * union of DEVICE_COLS and ACCESSORY_COLS. Selecting Laptops and pressing
+   * Export produced all 640 rows in the workspace — every accessory, 388 sold
+   * devices — in a sheet with two record shapes jammed together, so it
+   * carried `kind` plus a duplicate `date`, `sku` and `item`, and half of
+   * every row was empty.
+   *
+   * `activeRows` and `activeCols` are what the grid itself renders, and they
+   * already have the tab, the search box, the status filter (stale- and
+   * orphaned-repair flags included) and the sort applied. Exporting those is
+   * the whole fix for the first fault: there is now ONE source for "what is
+   * being looked at", so the file and the screen cannot disagree again.
+   *
+   * `activeCols` is filtered for COST PERMISSION ONLY, never for hidden-ness,
+   * which is deliberate and load-bearing: Status is hidden by default, and a
+   * column that silently dropped out of the file because it was hidden on
+   * screen would be this same bug wearing a different hat.
+   *
+   * No `kind` column — every tab holds one kind, so it would be a constant.
+   * `importCSV` infers the kind when the column is absent (see there), so
+   * these files still round-trip.
+   */
+  const exportTab = () => exportCSV(activeRows, activeCols, page, false);
+
+  /**
+   * EVERYTHING, AS A DELIBERATE SECOND ACTION.
+   *
+   * Still a real need — backups, the accountant, a bulk edit in a
+   * spreadsheet — so it keeps its own entry rather than being removed. What
+   * must not happen is the old behaviour, where the obvious button quietly
+   * did the broad thing.
+   *
+   * It is a small menu off the Export button rather than a second button,
+   * because a menu can SAY WHAT EACH ONE WILL GIVE YOU: the two entries carry
+   * their own row counts, so "Laptops (12 rows)" beside "Everything (640
+   * rows, 2 files)" makes the difference impossible to miss at the moment of
+   * choosing. A second icon button on a toolbar that already has six would
+   * have been one more unlabelled download arrow.
+   *
+   * TWO FILES, not one sheet. A device and an accessory are different record
+   * shapes; merging them is what produced the duplicate headers and the
+   * half-empty rows.
+   */
+  const allDevices = useMemo(() => inventory.filter(i => kindOf(i) === 'device'), [inventory]);
+  const allAccessories = useMemo(() => inventory.filter(i => kindOf(i) === 'accessory'), [inventory]);
+  const exportEverything = () => {
+    exportCSV(allDevices, visibleCols(DEVICE_COLS, canViewCost), 'inventory-devices');
+    exportCSV(allAccessories, visibleCols(ACCESSORY_COLS, canViewCost), 'inventory-accessories');
+    setMenu(null);
+  };
   const importCSV = (file: File) => {
     const reader = new FileReader();
     reader.onload = async e => {
       const rows = parseCSV(String(e.target?.result || ''));
       for (const r of rows) {
-        const k: ItemKind = (r.kind === 'accessory') ? 'accessory' : 'device';
+        const k: ItemKind = importedKind(r);
         const num = (v: string) => parseFloat(v) || 0;
         const base: InventoryItem = {
           id: uid(), kind: k, sku: r.sku || await onGenerateSku(k, (r.deviceType as DeviceType) || undefined),
@@ -928,7 +1040,11 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
     const own = hiddenByTab[tab];
     if (own) return own;
     if (tabKind(tab) === 'accessory') return hidden.accessory;
-    if (tab === 'phones' && legacyCustomised) return hidden.device;
+    // A legacy customised set predates the Status column, so it would leave it
+    // SHOWN for exactly the people who have been most deliberate about their
+    // columns. Union it in; an explicit toggle still wins, because that writes
+    // `hiddenByTab` which is checked above.
+    if (tab === 'phones' && legacyCustomised) return [...hidden.device, STATUS_COL];
     return TAB_HIDDEN_DEFAULT[tab] ?? hidden.device;
   };
   const activeHidden = hiddenFor(page);
@@ -1154,7 +1270,29 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
               )}
             </div>
 
-            <button onClick={exportAll} title="Export CSV" className="hidden md:flex items-center gap-2 px-3 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-700 dark:text-slate-200 hover:border-indigo-400"><Download className="w-4 h-4" /></button>
+            {/* Export — a menu, not a button, so the narrow and the broad
+                action are both named and both carry their row count. */}
+            <div className="relative hidden md:block" onClick={e => e.stopPropagation()}>
+              <button onClick={() => setMenu(menu === 'export' ? null : 'export')} title="Export CSV"
+                className="flex items-center gap-2 px-3 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-700 dark:text-slate-200 hover:border-indigo-400">
+                <Download className="w-4 h-4" />
+              </button>
+              {menu === 'export' && (
+                <div className="absolute right-0 mt-1 w-72 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shadow-lg z-30 p-2">
+                  <button onClick={() => { exportTab(); setMenu(null); }}
+                    className="w-full text-left px-2 py-2 rounded-md hover:bg-slate-100 dark:hover:bg-slate-800">
+                    <span className="block text-sm text-slate-700 dark:text-slate-200">{activeTitle} — {activeRows.length} row{activeRows.length === 1 ? '' : 's'}</span>
+                    <span className="block text-[11px] text-slate-400">What is on screen now: this tab, search, filter and sort.</span>
+                  </button>
+                  <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
+                  <button onClick={exportEverything}
+                    className="w-full text-left px-2 py-2 rounded-md hover:bg-slate-100 dark:hover:bg-slate-800">
+                    <span className="block text-sm text-slate-700 dark:text-slate-200">Everything — {allDevices.length + allAccessories.length} rows, 2 files</span>
+                    <span className="block text-[11px] text-slate-400">All devices and all accessories, sold included, as separate sheets.</span>
+                  </button>
+                </div>
+              )}
+            </div>
             <button onClick={() => fileRef.current?.click()} title="Import CSV" className="hidden md:flex items-center gap-2 px-3 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-700 dark:text-slate-200 hover:border-indigo-400"><Upload className="w-4 h-4" /></button>
             <input ref={fileRef} type="file" accept=".csv" className="hidden" onChange={e => e.target.files?.[0] && importCSV(e.target.files[0])} />
 
