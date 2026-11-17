@@ -1108,6 +1108,34 @@ export function labelPrintDoc(title: string, m: LabelMedia, c: LabelContent, img
 }
 
 /**
+ * MANY INVENTORY LABELS, ONE JOB.
+ *
+ * `labelPrintDoc` above is this with one entry; `dropOffLabelsPrintDoc` below
+ * is the same thing for a different label type. All three go through the one
+ * page builder, which is where the DYMO portrait-media rotation and the
+ * page-break chaining live — so a batch is not a second print path.
+ *
+ * Each entry carries its OWN content, images and options, because a selection
+ * can hold a phone, a laptop and an accessory at once and those render
+ * differently (a laptop has its own layout; an accessory is barcode-only).
+ * Every body is laid out independently, so the per-media fitting that stops a
+ * label overflowing onto the next one (PR #236) applies to each label in the
+ * run exactly as it does to a single print.
+ *
+ * Does NOT auto-print: a batch opens laid out and waits for the operator,
+ * matching services/shelfTag.ts's batch and the drop-off batch below. See
+ * services/inventoryLabel.ts for why that is the confirmation step.
+ */
+export function labelsPrintDoc(
+  title: string,
+  m: LabelMedia,
+  entries: { content: LabelContent; images: LabelImages; opts: LabelOpts }[],
+): string {
+  const u = mkU('mm', 1);
+  return pagesPrintDoc(title, m, entries.map(e => labelBody(u, m, e.content, e.images, e.opts)), { autoPrint: false });
+}
+
+/**
  * The shared print-page builder: wraps already-rendered label bodies (of ANY
  * label type on this system) in the correct physical page for the media, one
  * page per label, chained with page-break-after so a batch prints as a single

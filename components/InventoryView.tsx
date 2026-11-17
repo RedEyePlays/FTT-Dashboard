@@ -12,7 +12,8 @@ import { linkedRepairFor, REPAIR_STATUS_LABEL } from '../domain/repairs';
 import { inRepairTicketFor } from '../domain/repairVisibility';
 import { isStalePendingRepair, isOrphanedPendingRepair, PENDING_REPAIR_STALE_DAYS } from '../domain/alerts';
 import { printShelfTag, printShelfTagsBatch } from '../services/shelfTag';
-import { getStoreProfile } from './SettingsModal';
+import { getStoreProfile, getLabelSizes, getLabelSpacing } from './SettingsModal';
+import { loadLabelPrefs, printInventoryLabelsBatch } from '../services/inventoryLabel';
 import { ItemFormModal } from './ItemFormModal';
 // Lazy: defers jsPDF (~390 kB) until a label is actually printed.
 const LabelModal = lazy(() => import('./LabelModal').then(m => ({ default: m.LabelModal })));
@@ -910,6 +911,32 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
     printShelfTagsBatch(items, { storeName: getStoreProfile().storeName });
   };
 
+  /**
+   * PRINT A QR LABEL FOR EVERY SELECTED ROW, IN ONE JOB.
+   *
+   * The shelf tag has had a bulk action all along; the QR label — the one the
+   * owner puts on a device in the showcase — did not, so putting a shelf of
+   * stock out meant opening the Print Label modal once per device.
+   *
+   * Everything about one label (the template, the Show QR / barcode / status
+   * toggles, the content, the images) comes from the SAME builders the modal
+   * uses, reading the owner's saved preferences — see
+   * services/inventoryLabel.ts. No second set of settings, and nothing to
+   * re-pick per batch.
+   */
+  const bulkPrintLabels = () => {
+    const items = inventory.filter(i => selected.has(i.id));
+    if (items.length === 0) return;
+    const sizes = getLabelSizes();
+    const prefs = loadLabelPrefs(sizes);
+    const media = sizes.find(t => t.id === prefs.template) || sizes[0];
+    if (!media) return;
+    void printInventoryLabelsBatch(items, media, prefs, {
+      storeName: getStoreProfile().storeName,
+      spacing: getLabelSpacing(),
+    });
+  };
+
   const exportCSV = (rows: InventoryItem[], cols: Col[], name: string, withKind = true) => {
     const blob = new Blob([toCSV(rows, cols, canViewCost, withKind)], { type: 'text/csv;charset=utf-8;' });
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `${name}_${today()}.csv`; a.click();
@@ -1381,6 +1408,7 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
                     className="text-sm px-2 py-1 rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-indigo-400 flex items-center gap-1 disabled:opacity-40"><Truck className="w-3.5 h-3.5" /> Send to store</button>
                 )}
                 <button onClick={bulkPrintShelfTags} disabled={bulkBusy} className="text-sm px-2 py-1 rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-indigo-400 flex items-center gap-1 disabled:opacity-40"><Printer className="w-3.5 h-3.5" /> Print Shelf Tags</button>
+                <button onClick={bulkPrintLabels} disabled={bulkBusy} className="text-sm px-2 py-1 rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-indigo-400 flex items-center gap-1 disabled:opacity-40"><QrCode className="w-3.5 h-3.5" /> Print Labels</button>
                 <button onClick={() => exportCSV(inventory.filter(i => selected.has(i.id)), activeCols, 'selection')} className="text-sm px-2 py-1 rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-indigo-400 flex items-center gap-1"><Download className="w-3.5 h-3.5" /> Export</button>
                 <button onClick={bulkDelete} className="text-sm px-2 py-1 rounded-md bg-rose-50 text-rose-600 dark:bg-rose-900/30 dark:text-rose-300 hover:bg-rose-100 flex items-center gap-1"><Trash2 className="w-3.5 h-3.5" /> Delete</button>
                 <button onClick={() => { setSelected(new Set()); setBulkResult(null); }} className="text-sm px-2 py-1 rounded-md text-slate-500 hover:text-slate-700">Clear</button>
@@ -1475,6 +1503,7 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
                   <button onClick={() => setBulkPriceOpen(true)} disabled={bulkBusy} aria-label="Update price" className="tap-target flex items-center justify-center rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 shrink-0 disabled:opacity-40"><DollarSign className="w-4 h-4" /></button>
                   <button onClick={bulkMarkListed} disabled={bulkBusy} aria-label="Mark listed" className="tap-target flex items-center justify-center rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 shrink-0 disabled:opacity-40"><Tag className="w-4 h-4" /></button>
                   <button onClick={bulkPrintShelfTags} disabled={bulkBusy} aria-label="Print shelf tags" className="tap-target flex items-center justify-center rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 shrink-0 disabled:opacity-40"><Printer className="w-4 h-4" /></button>
+                  <button onClick={bulkPrintLabels} disabled={bulkBusy} aria-label="Print labels" className="tap-target flex items-center justify-center rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 shrink-0 disabled:opacity-40"><QrCode className="w-4 h-4" /></button>
                   <button onClick={() => exportCSV(inventory.filter(i => selected.has(i.id)), activeCols, 'selection')} aria-label="Export selection" className="tap-target flex items-center justify-center rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 shrink-0"><Download className="w-4 h-4" /></button>
                   <button onClick={bulkDelete} aria-label="Delete selection" className="tap-target flex items-center justify-center rounded-md bg-rose-50 text-rose-600 dark:bg-rose-900/30 dark:text-rose-300 shrink-0"><Trash2 className="w-4 h-4" /></button>
                   <button onClick={() => { setSelected(new Set()); setBulkResult(null); }} className="text-sm px-2 py-1 rounded-md text-slate-500 shrink-0">Clear</button>
