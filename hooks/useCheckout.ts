@@ -14,7 +14,7 @@ import {
   FloorSettings, floorFor, isBelowFloor, BELOW_FLOOR_WARNING, NO_COST_NOTE, belowFloorStamp,
 } from '../domain/priceFloor';
 import { WarrantySettings, defaultWarrantyDays, stampWarranty, warrantyUntil } from '../domain/warranty';
-import { PersistedCheckoutState, revalidateRestoredCart, describeDroppedLines, checkoutStorageKey } from '../domain/checkoutPersistence';
+import { PersistedCheckoutState, revalidateRestoredCart, describeDroppedLines, checkoutStorageKey, mergeSeededWithRestored } from '../domain/checkoutPersistence';
 import { saveCheckoutState, loadCheckoutState, clearCheckoutState } from '../services/checkoutPersistence';
 
 // All Quick Sale / checkout state, pricing math and the commit-payload builder
@@ -66,6 +66,14 @@ export interface CartLine {
   // A CUSTOMER PC ORDER: the warranty clock starts when they collect it, not
   // when the deposit is taken (domain/warranty.ts).
   startsWarrantyAtPickup?: boolean;
+  // WHICH REPAIR THIS SERVICE LINE IS, for the repair prefill only.
+  //
+  // The cart already tracks a linked repair in `linkedRepairId`, but that is
+  // hook state, not part of the line — so a cart coming back out of
+  // sessionStorage had no way to say which of its lines was the repair. That
+  // is what `mergeSeededWithRestored` needs in order to replace a stale
+  // repair line instead of either stomping the fresh one or duplicating it.
+  repairId?: string;
 }
 
 // A device sold that was flagged listed elsewhere — surfaced on the post-sale
@@ -185,8 +193,12 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
       key: uid(), inventoryId: '', kind: 'accessory', name: p.lineName, code: '',
       quantity: 1, maxQty: 1, unitPrice: p.repairPrice, purchaseCost: p.partsCost,
       repairCost: 0, taxable: true, discount: 0, isCustom: true, category: 'service', addToInventory: false,
+      repairId: p.repairId,
     };
-    setCart(prev => replace ? [line] : [...prev, line]);
+    // Appending also drops any line already in the cart for the SAME repair,
+    // so adding a repair that is already in the cart re-prices it rather than
+    // listing it twice — the same rule the restore merge applies.
+    setCart(prev => replace ? [line] : [...prev.filter(l => l.repairId !== p.repairId), line]);
     // Any deposit was collected earlier — note it for the tech rather than
     // re-collecting it or deferring recognition as a layaway.
     if (p.deposit > 0) setPaymentNotes(`Repair deposit of $${p.deposit.toFixed(2)} already collected — balance due $${Math.max(0, p.repairPrice - p.deposit).toFixed(2)}.`);
@@ -202,9 +214,28 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialCustomer?.id]);
 
+  /**
+   * A REPAIR PREFILL SEEDED THIS MOUNT BEATS THE SAVED CART.
+   *
+   * Declared BEFORE the restore effect below, which used to be the whole
+   * problem: both wrote the cart on mount and the later declaration won by
+   * accident, replacing the just-built repair line (priced from the repair's
+   * CURRENT parts) with the saved one and its stale parts cost. The view is
+   * unmounted and remounted every time the owner leaves Quick Sale
+   * (App.tsx renders it as `{view === 'pos' && …}`), which is exactly what
+   * they do to go and change the parts.
+   *
+   * Neither effect decides the outcome by ordering any more. The cart is
+   * merged by identity in `mergeSeededWithRestored`, and this ref says which
+   * of the scalar fields the restore must leave alone: the ones this seed
+   * owns. Everything else in the save still restores as it always did.
+   */
+  const seededPrefillRef = useRef(false);
+
   // Seed the cart from the ticket's Check Out flow (fresh cart).
   useEffect(() => {
     if (!initialRepair) return;
+    seededPrefillRef.current = true;
     seedRepairPrefill(initialRepair, true);
     onConsumeInitialRepair?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -266,17 +297,29 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
       clearCheckoutState(persistKey);
       return;
     }
-    setCart(revalidated);
-    setCustomerName(saved.customerName);
-    setCustomerPhone(saved.customerPhone);
-    setCustomerEmail(saved.customerEmail);
+    // Functional, and merged rather than assigned: a repair prefill may
+    // already have seeded a line into this same commit (see
+    // seededPrefillRef above). With nothing seeded this is exactly
+    // `setCart(revalidated)`.
+    setCart(prev => mergeSeededWithRestored(prev, revalidated));
+    // THE FIELDS THE SEED OWNS are not overwritten when one ran this mount:
+    // the repair's own customer and its linked id, and the deposit note the
+    // seed wrote. The rest of the saved state restores as it always has —
+    // this is the smallest set that stops the save contradicting the repair
+    // the person just asked to check out.
+    const seeded = seededPrefillRef.current;
+    if (!seeded) {
+      setCustomerName(saved.customerName);
+      setCustomerPhone(saved.customerPhone);
+      setCustomerEmail(saved.customerEmail);
+      setSelectedCustomerId(saved.selectedCustomerId);
+      setLinkedRepairId(saved.linkedRepairId);
+    }
     setCustomerNotes(saved.customerNotes);
-    setSelectedCustomerId(saved.selectedCustomerId);
-    setLinkedRepairId(saved.linkedRepairId);
     setPaymentMethod(saved.paymentMethod);
     setCashTaxStatus(saved.cashTaxStatus);
     setEtransferTaxStatus(saved.etransferTaxStatus);
-    setPaymentNotes(saved.paymentNotes);
+    if (!seeded) setPaymentNotes(saved.paymentNotes);
     setCashAmount(saved.cashAmount);
     setCardAmount(saved.cardAmount);
     setEtransferAmount(saved.etransferAmount);
@@ -517,14 +560,17 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
   };
 
   // ---- mutations ----
+  // The device cart line, built once so the picker and the PC-order seed below
+  // cannot drift apart in what they put in the cart.
+  const deviceLine = (i: InventoryItem): CartLine => ({
+    key: uid(), inventoryId: i.id, kind: 'device', name: getDeviceDisplayName(i),
+    code: i.sku || i.imei, quantity: 1, maxQty: 1, deviceType: i.deviceType,
+    unitPrice: i.targetSalePrice || 0, purchaseCost: i.purchaseCost, repairCost: i.repairCost || 0,
+    taxable: true, discount: 0, listedPlatforms: i.listedPlatforms,
+    openRepairNumber: openRepairFor(i.id, repairs)?.repairNumber,
+  });
   const addDevice = (i: InventoryItem) => {
-    setCart(c => [...c, {
-      key: uid(), inventoryId: i.id, kind: 'device', name: getDeviceDisplayName(i),
-      code: i.sku || i.imei, quantity: 1, maxQty: 1, deviceType: i.deviceType,
-      unitPrice: i.targetSalePrice || 0, purchaseCost: i.purchaseCost, repairCost: i.repairCost || 0,
-      taxable: true, discount: 0, listedPlatforms: i.listedPlatforms,
-      openRepairNumber: openRepairFor(i.id, repairs)?.repairNumber,
-    }]);
+    setCart(c => [...c, deviceLine(i)]);
     setPicker(null); setSearch('');
   };
   // Seed the cart with one named inventory device (a customer PC order's
@@ -534,7 +580,17 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
   useEffect(() => {
     if (!initialInventoryId) return;
     const item = inventory.find(i => i.id === initialInventoryId);
-    if (item && !cart.some(l => l.inventoryId === item.id)) addDevice(item);
+    // NOT the same race as the repair prefill: this effect is declared AFTER
+    // the restore, and it APPENDS functionally, so nothing of its is ever
+    // stomped. Its duplicate guard did have a quieter version of the same
+    // problem — it read the render-time `cart`, which on mount is still `[]`
+    // even though the restore has just queued a cart containing this very
+    // device, so a restored PC-order line could be added a second time. Done
+    // inside the updater it sees the real value.
+    if (item) {
+      setCart(prev => prev.some(l => l.inventoryId === item.id) ? prev : prev.concat(deviceLine(item)));
+      setPicker(null); setSearch('');
+    }
     onConsumeInitialInventory?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialInventoryId]);
