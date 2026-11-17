@@ -6,6 +6,7 @@ import {
   hasPhoneFields, hasLaptopFields, hasBrandModel, hasCondition, requiresItemName,
   laptopSpecLine, strandedFields, LAPTOP_SPEC_FIELDS,
   laptopPrintSpecs, printsLaptopLayout, storageRamSlot,
+  normalizeScreenSize, screenSizeWarning, LAPTOP_SCREEN_MIN_IN, LAPTOP_SCREEN_MAX_IN,
 } from './deviceSpecs';
 import { INV_SECTIONS } from './inventoryNav';
 import { readFileSync } from 'fs';
@@ -468,5 +469,93 @@ describe('printsLaptopLayout — which rows take the laptop printout', () => {
 
   it('a row with no kind is treated as a device, like everywhere else in the app', () => {
     expect(printsLaptopLayout({ deviceType: 'Laptop' })).toBe(true);
+  });
+});
+
+/* ======================================================================== *
+ * A SCREEN SIZE PRINTS AS ONE CLEAN FORM — AND AN IMPOSSIBLE ONE IS FLAGGED
+ *
+ * A real label went out reading 5.6" for a 15.6" laptop. Nothing in the code
+ * can produce that from "15.6" (one writer, a plain text input, no appender,
+ * no truncator — and the value round-trips, asserted below), so the stored
+ * value really was wrong and nothing warned anybody. Hence both halves: one
+ * printed form whatever gets typed, and a visible warning for a size no
+ * laptop has.
+ * ======================================================================== */
+
+describe('normalizeScreenSize', () => {
+  it('prints one clean form whatever the owner typed', () => {
+    // The field is free text with a 15.6" placeholder, so all of these happen.
+    for (const typed of ['15.6"', '15.6', '15.6 inch', '15.6in', '15.6 in', '15.6”', '  15.6 "  ', '15.6inches']) {
+      expect(normalizeScreenSize(typed), `${typed} should normalise`).toBe('15.6"');
+    }
+  });
+
+  it('never doubles a unit the owner already typed', () => {
+    expect(normalizeScreenSize('15.6"')).not.toBe('15.6""');
+    expect(normalizeScreenSize('15.6"')).toBe('15.6"');
+  });
+
+  it('a bare number gains the unit it was missing', () => {
+    // This is the one that printed with NO unit at all before.
+    expect(normalizeScreenSize('14')).toBe('14"');
+    expect(normalizeScreenSize('17.3')).toBe('17.3"');
+  });
+
+  it('round-trips the digits — nothing is truncated', () => {
+    // The 5.6"-for-15.6" report. If this ever fails, it IS a code bug.
+    expect(normalizeScreenSize('15.6"')).toBe('15.6"');
+    expect(normalizeScreenSize('15.6"')).not.toBe('5.6"');
+    expect(laptopPrintSpecs({ screenSize: '15.6"' }).screen).toBe('15.6"');
+    expect(laptopPrintSpecs({ screenSize: '15.6' }).screen).toBe('15.6"');
+  });
+
+  it('says nothing when there is nothing', () => {
+    expect(normalizeScreenSize('')).toBe('');
+    expect(normalizeScreenSize(undefined)).toBe('');
+    expect(normalizeScreenSize('   ')).toBe('');
+    expect(laptopPrintSpecs({})).toEqual({ main: '', gpu: '', screen: '' });
+  });
+
+  it('passes through anything it does not understand rather than mangling it', () => {
+    // A value this cannot read is still the owner's.
+    for (const odd of ['13-14', 'approx 15', 'QHD', '15.6 OLED']) {
+      expect(normalizeScreenSize(odd)).toBe(odd);
+    }
+  });
+});
+
+describe('screenSizeWarning — the 5.6" that nobody caught', () => {
+  it('flags a size no laptop has, and names the range', () => {
+    const w = screenSizeWarning('5.6"');
+    expect(w).toBeTruthy();
+    expect(w).toContain('5.6"');
+    expect(w).toContain(`${LAPTOP_SCREEN_MIN_IN}"`);
+    expect(w).toContain(`${LAPTOP_SCREEN_MAX_IN}"`);
+  });
+
+  it('is quiet about every size a laptop really comes in', () => {
+    for (const ok of ['10', '11.6', '13"', '13.3', '14 inch', '15.6"', '16', '17.3', '18']) {
+      expect(screenSizeWarning(ok), `${ok} should not warn`).toBeNull();
+    }
+  });
+
+  it('flags both ends, and the dropped-digit shapes in particular', () => {
+    for (const bad of ['5.6"', '1.6', '56', '9', '19', '55"']) {
+      expect(screenSizeWarning(bad), `${bad} should warn`).toBeTruthy();
+    }
+  });
+
+  it('is a WARNING, not a block — nothing here refuses a value', () => {
+    // The record still saves; `screenSizeWarning` only ever returns text.
+    expect(typeof screenSizeWarning('5.6"')).toBe('string');
+    expect(laptopPrintSpecs({ screenSize: '5.6"' }).screen).toBe('5.6"');
+  });
+
+  it('says nothing about an empty or unreadable value rather than nagging', () => {
+    expect(screenSizeWarning('')).toBeNull();
+    expect(screenSizeWarning(undefined)).toBeNull();
+    expect(screenSizeWarning('QHD')).toBeNull();
+    expect(screenSizeWarning('13-14')).toBeNull();
   });
 });

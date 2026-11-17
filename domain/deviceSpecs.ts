@@ -276,6 +276,64 @@ export interface LaptopSpecFields {
   screenSize?: string; gpu?: string;
 }
 
+/**
+ * ONE CLEAN FORM FOR A SCREEN SIZE: 15.6"
+ *
+ * The field is free text with a `15.6"` placeholder, so what gets typed varies
+ * — `15.6`, `15.6"`, `15.6 inch`, `15.6in`, a smart quote. Nothing anywhere
+ * appended a unit, so those printed as four different things on four labels,
+ * and a bare `15.6` printed with no unit at all.
+ *
+ * So the value is normalised at the point it is PRINTED rather than rewritten
+ * in the record: the owner keeps whatever they typed, and every label reads
+ * the same. Any trailing unit is stripped and exactly one `"` is put back, so
+ * a size that already carries one is never doubled into `15.6""`.
+ *
+ * Anything that is not a number followed by an optional unit is passed through
+ * untouched rather than mangled — a value this does not understand is still
+ * the owner's, and printing it as typed is better than printing it wrong.
+ */
+const SCREEN_UNIT = /\s*(?:"|”|''|in|ins|inch|inches)\s*$/i;
+
+export const normalizeScreenSize = (v?: string): string => {
+  const raw = (v || '').toString().trim();
+  if (!raw) return '';
+  const bare = raw.replace(SCREEN_UNIT, '').trim();
+  // Only re-attach the unit to something that reads as a measurement.
+  if (!bare || !/^\d{1,2}(\.\d{1,2})?$/.test(bare)) return raw;
+  return `${bare}"`;
+};
+
+/**
+ * A SCREEN SIZE NOBODY WOULD BELIEVE.
+ *
+ * This exists because a real label went out reading 5.6" for a 15.6" laptop —
+ * a dropped leading digit, typed into a free-text field that had nothing to
+ * say about it. The record is not blocked: the owner may know something the
+ * app does not, and a hard stop on a typo is how people learn to work around
+ * a form. But a wrong number on a customer-facing label is worse than a blank
+ * one, so the form says so, loudly, at the point of entry.
+ *
+ * 10–18 inches covers every laptop this shop would carry — the smallest
+ * netbooks are around 10", the largest desktop-replacements around 18".
+ * Returns null when there is nothing to say.
+ */
+export const LAPTOP_SCREEN_MIN_IN = 10;
+export const LAPTOP_SCREEN_MAX_IN = 18;
+
+export const screenSizeWarning = (v?: string): string | null => {
+  const raw = (v || '').toString().trim();
+  if (!raw) return null;
+  const bare = raw.replace(SCREEN_UNIT, '').trim();
+  const n = parseFloat(bare);
+  // Unparseable is not "out of range" — say nothing rather than nag about a
+  // value this does not understand.
+  if (!Number.isFinite(n) || !/^\d{1,2}(\.\d{1,2})?$/.test(bare)) return null;
+  if (n >= LAPTOP_SCREEN_MIN_IN && n <= LAPTOP_SCREEN_MAX_IN) return null;
+  return `${normalizeScreenSize(raw)} is an unusual screen size for a laptop `
+    + `(${LAPTOP_SCREEN_MIN_IN}"–${LAPTOP_SCREEN_MAX_IN}"). Check it before printing a label.`;
+};
+
 /** The two words the entry form uses, for a storage or RAM value printed alone. */
 export const STORAGE_ALONE_LABEL = 'Storage';
 export const RAM_ALONE_LABEL = 'RAM';
@@ -297,7 +355,8 @@ export const laptopPrintSpecs = (item: LaptopSpecFields): LaptopPrintSpecs => {
   return {
     main: [t(item.cpu), storageRamSlot(item.storage, item.ram)].filter(Boolean).join(' · '),
     gpu: t(item.gpu),
-    screen: t(item.screenSize),
+    // Normalised here, so BOTH printouts read the same whatever was typed.
+    screen: normalizeScreenSize(item.screenSize),
   };
 };
 

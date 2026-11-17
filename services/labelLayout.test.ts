@@ -4,7 +4,7 @@ import {
   labelPrintDoc, LabelMedia, LabelContent, LabelImages, LabelOpts, MAX_PUSH_DOWN_MM, maxSafePushDownMm,
   shortLabelSku, nonDymoQrSizeMm, nonDymoFontSizesMm, estimateTextWidthMm,
   estimateProportionalTextWidthMm, textColumnWidthMm, deviceSubLine, deviceLabelSpecs,
-  extraSpecLine, DYMO_LAPTOP_QR_MM,
+  extraSpecLine, DYMO_LAPTOP_QR_MM, labelTextHeightMm, labelTextRoomMm, fitsExtraSpec,
   shortRepairCode, issueRowWidthMm, ISSUE_MAX_LINES,
 } from './labelLayout';
 import { INVENTORY_SKU_PREFIX } from './sku';
@@ -983,5 +983,155 @@ describe('THE REGRESSION THAT MATTERS: the phone label is byte-identical', () =>
     ['accessory · 4x6', () => accDoc({ id: '4x6', w: 4, h: 6, label: '4 x 6' }), '62e45bc52ece4debef05e1bf235d81e9'],
   ])('%s renders exactly the bytes main rendered', async (_name, render, digest) => {
     expect(await sha(render())).toBe(digest);
+  });
+});
+
+/* ======================================================================== *
+ * A LABEL MUST NEVER OVERFLOW ITS MEDIA
+ *
+ * A laptop printed at 2 × 1" on a Zebra came out across TWO labels — text on
+ * the first, the QR and the screen size alone on the second. On a roll
+ * printer that burns a label every time and nobody notices until the roll is
+ * gone.
+ *
+ * The content is now sized by the LAYOUT (labelTextHeightMm / fitsExtraSpec),
+ * not left to `overflow:hidden` — which holds in Chromium but which this file
+ * already documents real label-printer drivers failing to honour.
+ *
+ * Verified against all five built-in media; the measured table is in the PR.
+ * ======================================================================== */
+
+const ALL_MEDIA: LabelMedia[] = [
+  { id: 'dymo-36x89', w: 3.5039370078740157, h: 1.4173228346456694, label: 'DYMO 36 × 89 mm', dymo: true },
+  { id: '2x1', w: 2, h: 1, label: '2 × 1"' },
+  { id: '2x2', w: 2, h: 2, label: '2 × 2"' },
+  { id: '2x3', w: 2, h: 3, label: '2 × 3"' },
+  { id: '4x6', w: 4, h: 6, label: '4 × 6"' },
+];
+
+// The exact item from the report, and the longest realistic one.
+const REPORTED = { kind: 'device', deviceType: 'Laptop', cpu: 'Ryzen 3 3200U', ram: '8GB', storage: '256GB', screenSize: '15.6"' };
+const LONGEST = { kind: 'device', deviceType: 'Laptop', cpu: 'Ryzen 7 5800H', ram: '32GB', storage: '1TB', screenSize: '17.3"', gpu: 'GeForce RTX 4060 Laptop' };
+const content = (it: Record<string, string>, device: string) => ({
+  org: 'FlipThatTech', code: '000718', device, sub: deviceSubLine(it),
+  serial: '5CD9245XYZ', status: 'In Stock', ...deviceLabelSpecs(it),
+});
+const FIT_OPTS = { showQr: true, showStatus: true, showBarcode: false, hasBarcodeImage: false };
+
+describe('every media fits a laptop on ONE label', () => {
+  // Every media EXCEPT 2 × 1" fits outright, with no allowance of any kind.
+  const FITTING_MEDIA = ALL_MEDIA.filter(m => !m.dymo && m.id !== '2x1');
+
+  it.each(FITTING_MEDIA.map(m => [m.label, m] as const))(
+    '%s — the reported item fits, with room to spare', (_l, m) => {
+      const c = content(REPORTED, 'HP Pavillion 255 G7');
+      const rendered = fitsExtraSpec(m, c, FIT_OPTS) ? c : { ...c, gpu: '', screen: '' };
+      expect(labelTextHeightMm(m, rendered, FIT_OPTS)).toBeLessThanOrEqual(labelTextRoomMm(m, c, FIT_OPTS));
+    });
+
+  it.each(FITTING_MEDIA.map(m => [m.label, m] as const))(
+    '%s — the LONGEST realistic laptop fits too', (_l, m) => {
+      const c = content(LONGEST, 'Lenovo Legion Pro 7i Gen 8');
+      const rendered = fitsExtraSpec(m, c, FIT_OPTS) ? c : { ...c, gpu: '', screen: '' };
+      expect(labelTextHeightMm(m, rendered, FIT_OPTS)).toBeLessThanOrEqual(labelTextRoomMm(m, c, FIT_OPTS));
+    });
+
+  /**
+   * THE 2 × 1" CAVEAT, asserted as what is actually true rather than hidden
+   * behind a tolerance.
+   *
+   * That stock cannot hold the five shared lines plus the status pill even
+   * for a PHONE: 3.01mm over, before any laptop content exists. The laptop
+   * extras are dropped there, which returns a laptop to exactly the footprint
+   * a phone has always had on that media. Going further means re-cutting
+   * every phone label in the shop, which is the owner's call and is written
+   * up in the PR — so the test states the parity, not a fiction about fitting.
+   */
+  it('a laptop at 2 × 1" is no taller than a PHONE at 2 × 1" — the extras are gone', () => {
+    const m = ALL_MEDIA.find(x => x.id === '2x1')!;
+    const phone = content({ kind: 'device', deviceType: 'Phone', storage: '256GB', color: 'Silver', batteryHealth: '89%' }, 'iPhone 14 Pro Max');
+    const lap = content(LONGEST, 'Lenovo Legion Pro 7i Gen 8');
+    expect(fitsExtraSpec(m, lap, FIT_OPTS)).toBe(false);
+    const dropped = { ...lap, gpu: '', screen: '' };
+    expect(labelTextHeightMm(m, dropped, FIT_OPTS)).toBeLessThanOrEqual(labelTextHeightMm(m, phone, FIT_OPTS));
+  });
+
+  it('the layout — not the browser — is what removes it', () => {
+    // The rendered document must simply not contain the dropped content.
+    const m = ALL_MEDIA.find(x => x.id === '2x1')!;
+    const html = labelPrintDoc('t', m, content(REPORTED, 'HP Pavillion 255 G7'), { qr: 'QRDATA' },
+      { showBarcode: false, showStatus: true });
+    expect(html).not.toContain('15.6"');
+    // …and everything that must stay, stays.
+    expect(html).toContain('HP Pavillion 255 G7');
+    expect(html).toContain('Ryzen 3 3200U · 256GB/8GB');
+    expect(html).toContain('000718');
+    expect(html).toContain('QRDATA');     // the QR is never dropped
+  });
+
+  it('bigger media KEEP the screen size — this is a fit rule, not a ban', () => {
+    for (const id of ['2x2', '2x3', '4x6']) {
+      const m = ALL_MEDIA.find(x => x.id === id)!;
+      const html = labelPrintDoc('t', m, content(REPORTED, 'HP Pavillion 255 G7'), { qr: 'QRDATA' },
+        { showBarcode: false, showStatus: true });
+      expect(html, `${id} should keep the screen size`).toContain('15.6"');
+    }
+  });
+
+  it('the DYMO keeps the full set, in its own corner layout', () => {
+    const m = ALL_MEDIA.find(x => x.dymo)!;
+    const html = labelPrintDoc('t', m, content(LONGEST, 'Lenovo Legion Pro 7i Gen 8'), { qr: 'QRDATA' },
+      { showBarcode: false, showStatus: true });
+    expect(html).toContain('17.3"');
+    expect(html).toContain('GeForce RTX 4060 Laptop');
+  });
+
+  it('a laptop with no GPU and no screen size prints no empty line at all', () => {
+    for (const m of ALL_MEDIA) {
+      const it = { kind: 'device', deviceType: 'Laptop', cpu: 'i5-1135G7', ram: '8GB', storage: '256GB' };
+      const c = content(it, 'HP Pavilion');
+      expect(extraSpecLine(c)).toBe('');
+      expect(fitsExtraSpec(m, c, FIT_OPTS)).toBe(false);
+      const html = labelPrintDoc('t', m, c, { qr: 'QRDATA' }, { showBarcode: false, showStatus: true });
+      expect(html).not.toMatch(/>\s*·\s*</);
+      expect(html).toContain('i5-1135G7 · 256GB/8GB');
+    }
+  });
+});
+
+describe('the height model is accurate, and errs HIGH', () => {
+  // Reference heights measured in headless Chromium against the real rendered
+  // label. Pinned so the model cannot drift back into under-estimating, which
+  // is what let the content overflow in the first place.
+  it.each([
+    ['2x1', '2x1', 24.59, { kind: 'device', deviceType: 'Phone', storage: '256GB', color: 'Silver', batteryHealth: '89%' }, 'iPhone 14 Pro Max'],
+    ['2x1 laptop', '2x1', 28.49, REPORTED, 'HP Pavillion 255 G7'],
+    ['2x2 laptop (serial wraps)', '2x2', 32.27, REPORTED, 'HP Pavillion 255 G7'],
+    ['4x6 laptop', '4x6', 33.99, REPORTED, 'HP Pavillion 255 G7'],
+  ] as const)('%s', (_n, id, measured, it, device) => {
+    const m = ALL_MEDIA.find(x => x.id === id)!;
+    const modelled = labelTextHeightMm(m, content(it as Record<string, string>, device), FIT_OPTS);
+    // Never under — an under-estimate says "fits" about content that does not.
+    expect(modelled).toBeGreaterThanOrEqual(measured);
+    // …and not so far over that it drops content needlessly.
+    expect(modelled).toBeLessThan(measured + 1.5);
+  });
+
+  it('counts the status pill, which is taller than the org line it shares a row with', () => {
+    const m = ALL_MEDIA.find(x => x.id === '2x1')!;
+    const c = content(REPORTED, 'HP Pavillion 255 G7');
+    const withPill = labelTextHeightMm(m, c, FIT_OPTS);
+    const without = labelTextHeightMm(m, c, { ...FIT_OPTS, showStatus: false });
+    expect(withPill).toBeGreaterThan(without);
+  });
+
+  it('counts a serial that WRAPS because the QR squeezed the column', () => {
+    // 2 × 2" has the widest QR relative to its width, leaving a 20.9mm column
+    // — narrower than a 10-character monospace serial, so that line is two.
+    const m = ALL_MEDIA.find(x => x.id === '2x2')!;
+    const c = content(REPORTED, 'HP Pavillion 255 G7');
+    const long = labelTextHeightMm(m, { ...c, serial: '5CD9245XYZ' }, FIT_OPTS);
+    const short = labelTextHeightMm(m, { ...c, serial: 'A1' }, FIT_OPTS);
+    expect(long).toBeGreaterThan(short);
   });
 });
