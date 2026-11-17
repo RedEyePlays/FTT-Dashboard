@@ -5,8 +5,15 @@ import JsBarcode from 'jsbarcode';
 import { jsPDF } from 'jspdf';
 import { InventoryItem, DeviceStatus } from '../types';
 import { getDeviceDisplayName, kindOf } from '../domain/inventory';
-import { LabelContent, labelPreview, labelPrintDoc, mmOf, maxSafePushDownMm, shortLabelSku, nonDymoQrSizeMm, deviceSubLine, deviceLabelSpecs, LABEL_PREFS_KEY } from '../services/labelLayout';
+import { LabelContent, labelPreview, labelPrintDoc, mmOf, maxSafePushDownMm, nonDymoQrSizeMm, shortLabelSku, LABEL_PREFS_KEY } from '../services/labelLayout';
 import { getLabelSizes, getStoreProfile, getLabelSpacing } from './SettingsModal';
+// The label itself is assembled in ONE place, shared with the bulk action, so
+// a batched label and this modal's cannot drift apart (a test asserts the two
+// documents are identical).
+import {
+  LabelPrefs, QrContent, STATUS_LABEL, barcodeFormat, buildLabelContent, buildLabelImages,
+  buildLabelOpts, genBarcode, labelSku, labelUpc, loadLabelPrefs, qrPayload,
+} from '../services/inventoryLabel';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 
 interface Props {
@@ -20,70 +27,29 @@ type TemplateId = string;
 
 const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
 
-const STATUS_LABEL: Record<DeviceStatus, string> = {
-  pending_purchase: 'Pending Purchase',
-  pending_repair: 'Pending Repair',
-  ready: 'Ready for Sale',
-  reserved: 'Reserved',
-  sold: 'Sold',
-  returned: 'Returned',
-};
-
 // Owner label preferences, persisted locally (not in Firestore). Remembers the
 // last selected template plus the optional-element toggles.
 // `qrContent` mirrors the owner's Settings → Labels "QR encodes" choice into this
 // blob (written by App.tsx), so the device QR encodes the configured field.
-type QrContent = 'sku' | 'id' | 'url' | 'imei';
-interface LabelPrefs { template: TemplateId; showBarcode: boolean; showQR: boolean; showStatus: boolean; qrContent: QrContent; }
+// LabelPrefs / QrContent now live beside the builders in
+// services/inventoryLabel.ts — same shape, one definition.
 // Shared with every other label type on this system (services/labelLayout.ts's
 // selectedLabelMedia reads the same key) so they all print on the stock the
 // owner actually selected here.
 const PREFS_KEY = LABEL_PREFS_KEY;
-const QR_CONTENTS: QrContent[] = ['sku', 'id', 'url', 'imei'];
-const loadPrefs = (): LabelPrefs => {
-  try {
-    const s = JSON.parse(localStorage.getItem(PREFS_KEY) || '{}');
-    const sizes = getLabelSizes();
-    return {
-      template: sizes.some(t => t.id === s.template) ? s.template : (sizes[0]?.id || 'dymo-36x89'),
-      showBarcode: s.showBarcode !== false, // default on
-      showQR: s.showQR !== false,           // default on
-      showStatus: s.showStatus !== false,   // default on
-      qrContent: QR_CONTENTS.includes(s.qrContent) ? s.qrContent : 'sku',
-    };
-  } catch {
-    return { template: 'dymo-36x89', showBarcode: true, showQR: true, showStatus: true, qrContent: 'sku' };
-  }
-};
-
-// Pick a retail symbology for a plain numeric UPC/EAN; otherwise CODE128.
-const barcodeFormat = (v: string): string =>
-  /^\d{12}$/.test(v) ? 'UPC' : /^\d{13}$/.test(v) ? 'EAN13' : /^\d{8}$/.test(v) ? 'EAN8' : 'CODE128';
-
-const genBarcode = (value: string, opts?: { format?: string; displayValue?: boolean }): string => {
-  const displayValue = opts?.displayValue ?? false;
-  const render = (format: string): string => {
-    const c = document.createElement('canvas');
-    JsBarcode(c, value || '0', { format, displayValue, margin: displayValue ? 6 : 0, height: 90, width: 2, fontSize: 20, textMargin: 2 });
-    return c.toDataURL('image/png');
-  };
-  try { return render(opts?.format || 'CODE128'); }
-  // A value that doesn't fit the chosen retail symbology falls back to CODE128.
-  catch { try { return render('CODE128'); } catch { return ''; } }
-};
 
 export const LabelModal: React.FC<Props> = ({ item, onClose }) => {
   const templates = useMemo(() => getLabelSizes(), []);
-  const [prefs, setPrefs] = useState<LabelPrefs>(loadPrefs);
+  const [prefs, setPrefs] = useState<LabelPrefs>(() => loadLabelPrefs(getLabelSizes()));
   const [qr, setQr] = useState('');
   const [barcode, setBarcode] = useState('');
 
   useEscapeKey(onClose);
 
   const isAccessory = kindOf(item) === 'accessory';
-  const sku = item.sku || item.imei || '';
+  const sku = labelSku(item);
   // Accessories print a UPC barcode only — prefer the manufacturer UPC.
-  const upc = (item.manufacturerBarcode || item.sku || '').trim();
+  const upc = labelUpc(item);
   const dn = getDeviceDisplayName(item);
   const name = dn === '—' ? 'Item' : dn;
   const media = templates.find(t => t.id === prefs.template) || templates[0];
@@ -99,13 +65,8 @@ export const LabelModal: React.FC<Props> = ({ item, onClose }) => {
     // Devices: QR encodes the configured field; barcode stays CODE128(SKU).
     // Anything without a value (e.g. IMEI on a device that's missing one) falls
     // back to the SKU rather than encoding an empty string.
-    const fallback = sku || 'N/A';
-    const qrData =
-      prefs.qrContent === 'id' ? (item.id || fallback)
-      : prefs.qrContent === 'imei' ? ((item.imei || '').trim() || fallback)
-      : prefs.qrContent === 'url' ? `${window.location.origin}/?sku=${encodeURIComponent(item.sku || item.id || '')}`
-      : (sku || fallback); // 'sku'
-    QRCode.toDataURL(qrData, { margin: 2, width: 320, errorCorrectionLevel: 'M' }).then(setQr).catch(() => setQr(''));
+    QRCode.toDataURL(qrPayload(item, prefs.qrContent), { margin: 2, width: 320, errorCorrectionLevel: 'M' })
+      .then(setQr).catch(() => setQr(''));
     setBarcode(genBarcode(sku));
   }, [sku, upc, isAccessory, prefs.qrContent, item.id, item.imei]);
 
@@ -122,18 +83,7 @@ export const LabelModal: React.FC<Props> = ({ item, onClose }) => {
   // comment) — the stored item.sku, the QR payload below (which still
   // encodes the full `sku`), receipts, reports and search all keep the full
   // value untouched.
-  const content: LabelContent = {
-    org: storeName,
-    code: shortLabelSku(isAccessory ? (upc || sku) : sku),
-    device: name,
-    sub: deviceSubLine(item),
-    // A laptop's GPU and screen size (multi-surface: the shelf tag prints the
-    // same two). Empty object for everything else, so a phone's content shape
-    // is unchanged.
-    ...deviceLabelSpecs(item),
-    serial: item.imei || undefined,
-    status: status || undefined,
-  };
+  const content: LabelContent = buildLabelContent(item, storeName);
   // Devices may hide the QR (or barcode) independently; accessories never show QR.
   const images = { qr: (isAccessory || !prefs.showQR) ? '' : qr, barcode };
   // Owner-configured content padding / line spacing / push-down offset
@@ -145,9 +95,7 @@ export const LabelModal: React.FC<Props> = ({ item, onClose }) => {
   // localStorage read — not worth caching at the cost of going stale.
   const spacing = getLabelSpacing();
   // Accessories: barcode-only label (no QR / text / status).
-  const opts = isAccessory
-    ? { showBarcode: true, showStatus: false, barcodeOnly: true }
-    : { showBarcode: prefs.showBarcode, showStatus: prefs.showStatus, padMm: spacing.paddingMm, lineGapMm: spacing.lineGapMm, pushDownMm: spacing.pushDownMm };
+  const opts = buildLabelOpts(item, prefs, spacing);
 
   const handlePrint = () => {
     const win = window.open('', '_blank', 'width=520,height=680');

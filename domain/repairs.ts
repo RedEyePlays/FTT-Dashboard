@@ -209,12 +209,40 @@ export const partsTotal = (parts?: RepairPart[]): number =>
 export const partName = (p: Pick<RepairPart, 'name'>): string => p.name && p.name.trim() ? p.name.trim() : 'Unspecified';
 
 /**
- * The repair's parts cost. Prefers the structured `parts` breakdown when present,
- * otherwise falls back to the legacy `partsCost` number — so old records and the
- * technician free-text flow keep working.
+ * The repair's parts cost: the structured `parts` breakdown when the repair has
+ * one, otherwise the legacy denormalized `partsCost` number.
+ *
+ * THE TEST IS WHETHER `parts` EXISTS, NOT WHETHER IT HAS ANYTHING IN IT.
+ *
+ * It used to be `r.parts && r.parts.length`, which made an EMPTY parts array
+ * fall through to `partsCost` — so deleting every part off a repair left its
+ * old total in place forever. It was the one edit to a repair that did not
+ * take effect: change a part's cost and the price followed, remove the part
+ * and nothing moved. Worse, it was self-reinforcing, because
+ * RepairsView's `commitDrawer` re-denormalizes `partsCost: repairPartsCost(r)`
+ * on every save — so emptying the parts wrote the stale figure straight back.
+ *
+ * THE TWO CASES ARE GENUINELY DISTINGUISHABLE IN THE STORED RECORD, which is
+ * why this needs no invented flag:
+ *
+ *   `parts` ABSENT   — the field was never written. A legacy ticket from
+ *                      before the structured breakdown existed, carrying only
+ *                      a typed `partsCost`. The fallback is for exactly these
+ *                      and still applies.
+ *   `parts` is `[]`  — the field was written and is empty. Only the parts
+ *                      editor writes it (`removePart` filters the array), and
+ *                      an empty array survives the Firestore write intact
+ *                      (services/firestoreDb.ts's `clean` strips `undefined`
+ *                      properties, never empty arrays). So this is a repair
+ *                      whose parts WERE itemized and now total nothing: £0.
+ *
+ * Nothing else writes `partsCost`: there is no typed parts-cost input in the
+ * repair form (the free-text flow the old comment meant is `partsUsed`, a
+ * note), and a technician cannot edit either field — see
+ * functions/src/repairUpdate.ts's TECH_EDITABLE_FIELDS.
  */
 export const repairPartsCost = (r: Pick<Repair, 'parts' | 'partsCost'>): number =>
-  r.parts && r.parts.length ? partsTotal(r.parts) : round2(r.partsCost || 0);
+  Array.isArray(r.parts) ? partsTotal(r.parts) : round2(r.partsCost || 0);
 
 /** Labor / margin portion of a repair = price − parts cost (never negative). */
 export const repairLabor = (r: Pick<Repair, 'repairPrice' | 'parts' | 'partsCost'>): number =>

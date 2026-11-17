@@ -124,6 +124,41 @@ export function revalidateRestoredCart(cart: CartLine[], inventory: InventoryIte
 
 // A plain, staff-facing summary of what got dropped — null when nothing was,
 // so callers can use it directly as "show a notice or don't".
+/**
+ * MERGE A RESTORED CART INTO WHATEVER THIS MOUNT HAS ALREADY SEEDED.
+ *
+ * Quick Sale has two things that both write the cart on mount: a repair
+ * prefill (the ticket's Check Out) and the sessionStorage restore. They used
+ * to race, and the restore won purely because it is DECLARED SECOND in
+ * hooks/useCheckout.ts — so the fresh repair line, built moments earlier from
+ * the repair's current parts, was replaced by the saved one and its stale
+ * parts cost. Invisible while the view stayed mounted (the restore runs once
+ * per mount), and reproducible the instant you navigate away and back, which
+ * is exactly what somebody does to go and change the parts.
+ *
+ * So the outcome is decided HERE, by identity, instead of by declaration
+ * order:
+ *
+ *   • THE SEEDED LINES WIN. The person asked for this repair to be checked
+ *     out seconds ago; a cart saved minutes ago is the older intent.
+ *   • A RESTORED LINE FOR THE SAME REPAIR IS DROPPED, not kept alongside —
+ *     otherwise the reported flow (check out, go change the parts, check out
+ *     again) would put the repair in the cart twice, at two different costs.
+ *   • EVERYTHING ELSE IN THE SAVED CART SURVIVES. Somebody halfway through
+ *     ringing up a case and a charger, who then sends a repair to checkout,
+ *     keeps the case and the charger. Throwing those away to make the repair
+ *     line correct would be trading one bug for another.
+ *
+ * With nothing seeded this is the identity function on the restored cart, so
+ * the ordinary restore — by far the common case — behaves exactly as before.
+ */
+export function mergeSeededWithRestored(seeded: CartLine[], restored: CartLine[]): CartLine[] {
+  if (seeded.length === 0) return restored;
+  const seededRepairs = new Set(seeded.map(l => l.repairId).filter(Boolean));
+  const kept = restored.filter(l => !(l.repairId && seededRepairs.has(l.repairId)));
+  return [...kept, ...seeded];
+}
+
 export function describeDroppedLines(droppedNames: string[]): string | null {
   if (droppedNames.length === 0) return null;
   if (droppedNames.length === 1) return `1 item is no longer available and was removed: ${droppedNames[0]}.`;
