@@ -1037,6 +1037,26 @@ const App: React.FC = () => {
       });
       logActivity(`${label} — ${field === 'repairCost' ? 'repair cost' : 'cost'} recorded`);
     }
+    /**
+     * A TARGET UNDER THE FLOOR, WARNED ON HERE TOO — a hole this closes.
+     *
+     * `handleSaveInventoryItem` (the Add/Edit form) has always warned when a
+     * saved target sits below the minimum the device may sell for. This
+     * handler — the INLINE path, used by the Inventory grid's own Target cell
+     * and now by the offer screen's — never did. So the same mistake typed
+     * into the grid was accepted in silence, which was already true before
+     * the offer screen existed and would simply have been inherited by it.
+     *
+     * Same wording, same owner-facing gate (it takes cost visibility to be
+     * able to act on it), same warn-don't-block: the owner may have a reason,
+     * and the write below goes ahead either way.
+     */
+    if (field === 'targetSalePrice'
+      && allow('reports.profit.detailed')
+      && targetBelowFloor({ ...target, targetSalePrice: value },
+        { minMarginPercent: settings.operations.minMarginPercent, minMarginDollars: settings.operations.minMarginDollars })) {
+      window.alert(`${TARGET_BELOW_FLOOR_NOTE}\n\n${label} is saved, but its target price is below the minimum it may sell for.`);
+    }
     // Entering an Actual sale price inline records a direct sale: stamp soldDate +
     // mark sold (like Quick Sale) so it leaves active stock and feeds reporting.
     const next = applyDirectSale({ ...target, [field]: value });
@@ -3953,6 +3973,10 @@ const App: React.FC = () => {
                   canViewCost={allow('reports.profit.detailed')}
                   currentUserId={appUser.id}
                   onSave={handleSaveOffer}
+                  // The SAME handler the Inventory grid uses, so a target set
+                  // while quoting goes through one write path, one audit entry
+                  // and one below-floor warning.
+                  onUpdateItem={allow('inventory.edit') ? handleUpdateItem : undefined}
                   onDelete={appUser.role === 'owner' ? handleDeleteOffer : undefined}
                   onSellLines={sellOfferLines}
                 />

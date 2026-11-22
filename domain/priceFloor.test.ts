@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, it, expect } from 'vitest';
 import { InventoryItem } from '../types';
 import {
@@ -256,5 +257,51 @@ describe('A MANAGER SEES WHO IS DISCOUNTING, NOT WHAT THE SHOP PAYS', () => {
     expect('gap' in r).toBe(false);
     expect(JSON.stringify(r)).not.toContain('264');
     expect(JSON.stringify(r)).not.toContain('240');
+  });
+});
+
+/* ======================================================================== *
+ * BOTH INVENTORY WRITE PATHS WARN — the hole the offer screen exposed
+ * ======================================================================== */
+
+describe('a below-floor target is warned on wherever a target is written', () => {
+  /**
+   * `handleSaveInventoryItem` (the Add/Edit form) has always warned. The INLINE
+   * path, `handleUpdateItem`, did not — so the same mistake typed into the
+   * Inventory grid's own Target cell was accepted in silence. That was already
+   * true before the offer screen got an editable Target, and the offer screen
+   * would simply have inherited it, since it writes through that same handler.
+   *
+   * Structural, because both are App-level wiring with no seam to call: this
+   * pins that neither path loses the check again.
+   */
+  const src = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
+
+  const bodyOf = (name: string): string => {
+    const start = src.indexOf(`const ${name} =`);
+    expect(start, name).toBeGreaterThan(-1);
+    // Up to the next top-level `const handle…`/`const sell…` declaration.
+    const next = src.slice(start + 10).search(/\n  (?:const|\/\*\*) /);
+    return src.slice(start, next > -1 ? start + 10 + next : start + 4000);
+  };
+
+  for (const handler of ['handleUpdateItem', 'handleSaveInventoryItem']) {
+    it(`${handler} checks it`, () => {
+      const body = bodyOf(handler);
+      expect(body).toContain('targetBelowFloor');
+      expect(body).toContain('TARGET_BELOW_FLOOR_NOTE');
+      // Owner-facing: it takes cost visibility to be able to act on it.
+      expect(body).toContain("allow('reports.profit.detailed')");
+    });
+  }
+
+  it('and it warns rather than blocking, on both', () => {
+    for (const handler of ['handleUpdateItem', 'handleSaveInventoryItem']) {
+      const body = bodyOf(handler);
+      // The write follows the alert; nothing returns early on a below-floor target.
+      const alertAt = body.indexOf('TARGET_BELOW_FLOOR_NOTE');
+      const writeAt = Math.max(body.indexOf('saveItem('), body.indexOf('saveItemSettled('));
+      expect(writeAt, handler).toBeGreaterThan(alertAt);
+    }
   });
 });

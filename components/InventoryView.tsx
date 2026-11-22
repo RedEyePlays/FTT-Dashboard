@@ -29,6 +29,7 @@ import {
   MAX_SELL_BATCH, SELL_BLOCK_NOTE, SellBatchPlan, describeSellBatch, planSellBatch,
   sellBatchTooLargeMessage,
 } from '../domain/sellBatch';
+import { NumberCell } from './NumberCell';
 import { ItemFormModal } from './ItemFormModal';
 // Lazy: defers jsPDF (~390 kB) until a label is actually printed.
 const LabelModal = lazy(() => import('./LabelModal').then(m => ({ default: m.LabelModal })));
@@ -151,13 +152,20 @@ const profitOf = (i: InventoryItem) => i.salePrice ? i.salePrice - i.purchaseCos
 // out of the Devices tab) while the number is still being typed. Stays blank
 // with a dash placeholder until a real sale price exists. Module-scope so the
 // input keeps focus across parent re-renders.
-const ActualCell: React.FC<{ item: InventoryItem; onCommit: (v: number) => void; className: string }> = ({ item, onCommit, className }) => {
-  const stored = item.salePrice || 0;
-  const [val, setVal] = useState(stored ? String(stored) : '');
-  useEffect(() => { setVal(stored ? String(stored) : ''); }, [stored, item.soldDate]);
-  const commit = () => {
-    const n = parseFloat(val) || 0;
-    if (n === stored) return;
+/**
+ * The Actual (sale price) cell — now a thin wrapper over the shared
+ * draft-then-commit NumberCell (components/NumberCell.tsx), which was
+ * extracted FROM this component when the offer screen needed an editable
+ * Target. The only thing left here is the confirmation, which is specific to
+ * this column.
+ */
+const ActualCell: React.FC<{ item: InventoryItem; onCommit: (v: number) => void; className: string }> = ({ item, onCommit, className }) => (
+  <NumberCell
+    value={item.salePrice || 0}
+    resetOn={item.soldDate}
+    placeholder={!item.soldDate ? '\u2014' : undefined}
+    onCommit={onCommit}
+    className={className}
     // Entering an Actual price marks the device sold immediately on save (see
     // domain/inventory.ts's applyDirectSale) — this narrow "Target"/"Actual"
     // column pair sits adjacent in the grid and is easy to fat-finger, so guard
@@ -165,22 +173,12 @@ const ActualCell: React.FC<{ item: InventoryItem; onCommit: (v: number) => void;
     // not-yet-sold item (no prior salePrice, no soldDate) getting its first
     // nonzero Actual price. Editing an already-sold item's price back and forth
     // needs no extra confirmation.
-    const firstTimeMarkingSold = stored === 0 && !item.soldDate && n > 0;
-    if (firstTimeMarkingSold && !window.confirm(`Mark "${item.item || item.sku || 'this item'}" as SOLD for $${n.toFixed(2)}? It will move out of active inventory into Sold.`)) {
-      setVal(stored ? String(stored) : '');
-      return;
-    }
-    onCommit(n);
-  };
-  return (
-    <input type="number" inputMode="decimal" value={val}
-      placeholder={!item.soldDate && !val ? '—' : undefined}
-      onChange={e => setVal(e.target.value)}
-      onBlur={commit}
-      onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-      className={className} />
-  );
-};
+    confirm={n => {
+      const firstTimeMarkingSold = !(item.salePrice || 0) && !item.soldDate && n > 0;
+      return !firstTimeMarkingSold
+        || window.confirm(`Mark "${item.item || item.sku || 'this item'}" as SOLD for $${n.toFixed(2)}? It will move out of active inventory into Sold.`);
+    }} />
+);
 
 // Date cell: shows a muted dash instead of the browser's literal "yyyy-mm-dd"
 // placeholder when empty (consistent with how blank Profit renders), while

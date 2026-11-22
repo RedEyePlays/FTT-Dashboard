@@ -104,6 +104,13 @@ const typeInto = (el: HTMLInputElement | HTMLTextAreaElement, value: string) => 
   act(() => { setNative.call(el, value); el.dispatchEvent(new Event('input', { bubbles: true })); });
 };
 
+/**
+ * Commit a draft-then-commit numeric cell. React attaches onBlur to the
+ * bubbling `focusout`, so a non-bubbling FocusEvent('blur') never reaches it.
+ */
+const commitCell = (el: HTMLInputElement) =>
+  act(() => { el.dispatchEvent(new FocusEvent('focusout', { bubbles: true })); });
+
 const view = (p: Partial<React.ComponentProps<typeof OffersView>> = {}) => (
   <OffersView offers={[]} inventory={INV} canViewCost onSave={() => {}} onSellLines={() => {}} {...p} />
 );
@@ -534,6 +541,224 @@ describe('pasting an accessory into an offer', () => {
     click(v.button('Find these'));
     expect(v.button('Add 0 to the offer')).toHaveProperty('disabled', true);
     expect(store.rows[0].lines).toEqual([]);
+    v.unmount();
+  });
+});
+
+/* ======================================================================== *
+ * 8. EDITING THE TARGET PRICE FROM THE OFFER
+ * ======================================================================== */
+
+describe('the Target cell is editable and writes to inventory', () => {
+  const QUOTE2 = offer({ lines: [{ itemId: 'a', outcome: 'pending' }, { itemId: 'c', outcome: 'pending' }] });
+  // 'c' has targetSalePrice 0 — the device the screen complains about.
+
+  const targetCell = (v: ReturnType<typeof mount>, sku: string) =>
+    v.host.querySelector(`input[aria-label="Target for ${sku}"]`) as HTMLInputElement;
+
+  it('commits the typed number to the INVENTORY record, not to the offer', () => {
+    const onUpdateItem = vi.fn();
+    const { v, store } = live([QUOTE2], { onUpdateItem });
+    click(v.button('Rashid'));
+    const cell = targetCell(v, 'FTT-000103');
+    typeInto(cell, '275.50');
+    commitCell(cell);
+    expect(onUpdateItem).toHaveBeenCalledWith('c', 'targetSalePrice', 275.5);
+    // NOTHING about the offer record changed — no price is stored on an offer.
+    expect(store.rows[0].lines).toEqual(QUOTE2.lines);
+    for (const l of store.rows[0].lines) {
+      for (const k of Object.keys(l)) expect(['itemId', 'outcome', 'grade', 'note', 'sentToSaleAt']).toContain(k);
+    }
+    v.unmount();
+  });
+
+  it('TYPING A MULTI-DIGIT NUMBER DOES NOT WRITE PER KEYSTROKE', () => {
+    // The draft-then-commit pattern: 1 → 12 → 125 as three saved values is
+    // what makes the cursor jump to the end mid-number.
+    const onUpdateItem = vi.fn();
+    const { v } = live([QUOTE2], { onUpdateItem });
+    click(v.button('Rashid'));
+    const cell = targetCell(v, 'FTT-000103');
+    typeInto(cell, '1');
+    typeInto(cell, '12');
+    typeInto(cell, '125');
+    expect(onUpdateItem).not.toHaveBeenCalled();
+    expect(cell.value).toBe('125');          // the draft is intact, uncanonicalised
+    commitCell(cell);
+    expect(onUpdateItem).toHaveBeenCalledTimes(1);
+    expect(onUpdateItem).toHaveBeenCalledWith('c', 'targetSalePrice', 125);
+    v.unmount();
+  });
+
+  it('Enter commits it too', () => {
+    const onUpdateItem = vi.fn();
+    const { v } = live([QUOTE2], { onUpdateItem });
+    click(v.button('Rashid'));
+    const cell = targetCell(v, 'FTT-000103');
+    act(() => { cell.focus(); });
+    typeInto(cell, '300');
+    // Enter blurs the field, which is what commits it.
+    act(() => { cell.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); });
+    expect(onUpdateItem).toHaveBeenCalledWith('c', 'targetSalePrice', 300);
+    v.unmount();
+  });
+
+  it('clearing it commits 0 — the same thing clearing it in Inventory does', () => {
+    const onUpdateItem = vi.fn();
+    const { v } = live([QUOTE2], { onUpdateItem });
+    click(v.button('Rashid'));
+    const cell = targetCell(v, 'FTT-000101');   // has 533.41
+    typeInto(cell, '');
+    commitCell(cell);
+    expect(onUpdateItem).toHaveBeenCalledWith('a', 'targetSalePrice', 0);
+    v.unmount();
+  });
+
+  it('committing the same value again writes nothing', () => {
+    const onUpdateItem = vi.fn();
+    const { v } = live([QUOTE2], { onUpdateItem });
+    click(v.button('Rashid'));
+    const cell = targetCell(v, 'FTT-000101');
+    commitCell(cell);
+    expect(onUpdateItem).not.toHaveBeenCalled();
+    v.unmount();
+  });
+
+  it('THE MARGIN AND THE LOT TOTALS RECOMPUTE, and the understated-target warning clears', () => {
+    // Driven through the real inventory array, as App does: the write lands in
+    // Firestore, the subscription re-renders the view with the new item.
+    let inv = INV;
+    const onUpdateItem = vi.fn((id: string, field: string, value: unknown) => {
+      inv = inv.map(i => i.id === id ? { ...i, [field]: value } : i);
+      v.rerender(view({ offers: [QUOTE2], inventory: inv, onUpdateItem, onSave: () => {} }));
+    });
+    const v = mount(view({ offers: [QUOTE2], inventory: inv, onUpdateItem }));
+    click(v.button('Rashid'));
+    // 'c' has no target, so the warning is up and the lot total excludes it.
+    expect(v.text()).toMatch(/1 of these have no target price set/);
+    expect(v.text()).toContain('$533.41');          // target: a alone
+    const cell = targetCell(v, 'FTT-000103');
+    typeInto(cell, '400');
+    commitCell(cell);
+    // Recomputed, with no reload: target 533.41 + 400, cost 333.16 + 200.11.
+    expect(v.text()).toContain('$933.41');
+    expect(v.text()).toContain('$533.27');          // 933.41 − 533.27 cost... margin
+    expect(v.text()).not.toMatch(/have no target price set/);
+    v.unmount();
+  });
+
+  it('COST AND MARGIN STAY READ-ONLY — there is no input for either', () => {
+    const { v } = live([QUOTE2], { onUpdateItem: () => {} });
+    click(v.button('Rashid'));
+    const labels = Array.from(v.host.querySelectorAll('input')).map(i => i.getAttribute('aria-label') || '');
+    expect(labels.some(l => /^Target for/.test(l))).toBe(true);
+    expect(labels.some(l => /Cost|Margin/i.test(l))).toBe(false);
+    v.unmount();
+  });
+
+  it('is read-only without inventory.edit, and for a deleted device', () => {
+    const { v } = live([QUOTE2]);                   // no onUpdateItem
+    click(v.button('Rashid'));
+    expect(targetCell(v, 'FTT-000103')).toBeNull();
+    expect(v.text()).toContain('—');
+    v.unmount();
+
+    const gone = live([offer({ lines: [{ itemId: 'nope', outcome: 'pending' }] })], { onUpdateItem: () => {} });
+    click(gone.v.button('Rashid'));
+    expect(gone.v.host.querySelector('input[aria-label^="Target for"]')).toBeNull();
+    gone.v.unmount();
+  });
+
+  it('TARGET IS NOT COST-GATED — pricing stock is not reading a cost', () => {
+    // The Inventory grid has never gated its Target column either; gating it
+    // here would make the offer screen stricter than the grid for one field.
+    const { v } = live([QUOTE2], { canViewCost: false, onUpdateItem: () => {} });
+    click(v.button('Rashid'));
+    expect(targetCell(v, 'FTT-000103')).toBeTruthy();
+    expect(v.text()).not.toContain('Our cost');
+    v.unmount();
+  });
+});
+
+/* ======================================================================== *
+ * 9. PRINTING THE SHEET
+ * ======================================================================== */
+
+describe('printing an offer', () => {
+  const QUOTED3 = offer({
+    lines: [
+      { itemId: 'a', outcome: 'pending', grade: 'A', note: 'boxed with charger' },
+      { itemId: 'b', outcome: 'declined', grade: 'C', note: 'cracked back' },
+    ],
+  });
+
+  let written = '';
+  const stubWindow = () => {
+    written = '';
+    const orig = window.open;
+    (window as any).open = () => ({
+      document: { write: (h: string) => { written += h; }, close: () => {} },
+    });
+    return () => { (window as any).open = orig; };
+  };
+
+  it('opens a sheet with the devices, their grades and their notes on it', () => {
+    const restore = stubWindow();
+    const { v } = live([QUOTED3]);
+    click(v.button('Rashid'));
+    click(v.button('Print sheet'));
+    expect(written).toContain('FTT-000101');
+    expect(written).toContain('boxed with charger');
+    expect(written).toContain('>A<');
+    // The declined line is not in the lot any more, so it is not on the sheet.
+    expect(written).not.toContain('FTT-000102');
+    expect(written).not.toContain('cracked back');
+    restore();
+    v.unmount();
+  });
+
+  it('AND NO PRICING — not from the row it is rendered beside', () => {
+    const restore = stubWindow();
+    const { v } = live([QUOTED3]);
+    click(v.button('Rashid'));
+    // The screen itself is showing cost, target and margin right now…
+    expect(v.text()).toContain('Our cost');
+    click(v.button('Print sheet'));
+    // …and none of it reaches the sheet.
+    for (const leak of [...MONEY_LEAKS, '$', 'Cost', 'Target', 'Margin']) {
+      expect(written, leak).not.toContain(leak);
+    }
+    restore();
+    v.unmount();
+  });
+
+  it('carries the shop name, the buyer and the count', () => {
+    const restore = stubWindow();
+    const { v } = live([QUOTED3]);
+    click(v.button('Rashid'));
+    click(v.button('Print sheet'));
+    expect(written).toContain('Rashid');
+    expect(written).toContain('1 device');
+    restore();
+    v.unmount();
+  });
+
+  it('does NOT stamp sentAt — a printed sheet is not a file the buyer re-opens', () => {
+    const restore = stubWindow();
+    const { v, store } = live([QUOTED3]);
+    click(v.button('Rashid'));
+    click(v.button('Print sheet'));
+    expect(store.rows[0].sentAt).toBeUndefined();
+    expect(v.text()).not.toMatch(/changed since the sheet was sent/);
+    restore();
+    v.unmount();
+  });
+
+  it('sits beside Export sheet, and both are disabled on an empty offer', () => {
+    const { v } = live([offer()]);
+    click(v.button('Rashid'));
+    expect(v.button('Export sheet')).toHaveProperty('disabled', true);
+    expect(v.button('Print sheet')).toHaveProperty('disabled', true);
     v.unmount();
   });
 });

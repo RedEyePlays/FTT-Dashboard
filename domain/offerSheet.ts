@@ -114,6 +114,46 @@ export const OFFER_SHEET_COLUMNS: OfferColumn[] = [
 /** Every header this sheet writes, in order. */
 export const offerSheetHeaders = (): string[] => OFFER_SHEET_COLUMNS.map(c => c.header);
 
+/**
+ * ONE DEVICE'S CELLS, and the reason this is extracted rather than inlined in
+ * the CSV builder.
+ *
+ * The buyer-safe content now goes out in TWO formats — the CSV file and the
+ * printed sheet (services/offerPrint.ts) — and the one thing that must never
+ * happen is the two drifting apart, with a field added to one and forgotten in
+ * the other, or worse, the printout growing its own field list that reaches a
+ * cost.
+ *
+ * So there is one row builder and both formats consume it. The printer is
+ * handed STRINGS that have already been through this allow-list; it is given
+ * no InventoryItem at all, so it could not print a purchase cost if somebody
+ * tried to make it. A test asserts the printed row carries every non-empty
+ * cell the CSV writes for the same device.
+ *
+ * Indexed by header name as well as position, because the print layout groups
+ * the spec columns into one cell and needs to ask for them by name.
+ */
+export interface OfferSheetRow {
+  /** The InventoryItem id, for keying only — never printed. */
+  id: string;
+  /** One string per OFFER_SHEET_COLUMNS entry, in order. */
+  cells: string[];
+  /** The same strings, by header name. */
+  byHeader: Record<string, string>;
+}
+
+export const offerSheetRows = (
+  rows: InventoryItem[],
+  annotations?: OfferSheetAnnotations,
+): OfferSheetRow[] => rows.map(r => {
+  const cells = OFFER_SHEET_COLUMNS.map(c => c.value(r, annotations?.[r.id]));
+  return {
+    id: r.id,
+    cells,
+    byHeader: Object.fromEntries(OFFER_SHEET_COLUMNS.map((c, k) => [c.header, cells[k]])),
+  };
+});
+
 const esc = (v: string) => `"${v.replace(/"/g, '""')}"`;
 
 /**
@@ -122,7 +162,7 @@ const esc = (v: string) => `"${v.replace(/"/g, '""')}"`;
  */
 export const offerSheetCsv = (rows: InventoryItem[], annotations?: OfferSheetAnnotations): string => [
   offerSheetHeaders().map(esc).join(','),
-  ...rows.map(r => OFFER_SHEET_COLUMNS.map(c => esc(c.value(r, annotations?.[r.id]))).join(',')),
+  ...offerSheetRows(rows, annotations).map(r => r.cells.map(esc).join(',')),
 ].join('\n');
 
 /**
