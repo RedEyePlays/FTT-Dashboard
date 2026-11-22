@@ -22,6 +22,9 @@ import {
   BATCH_FLAG_NOTE, BatchResolution, MAX_BATCH_PASTE, batchFlagged, batchIds,
   batchLocationLabel, batchPasteTooLargeMessage, describeBatch, parseIdentifierList, resolveBatch,
 } from '../domain/batchSelection';
+import {
+  OFFER_SHEET_EXCLUDED_NOTE, offerSheetCsv, offerSheetFileName,
+} from '../domain/offerSheet';
 import { ItemFormModal } from './ItemFormModal';
 // Lazy: defers jsPDF (~390 kB) until a label is actually printed.
 const LabelModal = lazy(() => import('./LabelModal').then(m => ({ default: m.LabelModal })));
@@ -1118,6 +1121,32 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
    */
   const allDevices = useMemo(() => inventory.filter(i => kindOf(i) === 'device'), [inventory]);
   const allAccessories = useMemo(() => inventory.filter(i => kindOf(i) === 'accessory'), [inventory]);
+  /**
+   * THE BUYER-SAFE SHEET (domain/offerSheet.ts).
+   *
+   * Same source of truth as `exportTab` — `activeRows`, so the tab, the search
+   * box, the status filter and the sort all apply — with ONE addition: when
+   * there is a selection, the selection IS the export. That is the whole point
+   * of the wholesale flow. The batch built from a pasted list spans tabs by
+   * design (a reserved device and an in-stock one are on different tabs), so
+   * narrowing it back down to the open tab would throw away exactly the thing
+   * that was just assembled. `inventory.filter` rather than
+   * `activeRows.filter`, for that reason.
+   *
+   * The menu entry names its own row count AND what the file leaves out, so
+   * the promise is on screen at the moment of export rather than in a comment
+   * in a module nobody reading their email has seen.
+   */
+  const offerRows = selected.size > 0 ? inventory.filter(i => selected.has(i.id)) : activeRows;
+  const exportOfferSheet = () => {
+    const blob = new Blob([offerSheetCsv(offerRows)], { type: 'text/csv;charset=utf-8;' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = offerSheetFileName(today());
+    a.click();
+    setMenu(null);
+  };
+
   const exportEverything = () => {
     exportCSV(allDevices, visibleCols(DEVICE_COLS, canViewCost), 'inventory-devices');
     exportCSV(allAccessories, visibleCols(ACCESSORY_COLS, canViewCost), 'inventory-accessories');
@@ -1472,6 +1501,19 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
                     className="w-full text-left px-2 py-2 rounded-md hover:bg-slate-100 dark:hover:bg-slate-800">
                     <span className="block text-sm text-slate-700 dark:text-slate-200">{activeTitle} — {activeRows.length} row{activeRows.length === 1 ? '' : 's'}</span>
                     <span className="block text-[11px] text-slate-400">What is on screen now: this tab, search, filter and sort.</span>
+                  </button>
+                  <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
+                  {/* THE BUYER-SAFE SHEET. The exclusions are named here, on
+                      the entry that produces the file. */}
+                  <button onClick={exportOfferSheet}
+                    className="w-full text-left px-2 py-2 rounded-md hover:bg-slate-100 dark:hover:bg-slate-800">
+                    <span className="block text-sm text-slate-700 dark:text-slate-200">
+                      Offer sheet for a buyer — {offerRows.length} row{offerRows.length === 1 ? '' : 's'}
+                      {selected.size > 0 && <span className="text-indigo-600 dark:text-indigo-400"> (your selection)</span>}
+                    </span>
+                    <span className="block text-[11px] text-slate-400">
+                      Identity and condition only. {OFFER_SHEET_EXCLUDED_NOTE} No price — blank Grade and Notes columns for the buyer.
+                    </span>
                   </button>
                   <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
                   <button onClick={exportEverything}
