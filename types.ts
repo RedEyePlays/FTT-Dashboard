@@ -284,6 +284,80 @@ export interface InventoryTransfer {
   valueAtSend?: number;
 }
 
+/* ----------------------- WHOLESALE OFFERS (domain/offers.ts) --------------- */
+
+/**
+ * WHAT THE OWNER SET AS THE OUTCOME OF ONE QUOTED DEVICE — and the complete
+ * list of what an offer line is allowed to STORE about its fate.
+ *
+ * 'sold' IS NOT HERE, DELIBERATELY. An offer never records a sale: a sale is a
+ * `salesTransaction` with money in it, written by the ordinary checkout, and
+ * anything that bypasses it is revenue that never reaches the P&L, the drawer
+ * or the dashboard. Whether a quoted device sold is READ BACK from inventory
+ * (see domain/offers.ts's `offerLineState`), never written here.
+ */
+export type OfferLineOutcome = 'pending' | 'declined';
+
+export interface OfferLine {
+  /** The InventoryItem this line quotes. */
+  itemId: string;
+  /**
+   * The owner's grade and buyer-facing note for THIS buyer — PER LINE, not per
+   * device, because the same phone quoted to two buyers is legitimately
+   * described differently to each. Both are exported in the offer sheet's
+   * existing Grade and Notes columns.
+   */
+  grade?: string;
+  note?: string;
+  outcome: OfferLineOutcome;
+  /**
+   * When this line was pushed to Quick Sale from this offer. NOT a sale and
+   * NOT money: a record that the owner took that action, which is the only
+   * thing that tells "the buyer took this one" apart from "it sold in-store
+   * to somebody else while the offer was out". Without it a device sold over
+   * the counter would read on the offer as though the buyer had bought it.
+   */
+  sentToSaleAt?: number;
+}
+
+/**
+ * A SAVED WHOLESALE OFFER: who it was quoted to, what was in it, and how each
+ * device ended up.
+ *
+ * NO LOCATION, deliberately. The stock in a lot is the company's and a batch
+ * plainly spans both stores — but the SALE lands at one store, and the
+ * `salesTransaction` is already stamped with it by the till that rings it
+ * (multi-store stage 5). Putting a location on the offer would create a
+ * second, competing answer to "whose profit is this": the offer's guess
+ * against the till's fact. The till wins, so the offer does not guess.
+ *
+ * NO MONEY FIELD of any kind — no agreed price, no revenue, no total. See
+ * `OfferLineOutcome` and domain/offers.ts.
+ */
+export interface Offer {
+  id: string;
+  buyerName: string;
+  /** Phone, email, "the guy from Scarborough" — free text, not a Customer. */
+  buyerContact?: string;
+  /** The day it was raised (ISO yyyy-mm-dd). */
+  date: string;
+  /** Owner-controlled lifecycle. Everything else about progress is derived. */
+  status: 'open' | 'closed';
+  lines: OfferLine[];
+  /** An internal note about the offer. Never exported. */
+  notes?: string;
+  createdAt: number;
+  createdBy?: string;
+  updatedAt?: number;
+  /**
+   * When the sheet was last EXPORTED. An offer stays editable afterwards, and
+   * the file in the buyer's inbox is a snapshot of the moment it was made —
+   * so a change after this timestamp means the buyer is holding a stale sheet,
+   * which the screen says out loud rather than leaving the owner to remember.
+   */
+  sentAt?: number;
+}
+
 // Who FUNDED the purchase — the store advancing money it is owed back, the
 // buyer using his own money, or the owner paying out of pocket.
 // 'personal' = the owner paid out of pocket: not store cash (never touches the

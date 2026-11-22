@@ -61,9 +61,23 @@ export const OFFER_SHEET_SOURCE_FIELDS = [
   'batteryHealth', 'cpu', 'ram', 'screenSize', 'condition',
 ] as const;
 
+/**
+ * WHAT THE OWNER TYPED FOR THIS BUYER, keyed by inventory id.
+ *
+ * The one thing in this file that does NOT come off the InventoryItem — and
+ * that is exactly why Grade and Notes can be filled in without weakening the
+ * allow-list. The values come from a saved offer (domain/offers.ts), which
+ * holds only what the owner typed for a buyer to read; the item's own fields
+ * are still reached only through `OFFER_SHEET_SOURCE_FIELDS`.
+ *
+ * Absent, or absent for a given row, and the column is blank exactly as
+ * before — the plain inventory export calls this with nothing.
+ */
+export type OfferSheetAnnotations = Record<string, { grade?: string; note?: string }>;
+
 interface OfferColumn {
   header: string;
-  value: (i: InventoryItem) => string;
+  value: (i: InventoryItem, a?: { grade?: string; note?: string }) => string;
 }
 
 const str = (v: unknown): string => (v == null ? '' : String(v)).trim();
@@ -88,9 +102,13 @@ export const OFFER_SHEET_COLUMNS: OfferColumn[] = [
   { header: 'RAM', value: i => str(i.ram) },
   { header: 'Screen', value: i => str(i.screenSize) },
   { header: 'Condition', value: i => str(i.condition) },
-  // The buyer's own columns — see the header comment.
-  { header: 'Grade', value: () => '' },
-  { header: 'Notes', value: () => '' },
+  // THE BUYER'S OWN COLUMNS. Blank when the sheet is exported straight from
+  // Inventory (nobody has written anything for this buyer yet, and a blank
+  // column is a working document — see the header comment). Filled from the
+  // offer when it is exported from a saved one: the grade the owner put on
+  // this device FOR THIS BUYER, and the note they wrote them.
+  { header: 'Grade', value: (_i, a) => str(a?.grade) },
+  { header: 'Notes', value: (_i, a) => str(a?.note) },
 ];
 
 /** Every header this sheet writes, in order. */
@@ -102,9 +120,9 @@ const esc = (v: string) => `"${v.replace(/"/g, '""')}"`;
  * The sheet itself. Built column by column from the allow-list, so a row's
  * other fields are never read — not masked, not blanked, never touched.
  */
-export const offerSheetCsv = (rows: InventoryItem[]): string => [
+export const offerSheetCsv = (rows: InventoryItem[], annotations?: OfferSheetAnnotations): string => [
   offerSheetHeaders().map(esc).join(','),
-  ...rows.map(r => OFFER_SHEET_COLUMNS.map(c => esc(c.value(r))).join(',')),
+  ...rows.map(r => OFFER_SHEET_COLUMNS.map(c => esc(c.value(r, annotations?.[r.id]))).join(',')),
 ].join('\n');
 
 /**
@@ -114,3 +132,16 @@ export const offerSheetCsv = (rows: InventoryItem[]): string => [
  */
 export const offerSheetFileName = (todayISO: string): string =>
   `offer-sheet-SAFE-TO-SEND_${todayISO}.csv`;
+
+/**
+ * The same, for a sheet exported from a saved offer — the buyer's name is in
+ * it because the owner will have several of these in one folder, quoted to
+ * different people, and "which of these did I send Rashid?" is not a question
+ * a date alone answers.
+ */
+export const offerSheetFileNameFor = (buyerName: string, todayISO: string): string => {
+  const slug = (buyerName || '').trim().replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').slice(0, 40);
+  return slug
+    ? `offer-sheet-SAFE-TO-SEND_${slug}_${todayISO}.csv`
+    : offerSheetFileName(todayISO);
+};
