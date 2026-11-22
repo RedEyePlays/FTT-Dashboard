@@ -99,14 +99,17 @@ const view = (props: Partial<React.ComponentProps<typeof InventoryView>> = {}) =
 );
 
 /** Open the Export menu and take the named entry. */
-const exportVia = (v: ReturnType<typeof mount>, entry: 'tab' | 'everything') => {
+const exportVia = (v: ReturnType<typeof mount>, entry: 'tab' | 'everything' | 'offer') => {
   const openers = Array.from(v.host.querySelectorAll('button'))
     .filter(b => b.getAttribute('title') === 'Export CSV');
   click(openers[0]);
   const items = Array.from(v.host.querySelectorAll('button'));
+  const txt = (b: Element) => b.textContent || '';
   const target = entry === 'everything'
-    ? items.find(b => (b.textContent || '').startsWith('Everything'))
-    : items.find(b => (b.textContent || '').includes('row') && !(b.textContent || '').startsWith('Everything'));
+    ? items.find(b => txt(b).startsWith('Everything'))
+    : entry === 'offer'
+      ? items.find(b => txt(b).startsWith('Offer sheet'))
+      : items.find(b => txt(b).includes('row') && !txt(b).startsWith('Everything') && !txt(b).startsWith('Offer sheet'));
   click(target);
 };
 
@@ -340,6 +343,11 @@ describe('exporting everything', () => {
  * ======================================================================== */
 
 describe('round-tripping an exported file through import', () => {
+  /**
+   * Import now PREVIEWS before it writes (domain/inventoryImport.ts), so this
+   * picks the file and then confirms the plan — nothing reaches `onSave`
+   * until Apply, which is the point of the preview.
+   */
   const importText = async (v: ReturnType<typeof mount>, text: string, name: string) => {
     const input = Array.from(v.host.querySelectorAll('input'))
       .find(i => (i as HTMLInputElement).type === 'file') as HTMLInputElement;
@@ -350,7 +358,56 @@ describe('round-tripping an exported file through import', () => {
       // FileReader is async even in happy-dom.
       await new Promise(r => setTimeout(r, 30));
     });
+    const apply = Array.from(v.host.querySelectorAll('button'))
+      .find(b => (b.textContent || '').startsWith('Apply '));
+    if (!apply) throw new Error(`no Apply button — preview did not open for ${name}`);
+    await act(async () => {
+      apply.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await new Promise(r => setTimeout(r, 30));
+    });
   };
+
+  /**
+   * THE DATA-LOSS TRAP THIS REPLACED. Import used to build every row as a new
+   * record, so exporting and importing back doubled the inventory — two rows
+   * per SKU, two per IMEI, silently.
+   */
+  it('UPDATES the matching items instead of duplicating them', async () => {
+    const out = mount(view({ inventory: MIXED, section: 'laptops' }));
+    exportVia(out, 'tab');
+    const csv = downloads[0].text;
+    out.unmount();
+
+    const onSave = vi.fn();
+    const back = mount(view({ inventory: MIXED, section: 'laptops', onSave }));
+    await importText(back, csv, 'laptops.csv');
+    const saved: InventoryItem[] = onSave.mock.calls.map(c => c[0]);
+    // Every row came back onto the item it already was — same ids, no new ones.
+    expect(saved.map(i => i.id).sort()).toEqual(['l1', 'l2', 'l3']);
+    expect(saved.every(i => MIXED.some(m => m.id === i.id))).toBe(true);
+    back.unmount();
+  });
+
+  it('and says so before writing anything', async () => {
+    const out = mount(view({ inventory: MIXED, section: 'laptops' }));
+    exportVia(out, 'tab');
+    const csv = downloads[0].text;
+    out.unmount();
+
+    const onSave = vi.fn();
+    const back = mount(view({ inventory: MIXED, section: 'laptops', onSave }));
+    const input = Array.from(back.host.querySelectorAll('input'))
+      .find(i => (i as HTMLInputElement).type === 'file') as HTMLInputElement;
+    Object.defineProperty(input, 'files', { value: [new File([csv], 'l.csv', { type: 'text/csv' })], configurable: true });
+    await act(async () => {
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      await new Promise(r => setTimeout(r, 30));
+    });
+    // The preview is open, the counts are on it, and NOTHING has been saved.
+    expect(back.host.textContent).toContain('3 to update · 0 new');
+    expect(onSave).not.toHaveBeenCalled();
+    back.unmount();
+  });
 
   it('does not corrupt deviceStatus', async () => {
     const out = mount(view({ inventory: MIXED, section: 'laptops' }));
@@ -417,6 +474,113 @@ describe('round-tripping an exported file through import', () => {
     expect(onSave).toHaveBeenCalledTimes(1);
     expect(onSave.mock.calls[0][0].kind).toBe('device');
     expect(onSave.mock.calls[0][0].deviceStatus).toBe('reserved');
+    v.unmount();
+  });
+});
+
+/* ======================================================================== *
+ * 5. THE BUYER-SAFE SHEET — THE THIRD ENTRY
+ * ======================================================================== */
+
+const COSTED: InventoryItem[] = [
+  device({ id: 'c1', sku: 'LAP-1', item: 'Dell XPS 15', deviceType: 'Laptop', date: '2026-01-02',
+    purchaseCost: 977.33, repairCost: 611.19, boughtFrom: 'Kijiji seller — flaky',
+    purchaseSource: 'Kijiji', notes: 'aftermarket screen, do not mention', targetSalePrice: 1234.56 }),
+  device({ id: 'c2', sku: 'LAP-2', item: 'HP Pavillion', deviceType: 'Laptop', date: '2026-01-01',
+    purchaseCost: 500.01, notes: 'battery swollen' }),
+  device({ id: 'c3', sku: 'PHN-1', item: 'iPhone 13', deviceType: 'Phone', purchaseCost: 300.07 }),
+];
+
+describe('the offer sheet is safe to send', () => {
+  it('carries no cost, source or internal note — unlike the tab export beside it', () => {
+    const v = mount(view({ inventory: COSTED, section: 'laptops' }));
+    exportVia(v, 'offer');
+    const offer = downloads[0].text;
+    for (const leak of ['977.33', '611.19', 'Kijiji', 'do not mention', 'swollen', '1234.56']) {
+      expect(offer, leak).not.toContain(leak);
+    }
+    // The ordinary tab export DOES carry them — which is the whole problem,
+    // and is deliberately unchanged. (This role cannot view cost, so the two
+    // cost FIGURES come out as the word "Recorded"; the sourcing, the internal
+    // note and the asking price are in the file in full regardless of role,
+    // which is why hand-deleting columns was never a reliable answer.)
+    downloads = [];
+    exportVia(v, 'tab');
+    const tab = downloads[0].text;
+    for (const kept of ['Kijiji', 'do not mention', 'swollen', '1234.56']) expect(tab, kept).toContain(kept);
+    expect(headersOf(downloads[0])).toContain('purchaseCost');
+    v.unmount();
+  });
+
+  it('is named so the shareable file cannot be confused with the internal one', () => {
+    const v = mount(view({ inventory: COSTED, section: 'laptops' }));
+    exportVia(v, 'offer');
+    expect(downloads[0].name).toMatch(/offer-sheet-SAFE-TO-SEND_\d{4}-\d{2}-\d{2}\.csv/);
+    v.unmount();
+  });
+
+  it('exports what is on screen: this tab, in the grid\'s own order', () => {
+    const v = mount(view({ inventory: COSTED, section: 'laptops' }));
+    exportVia(v, 'offer');
+    const rows = rowsOf(downloads[0]);
+    expect(rows).toHaveLength(2);                      // the two laptops only
+    expect(rows[0]).toContain('LAP-2');                // 01-01 before 01-02
+    expect(rows[1]).toContain('LAP-1');
+    expect(downloads[0].text).not.toContain('PHN-1');
+    v.unmount();
+  });
+
+  it('respects the search box', () => {
+    const v = mount(view({ inventory: COSTED, section: 'laptops' }));
+    const box = v.host.querySelector('input[placeholder]') as HTMLInputElement;
+    const setNative = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!;
+    act(() => { setNative.call(box, 'Pavillion'); box.dispatchEvent(new Event('input', { bubbles: true })); });
+    exportVia(v, 'offer');
+    expect(rowsOf(downloads[0])).toHaveLength(1);
+    expect(downloads[0].text).toContain('LAP-2');
+    v.unmount();
+  });
+
+  it('EXPORTS THE SELECTION when there is one — across tabs, as a batch is built', () => {
+    const v = mount(view({ inventory: COSTED, section: 'laptops' }));
+    // Tick the first laptop row…
+    click(v.host.querySelectorAll('button[title="Select"]')[0]);
+    exportVia(v, 'offer');
+    expect(rowsOf(downloads[0])).toHaveLength(1);
+    v.unmount();
+  });
+
+  it('a phone and a laptop in one sheet each carry their own specs', () => {
+    const mixed = [
+      device({ id: 'm1', sku: 'PHN-9', item: 'iPhone 14', deviceType: 'Phone', storage: '256GB', batteryHealth: '89%' }),
+      device({ id: 'm2', sku: 'LAP-9', item: 'XPS', deviceType: 'Laptop', cpu: 'i7-12700H', ram: '32GB', screenSize: '15.6' }),
+    ];
+    const v = mount(view({ inventory: mixed, section: 'phones' }));
+    click(v.host.querySelectorAll('button[title="Select"]')[0]);
+    exportVia(v, 'offer');
+    expect(downloads[0].text).toContain('89%');
+    v.unmount();
+  });
+
+  it('the menu says what the file leaves out, where the file is produced', () => {
+    const v = mount(view({ inventory: COSTED, section: 'laptops' }));
+    click(Array.from(v.host.querySelectorAll('button')).find(b => b.getAttribute('title') === 'Export CSV'));
+    const entry = Array.from(v.host.querySelectorAll('button')).find(b => (b.textContent || '').startsWith('Offer sheet'));
+    const t = entry!.textContent || '';
+    for (const f of ['purchase cost', 'repair cost', 'bought from', 'purchase source', 'internal notes']) {
+      expect(t, f).toContain(f);
+    }
+    expect(t).toContain('No price');
+    v.unmount();
+  });
+
+  it('leaves the other two exports exactly as they were', () => {
+    const v = mount(view({ inventory: COSTED, section: 'laptops' }));
+    exportVia(v, 'everything');
+    expect(downloads).toHaveLength(2);
+    expect(downloads[0].name).toMatch(/^inventory-devices_/);
+    expect(downloads[1].name).toMatch(/^inventory-accessories_/);
+    expect(headersOf(downloads[0])).toContain('purchaseCost');
     v.unmount();
   });
 });

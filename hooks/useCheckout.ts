@@ -99,6 +99,14 @@ interface Args {
   // deposit path of its own.
   initialInventoryId?: string;
   onConsumeInitialInventory?: () => void;
+  // Pre-seed the cart with a WHOLE BATCH of inventory devices — a wholesale
+  // lot sent over from Inventory's bulk actions. Separate from the singular
+  // prop above rather than replacing it: the PC-order path has its own
+  // meaning ("this build, then a deposit") and its own tests, and the two
+  // seeds are independent. Which devices are eligible is decided by
+  // domain/sellBatch.ts before the ids ever get here.
+  initialInventoryIds?: string[];
+  onConsumeInitialInventoryBatch?: () => void;
   onComplete: (payload: CartCheckout) => void;
   // Allocate a real SKU the same way normal device intake does (App's atomic
   // generator). Used to give a custom device opted into inventory a proper SKU
@@ -121,7 +129,7 @@ interface Args {
 
 const uid = newId;
 
-export function useCheckout({ inventory, customers = [], repairs = [], initialCustomer, onConsumeInitial, initialRepair, onConsumeInitialRepair, initialInventoryId, onConsumeInitialInventory, onComplete, onGenerateSku, persist, floorSettings = {}, warrantySettings = {} }: Args) {
+export function useCheckout({ inventory, customers = [], repairs = [], initialCustomer, onConsumeInitial, initialRepair, onConsumeInitialRepair, initialInventoryId, onConsumeInitialInventory, initialInventoryIds, onConsumeInitialInventoryBatch, onComplete, onGenerateSku, persist, floorSettings = {}, warrantySettings = {} }: Args) {
   const [cart, setCart] = useState<CartLine[]>([]);
   const [picker, setPicker] = useState<null | ItemKind>(null);
   const [search, setSearch] = useState('');
@@ -594,6 +602,49 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
     onConsumeInitialInventory?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialInventoryId]);
+
+  /**
+   * SEED THE CART WITH A WHOLE BATCH — the wholesale lot sent over from
+   * Inventory's bulk actions (domain/sellBatch.ts decided which ids these are).
+   *
+   * Deliberately the same shape as the single-device effect above, for the same
+   * reasons, and declared after it so the ordering is explicit rather than
+   * incidental:
+   *   • AFTER the restore, so a restored cart is never stomped;
+   *   • APPENDS FUNCTIONALLY, so it cannot lose a line queued beside it;
+   *   • the DUPLICATE GUARD IS INSIDE THE UPDATER, because on mount the
+   *     render-time `cart` is still `[]` even when the restore has just queued
+   *     a cart containing these very devices — read from outside, a restored
+   *     lot would be added a second time, at full price, thirty lines over.
+   *
+   * It also guards WITHIN the batch: the same device reached by two different
+   * identifiers in the paste is one line, not two.
+   *
+   * It does NOT touch pricing, warranty stamping or layaway. Each line is
+   * `deviceLine(item)` — the identical line the picker builds — so the lot is
+   * thirty ordinary device lines and everything downstream treats them as such.
+   */
+  useEffect(() => {
+    if (!initialInventoryIds || initialInventoryIds.length === 0) return;
+    const items = initialInventoryIds
+      .map(id => inventory.find(i => i.id === id))
+      .filter((i): i is InventoryItem => !!i);
+    if (items.length > 0) {
+      setCart(prev => {
+        const have = new Set(prev.map(l => l.inventoryId));
+        const add: CartLine[] = [];
+        for (const item of items) {
+          if (have.has(item.id)) continue;
+          have.add(item.id);
+          add.push(deviceLine(item));
+        }
+        return add.length ? prev.concat(add) : prev;
+      });
+      setPicker(null); setSearch('');
+    }
+    onConsumeInitialInventoryBatch?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialInventoryIds]);
 
   const addAccessory = (i: InventoryItem) => {
     setCart(c => [...c, {

@@ -20,6 +20,9 @@ interface Props {
   onConsumeInitialRepair?: () => void;
   initialInventoryId?: string;
   onConsumeInitialInventory?: () => void;
+  /** A wholesale lot sent over from Inventory's bulk actions. */
+  initialInventoryIds?: string[];
+  onConsumeInitialInventoryBatch?: () => void;
   onSellCart: (payload: CartCheckout) => void;
   canViewProfit?: boolean;         // gate cost/profit figures (same pattern as Dashboard)
   onGenerateSku?: (deviceType?: DeviceType) => Promise<string>; // real SKU for a custom device added to inventory
@@ -52,9 +55,9 @@ interface Props {
 // Quick Sale = the desktop split-screen cart on ≥md, a step-based flow on phones.
 // Both share the same checkout logic (hooks/useCheckout) — no duplicated business
 // logic; only the presentation differs, and only one renders at a time.
-export const QuickSaleView: React.FC<Props> = ({ inventory, customers, repairs, initialCustomer, onConsumeInitial, initialRepair, onConsumeInitialRepair, initialInventoryId, onConsumeInitialInventory, onSellCart, canViewProfit = true, onGenerateSku, cashDrawer, storeLabel, onOpenDrawer, onLogCash, onCloseDrawer, onCorrectFloat, reconciledToday, onCartDirtyChange, persist, floorSettings, warrantySettings }) => {
+export const QuickSaleView: React.FC<Props> = ({ inventory, customers, repairs, initialCustomer, onConsumeInitial, initialRepair, onConsumeInitialRepair, initialInventoryId, onConsumeInitialInventory, initialInventoryIds, onConsumeInitialInventoryBatch, onSellCart, canViewProfit = true, onGenerateSku, cashDrawer, storeLabel, onOpenDrawer, onLogCash, onCloseDrawer, onCorrectFloat, reconciledToday, onCartDirtyChange, persist, floorSettings, warrantySettings }) => {
   const isMobile = useIsMobile();
-  const common = { inventory, customers, repairs, initialCustomer, onConsumeInitial, initialRepair, onConsumeInitialRepair, initialInventoryId, onConsumeInitialInventory, canViewProfit, onGenerateSku, onDirtyChange: onCartDirtyChange, persist, floorSettings, warrantySettings } as const;
+  const common = { inventory, customers, repairs, initialCustomer, onConsumeInitial, initialRepair, onConsumeInitialRepair, initialInventoryId, onConsumeInitialInventory, initialInventoryIds, onConsumeInitialInventoryBatch, canViewProfit, onGenerateSku, onDirtyChange: onCartDirtyChange, persist, floorSettings, warrantySettings } as const;
   const checkout = isMobile
     ? <MobileCheckout {...common} onComplete={onSellCart} />
     : <CartSaleView {...common} onComplete={onSellCart} />;

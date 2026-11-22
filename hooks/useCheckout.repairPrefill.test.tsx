@@ -277,3 +277,83 @@ describe('the initialInventoryId seed', () => {
     v.unmount();
   });
 });
+
+/* ======================================================================== *
+ * THE BATCH SEED — a wholesale lot sent over from Inventory
+ * ======================================================================== */
+
+const lot: InventoryItem[] = [
+  { ...pcBuild, id: 'w1', sku: 'FTT-000101', item: 'iPhone 14', deviceType: 'Phone', purchaseCost: 300, targetSalePrice: 500 },
+  { ...pcBuild, id: 'w2', sku: 'FTT-000102', item: 'iPhone 15', deviceType: 'Phone', purchaseCost: 400, targetSalePrice: 700 },
+  { ...pcBuild, id: 'w3', sku: 'FTT-000103', item: 'Pixel 8', deviceType: 'Phone', purchaseCost: 200, targetSalePrice: 350 },
+];
+
+describe('the initialInventoryIds batch seed', () => {
+  const withLot = (args: Record<string, unknown>) =>
+    mount({ inventory: [accessory, pcBuild, ...lot], ...args });
+
+  it('seeds one ordinary device line per id, in order, at each target price', () => {
+    const v = withLot({ persist: null, initialInventoryIds: ['w1', 'w2', 'w3'] });
+    expect(v.cx.cart.map((l: CartLine) => l.inventoryId)).toEqual(['w1', 'w2', 'w3']);
+    expect(v.cx.cart.map((l: CartLine) => l.unitPrice)).toEqual([500, 700, 350]);
+    // The SAME line the picker builds — nothing bespoke about a lot line.
+    expect(v.cx.cart.every((l: CartLine) => l.kind === 'device' && l.quantity === 1 && l.maxQty === 1)).toBe(true);
+    expect(v.cx.cart.map((l: CartLine) => l.purchaseCost)).toEqual([300, 400, 200]);
+    v.unmount();
+  });
+
+  // Declared AFTER the restore and appends functionally, like the single seed.
+  it('is not stomped by a restored cart, and does not stomp it', () => {
+    saveCart([line({ inventoryId: 'acc-1', name: 'Case', unitPrice: 15, purchaseCost: 3, maxQty: 5 })]);
+    const v = withLot({ persist, initialInventoryIds: ['w1', 'w2'] });
+    expect(v.cx.cart.map((l: CartLine) => l.inventoryId)).toEqual(['acc-1', 'w1', 'w2']);
+    v.unmount();
+  });
+
+  // THE GUARD THAT HAS TO BE INSIDE THE UPDATER: on mount the render-time
+  // `cart` is still [] even though the restore has queued one holding these
+  // very devices. Read from outside, a restored lot is added a second time —
+  // at full price, thirty lines over.
+  it('adds no second line for a device the RESTORED cart already holds', () => {
+    saveCart([
+      line({ inventoryId: 'w1', kind: 'device', name: 'iPhone 14', unitPrice: 500, purchaseCost: 300 }),
+      line({ inventoryId: 'w3', kind: 'device', name: 'Pixel 8', unitPrice: 350, purchaseCost: 200 }),
+    ]);
+    const v = withLot({ persist, initialInventoryIds: ['w1', 'w2', 'w3'] });
+    expect(v.cx.cart.map((l: CartLine) => l.inventoryId)).toEqual(['w1', 'w3', 'w2']);
+    for (const id of ['w1', 'w2', 'w3']) {
+      expect(v.cx.cart.filter((l: CartLine) => l.inventoryId === id), id).toHaveLength(1);
+    }
+    v.unmount();
+  });
+
+  it('guards WITHIN the batch: the same device twice is one line', () => {
+    const v = withLot({ persist: null, initialInventoryIds: ['w1', 'w2', 'w1'] });
+    expect(v.cx.cart.map((l: CartLine) => l.inventoryId)).toEqual(['w1', 'w2']);
+    v.unmount();
+  });
+
+  it('an id naming nothing is skipped, and the rest still go', () => {
+    const v = withLot({ persist: null, initialInventoryIds: ['w1', 'gone', 'w2'] });
+    expect(v.cx.cart.map((l: CartLine) => l.inventoryId)).toEqual(['w1', 'w2']);
+    v.unmount();
+  });
+
+  it('does nothing at all when there is no batch', () => {
+    expect(withLot({ persist: null }).cx.cart).toEqual([]);
+    expect(withLot({ persist: null, initialInventoryIds: [] }).cx.cart).toEqual([]);
+  });
+
+  it('leaves the single-device seed working alongside it', () => {
+    const v = withLot({ persist: null, initialInventoryId: 'pc-1', initialInventoryIds: ['w1'] });
+    expect(v.cx.cart.map((l: CartLine) => l.inventoryId).sort()).toEqual(['pc-1', 'w1']);
+    v.unmount();
+  });
+
+  it('tells the caller it has consumed the batch, so navigating back does not re-seed', () => {
+    const onConsumeInitialInventoryBatch = vi.fn();
+    const v = withLot({ persist: null, initialInventoryIds: ['w1'], onConsumeInitialInventoryBatch });
+    expect(onConsumeInitialInventoryBatch).toHaveBeenCalled();
+    v.unmount();
+  });
+});

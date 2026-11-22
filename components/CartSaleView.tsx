@@ -37,6 +37,9 @@ interface Props {
   /** Pre-seed one inventory device (a customer PC order's reserved build). */
   initialInventoryId?: string;
   onConsumeInitialInventory?: () => void;
+  /** A wholesale lot sent over from Inventory's bulk actions. */
+  initialInventoryIds?: string[];
+  onConsumeInitialInventoryBatch?: () => void;
   onComplete: (payload: import('../hooks/useCheckout').CartCheckout) => void;
   canViewProfit?: boolean;      // gate cost/profit figures (same pattern as Dashboard)
   onGenerateSku?: (deviceType?: DeviceType) => Promise<string>;

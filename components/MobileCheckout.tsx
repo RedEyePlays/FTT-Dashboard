@@ -35,6 +35,9 @@ interface Props {
   onConsumeInitialRepair?: () => void;
   initialInventoryId?: string;
   onConsumeInitialInventory?: () => void;
+  /** A wholesale lot sent over from Inventory's bulk actions. */
+  initialInventoryIds?: string[];
+  onConsumeInitialInventoryBatch?: () => void;
   onComplete: (payload: CartCheckout) => void;
   // Accepted for a uniform QuickSaleView call; the mobile flow shows no
   // cost/profit figures, so there is nothing to mask here.
