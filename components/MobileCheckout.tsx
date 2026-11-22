@@ -2,13 +2,13 @@ import React, { useEffect, useState, lazy, Suspense } from 'react';
 import {
   ScanLine, Search, Plus, Minus, Trash2, Smartphone, Package, Sparkles, ShoppingCart,
   User, Phone, Mail, ChevronLeft, CheckCircle, Banknote, CreditCard, Blend, Send,
-  Printer, RotateCcw, Eye, X, AlertTriangle, FileText, Wrench, History, HandCoins, Camera,
+  Printer, RotateCcw, Eye, X, AlertTriangle, FileText, Wrench, History, HandCoins, Camera, Tag,
 } from 'lucide-react';
 // Lazy: pulls in the camera viewport/detection code only when actually opened
 // — the mobile checkout flow otherwise assumes a keyboard-wedge barcode
 // scanner gun (real POS hardware), so most sessions never touch this at all.
 const QRScanner = lazy(() => import('./QRScanner').then(m => ({ default: m.QRScanner })));
-import { InventoryItem, Customer, DeviceType, Repair } from '../types';
+import { InventoryItem, Customer, DeviceType, Repair, Offer } from '../types';
 import { FloorSettings } from '../domain/priceFloor';
 import { WarrantySettings } from '../domain/warranty';
 import { RepairSalePrefill } from '../domain/repairs';
@@ -38,6 +38,9 @@ interface Props {
   /** A wholesale lot sent over from Inventory's bulk actions. */
   initialInventoryIds?: string[];
   onConsumeInitialInventoryBatch?: () => void;
+  /** The saved offer the batch came from, and the live offers (domain/offers.ts). */
+  initialOfferId?: string;
+  offers?: Offer[];
   onComplete: (payload: CartCheckout) => void;
   // Accepted for a uniform QuickSaleView call; the mobile flow shows no
   // cost/profit figures, so there is nothing to mask here.
@@ -463,6 +466,17 @@ export const MobileCheckout: React.FC<Props> = (props) => {
               <label className="flex items-center gap-2 mt-2 text-orange-800 dark:text-orange-300"><input type="checkbox" checked={cx.allowOpenRepairSale} onChange={e => cx.setAllowOpenRepairSale(e.target.checked)} className="rounded" /> Sell anyway</label>
             </div>
           )}
+          {cx.hasOfferedDevice && (
+            <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-500/40 rounded-xl p-3 text-sm">
+              <p className="flex items-center gap-2 font-semibold text-amber-800 dark:text-amber-300"><Tag className="w-4 h-4" /> Quoted to a wholesale buyer</p>
+              {cx.offeredLines.map(o => (
+                <p key={o.line.key} className="text-xs text-amber-700/80 dark:text-amber-300/80 mt-1">
+                  {o.line.name} is {o.warning} — selling it here means telling them it is gone.
+                </p>
+              ))}
+              <label className="flex items-center gap-2 mt-2 text-amber-800 dark:text-amber-300"><input type="checkbox" checked={cx.allowOfferedSale} onChange={e => cx.setAllowOfferedSale(e.target.checked)} className="rounded" /> Sell anyway</label>
+            </div>
+          )}
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-4 space-y-1.5 text-sm">
             <div className="flex justify-between"><span className="text-slate-500 dark:text-slate-400">Subtotal</span><span className="text-slate-800 dark:text-slate-100">{money(cx.subtotal)}</span></div>
             <div className="flex justify-between"><span className="text-slate-500 dark:text-slate-400">Tax</span><span className="text-slate-600 dark:text-slate-300">{money(cx.tax)}</span></div>
@@ -498,7 +512,7 @@ export const MobileCheckout: React.FC<Props> = (props) => {
         {step < 3 ? (
           <button onClick={next} disabled={!canNext} className="ml-auto px-6 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white rounded-xl text-sm font-semibold">Next</button>
         ) : (
-          <button onClick={cx.handleCheckout} disabled={cx.isSubmitting || cx.cart.length === 0 || cx.blockedByZeroPrice || cx.blockedByListedElsewhere || cx.blockedByOpenRepair || cx.mixedPaymentMismatch} className="ml-auto px-6 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white rounded-xl text-sm font-semibold flex items-center gap-2"><CheckCircle className="w-4 h-4" /> {cx.isSubmitting ? 'Processing…' : cx.isLayaway ? 'Take Deposit' : 'Complete Sale'}</button>
+          <button onClick={cx.handleCheckout} disabled={cx.isSubmitting || cx.cart.length === 0 || cx.blockedByZeroPrice || cx.blockedByListedElsewhere || cx.blockedByOpenRepair || cx.blockedByOffered || cx.mixedPaymentMismatch} className="ml-auto px-6 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white rounded-xl text-sm font-semibold flex items-center gap-2"><CheckCircle className="w-4 h-4" /> {cx.isSubmitting ? 'Processing…' : cx.isLayaway ? 'Take Deposit' : 'Complete Sale'}</button>
         )}
       </div>
 

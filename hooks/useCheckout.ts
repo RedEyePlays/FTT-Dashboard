@@ -1,7 +1,8 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
-import { InventoryItem, ItemKind, DeviceType, SalesTransaction, Customer, Repair, ListingPlatform } from '../types';
+import { InventoryItem, ItemKind, DeviceType, SalesTransaction, Customer, Repair, ListingPlatform, Offer } from '../types';
 import { getPOSSettings, getStoreProfile } from '../components/SettingsModal';
 import { newId } from '../domain/ids';
+import { commitmentExcept, commitmentWarning, committedCounts } from '../domain/offers';
 import { kindOf, getDeviceDisplayName } from '../domain/inventory';
 import { sameIdentifier, matchesRepairIdentifier } from '../domain/identifierSearch';
 import { isZeroPricedDevice as isZeroPricedLine, cartHasZeroPricedDevice, searchCheckoutInventory, salesBalanceOwing, mixedPaymentMismatch as computeMixedPaymentMismatch, taxAppliesForSale, costShareForLine, mixedSaleTax } from '../domain/pos';
@@ -63,6 +64,16 @@ export interface CartLine {
   // acknowledgement (same non-blocking-but-acknowledged gate as
   // listedPlatforms above; selling a device as-is is legitimate).
   openRepairNumber?: string;
+  /**
+   * WHICH SAVED OFFER THIS LINE WAS SEEDED FROM, when it was (domain/offers.ts).
+   *
+   * Not a snapshot of anything and not used in any arithmetic: it exists so
+   * the out-on-offer warning below can discount THIS offer's own commitment.
+   * A cart the offer just pushed here conflicting with that same offer is the
+   * screen arguing with itself, which is how a safeguard gets dismissed by
+   * reflex and stops working. Every other open offer still counts.
+   */
+  fromOfferId?: string;
   // A CUSTOMER PC ORDER: the warranty clock starts when they collect it, not
   // when the deposit is taken (domain/warranty.ts).
   startsWarrantyAtPickup?: boolean;
@@ -107,6 +118,16 @@ interface Args {
   // domain/sellBatch.ts before the ids ever get here.
   initialInventoryIds?: string[];
   onConsumeInitialInventoryBatch?: () => void;
+  /** The saved offer those ids came from, if they came from one. */
+  initialOfferId?: string;
+  /**
+   * Live wholesale offers, for the out-on-offer warning. LIVE, not a snapshot
+   * taken at add-to-cart time like `listedPlatforms` and `openRepairNumber`:
+   * an offer can be raised, answered or closed while a cart sits in
+   * sessionStorage across a navigation, and a stale snapshot would both miss a
+   * quote raised since and keep warning about one the buyer has declined.
+   */
+  offers?: Offer[];
   onComplete: (payload: CartCheckout) => void;
   // Allocate a real SKU the same way normal device intake does (App's atomic
   // generator). Used to give a custom device opted into inventory a proper SKU
@@ -129,7 +150,7 @@ interface Args {
 
 const uid = newId;
 
-export function useCheckout({ inventory, customers = [], repairs = [], initialCustomer, onConsumeInitial, initialRepair, onConsumeInitialRepair, initialInventoryId, onConsumeInitialInventory, initialInventoryIds, onConsumeInitialInventoryBatch, onComplete, onGenerateSku, persist, floorSettings = {}, warrantySettings = {} }: Args) {
+export function useCheckout({ inventory, customers = [], repairs = [], initialCustomer, onConsumeInitial, initialRepair, onConsumeInitialRepair, initialInventoryId, onConsumeInitialInventory, initialInventoryIds, onConsumeInitialInventoryBatch, initialOfferId, offers = [], onComplete, onGenerateSku, persist, floorSettings = {}, warrantySettings = {} }: Args) {
   const [cart, setCart] = useState<CartLine[]>([]);
   const [picker, setPicker] = useState<null | ItemKind>(null);
   const [search, setSearch] = useState('');
@@ -144,6 +165,8 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
   // repair ticket — same acknowledge-don't-block pattern as the two above (an
   // as-is sale of a device mid-repair is a real thing; a silent one isn't).
   const [allowOpenRepairSale, setAllowOpenRepairSale] = useState(false);
+  // Out-on-offer acknowledgement — see the safeguard below.
+  const [allowOfferedSale, setAllowOfferedSale] = useState(false);
   // Sold devices that were flagged listed elsewhere, captured at the moment of
   // checkout so the confirmation screen can remind the seller to delist them —
   // guaranteed to surface at least once, independent of the Firestore write.
@@ -518,6 +541,32 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
   const hasOpenRepairDevice = openRepairLines.length > 0;
   const blockedByOpenRepair = hasOpenRepairDevice && !allowOpenRepairSale;
 
+  /**
+   * OUT-ON-OFFER safeguard (domain/offers.ts). THIS IS WHERE THE DOUBLE-SELL
+   * ACTUALLY HAPPENS, so this is where it is caught.
+   *
+   * A device quoted to a wholesale buyer is neither sold nor reserved — the
+   * buyer has not agreed to anything — so nothing about the device changed and
+   * nothing here blocks the sale. Selling it over the counter is legitimate: a
+   * customer with cash beats a wholesaler who is still thinking about it. What
+   * is not legitimate is doing it UNKNOWINGLY and finding out when the buyer
+   * says yes. So checkout is gated on an acknowledgement that NAMES THE
+   * BUYERS, exactly as the open-repair gate names the ticket, and then it goes
+   * through.
+   *
+   * The count is the point: two buyers quoted the same phone is normal, and
+   * "out on 2 open offers (Rashid, Mo)" is what somebody at the till needs
+   * told. `commitmentExcept` discounts the offer this cart was seeded from.
+   */
+  const offerCommitments = useMemo(() => committedCounts(offers, inventory), [offers, inventory]);
+  const offeredLines = cart
+    .filter(l => l.kind === 'device' && !!l.inventoryId)
+    .map(l => ({ line: l, commitment: commitmentExcept(offerCommitments, l.inventoryId, l.fromOfferId) }))
+    .filter((x): x is { line: CartLine; commitment: NonNullable<ReturnType<typeof commitmentExcept>> } => !!x.commitment)
+    .map(x => ({ ...x, warning: commitmentWarning(x.commitment) }));
+  const hasOfferedDevice = offeredLines.length > 0;
+  const blockedByOffered = hasOfferedDevice && !allowOfferedSale;
+
   // FLOOR PRICE (domain/priceFloor.ts). Staff cannot see cost, so nothing tells
   // them a device is going out below what the shop paid for it.
   //
@@ -570,8 +619,9 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
   // ---- mutations ----
   // The device cart line, built once so the picker and the PC-order seed below
   // cannot drift apart in what they put in the cart.
-  const deviceLine = (i: InventoryItem): CartLine => ({
+  const deviceLine = (i: InventoryItem, fromOfferId?: string): CartLine => ({
     key: uid(), inventoryId: i.id, kind: 'device', name: getDeviceDisplayName(i),
+    ...(fromOfferId ? { fromOfferId } : {}),
     code: i.sku || i.imei, quantity: 1, maxQty: 1, deviceType: i.deviceType,
     unitPrice: i.targetSalePrice || 0, purchaseCost: i.purchaseCost, repairCost: i.repairCost || 0,
     taxable: true, discount: 0, listedPlatforms: i.listedPlatforms,
@@ -636,7 +686,7 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
         for (const item of items) {
           if (have.has(item.id)) continue;
           have.add(item.id);
-          add.push(deviceLine(item));
+          add.push(deviceLine(item, initialOfferId));
         }
         return add.length ? prev.concat(add) : prev;
       });
@@ -765,7 +815,7 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
   // stale state twice.
   const handleCheckout = async () => {
     if (isSubmittingRef.current) return;
-    if (cart.length === 0 || blockedByZeroPrice || blockedByListedElsewhere || blockedByOpenRepair || mixedPaymentMismatch) return;
+    if (cart.length === 0 || blockedByZeroPrice || blockedByListedElsewhere || blockedByOpenRepair || blockedByOffered || mixedPaymentMismatch) return;
     isSubmittingRef.current = true;
     setIsSubmitting(true);
     try {
@@ -1075,6 +1125,7 @@ export function useCheckout({ inventory, customers = [], repairs = [], initialCu
     isZeroPricedDevice, hasZeroPricedDevice, allowZeroPrice, setAllowZeroPrice, blockedByZeroPrice,
     hasListedElsewhereDevice, allowListedElsewhereSale, setAllowListedElsewhereSale, blockedByListedElsewhere, delistReminders,
     hasOpenRepairDevice, openRepairLines, allowOpenRepairSale, setAllowOpenRepairSale, blockedByOpenRepair,
+    hasOfferedDevice, offeredLines, allowOfferedSale, setAllowOfferedSale, blockedByOffered,
     // Floor price + the per-line helpers the till renders.
     belowFloorLines, isBelowFloorLine, hasNoCostRecorded, targetPriceOf,
     hasBelowFloorLine, belowFloorGap, BELOW_FLOOR_WARNING, NO_COST_NOTE,

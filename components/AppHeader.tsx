@@ -1,6 +1,6 @@
 import React from 'react';
 import {
-  LayoutDashboard, Table, ShoppingCart, ShoppingBag, Wrench, Contact, Activity, BarChart3, StickyNote,
+  LayoutDashboard, Table, ShoppingCart, ShoppingBag, Wrench, Contact, Handshake, Activity, BarChart3, StickyNote,
   Truck, Cpu, ScrollText, Users as UsersIcon, Settings, Bot, Sparkles, MessageCircle,
   Search, PlusCircle, Moon, Sun, Menu, MoreHorizontal, ChevronDown, LogOut, Clock, Receipt, ReceiptText, ClipboardCheck, Lock,
 } from 'lucide-react';
@@ -82,6 +82,10 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     // so it belongs where staff already look for both. Gated on its OWN
     // permission — a technician holds 'builds.manage' but not 'inventory.add'.
     { key: 'pcbuilds', label: 'PC Builds', icon: <Cpu className="w-4 h-4" />, view: 'pcbuilds', show: allow('builds.manage') },
+    // WHOLESALE OFFERS, beside Customers: an offer is a record about a person
+    // you are selling to, not a view of stock. Gated on 'sales.complete' —
+    // quoting a buyer is a selling activity and needs no permission of its own.
+    { key: 'offers', label: 'Offers', icon: <Handshake className="w-4 h-4" />, view: 'offers', show: allow('sales.complete') },
     { key: 'customers', label: 'Customers', icon: <Contact className="w-4 h-4" />, view: 'customers', show: allow('reports.view') },
     { key: 'pos', label: 'Quick Sale', icon: <ShoppingCart className="w-4 h-4" />, view: 'pos', show: true },
     { key: 'quickpurchase', label: 'Quick Purchase', icon: <ShoppingBag className="w-4 h-4" />, view: 'quickpurchase', show: allow('inventory.add') },

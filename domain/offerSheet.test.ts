@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { InventoryItem } from '../types';
 import {
   OFFER_SHEET_COLUMNS, OFFER_SHEET_EXCLUDED, OFFER_SHEET_EXCLUDED_NOTE, OFFER_SHEET_SOURCE_FIELDS,
-  offerSheetCsv, offerSheetFileName, offerSheetHeaders,
+  offerSheetCsv, offerSheetFileName, offerSheetFileNameFor, offerSheetHeaders,
 } from './offerSheet';
 
 /**
@@ -135,5 +135,58 @@ describe('the file says what it is', () => {
     expect(n.endsWith('.csv')).toBe(true);
     // Distinguishable at a glance from "phones_2026-11-22.csv" next to it.
     expect(n).not.toMatch(/^phones|^inventory/);
+  });
+});
+
+/* ======================================================================== *
+ * GRADE AND NOTES, FILLED FROM A SAVED OFFER
+ * ======================================================================== */
+
+describe('the buyer\'s columns carry what the owner typed for THIS buyer', () => {
+  it('grade and note reach the file', () => {
+    const csv = offerSheetCsv([dev({ id: 'x1' })], { x1: { grade: 'A', note: 'boxed with charger' } });
+    const h = offerSheetHeaders();
+    const cells = rowsOf(csv)[0].split(',');
+    expect(cells[h.indexOf('Grade')]).toBe('"A"');
+    expect(cells[h.indexOf('Notes')]).toBe('"boxed with charger"');
+  });
+
+  it('a comma in the buyer note cannot shift a column', () => {
+    const csv = offerSheetCsv([dev({ id: 'x1' })], { x1: { note: 'mint, boxed' } });
+    expect(rowsOf(csv)).toHaveLength(1);
+    expect(csv).toContain('"mint, boxed"');
+    expect(rowsOf(csv)[0].split('","')).toHaveLength(offerSheetHeaders().length);
+  });
+
+  it('a row with no annotation is blank exactly as before', () => {
+    const csv = offerSheetCsv([dev({ id: 'x1' }), dev({ id: 'x2' })], { x1: { grade: 'A' } });
+    const h = offerSheetHeaders();
+    expect(rowsOf(csv)[1].split(',')[h.indexOf('Grade')]).toBe('""');
+  });
+
+  it('and the plain inventory export, which passes none, is byte-identical to before', () => {
+    // The Inventory → "Offer sheet for a buyer" path calls this with one
+    // argument; adding the second must not have changed that file at all.
+    expect(offerSheetCsv([dev()])).toBe(offerSheetCsv([dev()], undefined));
+    expect(offerSheetCsv([dev()], {})).toBe(offerSheetCsv([dev()]));
+  });
+
+  it('ANNOTATIONS DO NOT WIDEN THE ALLOW-LIST — the item\'s own fields are still unreachable', () => {
+    // The annotation carries only what the owner typed for a buyer to read.
+    // Everything else about the row still comes through
+    // OFFER_SHEET_SOURCE_FIELDS, so the costs stay out.
+    const csv = offerSheetCsv([dev({ id: 'x1' })], { x1: { grade: 'A', note: 'see photos' } });
+    for (const leak of ['977.33', '611.19', 'Kijiji', 'do not mention', '1234.56']) {
+      expect(csv, leak).not.toContain(leak);
+    }
+    expect(headerLine(csv)).toBe(headerLine(offerSheetCsv([dev()])));
+  });
+
+  it('names the file after the buyer, because several of these share a folder', () => {
+    expect(offerSheetFileNameFor('Rashid Wholesale', '2026-11-22'))
+      .toBe('offer-sheet-SAFE-TO-SEND_Rashid-Wholesale_2026-11-22.csv');
+    // A buyer name of nothing but punctuation falls back rather than producing
+    // a file called "offer-sheet-SAFE-TO-SEND__2026-11-22.csv".
+    expect(offerSheetFileNameFor('  ???  ', '2026-11-22')).toBe(offerSheetFileName('2026-11-22'));
   });
 });

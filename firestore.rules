@@ -819,6 +819,45 @@ service cloud.firestore {
         allow delete: if isOwnerOf(ws);
       }
 
+      // WHOLESALE OFFERS (domain/offers.ts): a saved batch quoted to a buyer.
+      //
+      // READ IS EVERY ACTIVE MEMBER, deliberately wider than who may raise
+      // one. Quick Sale reads offers on every cart to warn that a device is
+      // out on a quote (hooks/useCheckout.ts), and that warning is the whole
+      // reason the record exists — an employee at the till who cannot read
+      // offers is an employee who sells the phone a buyer has just agreed to.
+      //
+      // WRITE IS isStaffOf, which is the same tier that may complete a sale.
+      // Quoting a buyer is a selling activity; it needs no permission of its
+      // own, and a technician (who holds no sales permission) has no business
+      // raising one.
+      //
+      // THE FIELD GUARD IS LOAD-BEARING, NOT DECORATION. An offer must never
+      // carry money: no price, no agreed figure, no revenue, no sold flag.
+      // Revenue written anywhere but salesTransactions never reaches the P&L,
+      // the drawer, the dashboard or the daily close, so the rule refuses the
+      // document rather than trusting every present and future client not to
+      // send one. `hasOnly` is the right primitive here precisely because it
+      // is a whitelist: a field nobody has thought of yet is refused by
+      // default, which is the behaviour this guard is for.
+      function offerShapeOk() {
+        return request.resource.data.keys().hasOnly([
+          'id', 'buyerName', 'buyerContact', 'date', 'status', 'lines', 'notes',
+          'createdAt', 'createdBy', 'updatedAt', 'sentAt'
+        ])
+          && request.resource.data.status in ['open', 'closed']
+          && request.resource.data.lines is list
+          && request.resource.data.lines.size() <= 500;
+      }
+      match /offers/{id} {
+        allow read: if activeMemberOf(ws);
+        allow create, update: if isStaffOf(ws) && offerShapeOk();
+        // Deleting an offer is the owner's call. It is the record of what was
+        // quoted to whom, and a part-sold one is the only thing linking a lot
+        // of devices to the buyer who took them.
+        allow delete: if isOwnerOf(ws);
+      }
+
       // Workspace meta doc (settings, notes, tasks, sku counters, backup
       // stamp — see services/firestoreDb.ts's metaRef): any staff may touch
       // it (sku counters advance on every device add, notes/tasks are shared

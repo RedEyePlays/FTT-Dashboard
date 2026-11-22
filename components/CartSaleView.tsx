@@ -2,9 +2,9 @@ import React, { lazy, Suspense, useState } from 'react';
 import {
   ShoppingCart, Trash2, X, Search, User, Phone, FileText, Mail,
   Banknote, CreditCard, Blend, Send, CheckCircle, Package, Smartphone, ScanLine, History,
-  Printer, Eye, RotateCcw, QrCode, Sparkles, AlertTriangle, Wrench, HandCoins,
+  Printer, Eye, RotateCcw, QrCode, Sparkles, AlertTriangle, Wrench, HandCoins, Tag,
 } from 'lucide-react';
-import { InventoryItem, Customer, DeviceType, Repair } from '../types';
+import { InventoryItem, Customer, DeviceType, Repair, Offer } from '../types';
 import { FloorSettings, belowFloorGapLabel } from '../domain/priceFloor';
 import { WarrantySettings } from '../domain/warranty';
 import { RepairSalePrefill } from '../domain/repairs';
@@ -40,6 +40,9 @@ interface Props {
   /** A wholesale lot sent over from Inventory's bulk actions. */
   initialInventoryIds?: string[];
   onConsumeInitialInventoryBatch?: () => void;
+  /** The saved offer the batch came from, and the live offers (domain/offers.ts). */
+  initialOfferId?: string;
+  offers?: Offer[];
   onComplete: (payload: import('../hooks/useCheckout').CartCheckout) => void;
   canViewProfit?: boolean;      // gate cost/profit figures (same pattern as Dashboard)
   onGenerateSku?: (deviceType?: DeviceType) => Promise<string>;
@@ -82,6 +85,7 @@ export const CartSaleView: React.FC<Props> = (props) => {
     isZeroPricedDevice, hasZeroPricedDevice, allowZeroPrice, setAllowZeroPrice, blockedByZeroPrice,
     hasListedElsewhereDevice, allowListedElsewhereSale, setAllowListedElsewhereSale, blockedByListedElsewhere, delistReminders,
     hasOpenRepairDevice, openRepairLines, allowOpenRepairSale, setAllowOpenRepairSale, blockedByOpenRepair,
+    hasOfferedDevice, offeredLines, allowOfferedSale, setAllowOfferedSale, blockedByOffered,
     addDevice, addAccessory, updateLine, removeLine, num, addCustomItem, handleScan, handleCheckout, isSubmitting, reset, printReceipt, printInvoice, emailReceipt, soldDeviceRows,
     scanResults, addScanResult, repairMatches, addRepair,
     printReceiptOnComplete, setPrintReceiptOnComplete,
@@ -586,12 +590,31 @@ export const CartSaleView: React.FC<Props> = (props) => {
           </div>
         )}
 
+        {/* OUT ON A WHOLESALE OFFER (domain/offers.ts). Named buyers, not a
+            block: the quote is not an agreement, and a customer at the counter
+            with cash beats a wholesaler who is still deciding. Doing it
+            unknowingly is the mistake. */}
+        {hasOfferedDevice && (
+          <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-500/40 rounded-xl p-3 text-sm">
+            <p className="flex items-center gap-2 font-semibold text-amber-800 dark:text-amber-300"><Tag className="w-4 h-4" /> Quoted to a wholesale buyer</p>
+            {offeredLines.map(o => (
+              <p key={o.line.key} className="text-xs text-amber-700/80 dark:text-amber-300/80 mt-1">
+                {o.line.name} is {o.warning} — selling it here means telling them it is gone.
+              </p>
+            ))}
+            <label className="flex items-center gap-2 mt-2 text-amber-800 dark:text-amber-300 cursor-pointer">
+              <input type="checkbox" checked={allowOfferedSale} onChange={e => setAllowOfferedSale(e.target.checked)} className="rounded" />
+              Sell anyway
+            </label>
+          </div>
+        )}
+
         <label className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300 cursor-pointer select-none">
           <input type="checkbox" checked={printReceiptOnComplete} onChange={e => setPrintReceiptOnComplete(e.target.checked)} className="rounded" />
           <Printer className="w-3.5 h-3.5 text-slate-400" /> Print receipt on completion
         </label>
 
-        <button onClick={handleCheckout} disabled={isSubmitting || cart.length === 0 || blockedByZeroPrice || blockedByListedElsewhere || blockedByOpenRepair || mixedPaymentMismatch}
+        <button onClick={handleCheckout} disabled={isSubmitting || cart.length === 0 || blockedByZeroPrice || blockedByListedElsewhere || blockedByOpenRepair || blockedByOffered || mixedPaymentMismatch}
           className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold rounded-xl text-sm transition-colors flex items-center justify-center gap-2">
           <ShoppingCart className="w-4 h-4" /> {isSubmitting ? 'Processing…' : isLayaway ? `Take Deposit · ${money(cx.depositAmount)}` : `Complete Sale · ${money(totalPaid)}`}
         </button>
