@@ -17,6 +17,7 @@ const Dashboard = lazy(() => import('./components/Dashboard').then(m => ({ defau
 const QuickSaleView = lazy(() => import('./components/QuickSaleView').then(m => ({ default: m.QuickSaleView })));
 const QuickPurchaseView = lazy(() => import('./components/QuickPurchaseView').then(m => ({ default: m.QuickPurchaseView })));
 const InventoryView = lazy(() => import('./components/InventoryView').then(m => ({ default: m.InventoryView })));
+const OffersView = lazy(() => import('./components/OffersView').then(m => ({ default: m.OffersView })));
 const RepairsView = lazy(() => import('./components/RepairsView').then(m => ({ default: m.RepairsView })));
 const TechRepairsView = lazy(() => import('./components/TechRepairsView').then(m => ({ default: m.TechRepairsView })));
 // The kiosk punch screen. Lazy like every other page-level view, so the door
@@ -43,7 +44,7 @@ const PcBuildsView = lazy(() => import('./components/PcBuildsView').then(m => ({
 // Lazy like every other route: the Firebase Storage SDK and the image
 // resizing only load for the people who actually scan receipts.
 const ReceiptsView = lazy(() => import('./components/ReceiptsView').then(m => ({ default: m.ReceiptsView })));
-import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, DeviceBuyer, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission, Repair, RepairBatch, TimeEntry, PayPeriodPaid, PayPeriodApproval, BreakReason, SalesTransaction, CashReconciliation, StaffNote, BalancePayment, Expense, RecurringExpense, RefundSplit, StaffBonus, KioskStaff, CashDrawerEntry, AppUser, PcBuild, Receipt, ReceiptEntered, InventoryTransfer } from './types';
+import { InventoryItem, ViewState, Note, Task, AppData, ChatMessage, DeviceBuyer, DropOff, Settlement, ItemKind, DeviceType, ActivityEntry, Customer, WorkspaceInvite, Role, Permission, Repair, RepairBatch, TimeEntry, PayPeriodPaid, PayPeriodApproval, BreakReason, SalesTransaction, CashReconciliation, StaffNote, BalancePayment, Expense, RecurringExpense, RefundSplit, StaffBonus, KioskStaff, CashDrawerEntry, AppUser, PcBuild, Receipt, ReceiptEntered, InventoryTransfer , Offer } from './types';
 import { skuPrefix, nextSku } from './services/sku';
 import { BUILD_STATUS_LABEL, buildToInventoryItem } from './domain/pcBuild';
 import { REPAIR_PREFIX, BATCH_PREFIX, applyTechEdit, techUpdateAuditPlan, repairSalePrefill, completeRepair, completeRepairSale, dateToEpochMs, isRepairOpen, flagDeviceForRepair, restoredDeviceStatus } from './domain/repairs';
@@ -107,6 +108,7 @@ import {
   buildTransfer, applySend, applyReceive, applyCancel, markReceived, markCancelled,
   canReceive as canReceiveTransfer, canCancel as canCancelTransfer, checkSend, staleTransfers,
 } from './domain/transfers';
+import { markSentToSale } from './domain/offers';
 import { clockInStoreChoices, canClockInAt } from './domain/shiftLocation';
 import { useActiveStore } from './hooks/useActiveStore';
 import { useReportScope } from './hooks/useReportScope';
@@ -145,7 +147,7 @@ const PAGE_TITLES: Record<ViewState, string> = {
   dashboard: 'Dashboard', analytics: 'Analytics', reports: 'Reports', entry: 'Add Item', edit: 'Edit Item',
   grid: 'Inventory', notes: 'Notes', ai: 'AI Assistant', pos: 'Checkout', quickpurchase: 'Quick Purchase', dropoff: 'Drop-Offs',
   repairs: 'Repairs', customers: 'Customers', users: 'Users', audit: 'Audit Log',
-  settings: 'Settings', timeclock: 'Time Clock', closeout: 'Close Out', layaways: 'Layaways',
+  settings: 'Settings', timeclock: 'Time Clock', closeout: 'Close Out', layaways: 'Layaways', offers: 'Offers',
   pcbuilds: 'PC Builds',
   receipts: 'Receipts',
 };
@@ -183,7 +185,7 @@ const App: React.FC = () => {
     data, notes, setNotes, tasks, setTasks,
     deviceBuyers, dropOffs, settlements, settlementsLoaded, salesTransactions, customers, repairs, repairBatches, pcBuilds,
     timeEntries, payPeriods, payPeriodApprovals, staffBonuses, kioskStaff, cashReconciliations, staffNotes, expenses, recurringExpenses,
-    skuCounters, setSkuCounters, activityLog, lastBackup, settings, receipts, locations, transfers,
+    skuCounters, setSkuCounters, activityLog, lastBackup, settings, receipts, locations, transfers, offers,
     dbLoading, dbError, reconnect, refusedCollections, enableExtendedData, enableCashData,
     deviceBuyersRef, dropOffsRef, settlementsRef, customersRef, salesTransactionsRef,
     repairsRef, repairBatchesRef, skuRef, dataRef,
@@ -250,6 +252,9 @@ const App: React.FC = () => {
   // one sale" bulk action. Separate from the single-device prefill above: that
   // one means "this build, then a deposit", this one means "these thirty".
   const [prefillInventoryIds, setPrefillInventoryIds] = useState<string[] | undefined>(undefined);
+  // Which saved offer that batch came from, so the till does not warn about
+  // the very offer that sent the devices to it (domain/offers.ts).
+  const [prefillOfferId, setPrefillOfferId] = useState<string | undefined>(undefined);
   const [drawerOpen, setDrawerOpen] = useState(false);
   // Deep-link targets from Global Search (open a specific record on the target view).
   const [focusRepairId, setFocusRepairId] = useState<string | undefined>(undefined);
@@ -657,6 +662,7 @@ const App: React.FC = () => {
     if (allow('inventory.add')) p.push({ id: 'quickpurchase', label: 'Quick Purchase', keywords: 'buy purchase device counter cash', view: 'quickpurchase' });
     if (allow('repairs.tech')) p.push({ id: 'repairs', label: 'Repairs', keywords: 'tickets', view: 'repairs' });
     if (allow('builds.manage')) p.push({ id: 'pcbuilds', label: 'PC Builds', keywords: 'custom pc desktop computer build parts gaming', view: 'pcbuilds' });
+    if (allow('sales.complete')) p.push({ id: 'offers', label: 'Offers', keywords: 'wholesale offer quote buyer batch lot bulk sheet', view: 'offers' });
     if (allow('timeclock.use')) p.push({ id: 'timeclock', label: 'Time Clock', keywords: 'clock in out hours shift break payroll pay', view: 'timeclock' });
     if (allow('closeout.view')) p.push({ id: 'closeout', label: 'Close Out', keywords: 'end of day summary lock up reconcile', view: 'closeout' });
     if (allow('reports.view')) p.push({ id: 'customers', label: 'Customers', keywords: 'crm clients', view: 'customers' });
@@ -3435,6 +3441,40 @@ const App: React.FC = () => {
     navigate('pos');
   };
 
+  /* --- WHOLESALE OFFERS (domain/offers.ts) ------------------------------- */
+  //
+  // SAVE AND DELETE ARE ORDINARY COLLECTION WRITES. There is no bespoke offer
+  // write path, and there is nothing for one to do: an offer holds no money,
+  // so it never needs to touch inventory, the drawer or salesTransactions.
+  const handleSaveOffer = (offer: Offer) => {
+    if (uid && allow('sales.complete')) saveItem(uid, 'offers', offer);
+  };
+  const handleDeleteOffer = (id: string) => {
+    if (uid && appUser?.role === 'owner') void deleteItem(uid, 'offers', id);
+  };
+  /**
+   * SELL PART OF AN OFFER — and note what this function does NOT do.
+   *
+   * It writes no sale. It stamps the offer's lines with "these went to the
+   * till" (domain/offers.ts's markSentToSale: a timestamp, no price, no sold
+   * flag) and hands the ids to the SAME Quick Sale seed the Inventory bulk
+   * action uses. The ordinary checkout then writes the salesTransaction, the
+   * sold rows, the drawer entry and the profit, exactly as it does for a
+   * walk-in — which is the only way the money reaches the P&L, the dashboard
+   * and the daily close.
+   *
+   * `initialOfferId` travels with it so the out-on-offer warning at the till
+   * does not fire on the very offer that sent the devices there.
+   */
+  const sellOfferLines = (offerId: string, itemIds: string[]) => {
+    if (!allow('sales.complete') || itemIds.length === 0) return;
+    const offer = offers.find(o => o.id === offerId);
+    if (offer) handleSaveOffer(markSentToSale(offer, itemIds, Date.now()));
+    setPrefillInventoryIds(itemIds);
+    setPrefillOfferId(offerId);
+    navigate('pos');
+  };
+
   // Quick actions from a customer profile: seed the target view with the customer.
   const startSaleFor = (c: Customer) => { setPrefillCustomer(c); navigate('pos'); };
   const createRepairFor = (c: Customer) => { setPrefillCustomer(c); navigate('repairs'); };
@@ -3904,6 +3944,21 @@ const App: React.FC = () => {
                 />
               : <div className="text-center text-slate-400 py-20">You don't have access to receipts.</div>
           )}
+          {view === 'offers' && (
+            allow('sales.complete')
+              ? (
+                <OffersView
+                  offers={offers}
+                  inventory={data}
+                  canViewCost={allow('reports.profit.detailed')}
+                  currentUserId={appUser.id}
+                  onSave={handleSaveOffer}
+                  onDelete={appUser.role === 'owner' ? handleDeleteOffer : undefined}
+                  onSellLines={sellOfferLines}
+                />
+              )
+              : <div className="text-center text-slate-400 py-20">You don't have access to offers.</div>
+          )}
           {view === 'pcbuilds' && allow('builds.manage') && (
             <PcBuildsView
               builds={pcBuilds}
@@ -3997,7 +4052,9 @@ const App: React.FC = () => {
               initialInventoryId={prefillInventoryId}
               onConsumeInitialInventory={() => setPrefillInventoryId(undefined)}
               initialInventoryIds={prefillInventoryIds}
-              onConsumeInitialInventoryBatch={() => setPrefillInventoryIds(undefined)}
+              onConsumeInitialInventoryBatch={() => { setPrefillInventoryIds(undefined); setPrefillOfferId(undefined); }}
+              initialOfferId={prefillOfferId}
+              offers={offers}
               onSellCart={handleSellCart}
               floorSettings={{ minMarginPercent: settings.operations.minMarginPercent, minMarginDollars: settings.operations.minMarginDollars }}
               warrantySettings={{ deviceWarrantyDays: settings.operations.deviceWarrantyDays, accessoryWarrantyDays: settings.operations.accessoryWarrantyDays }}

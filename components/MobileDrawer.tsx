@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import {
-  LayoutDashboard, BarChart3, Table, StickyNote, ShoppingCart, ShoppingBag, Wrench, Contact, Truck,
+  LayoutDashboard, BarChart3, Table, StickyNote, ShoppingCart, ShoppingBag, Wrench, Contact, Handshake, Truck,
   ScrollText, Users as UsersIcon, Bot, Search, Settings, Sparkles, Moon, Sun, Lock, LogOut, X, Clock,
   Receipt, ClipboardCheck, Cpu,
 } from 'lucide-react';
@@ -66,6 +66,8 @@ export const MobileDrawer: React.FC<Props> = ({
     // 'builds.manage', NOT 'inventory.add' — technicians hold the former and
     // not the latter, and they are usually the ones building the machines.
     { label: 'PC Builds', icon: <Cpu className="w-5 h-5" />, on: () => go('pcbuilds'), active: view === 'pcbuilds', show: allow('builds.manage') },
+    // 'sales.complete' — quoting a wholesale buyer is a selling activity.
+    { label: 'Offers', icon: <Handshake className="w-5 h-5" />, on: () => go('offers'), active: view === 'offers', show: allow('sales.complete') },
     { label: 'Customers', icon: <Contact className="w-5 h-5" />, on: () => go('customers'), active: view === 'customers', show: allow('reports.view') },
     { label: 'Time Clock', icon: <Clock className="w-5 h-5" />, on: () => go('timeclock'), active: view === 'timeclock', show: allow('timeclock.use') },
     { label: 'Close Out', icon: <ClipboardCheck className="w-5 h-5" />, on: () => go('closeout'), active: view === 'closeout', show: allow('closeout.view') },

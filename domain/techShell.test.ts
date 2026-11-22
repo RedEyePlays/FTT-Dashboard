@@ -26,7 +26,7 @@ const ALL_VIEWS = Object.keys({
   dashboard: 1, analytics: 1, reports: 1, entry: 1, edit: 1, grid: 1, notes: 1,
   ai: 1, pos: 1, quickpurchase: 1, dropoff: 1, repairs: 1, customers: 1,
   users: 1, audit: 1, settings: 1, timeclock: 1, closeout: 1, layaways: 1,
-  pcbuilds: 1, receipts: 1,
+  pcbuilds: 1, receipts: 1, offers: 1,
 } satisfies Record<ViewState, 1>) as ViewState[];
 
 describe('the technician shell has exactly two screens', () => {

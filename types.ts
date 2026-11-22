@@ -1392,7 +1392,7 @@ export interface AppData {
   activityLog?: ActivityEntry[];
 }
 
-export type ViewState = 'dashboard' | 'analytics' | 'reports' | 'entry' | 'edit' | 'grid' | 'notes' | 'ai' | 'pos' | 'quickpurchase' | 'dropoff' | 'repairs' | 'customers' | 'users' | 'audit' | 'settings' | 'timeclock' | 'closeout' | 'layaways' | 'pcbuilds' | 'receipts';
+export type ViewState = 'dashboard' | 'analytics' | 'reports' | 'entry' | 'edit' | 'grid' | 'notes' | 'ai' | 'pos' | 'quickpurchase' | 'dropoff' | 'repairs' | 'customers' | 'users' | 'audit' | 'settings' | 'timeclock' | 'closeout' | 'layaways' | 'pcbuilds' | 'receipts' | 'offers';
 
 // A single cash movement in a day's drawer, logged as part of reconciliation:
 // a manual cash-in (top-up / tip / off-sale payment), a paid cash expense, or an
