@@ -242,6 +242,38 @@ export const committedCounts = (offers: Offer[], inventory: InventoryItem[]): Ma
 };
 
 /**
+ * ONE DEVICE'S COMMITMENT, IGNORING ONE OFFER — and why that argument exists.
+ *
+ * A cart seeded FROM an offer holds devices that offer has just pushed to the
+ * till, so they are legitimately 'at-till' and legitimately committed. Warning
+ * about them at that very checkout would be the screen telling the owner that
+ * the thing they are doing conflicts with the thing they are doing, which is
+ * how a safeguard gets trained into reflex-dismissal and stops working.
+ *
+ * So the cart line records which offer it came from and that offer alone is
+ * discounted. Every OTHER open offer still counts — including, deliberately,
+ * the case where offer A has pushed a device to one till while offer B still
+ * has it quoted, and the case of an ordinary over-the-counter sale of a device
+ * that some offer has at a till, which carries no offer id and so sees the lot.
+ */
+export const commitmentExcept = (
+  commitments: Map<string, Commitment>,
+  itemId: string,
+  exceptOfferId?: string,
+): Commitment | null => {
+  const c = commitments.get(itemId);
+  if (!c) return null;
+  if (!exceptOfferId) return c;
+  const keep = c.offerIds.map((id, k) => k).filter(k => c.offerIds[k] !== exceptOfferId);
+  if (keep.length === 0) return null;
+  return {
+    count: keep.length,
+    buyers: keep.map(k => c.buyers[k]),
+    offerIds: keep.map(k => c.offerIds[k]),
+  };
+};
+
+/**
  * What to say at the till about a device that is out on a quote.
  *
  * ACKNOWLEDGE, DO NOT BLOCK — the pattern this app already uses for $0 device
