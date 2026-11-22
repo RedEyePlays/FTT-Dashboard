@@ -500,3 +500,40 @@ describe('a device already on somebody else\'s open offer', () => {
     v.unmount();
   });
 });
+
+/* ======================================================================== *
+ * 7. DEVICES ONLY
+ * ======================================================================== */
+
+describe('pasting an accessory into an offer', () => {
+  const WITH_CABLE = [
+    ...INV,
+    { ...dev({ id: 'acc', sku: 'FTT-000900', item: 'USB-C cable', imei: '' }), kind: 'accessory' as const,
+      quantity: 5, costPerUnit: 2, sellingPrice: 9.99 },
+  ];
+
+  it('is refused at the moment it is pasted, and NAMED', () => {
+    // Not silently at sell time, after it has been quoted to somebody.
+    const { v, store } = live([offer({ lines: [] })], { inventory: WITH_CABLE });
+    click(v.button('Rashid'));
+    click(v.button('Add devices'));
+    typeInto(v.host.querySelector('textarea') as HTMLTextAreaElement, 'FTT-000101\nFTT-000900');
+    click(v.button('Find these'));
+    expect(v.text()).toContain('an offer is devices only');
+    expect(v.text()).toContain('FTT-000900');
+    click(v.button('Add 1 to the offer'));   // the device only
+    expect(store.rows[0].lines.map(l => l.itemId)).toEqual(['a']);
+    v.unmount();
+  });
+
+  it('an all-accessory paste adds nothing', () => {
+    const { v, store } = live([offer({ lines: [] })], { inventory: WITH_CABLE });
+    click(v.button('Rashid'));
+    click(v.button('Add devices'));
+    typeInto(v.host.querySelector('textarea') as HTMLTextAreaElement, 'FTT-000900');
+    click(v.button('Find these'));
+    expect(v.button('Add 0 to the offer')).toHaveProperty('disabled', true);
+    expect(store.rows[0].lines).toEqual([]);
+    v.unmount();
+  });
+});

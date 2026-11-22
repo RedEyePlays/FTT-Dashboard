@@ -5,6 +5,7 @@ import {
   LIVE_STATES, OFFER_LINE_STATE_LABEL, OFFER_PROGRESS_LABEL, addLines, commitmentWarning,
   committedCounts, markSentToSale, newOffer, offerAnnotations, offerCounts, offerItemsIn,
   offerLineState, offerLineViews, offerProgress, offerTotals, patchLine, removeLine, sheetIsStale,
+  OFFER_ACCESSORY_NOTE, splitOfferable,
 } from './offers';
 
 /**
@@ -330,5 +331,25 @@ describe('editing an offer', () => {
   it('a new offer starts open, empty and dated', () => {
     const o = newOffer('o9', '  Rashid  ', '2026-11-22', 5000, 'uid-1');
     expect(o).toMatchObject({ id: 'o9', buyerName: 'Rashid', date: '2026-11-22', status: 'open', lines: [], createdBy: 'uid-1' });
+  });
+});
+
+/* ======================================================================== *
+ * 7. DEVICES ONLY
+ * ======================================================================== */
+
+describe('an offer is devices only', () => {
+  it('splits the accessories out rather than dropping them', () => {
+    const items = [dev({ id: 'a' }), dev({ id: 'c', kind: 'accessory', item: 'USB-C cable' }), dev({ id: 'b' })];
+    const s = splitOfferable(items);
+    expect(s.offerable.map(i => i.id)).toEqual(['a', 'b']);
+    expect(s.notOfferable.map(i => i.id)).toEqual(['c']);
+    expect(OFFER_ACCESSORY_NOTE).toMatch(/devices only/);
+  });
+
+  it('a row with no `kind` at all is a device, as everywhere else in the app', () => {
+    const legacy = { ...dev({ id: 'x' }) } as Partial<InventoryItem>;
+    delete legacy.kind;
+    expect(splitOfferable([legacy as InventoryItem]).offerable).toHaveLength(1);
   });
 });

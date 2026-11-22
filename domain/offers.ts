@@ -354,6 +354,29 @@ export const LIVE_STATES: OfferLineState[] = ['pending', 'at-till', 'sold'];
  * ======================================================================== */
 
 /**
+ * DEVICES ONLY, AND ENFORCED AT THE POINT OF ADDING.
+ *
+ * An accessory is a QUANTITY line with its own stock maths and its own
+ * oversell guard, and domain/sellBatch.ts already refuses to send one to the
+ * till for exactly that reason. The offer sheet's columns are device columns
+ * too — battery health, CPU, RAM, screen size. So an accessory has no
+ * coherent place on an offer, and the honest moment to say so is when the
+ * owner pastes its SKU in, not silently at sell time after it has been quoted.
+ *
+ * Reported rather than dropped: a cable that vanishes out of a pasted list is
+ * a line the owner thinks they quoted.
+ */
+export const OFFER_ACCESSORY_NOTE = 'an accessory — an offer is devices only';
+
+export const splitOfferable = (items: InventoryItem[]): {
+  offerable: InventoryItem[];
+  notOfferable: InventoryItem[];
+} => ({
+  offerable: items.filter(i => (i.kind ?? 'device') !== 'accessory'),
+  notOfferable: items.filter(i => (i.kind ?? 'device') === 'accessory'),
+});
+
+/**
  * ADD DEVICES TO AN OFFER, skipping the ones already on it.
  *
  * The caller resolves the identifiers with domain/batchSelection.ts — the same

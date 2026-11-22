@@ -8,7 +8,7 @@ import { todayISO } from '../domain/dates';
 import { getDeviceDisplayName } from '../domain/inventory';
 import {
   LIVE_STATES, OFFER_LINE_STATE_LABEL, OFFER_PROGRESS_LABEL, OfferLineState, addLines,
-  commitmentExcept, commitmentWarning, committedCounts, newOffer,
+  OFFER_ACCESSORY_NOTE, commitmentExcept, commitmentWarning, committedCounts, newOffer, splitOfferable,
   offerAnnotations, offerCounts, offerItemsIn, offerLineViews, offerProgress, offerTotals,
   patchLine, removeLine, sheetIsStale,
 } from '../domain/offers';
@@ -128,9 +128,14 @@ export const OffersView: React.FC<Props> = ({
     setPasteResolved(resolveBatch(inventory, pasteText));
   };
 
+  /** The matched devices, minus the accessories — see `splitOfferable`. */
+  const pasteSplit = pasteResolved
+    ? splitOfferable(pasteResolved.matched.map(m => m.item))
+    : { offerable: [], notOfferable: [] };
+
   const applyPaste = () => {
     if (!offer || !pasteResolved) return;
-    save(addLines(offer, batchIds(pasteResolved), Date.now()));
+    save(addLines(offer, pasteSplit.offerable.map(i => i.id), Date.now()));
     setPasteResolved(null);
     setPasteText('');
     setPasteOpen(false);
@@ -513,9 +518,9 @@ export const OffersView: React.FC<Props> = ({
             <button onClick={() => setPasteOpen(false)} className="px-3 py-2 text-sm text-slate-500 hover:text-slate-700">Cancel</button>
             {pasteResolved
               ? (
-                <button onClick={applyPaste} disabled={pasteResolved.matched.length === 0}
+                <button onClick={applyPaste} disabled={pasteSplit.offerable.length === 0}
                   className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white rounded-lg text-sm font-medium">
-                  Add {pasteResolved.matched.length} to the offer
+                  Add {pasteSplit.offerable.length} to the offer
                 </button>
               )
               : (
@@ -557,17 +562,28 @@ export const OffersView: React.FC<Props> = ({
                   </p>
                 </div>
               )}
+              {/* DEVICES ONLY. Named, not silently dropped — a cable that
+                  vanishes out of a pasted list is a line the owner thinks
+                  they quoted. */}
+              {pasteSplit.notOfferable.length > 0 && (
+                <div className="text-sm rounded-lg px-3 py-2 bg-rose-50 dark:bg-rose-900/20 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300">
+                  <p className="font-medium">Not added — {OFFER_ACCESSORY_NOTE}:</p>
+                  <p className="font-mono text-xs mt-1 break-all">
+                    {pasteSplit.notOfferable.map(i => i.sku || i.item).join(', ')}
+                  </p>
+                </div>
+              )}
               {/* Already quoted to somebody else. Not a block: that is a
                   normal thing to do on purpose, and the only mistake is doing
                   it without realising. */}
-              {pasteResolved.matched.some(m => !!elsewhere(m.item.id)) && (
+              {pasteSplit.offerable.some(i => !!elsewhere(i.id)) && (
                 <div className="text-sm rounded-lg px-3 py-2 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300">
                   <p className="font-medium">Already on another open offer — they will be added anyway:</p>
                   <ul className="mt-1 space-y-0.5">
-                    {pasteResolved.matched.filter(m => !!elsewhere(m.item.id)).map(m => (
-                      <li key={m.item.id} className="text-xs">
-                        <span className="font-mono">{m.item.sku || m.identifier}</span>
-                        {' — '}{commitmentWarning(elsewhere(m.item.id)!)}
+                    {pasteSplit.offerable.filter(i => !!elsewhere(i.id)).map(i => (
+                      <li key={i.id} className="text-xs">
+                        <span className="font-mono">{i.sku || i.item}</span>
+                        {' — '}{commitmentWarning(elsewhere(i.id)!)}
                       </li>
                     ))}
                   </ul>
