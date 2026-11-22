@@ -7,7 +7,8 @@ import { newId } from '../domain/ids';
 import { todayISO } from '../domain/dates';
 import { getDeviceDisplayName } from '../domain/inventory';
 import {
-  LIVE_STATES, OFFER_LINE_STATE_LABEL, OFFER_PROGRESS_LABEL, OfferLineState, addLines, newOffer,
+  LIVE_STATES, OFFER_LINE_STATE_LABEL, OFFER_PROGRESS_LABEL, OfferLineState, addLines,
+  commitmentExcept, commitmentWarning, committedCounts, newOffer,
   offerAnnotations, offerCounts, offerItemsIn, offerLineViews, offerProgress, offerTotals,
   patchLine, removeLine, sheetIsStale,
 } from '../domain/offers';
@@ -92,6 +93,19 @@ export const OffersView: React.FC<Props> = ({
     [offers],
   );
   const offer = sorted.find(o => o.id === openId) || null;
+  /**
+   * WHAT IS ALREADY OUT ON SOMEBODY ELSE'S QUOTE.
+   *
+   * Quick Sale catches the double-sell at the moment money changes hands,
+   * which is where the damage is. This catches it one step earlier, while the
+   * offer is being BUILT: quoting two buyers the same phone is legitimate and
+   * normal, so this does not block it — but doing it without realising is how
+   * the owner promises one device to two people and finds out when both say
+   * yes. `commitmentExcept` discounts this offer's own lines, so an offer
+   * never reports itself.
+   */
+  const commitments = useMemo(() => committedCounts(offers, inventory), [offers, inventory]);
+  const elsewhere = (itemId: string) => commitmentExcept(commitments, itemId, offer?.id);
   const views = useMemo(() => offer ? offerLineViews(offer, inventory) : [], [offer, inventory]);
 
   const save = (next: Offer) => onSave(next);
@@ -449,6 +463,11 @@ export const OffersView: React.FC<Props> = ({
                         <span className={`text-[11px] px-1.5 py-0.5 rounded-full ${STATE_STYLE[v.state]}`}>
                           {OFFER_LINE_STATE_LABEL[v.state]}
                         </span>
+                        {elsewhere(v.line.itemId) && (
+                          <span className="block text-[11px] text-amber-700 dark:text-amber-400 mt-0.5">
+                            also {commitmentWarning(elsewhere(v.line.itemId)!)}
+                          </span>
+                        )}
                       </td>
                       <td className="px-2 py-1.5">
                         <input value={v.line.grade || ''} aria-label={`Grade for ${v.item?.sku || v.line.itemId}`}
@@ -536,6 +555,22 @@ export const OffersView: React.FC<Props> = ({
                   <p className="font-mono text-xs mt-1 break-all">
                     {pasteResolved.ambiguous.map(a => `${a.identifier} (${a.items.length})`).join(', ')}
                   </p>
+                </div>
+              )}
+              {/* Already quoted to somebody else. Not a block: that is a
+                  normal thing to do on purpose, and the only mistake is doing
+                  it without realising. */}
+              {pasteResolved.matched.some(m => !!elsewhere(m.item.id)) && (
+                <div className="text-sm rounded-lg px-3 py-2 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300">
+                  <p className="font-medium">Already on another open offer — they will be added anyway:</p>
+                  <ul className="mt-1 space-y-0.5">
+                    {pasteResolved.matched.filter(m => !!elsewhere(m.item.id)).map(m => (
+                      <li key={m.item.id} className="text-xs">
+                        <span className="font-mono">{m.item.sku || m.identifier}</span>
+                        {' — '}{commitmentWarning(elsewhere(m.item.id)!)}
+                      </li>
+                    ))}
+                  </ul>
                 </div>
               )}
             </div>

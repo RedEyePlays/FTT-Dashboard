@@ -452,3 +452,51 @@ describe('marking devices sold goes through the ordinary checkout', () => {
     host.remove();
   });
 });
+
+/* ======================================================================== *
+ * 6. QUOTING TWO BUYERS THE SAME PHONE
+ * ======================================================================== */
+
+describe('a device already on somebody else\'s open offer', () => {
+  const RASHID = offer({ id: 'o1', buyerName: 'Rashid', lines: [{ itemId: 'a', outcome: 'pending' }] });
+
+  it('is reported while the second offer is being built — and added anyway', () => {
+    const { v, store } = live([RASHID, offer({ id: 'o2', buyerName: 'Mo', lines: [] })]);
+    click(v.button('Mo'));
+    click(v.button('Add devices'));
+    typeInto(v.host.querySelector('textarea') as HTMLTextAreaElement, 'FTT-000101');
+    click(v.button('Find these'));
+    expect(v.text()).toContain('Already on another open offer');
+    expect(v.text()).toContain('out on an open offer to Rashid');
+    // Not a block: quoting two buyers is a normal thing to do on purpose.
+    click(v.button('Add 1 to the offer'));
+    expect(store.rows.find(o => o.id === 'o2')!.lines.map(l => l.itemId)).toEqual(['a']);
+    v.unmount();
+  });
+
+  it('carries the note on the line afterwards, on both offers', () => {
+    const both = [RASHID, offer({ id: 'o2', buyerName: 'Mo', lines: [{ itemId: 'a', outcome: 'pending' }] })];
+    const { v } = live(both);
+    click(v.button('Mo'));
+    expect(v.text()).toContain('also out on an open offer to Rashid');
+    v.unmount();
+  });
+
+  it('AN OFFER NEVER REPORTS ITSELF', () => {
+    const { v } = live([RASHID]);
+    click(v.button('Rashid'));
+    expect(v.text()).not.toContain('also out on');
+    v.unmount();
+  });
+
+  it('and says nothing once the other offer is closed', () => {
+    const both = [
+      offer({ id: 'o1', buyerName: 'Rashid', status: 'closed', lines: [{ itemId: 'a', outcome: 'pending' }] }),
+      offer({ id: 'o2', buyerName: 'Mo', lines: [{ itemId: 'a', outcome: 'pending' }] }),
+    ];
+    const { v } = live(both);
+    click(v.button('Mo'));
+    expect(v.text()).not.toContain('also out on');
+    v.unmount();
+  });
+});
