@@ -50,6 +50,12 @@ export const COLLECTIONS = [
   // phone goes missing in a car, and the record is what makes a never-arrived
   // device chaseable.
   'transfers',
+  // WHOLESALE OFFERS (domain/offers.ts): a saved batch quoted to a buyer.
+  // Its own collection because an offer is a record with a lifecycle, not a
+  // view of stock — and because it must be readable to flag a device that is
+  // out on a quote from any till, which a transient selection could not do.
+  // It holds NO money: no price, no revenue, no sold flag. See domain/offers.ts.
+  'offers',
   // The kiosk punch roster. Deliberately NOT in functions/src/backups.ts's
   // COLLECTIONS: it is a derived mirror of users/{uid} (rebuilt by the
   // syncKioskStaff trigger), and it holds PIN hashes, which have no business

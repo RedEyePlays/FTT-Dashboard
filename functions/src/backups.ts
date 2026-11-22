@@ -24,6 +24,12 @@ const COLLECTIONS = [
   "dropOffs", "runners", "settlements", "activityLog", "auditLogs",
   "repairs", "repairBatches", "timeEntries", "payPeriods", "payPeriodApprovals",
   "staffBonuses", "cashReconciliations", "staffNotes", "expenses", "recurringExpenses",
+  // Wholesale offers (domain/offers.ts). Added here at the same time as in
+  // services/firestoreDb.ts, per the warning above — though it only takes
+  // effect in SCHEDULED backups once functions are deployed. The manual
+  // "Download Backup" / "Export JSON" path loops the client constant directly
+  // and includes it immediately.
+  "offers",
 ] as const;
 
 const HOUR_MS = 3_600_000;
