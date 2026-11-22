@@ -246,6 +246,10 @@ const App: React.FC = () => {
   // One inventory device to drop into the POS cart — a customer PC order's
   // reserved build, on its way to the ordinary layaway deposit.
   const [prefillInventoryId, setPrefillInventoryId] = useState<string | undefined>(undefined);
+  // A whole wholesale lot on its way to the POS cart — Inventory's "Sell as
+  // one sale" bulk action. Separate from the single-device prefill above: that
+  // one means "this build, then a deposit", this one means "these thirty".
+  const [prefillInventoryIds, setPrefillInventoryIds] = useState<string[] | undefined>(undefined);
   const [drawerOpen, setDrawerOpen] = useState(false);
   // Deep-link targets from Global Search (open a specific record on the target view).
   const [focusRepairId, setFocusRepairId] = useState<string | undefined>(undefined);
@@ -3422,6 +3426,15 @@ const App: React.FC = () => {
     navigate('pos');
   };
 
+  // Send a built batch of inventory devices to Quick Sale as cart lines.
+  // Which ids are eligible was decided in Inventory (domain/sellBatch.ts);
+  // this only carries them across and switches view.
+  const sellInventorySelection = (ids: string[]) => {
+    if (!allow('sales.complete') || ids.length === 0) return;
+    setPrefillInventoryIds(ids);
+    navigate('pos');
+  };
+
   // Quick actions from a customer profile: seed the target view with the customer.
   const startSaleFor = (c: Customer) => { setPrefillCustomer(c); navigate('pos'); };
   const createRepairFor = (c: Customer) => { setPrefillCustomer(c); navigate('repairs'); };
@@ -3957,6 +3970,7 @@ const App: React.FC = () => {
               onSendTransfer={allow('inventory.edit') ? handleSendTransfer : undefined}
               onReceiveTransfer={allow('inventory.edit') ? handleReceiveTransfer : undefined}
               onCancelTransfer={allow('inventory.edit') ? handleCancelTransfer : undefined}
+              onSellSelection={allow('sales.complete') ? sellInventorySelection : undefined}
               onSave={handleSaveInventoryItem}
               onUpdate={handleUpdateItem}
               onDelete={handleDeleteItem}
@@ -3982,6 +3996,8 @@ const App: React.FC = () => {
               onConsumeInitialRepair={() => setPrefillRepairSale(undefined)}
               initialInventoryId={prefillInventoryId}
               onConsumeInitialInventory={() => setPrefillInventoryId(undefined)}
+              initialInventoryIds={prefillInventoryIds}
+              onConsumeInitialInventoryBatch={() => setPrefillInventoryIds(undefined)}
               onSellCart={handleSellCart}
               floorSettings={{ minMarginPercent: settings.operations.minMarginPercent, minMarginDollars: settings.operations.minMarginDollars }}
               warrantySettings={{ deviceWarrantyDays: settings.operations.deviceWarrantyDays, accessoryWarrantyDays: settings.operations.accessoryWarrantyDays }}

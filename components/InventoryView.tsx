@@ -25,6 +25,10 @@ import {
 import {
   OFFER_SHEET_EXCLUDED_NOTE, offerSheetCsv, offerSheetFileName,
 } from '../domain/offerSheet';
+import {
+  MAX_SELL_BATCH, SELL_BLOCK_NOTE, SellBatchPlan, describeSellBatch, planSellBatch,
+  sellBatchTooLargeMessage,
+} from '../domain/sellBatch';
 import { ItemFormModal } from './ItemFormModal';
 // Lazy: defers jsPDF (~390 kB) until a label is actually printed.
 const LabelModal = lazy(() => import('./LabelModal').then(m => ({ default: m.LabelModal })));
@@ -102,6 +106,13 @@ interface Props {
   notes?: Note[];                        // workspace notes, for the linked-notes panel
   noteRole?: Role;                       // viewer's role, gates which linked notes show
   onOpenNote?: (noteId: string) => void; // jump to a linked note in the Notes board
+  /**
+   * SELL THE SELECTION AS ONE SALE. Hands a batch of device ids to Quick Sale,
+   * which seeds them as ordinary device cart lines. Optional, and absent
+   * without `sales.complete` — a bulk action that puts stock in a till is a
+   * selling permission, not an inventory one.
+   */
+  onSellSelection?: (ids: string[]) => void;
   /**
    * MOVING STOCK BETWEEN STORES (multi-store stage 4). All four are optional:
    * a workspace with one store passes none of them and the In Transit tab
@@ -544,7 +555,7 @@ const PhotoThumb: React.FC<{ item: InventoryItem; onClick: () => void }> = ({ it
   );
 };
 
-export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activity, auditLogs = [], canViewCost = false, userId, section, onSelectSection, onSave, workspaceId, currentUserId, onFindStockPhoto, deviceWarrantyDays, onUpdate, onDelete, onGenerateSku, previewSku, onSeed, repairs = [], customers, onCreateCustomer, onCreateRepair, onOpenRepair, notes, noteRole, onOpenNote,
+export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activity, auditLogs = [], canViewCost = false, userId, section, onSelectSection, onSave, workspaceId, currentUserId, onFindStockPhoto, deviceWarrantyDays, onUpdate, onDelete, onGenerateSku, previewSku, onSeed, repairs = [], customers, onCreateCustomer, onCreateRepair, onOpenRepair, notes, noteRole, onOpenNote, onSellSelection,
   locations = [], transfers = [], me, activeLocationId = '',
   onSendTransfer, onReceiveTransfer, onCancelTransfer }) => {
   const linkedRepairOf = (id: string): Repair | undefined => linkedRepairFor(id, repairs);
@@ -977,6 +988,39 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
     if (count > MAX_BATCH_PASTE) { setBatchResolved(null); setBatchNote(batchPasteTooLargeMessage(count)); return; }
     setBatchNote(null);
     setBatchResolved(resolveBatch(inventory, batchText));
+  };
+
+  /* --- SELLING THE BATCH AS ONE SALE (domain/sellBatch.ts) --------------- */
+  const [sellPlan, setSellPlan] = useState<SellBatchPlan | null>(null);
+  const [sellTooLarge, setSellTooLarge] = useState<string | null>(null);
+
+  /**
+   * Plan it and show it. A CONFIRMATION STEP IS RIGHT HERE, unlike the label
+   * batch (which deliberately has none): this one leaves the screen. The owner
+   * lands in Quick Sale with a cart already full, and the three things they
+   * need to know — what is not being sent, what is reserved or on the bench,
+   * and what the lot would come to at target prices — can only be read before
+   * they go, not after.
+   */
+  const openSellBatch = () => {
+    const items = inventory.filter(i => selected.has(i.id));
+    const plan = planSellBatch(items);
+    if (plan.sellable.length > MAX_SELL_BATCH) {
+      setSellTooLarge(sellBatchTooLargeMessage(plan.sellable.length));
+      setSellPlan(null);
+      return;
+    }
+    setSellTooLarge(null);
+    setSellPlan(plan);
+  };
+
+  const confirmSellBatch = () => {
+    if (!sellPlan || !onSellSelection) return;
+    onSellSelection(sellPlan.sellable.map(i => i.id));
+    setSellPlan(null);
+    // The batch has been handed over; leaving it ticked behind us is how the
+    // same lot gets sent twice.
+    clearSelection();
   };
 
   /** Commit the resolution the owner has just read. */
@@ -1632,6 +1676,13 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
                     title={sendableSelection.length === 0 ? 'Nothing in this selection can be sent' : 'Send to another store'}
                     className="text-sm px-2 py-1 rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-indigo-400 flex items-center gap-1 disabled:opacity-40"><Truck className="w-3.5 h-3.5" /> Send to store</button>
                 )}
+                {/* SELL THE LOT. Only with selling permission, and only from
+                    a device tab — an accessory selection has nothing to send. */}
+                {onSellSelection && activeKind === 'device' && (
+                  <button onClick={openSellBatch} disabled={bulkBusy}
+                    title="Send these devices to Quick Sale as one sale"
+                    className="text-sm px-2 py-1 rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-indigo-400 flex items-center gap-1 disabled:opacity-40"><DollarSign className="w-3.5 h-3.5" /> Sell as one sale</button>
+                )}
                 <button onClick={bulkPrintShelfTags} disabled={bulkBusy} className="text-sm px-2 py-1 rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-indigo-400 flex items-center gap-1 disabled:opacity-40"><Printer className="w-3.5 h-3.5" /> Print Shelf Tags</button>
                 <button onClick={bulkPrintLabels} disabled={bulkBusy} className="text-sm px-2 py-1 rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-indigo-400 flex items-center gap-1 disabled:opacity-40"><QrCode className="w-3.5 h-3.5" /> Print Labels</button>
                 <button onClick={() => exportCSV(inventory.filter(i => selected.has(i.id)), activeCols, 'selection')} className="text-sm px-2 py-1 rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-indigo-400 flex items-center gap-1"><Download className="w-3.5 h-3.5" /> Export</button>
@@ -1729,6 +1780,9 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
                   )}
                   <button onClick={() => setBulkPriceOpen(true)} disabled={bulkBusy} aria-label="Update price" className="tap-target flex items-center justify-center rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 shrink-0 disabled:opacity-40"><DollarSign className="w-4 h-4" /></button>
                   <button onClick={bulkMarkListed} disabled={bulkBusy} aria-label="Mark listed" className="tap-target flex items-center justify-center rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 shrink-0 disabled:opacity-40"><Tag className="w-4 h-4" /></button>
+                  {onSellSelection && activeKind === 'device' && (
+                    <button onClick={openSellBatch} disabled={bulkBusy} aria-label="Sell as one sale" className="tap-target flex items-center justify-center rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 shrink-0 disabled:opacity-40"><DollarSign className="w-4 h-4" /></button>
+                  )}
                   <button onClick={bulkPrintShelfTags} disabled={bulkBusy} aria-label="Print shelf tags" className="tap-target flex items-center justify-center rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 shrink-0 disabled:opacity-40"><Printer className="w-4 h-4" /></button>
                   <button onClick={bulkPrintLabels} disabled={bulkBusy} aria-label="Print labels" className="tap-target flex items-center justify-center rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 shrink-0 disabled:opacity-40"><QrCode className="w-4 h-4" /></button>
                   <button onClick={() => exportCSV(inventory.filter(i => selected.has(i.id)), activeCols, 'selection')} aria-label="Export selection" className="tap-target flex items-center justify-center rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 shrink-0"><Download className="w-4 h-4" /></button>
@@ -1738,6 +1792,74 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
               )}
             </div>
           )}
+
+      {/* SELLING THE LOT — what goes, what does not, and what it comes to.
+          This action leaves the screen, so everything the owner needs to know
+          has to be readable before they go, not after they land in a cart. */}
+      <ResponsiveDialog open={!!sellPlan || !!sellTooLarge} onClose={() => { setSellPlan(null); setSellTooLarge(null); }}
+        title="Sell this batch as one sale"
+        footer={
+          <div className="flex items-center gap-2">
+            <button onClick={() => { setSellPlan(null); setSellTooLarge(null); }} className="px-3 py-2 text-sm text-slate-500 hover:text-slate-700">Cancel</button>
+            {sellPlan && (
+              <button onClick={confirmSellBatch} disabled={sellPlan.sellable.length === 0}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white rounded-lg text-sm font-medium">
+                Send {sellPlan.sellable.length} to Quick Sale
+              </button>
+            )}
+          </div>
+        }>
+        {sellTooLarge
+          ? (
+            <p className="text-sm rounded-lg px-3 py-2 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300">
+              {sellTooLarge}
+            </p>
+          )
+          : sellPlan && (
+            <div className="space-y-3">
+              <p className="text-sm font-medium text-slate-700 dark:text-slate-200">{describeSellBatch(sellPlan)}</p>
+              {/* ONE AGREED LOT PRICE. Each line is seeded at that device's own
+                  target price — no pricing is invented here — and this is the
+                  sum, so the gap to the agreed figure is a number on screen
+                  rather than arithmetic at the counter. */}
+              <div className="text-sm rounded-lg px-3 py-2 bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300">
+                <p>
+                  The cart is seeded at each device's own target price, which comes
+                  to <span className="font-semibold">${sellPlan.targetTotal.toFixed(2)}</span> for
+                  the {sellPlan.sellable.length} device{sellPlan.sellable.length === 1 ? '' : 's'}.
+                </p>
+                <p className="text-xs mt-1 text-slate-500 dark:text-slate-400">
+                  A wholesale lot goes for one agreed figure, so adjust the line prices or discounts
+                  in Quick Sale until the total is what the buyer agreed. Nothing is priced for you.
+                </p>
+              </div>
+              {sellPlan.blocked.length > 0 && (
+                <div className="text-sm rounded-lg px-3 py-2 bg-rose-50 dark:bg-rose-900/20 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300">
+                  <p className="font-medium">Not being sent:</p>
+                  <ul className="mt-1 space-y-0.5">
+                    {sellPlan.blocked.map(b => (
+                      <li key={b.item.id} className="text-xs">
+                        <span className="font-mono">{b.item.sku || b.item.item}</span> — {SELL_BLOCK_NOTE[b.reason]}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {sellPlan.flagged.length > 0 && (
+                <div className="text-sm rounded-lg px-3 py-2 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300">
+                  <p className="font-medium">Going, but worth a look first:</p>
+                  <ul className="mt-1 space-y-0.5">
+                    {sellPlan.flagged.map(f => (
+                      <li key={f.item.id} className="text-xs">
+                        <span className="font-mono">{f.item.sku || f.item.item}</span> — {BATCH_FLAG_NOTE[f.flag]}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+      </ResponsiveDialog>
 
       {/* PASTE A LIST, SEE WHAT IT FOUND, THEN SELECT IT.
           Two steps on purpose: nothing is added to the selection until the

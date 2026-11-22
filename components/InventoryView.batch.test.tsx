@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import React from 'react';
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { createRoot } from 'react-dom/client';
 import { act } from 'react';
 import { InventoryView } from './InventoryView';
@@ -322,6 +322,69 @@ describe('scan-to-add', () => {
     enableScanAdds(v);
     scan(v, 'FTT-000101');
     expect(v.text()).toContain('batch kept across filters');
+    v.unmount();
+  });
+});
+
+/* ======================================================================== *
+ * 5. SELLING THE BATCH AS ONE SALE
+ * ======================================================================== */
+
+describe('sending the batch to Quick Sale', () => {
+  const build = (onSellSelection: (ids: string[]) => void, list = 'FTT-000101\nFTT-000102') => {
+    const v = mount(view({ onSellSelection }));
+    paste(v, list);
+    click(v.button(`Add ${list.split('\n').length} to selection`));
+    click(v.button('Sell as one sale'));
+    return v;
+  };
+
+  it('hands over exactly the devices that are going', () => {
+    const onSellSelection = vi.fn();
+    const v = build(onSellSelection);
+    click(v.button('Send 2 to Quick Sale'));
+    expect(onSellSelection).toHaveBeenCalledWith(['p1', 'p2']);
+    v.unmount();
+  });
+
+  it('shows the lot total at target prices, and says no price is set for you', () => {
+    const v = build(() => {});
+    expect(v.text()).toContain('2 devices to the cart');
+    expect(v.text()).toContain('Nothing is priced for you');
+    v.unmount();
+  });
+
+  it('names a sold device as NOT sent, and a reserved one as going', () => {
+    const v = build(() => {}, 'FTT-000101\nFTT-000301\nFTT-000401');
+    expect(v.text()).toContain('already sold — not sent');
+    expect(v.text()).toContain('reserved for a customer');
+    // Two go (the ordinary one and the reserved one), one does not.
+    expect(v.button('Send 2 to Quick Sale')).toBeTruthy();
+    v.unmount();
+  });
+
+  it('nothing is handed over until the confirmation, and Cancel hands over nothing', () => {
+    const onSellSelection = vi.fn();
+    const v = build(onSellSelection);
+    expect(onSellSelection).not.toHaveBeenCalled();
+    click(v.button('Cancel'));
+    expect(onSellSelection).not.toHaveBeenCalled();
+    expect(v.text()).toContain('2 selected');   // the batch is still there
+    v.unmount();
+  });
+
+  it('clears the selection afterwards, so the same lot cannot be sent twice', () => {
+    const v = build(() => {});
+    click(v.button('Send 2 to Quick Sale'));
+    expect(v.text()).not.toMatch(/\d+ selected/);
+    v.unmount();
+  });
+
+  it('the action is absent without selling permission', () => {
+    const v = mount(view());           // no onSellSelection
+    paste(v, 'FTT-000101');
+    click(v.button('Add 1 to selection'));
+    expect(v.button('Sell as one sale')).toBeUndefined();
     v.unmount();
   });
 });
