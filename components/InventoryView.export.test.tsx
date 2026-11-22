@@ -340,6 +340,11 @@ describe('exporting everything', () => {
  * ======================================================================== */
 
 describe('round-tripping an exported file through import', () => {
+  /**
+   * Import now PREVIEWS before it writes (domain/inventoryImport.ts), so this
+   * picks the file and then confirms the plan — nothing reaches `onSave`
+   * until Apply, which is the point of the preview.
+   */
   const importText = async (v: ReturnType<typeof mount>, text: string, name: string) => {
     const input = Array.from(v.host.querySelectorAll('input'))
       .find(i => (i as HTMLInputElement).type === 'file') as HTMLInputElement;
@@ -350,7 +355,56 @@ describe('round-tripping an exported file through import', () => {
       // FileReader is async even in happy-dom.
       await new Promise(r => setTimeout(r, 30));
     });
+    const apply = Array.from(v.host.querySelectorAll('button'))
+      .find(b => (b.textContent || '').startsWith('Apply '));
+    if (!apply) throw new Error(`no Apply button — preview did not open for ${name}`);
+    await act(async () => {
+      apply.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await new Promise(r => setTimeout(r, 30));
+    });
   };
+
+  /**
+   * THE DATA-LOSS TRAP THIS REPLACED. Import used to build every row as a new
+   * record, so exporting and importing back doubled the inventory — two rows
+   * per SKU, two per IMEI, silently.
+   */
+  it('UPDATES the matching items instead of duplicating them', async () => {
+    const out = mount(view({ inventory: MIXED, section: 'laptops' }));
+    exportVia(out, 'tab');
+    const csv = downloads[0].text;
+    out.unmount();
+
+    const onSave = vi.fn();
+    const back = mount(view({ inventory: MIXED, section: 'laptops', onSave }));
+    await importText(back, csv, 'laptops.csv');
+    const saved: InventoryItem[] = onSave.mock.calls.map(c => c[0]);
+    // Every row came back onto the item it already was — same ids, no new ones.
+    expect(saved.map(i => i.id).sort()).toEqual(['l1', 'l2', 'l3']);
+    expect(saved.every(i => MIXED.some(m => m.id === i.id))).toBe(true);
+    back.unmount();
+  });
+
+  it('and says so before writing anything', async () => {
+    const out = mount(view({ inventory: MIXED, section: 'laptops' }));
+    exportVia(out, 'tab');
+    const csv = downloads[0].text;
+    out.unmount();
+
+    const onSave = vi.fn();
+    const back = mount(view({ inventory: MIXED, section: 'laptops', onSave }));
+    const input = Array.from(back.host.querySelectorAll('input'))
+      .find(i => (i as HTMLInputElement).type === 'file') as HTMLInputElement;
+    Object.defineProperty(input, 'files', { value: [new File([csv], 'l.csv', { type: 'text/csv' })], configurable: true });
+    await act(async () => {
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      await new Promise(r => setTimeout(r, 30));
+    });
+    // The preview is open, the counts are on it, and NOTHING has been saved.
+    expect(back.host.textContent).toContain('3 to update · 0 new');
+    expect(onSave).not.toHaveBeenCalled();
+    back.unmount();
+  });
 
   it('does not corrupt deviceStatus', async () => {
     const out = mount(view({ inventory: MIXED, section: 'laptops' }));

@@ -14,6 +14,10 @@ import { isStalePendingRepair, isOrphanedPendingRepair, PENDING_REPAIR_STALE_DAY
 import { printShelfTag, printShelfTagsBatch } from '../services/shelfTag';
 import { getStoreProfile, getLabelSizes, getLabelSpacing } from './SettingsModal';
 import { loadLabelPrefs, printInventoryLabelsBatch } from '../services/inventoryLabel';
+import {
+  ImportPlan, CONFLICT_MESSAGE, applyImportRow, describeImportPlan, importRowChanges,
+  newImportedItem, planImport, rowSku,
+} from '../domain/inventoryImport';
 import { ItemFormModal } from './ItemFormModal';
 // Lazy: defers jsPDF (~390 kB) until a label is actually printed.
 const LabelModal = lazy(() => import('./LabelModal').then(m => ({ default: m.LabelModal })));
@@ -577,6 +581,9 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
   const [hiddenByTab, setHiddenByTab] = useState<Partial<Record<InvSection, string[]>>>(() => loadLS(LS_HIDDEN_BY_TAB, {}));
   const [views, setViews] = useState<SavedView[]>(() => loadLS(LS_VIEWS, []));
   const [menu, setMenu] = useState<null | 'cols' | 'views' | 'filter' | 'export'>(null);
+  // A parsed import, planned against live inventory and held until the owner
+  // confirms it — see importCSV.
+  const [importPlan, setImportPlan] = useState<{ plan: ImportPlan; fileName: string } | null>(null);
   const [expandItem, setExpandItem] = useState<InventoryItem | null>(null);
   const [labelItem, setLabelItem] = useState<InventoryItem | null>(null);
   const [colW, setColW] = useState<ColWidths>(() => loadLS(LS_COLW, { device: {}, accessory: {} }));
@@ -994,31 +1001,42 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
     exportCSV(allAccessories, visibleCols(ACCESSORY_COLS, canViewCost), 'inventory-accessories');
     setMenu(null);
   };
+  /**
+   * IMPORT MATCHES, AND SHOWS ITS WORKING BEFORE IT WRITES ANYTHING.
+   *
+   * It used to build every row as a new record and save it immediately, so
+   * exporting, marking up in Excel and importing back DOUBLED the inventory —
+   * two records per SKU, two per IMEI, silently. See
+   * domain/inventoryImport.ts for the matching and for what an import is
+   * allowed to overwrite.
+   *
+   * NOTHING IS WRITTEN UNTIL THE OWNER SEES THE COUNTS. The file is parsed,
+   * planned against live inventory and held; the dialog says how many rows
+   * would update, how many are new and which conflict, and only then does
+   * Apply run. An import that cannot be previewed is one that cannot safely
+   * be run — which is exactly how this bug stayed invisible.
+   */
   const importCSV = (file: File) => {
     const reader = new FileReader();
-    reader.onload = async e => {
+    reader.onload = e => {
       const rows = parseCSV(String(e.target?.result || ''));
-      for (const r of rows) {
-        const k: ItemKind = importedKind(r);
-        const num = (v: string) => parseFloat(v) || 0;
-        const base: InventoryItem = {
-          id: uid(), kind: k, sku: r.sku || await onGenerateSku(k, (r.deviceType as DeviceType) || undefined),
-          date: r.date || today(), item: r.item || '', imei: r.imei || '', boughtFrom: r.boughtFrom || '',
-          purchaseCost: num(r.purchaseCost), repairCost: num(r.repairCost), soldDate: r.soldDate || '',
-          soldTo: r.soldTo || '', salePrice: num(r.salePrice), notes: r.notes || '',
-          ...(k === 'device' ? {
-            deviceType: (r.deviceType as DeviceType) || 'Phone', brand: r.brand, model: r.model, storage: r.storage,
-            color: r.color, batteryHealth: r.batteryHealth, condition: r.condition || 'Good', purchaseSource: r.purchaseSource,
-            targetSalePrice: num(r.targetSalePrice), deviceStatus: (r.deviceStatus as DeviceStatus) || 'ready',
-          } : {
-            manufacturerBarcode: r.manufacturerBarcode, category: r.category, quantity: num(r.quantity),
-            costPerUnit: num(r.costPerUnit), sellingPrice: num(r.sellingPrice), lowStockThreshold: num(r.lowStockThreshold) || 3,
-          }),
-        };
-        onSave(base);
-      }
+      if (rows.length === 0) { window.alert('That file has no rows.'); return; }
+      setImportPlan({ plan: planImport(rows, inventory), fileName: file.name });
     };
     reader.readAsText(file);
+  };
+
+  const applyImportPlan = async () => {
+    const pending = importPlan;
+    if (!pending) return;
+    setImportPlan(null);
+    for (const o of pending.plan.outcomes) {
+      if (o.kind === 'conflict') continue;      // reported in the dialog, never merged
+      if (o.kind === 'update') { onSave(applyImportRow(o.existing, o.row)); continue; }
+      const k: ItemKind = importedKind(o.row);
+      const sku = rowSku(o.row) || await onGenerateSku(k, (o.row.deviceType as DeviceType) || undefined);
+      onSave(newImportedItem(o.row, k, uid(), sku, today()));
+    }
   };
 
   const saveView = () => {
@@ -1552,6 +1570,53 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
       {/* ADD form. Nothing is written to the database until Save, and no SKU is
           allocated until then either — an abandoned form burns neither. */}
       {addForm}
+
+      {/* THE IMPORT PREVIEW — nothing is written until this is confirmed. */}
+      {importPlan && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={() => setImportPlan(null)}>
+          <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-lg border border-slate-200 dark:border-slate-700 max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="px-5 py-3 border-b border-slate-100 dark:border-slate-800 flex justify-between items-center">
+              <h2 className="font-bold text-slate-800 dark:text-slate-100">Import {importPlan.fileName}</h2>
+              <button onClick={() => setImportPlan(null)}><X className="w-5 h-5 text-slate-400" /></button>
+            </div>
+            <div className="px-5 pt-4">
+              <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">{describeImportPlan(importPlan.plan)}</p>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+                Rows are matched on SKU, then IMEI/serial — a matching row UPDATES that item instead of adding a
+                second copy of it. Only the columns present in the file are touched, and cost, supplier and sale
+                fields are never written by an import.
+              </p>
+            </div>
+            <div className="flex-1 overflow-y-auto px-5 py-3 space-y-1">
+              {importPlan.plan.outcomes.map((o, idx) => (
+                <div key={idx} className="flex items-start justify-between gap-2 text-sm py-1 border-b border-slate-50 dark:border-slate-800/60 last:border-0">
+                  <span className="font-mono text-xs text-slate-500 shrink-0 w-28 truncate">{rowSku(o.row) || o.row.imei || '(no id)'}</span>
+                  {o.kind === 'conflict' ? (
+                    <span className="text-xs text-rose-600 dark:text-rose-400 flex-1">Skipped — {CONFLICT_MESSAGE[o.reason]}</span>
+                  ) : o.kind === 'update' ? (
+                    <span className="text-xs text-slate-500 dark:text-slate-400 flex-1 truncate">
+                      Update {o.existing.item || o.existing.sku}
+                      {importRowChanges(o.existing, o.row).length
+                        ? ` · ${importRowChanges(o.existing, o.row).join(', ')}`
+                        : ' · no change'}
+                    </span>
+                  ) : (
+                    <span className="text-xs text-emerald-600 dark:text-emerald-400 flex-1">New item</span>
+                  )}
+                </div>
+              ))}
+            </div>
+            <div className="px-5 py-3 border-t border-slate-100 dark:border-slate-800 flex justify-end gap-2">
+              <button onClick={() => setImportPlan(null)} className="px-4 py-2 text-sm rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">Cancel</button>
+              <button onClick={() => void applyImportPlan()}
+                disabled={importPlan.plan.updates + importPlan.plan.creates === 0}
+                className="px-4 py-2 text-sm rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-medium disabled:opacity-40">
+                Apply {importPlan.plan.updates + importPlan.plan.creates} row{importPlan.plan.updates + importPlan.plan.creates === 1 ? '' : 's'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Empty rows the OLD Add Device button left behind. Listed, never
           auto-deleted (domain/blankRows.ts). */}
