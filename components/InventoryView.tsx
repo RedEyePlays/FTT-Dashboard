@@ -2,7 +2,7 @@ import React, { useState, useMemo, useRef, useEffect, useLayoutEffect, lazy, Sus
 import {
   Search, Smartphone, Package, QrCode, Trash2, X, Plus, ScanLine, AlertTriangle,
   Columns3, SlidersHorizontal, Bookmark, Download, Upload, Copy, ChevronUp, ChevronDown,
-  ChevronLeft, ChevronRight, CheckSquare, Square, Boxes,
+  ChevronLeft, ChevronRight, CheckSquare, Square, Boxes, ListPlus, Pin,
   Pencil, MoreVertical, Printer, Truck, History, ScrollText, Wrench, Tag, DollarSign, CheckCircle2, AlertCircle,
 } from 'lucide-react';
 import { InventoryItem, DeviceBuyer, ItemKind, DeviceType, DeviceStatus, ActivityEntry, AuditEntry, Repair, Note, Role, Customer, Location, InventoryTransfer, AppUser } from '../types';
@@ -18,6 +18,10 @@ import {
   ImportPlan, CONFLICT_MESSAGE, applyImportRow, describeImportPlan, importRowChanges,
   newImportedItem, planImport, rowSku,
 } from '../domain/inventoryImport';
+import {
+  BATCH_FLAG_NOTE, BatchResolution, MAX_BATCH_PASTE, batchFlagged, batchIds,
+  batchLocationLabel, batchPasteTooLargeMessage, describeBatch, parseIdentifierList, resolveBatch,
+} from '../domain/batchSelection';
 import { ItemFormModal } from './ItemFormModal';
 // Lazy: defers jsPDF (~390 kB) until a label is actually printed.
 const LabelModal = lazy(() => import('./LabelModal').then(m => ({ default: m.LabelModal })));
@@ -566,6 +570,31 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
   // how "which laptops did we sell" gets asked without splitting the tab.
   const [soldType, setSoldType] = usePersistedFilter<string>('inv_sold_type', userId, 'all');
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  /**
+   * IS THE CURRENT SELECTION A *BUILT BATCH*?
+   *
+   * THE DECISION THIS FLAG RECORDS. Wiping the selection when the page, the
+   * search, the status filter or the sort changes (see the reset effect below)
+   * is kept for a HAND-TICKED selection and abandoned for a BUILT one, rather
+   * than removed outright. The two are different intents:
+   *
+   *   • Ticking rows is scoped to what is on screen. You tick three of the
+   *     rows you can see; change the filter and those three rows are no longer
+   *     what you were looking at, and a stale tick you have forgotten about is
+   *     how a bulk price update lands on the wrong device. Wiping is right.
+   *   • A batch built from a list of identifiers is a deliberate, named set.
+   *     The owner is ASSEMBLING it, and searching, switching tabs and scanning
+   *     are how it gets assembled — a sold device and an in-stock one live on
+   *     different tabs, so a batch that cannot cross a tab cannot be built at
+   *     all. Wiping is fatal.
+   *
+   * So the moment anything is added by identifier the selection is pinned, and
+   * from then on only a deliberate Clear (or a bulk action that consumes it)
+   * empties it. The pin is visible in the bulk bar — a selection that survives
+   * a filter change must say that it is doing so, or it becomes the stale tick
+   * the wipe existed to prevent.
+   */
+  const [pinned, setPinned] = useState(false);
   const [hidden, setHidden] = useState<Record<'device' | 'accessory', string[]>>(() => loadLS(LS_HIDDEN, DEFAULT_HIDDEN));
   /**
    * THE OWNER'S OWN COLUMN CHOICE, PER TAB — and the thing that distinguishes
@@ -601,8 +630,18 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
   const resetColumnWidth = (kind: 'device' | 'accessory', key: string) =>
     setColW(c => { const next = { ...c[kind] }; delete next[key]; return { ...c, [kind]: next }; });
   const resetAllWidths = (kind: 'device' | 'accessory') => setColW(c => ({ ...c, [kind]: {} }));
-  // Reset pagination + selection whenever the active page or its filters change.
-  useEffect(() => { setPageNum(1); setSelected(new Set()); setBulkResult(null); setBulkPriceOpen(false); }, [page, query, statusFilter, sort]);
+  // Reset pagination + selection whenever the active page or its filters change
+  // — EXCEPT a pinned batch, which is being assembled across exactly these
+  // changes (see `pinned` above). `pinned` is read without being a dependency
+  // on purpose: this effect must fire on a FILTER change, not when the pin
+  // itself flips, and the closure React invokes on a filter change is the one
+  // from that render, so the value it reads is current.
+  useEffect(() => {
+    setPageNum(1);
+    if (!pinned) setSelected(new Set());
+    setBulkResult(null);
+    setBulkPriceOpen(false);
+  }, [page, query, statusFilter, sort]);
 
   // One count per tab, from the SAME predicate the tables filter by
   // (domain/deviceSpecs.ts's inTab) — so a tab's badge can never disagree with
@@ -732,6 +771,12 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
   // no rows for the current filter, which is a different thing entirely.
   const [scanMsg, setScanMsg] = useState<string | null>(null);
   useEffect(() => { setScanMsg(null); }, [query]);
+  /**
+   * What the last scan-to-add did. Deliberately NOT `scanMsg`: that one is
+   * cleared by the effect above on every query change, and scan-to-add empties
+   * the query as its last act, so the feedback would erase itself.
+   */
+  const [scanAddMsg, setScanAddMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   // Focus management for the scanner. A wedge scanner types wherever the caret
   // happens to be; if that is nowhere, the code is simply lost and the person
@@ -758,6 +803,29 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
   const onSearchEnter = () => {
     const v = query.trim();
     if (!v) return;
+    // SCAN-TO-ADD: the same keystrokes, the opposite intent. The code goes
+    // into the batch, the box is emptied for the next handset, and nothing is
+    // filtered or opened. Unmatched and ambiguous codes are reported rather
+    // than swallowed — a scan that quietly did nothing is a device missing
+    // from the offer. (See `scanAdds`.)
+    if (scanAdds) {
+      const r = resolveBatch(inventory, v);
+      addToBatch(batchIds(r));
+      // Emptying the box is what stops the scan filtering the table — and it
+      // is also why this feedback needs its own state: the effect above wipes
+      // `scanMsg` on every query change, this message included.
+      setQuery('');
+      setScanAddMsg(r.matched.length > 0
+        ? {
+            ok: true,
+            text: `Added ${r.matched[0].item.sku || r.matched[0].item.item}`
+              + `${r.matched.length > 1 ? ` +${r.matched.length - 1} more` : ''} to the batch.`,
+          }
+        : r.ambiguous.length > 0
+          ? { ok: false, text: `“${v}” matches ${r.ambiguous[0].items.length} items — not added. Open it from the table instead.` }
+          : { ok: false, text: noIdentifierMatchMessage(v) });
+      return;
+    }
     if (scanHits.length === 1) { setScanMsg(null); openItem(scanHits[0], true); return; }
     if (scanHits.length === 0 && activeRows.length === 0) setScanMsg(noIdentifierMatchMessage(v));
     else setScanMsg(null);
@@ -864,6 +932,60 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
     const allSel = rows.every(r => s.has(r.id));
     const n = new Set(s); rows.forEach(r => allSel ? n.delete(r.id) : n.add(r.id)); return n;
   });
+  /**
+   * EMPTYING THE SELECTION IS ALWAYS DELIBERATE — and always unpins, so the
+   * next hand-ticked selection goes back to the ordinary wipe-on-filter
+   * behaviour. Every place that used to call `setSelected(new Set())` goes
+   * through here, so there is one way to end a batch rather than five.
+   */
+  const clearSelection = () => { setSelected(new Set()); setPinned(false); };
+
+  /* --- BUILDING A BATCH FROM IDENTIFIERS (domain/batchSelection.ts) ------- */
+  const [batchOpen, setBatchOpen] = useState(false);
+  const [batchText, setBatchText] = useState('');
+  const [batchResolved, setBatchResolved] = useState<BatchResolution | null>(null);
+  const [batchNote, setBatchNote] = useState<string | null>(null);
+  /**
+   * SCAN-TO-ADD. The scanner types into the search box and sends Enter, so
+   * every scan used to REPLACE the query — which filtered the table and (via
+   * the reset effect) threw away everything selected so far. With this on,
+   * Enter resolves the code, ADDS it to the batch and clears the box ready for
+   * the next handset; the query never lingers, so nothing is filtered either.
+   *
+   * It is a visible, explicit mode rather than a guess at intent: the same
+   * keystrokes mean "find this one" and "add this one", and the only honest
+   * way to tell them apart is to ask.
+   */
+  const [scanAdds, setScanAdds] = useState(false);
+
+  /** Add resolved ids to the selection, pinning it as a built batch. */
+  const addToBatch = (ids: string[]) => {
+    if (ids.length === 0) return;
+    setPinned(true);
+    // On a phone the bulk bar only exists in selection mode, so a batch built
+    // there would otherwise be invisible and unusable.
+    if (isMobile) setSelectMode(true);
+    setSelected(s => { const n = new Set(s); ids.forEach(id => n.add(id)); return n; });
+  };
+
+  /** Resolve the pasted blob and show what it found — nothing is selected yet. */
+  const resolvePaste = () => {
+    const count = parseIdentifierList(batchText).length;
+    if (count > MAX_BATCH_PASTE) { setBatchResolved(null); setBatchNote(batchPasteTooLargeMessage(count)); return; }
+    setBatchNote(null);
+    setBatchResolved(resolveBatch(inventory, batchText));
+  };
+
+  /** Commit the resolution the owner has just read. */
+  const applyPaste = () => {
+    if (!batchResolved) return;
+    const ids = batchIds(batchResolved);
+    addToBatch(ids);
+    setBatchNote(`Added ${ids.length} item${ids.length === 1 ? '' : 's'} to the batch.`);
+    setBatchResolved(null);
+    setBatchText('');
+    setBatchOpen(false);
+  };
   // SENDING TO THE OTHER STORE. Offered only when there is another store this
   // person may send to, and only from a tab holding sellable stock — a sold
   // device is not the shop's to move and one already in transit is in a car.
@@ -876,7 +998,7 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
     && canSendFrom(me || undefined, locations, activeLocationId)
     && actableStores(me || undefined, locations).some(l => l.id !== activeLocationId);
 
-  const bulkDelete = () => { selected.forEach(id => onDelete(id)); setSelected(new Set()); };
+  const bulkDelete = () => { selected.forEach(id => onDelete(id)); clearSelection(); };
   const bulkStatus = (status: DeviceStatus) => { selected.forEach(id => { const it = inventory.find(x => x.id === id); if (it && kindOf(it) === 'device') onUpdate(id, 'deviceStatus', status); }); };
 
   // Bulk price / listed actions run each write independently and report which
@@ -1233,10 +1355,32 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
               <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
               <input ref={searchRef} value={query} onChange={e => setQuery(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); onSearchEnter(); } }}
-                placeholder="Scan or search by SKU, IMEI, serial, barcode, or name…"
-                className="w-full pl-9 pr-24 py-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-              <span className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1 text-[11px] text-slate-400"><ScanLine className="w-3.5 h-3.5" /> scanner ready</span>
+                placeholder={scanAdds
+                  ? 'Scan to ADD to the batch — each code is added, not searched…'
+                  : 'Scan or search by SKU, IMEI, serial, barcode, or name…'}
+                className={`w-full pl-9 pr-24 py-2.5 bg-white dark:bg-slate-900 border rounded-lg text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 ${scanAdds ? 'border-indigo-500 ring-1 ring-indigo-300 dark:ring-indigo-700' : 'border-slate-200 dark:border-slate-700'}`} />
+              <span className={`absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1 text-[11px] ${scanAdds ? 'text-indigo-600 dark:text-indigo-400 font-medium' : 'text-slate-400'}`}>
+                <ScanLine className="w-3.5 h-3.5" /> {scanAdds ? 'adding to batch' : 'scanner ready'}
+              </span>
             </div>
+
+            {/* BUILDING A BATCH BY IDENTIFIER — the wholesale case. Both of
+                these pin the selection, so it survives the search, tab, filter
+                and sort changes that building it requires. */}
+            <button onClick={() => { setBatchOpen(true); setBatchResolved(null); setBatchNote(null); }}
+              title="Paste a list of SKUs, IMEIs or serials and select all of them"
+              className="flex items-center gap-2 px-3 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-700 dark:text-slate-200 hover:border-indigo-400">
+              <ListPlus className="w-4 h-4" /> <span className="hidden lg:inline">Paste list</span>
+            </button>
+            <button onClick={() => { setScanAdds(m => !m); setScanMsg(null); setScanAddMsg(null); setQuery(''); }}
+              title={scanAdds
+                ? 'Scanning is adding to the batch. Turn off to go back to searching.'
+                : 'Switch the scanner to ADD each code to the batch instead of searching for it'}
+              className={`flex items-center gap-2 px-3 py-2.5 border rounded-lg text-sm ${scanAdds
+                ? 'bg-indigo-600 border-indigo-600 text-white hover:bg-indigo-700'
+                : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:border-indigo-400'}`}>
+              <ScanLine className="w-4 h-4" /> <span className="hidden lg:inline">{scanAdds ? 'Scan adds: on' : 'Scan adds'}</span>
+            </button>
 
             {/* The Sold tab's type filter. Sold is deliberately ONE tab — "what
                 did we sell" is the question — so the split lives inside it. */}
@@ -1249,7 +1393,7 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
             )}
 
             {/* Mobile: selection-mode toggle */}
-            <button onClick={() => { setSelectMode(m => !m); setSelected(new Set()); }} className="md:hidden flex items-center gap-2 px-3 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-700 dark:text-slate-200"><CheckSquare className="w-4 h-4" /> {selectMode ? 'Done' : 'Select'}</button>
+            <button onClick={() => { setSelectMode(m => !m); clearSelection(); }} className="md:hidden flex items-center gap-2 px-3 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-700 dark:text-slate-200"><CheckSquare className="w-4 h-4" /> {selectMode ? 'Done' : 'Select'}</button>
 
             {/* Mobile filters/sort sheet trigger */}
             <button onClick={() => setMobileFilter(true)} className="md:hidden flex items-center gap-2 px-3 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-700 dark:text-slate-200 hover:border-indigo-400"><SlidersHorizontal className="w-4 h-4" /> Sort{isDeviceStockTab && statusFilter !== 'all' && <span className="w-2 h-2 rounded-full bg-indigo-500" />}</button>
@@ -1380,6 +1524,18 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
           {/* A scan that matched nothing anywhere — said in words, because an
               empty table does not distinguish "no such code" from "not on this
               page". */}
+          {/* What the last scan added — or why it added nothing. A scan that
+              quietly did nothing is a device missing from the offer. */}
+          {scanAddMsg && (
+            <div className={`flex items-start gap-2 rounded-lg px-3 py-2 text-sm border ${scanAddMsg.ok
+              ? 'bg-indigo-50 dark:bg-indigo-900/20 border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-300'
+              : 'bg-rose-50 dark:bg-rose-900/20 border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300'}`}>
+              {scanAddMsg.ok ? <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" /> : <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />}
+              <span>{scanAddMsg.text}</span>
+              <button onClick={() => setScanAddMsg(null)} className="ml-auto opacity-70 hover:opacity-100 shrink-0"><X className="w-3.5 h-3.5" /></button>
+            </div>
+          )}
+
           {scanMsg && (
             <div className="flex items-start gap-2 bg-rose-50 dark:bg-rose-900/20 border border-rose-200 dark:border-rose-800 rounded-lg px-3 py-2 text-sm text-rose-700 dark:text-rose-300">
               <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
@@ -1402,6 +1558,15 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
             <div className="hidden md:flex flex-col gap-2">
               <div className="flex items-center gap-2 flex-wrap bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800 rounded-lg px-3 py-2">
                 <span className="text-sm font-medium text-indigo-700 dark:text-indigo-300">{selected.size} selected</span>
+                {/* A selection that outlives a filter change has to SAY that
+                    it is doing so, or it becomes the stale tick the wipe
+                    existed to prevent. */}
+                {pinned && (
+                  <span title="Built from a list of identifiers — kept while you search, switch tabs, filter and sort. Only Clear empties it."
+                    className="flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded-full bg-indigo-100 dark:bg-indigo-800/60 text-indigo-700 dark:text-indigo-200">
+                    <Pin className="w-3 h-3" /> batch kept across filters
+                  </span>
+                )}
                 {activeKind === 'device' && (
                   <select onChange={e => { if (e.target.value) { bulkStatus(e.target.value as DeviceStatus); e.target.value = ''; } }} className="text-sm bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md px-2 py-1">
                     <option value="">Set status…</option>
@@ -1429,7 +1594,7 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
                 <button onClick={bulkPrintLabels} disabled={bulkBusy} className="text-sm px-2 py-1 rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-indigo-400 flex items-center gap-1 disabled:opacity-40"><QrCode className="w-3.5 h-3.5" /> Print Labels</button>
                 <button onClick={() => exportCSV(inventory.filter(i => selected.has(i.id)), activeCols, 'selection')} className="text-sm px-2 py-1 rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-indigo-400 flex items-center gap-1"><Download className="w-3.5 h-3.5" /> Export</button>
                 <button onClick={bulkDelete} className="text-sm px-2 py-1 rounded-md bg-rose-50 text-rose-600 dark:bg-rose-900/30 dark:text-rose-300 hover:bg-rose-100 flex items-center gap-1"><Trash2 className="w-3.5 h-3.5" /> Delete</button>
-                <button onClick={() => { setSelected(new Set()); setBulkResult(null); }} className="text-sm px-2 py-1 rounded-md text-slate-500 hover:text-slate-700">Clear</button>
+                <button onClick={() => { clearSelection(); setBulkResult(null); }} className="text-sm px-2 py-1 rounded-md text-slate-500 hover:text-slate-700">Clear</button>
                 {bulkBusy && <span className="text-xs text-indigo-500">Working…</span>}
               </div>
               {bulkResult && (
@@ -1511,7 +1676,9 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
                 </div>
               ) : (
                 <div className="px-3 py-2 flex items-center gap-2 overflow-x-auto">
-                  <span className="text-sm font-medium text-indigo-700 dark:text-indigo-300 shrink-0">{selected.size}</span>
+                  <span className="text-sm font-medium text-indigo-700 dark:text-indigo-300 shrink-0 flex items-center gap-1">
+                    {selected.size}{pinned && <Pin className="w-3 h-3" aria-label="batch kept across filters" />}
+                  </span>
                   {activeKind === 'device' && (
                     <select onChange={e => { if (e.target.value) { bulkStatus(e.target.value as DeviceStatus); e.target.value = ''; } }} className="text-sm bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md px-2 py-1.5 shrink-0">
                       <option value="">Status…</option>
@@ -1524,11 +1691,90 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
                   <button onClick={bulkPrintLabels} disabled={bulkBusy} aria-label="Print labels" className="tap-target flex items-center justify-center rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 shrink-0 disabled:opacity-40"><QrCode className="w-4 h-4" /></button>
                   <button onClick={() => exportCSV(inventory.filter(i => selected.has(i.id)), activeCols, 'selection')} aria-label="Export selection" className="tap-target flex items-center justify-center rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 shrink-0"><Download className="w-4 h-4" /></button>
                   <button onClick={bulkDelete} aria-label="Delete selection" className="tap-target flex items-center justify-center rounded-md bg-rose-50 text-rose-600 dark:bg-rose-900/30 dark:text-rose-300 shrink-0"><Trash2 className="w-4 h-4" /></button>
-                  <button onClick={() => { setSelected(new Set()); setBulkResult(null); }} className="text-sm px-2 py-1 rounded-md text-slate-500 shrink-0">Clear</button>
+                  <button onClick={() => { clearSelection(); setBulkResult(null); }} className="text-sm px-2 py-1 rounded-md text-slate-500 shrink-0">Clear</button>
                 </div>
               )}
             </div>
           )}
+
+      {/* PASTE A LIST, SEE WHAT IT FOUND, THEN SELECT IT.
+          Two steps on purpose: nothing is added to the selection until the
+          owner has read what did and did not resolve. A wholesale offer built
+          from a list with two silent misses is an offer with two devices
+          missing from it, discovered at the counter. */}
+      <ResponsiveDialog open={batchOpen} onClose={() => setBatchOpen(false)} title="Build a batch from a list"
+        footer={
+          <div className="flex items-center gap-2">
+            <button onClick={() => setBatchOpen(false)} className="px-3 py-2 text-sm text-slate-500 hover:text-slate-700">Cancel</button>
+            {batchResolved
+              ? (
+                <button onClick={applyPaste} disabled={batchResolved.matched.length === 0}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white rounded-lg text-sm font-medium">
+                  Add {batchResolved.matched.length} to selection
+                </button>
+              )
+              : (
+                <button onClick={resolvePaste} disabled={!batchText.trim()}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white rounded-lg text-sm font-medium">
+                  Find these
+                </button>
+              )}
+          </div>
+        }>
+        <div className="space-y-3">
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            Paste SKUs, IMEIs or serials — one per line, or separated by commas or spaces. The
+            shop's <span className="font-mono">FTT-</span> prefix is optional, so the short code printed on a shelf tag works.
+            Whatever is found is <span className="font-medium">added</span> to the current selection and kept while you
+            search, switch tabs, filter and sort.
+          </p>
+          <textarea value={batchText} onChange={e => { setBatchText(e.target.value); setBatchResolved(null); }}
+            rows={7} aria-label="Identifiers to add"
+            placeholder={'FTT-000101\n000102\n35 678901 234000 2'}
+            className="w-full p-2.5 font-mono text-sm bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+          {batchNote && (
+            <p className="text-sm rounded-lg px-3 py-2 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300">
+              {batchNote}
+            </p>
+          )}
+          {batchResolved && (
+            <div className="space-y-2">
+              <p className="text-sm font-medium text-slate-700 dark:text-slate-200">{describeBatch(batchResolved)}</p>
+              {batchResolved.unmatched.length > 0 && (
+                <div className="text-sm rounded-lg px-3 py-2 bg-rose-50 dark:bg-rose-900/20 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300">
+                  <p className="font-medium">Not in inventory — nothing will be selected for these:</p>
+                  <p className="font-mono text-xs mt-1 break-all">{batchResolved.unmatched.join(', ')}</p>
+                </div>
+              )}
+              {batchResolved.ambiguous.length > 0 && (
+                <div className="text-sm rounded-lg px-3 py-2 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300">
+                  <p className="font-medium">Matches more than one item — skipped rather than guessed at:</p>
+                  <p className="font-mono text-xs mt-1 break-all">
+                    {batchResolved.ambiguous.map(a => `${a.identifier} (${a.items.length})`).join(', ')}
+                  </p>
+                </div>
+              )}
+              {/* Not a block — a wholesale batch legitimately includes a
+                  device reserved for a customer who never came back. The
+                  owner is the one who knows that; what is not acceptable is
+                  finding out afterwards. */}
+              {batchFlagged(batchResolved).length > 0 && (
+                <div className="text-sm rounded-lg px-3 py-2 bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300">
+                  <p className="font-medium">Found, and worth a look before you offer them — these will be selected:</p>
+                  <ul className="mt-1 space-y-0.5">
+                    {batchFlagged(batchResolved).map(m => (
+                      <li key={m.item.id} className="text-xs">
+                        <span className="font-mono">{m.item.sku || m.identifier}</span>
+                        {' — '}{BATCH_FLAG_NOTE[m.flag!]} ({batchLocationLabel(m.item)})
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </ResponsiveDialog>
 
       {/* Mobile filter + sort sheet */}
       <ResponsiveDialog open={mobileFilter} onClose={() => setMobileFilter(false)} title="Filters & sort"
@@ -1658,7 +1904,7 @@ export const InventoryView: React.FC<Props> = ({ inventory, deviceBuyers, activi
           fromLocationId={activeLocationId} locations={locations}
           destinations={actableStores(me || undefined, locations)}
           onClose={() => setSendOpen(false)}
-          onSend={async input => { await onSendTransfer(input); setSelected(new Set()); }} />
+          onSend={async input => { await onSendTransfer(input); clearSelection(); }} />
       )}
 
       {expandItem && <ItemFormModal initial={expandItem} locations={locations} activeTransfer={transferFor(expandItem, transfers)} canViewCost={canViewCost} deviceBuyers={deviceBuyers} onSave={onSave} onGenerateSku={onGenerateSku} onClose={closeItem}
