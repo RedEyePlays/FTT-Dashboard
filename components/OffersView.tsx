@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import {
-  Handshake, Plus, Trash2, X, Download, DollarSign, ListPlus, AlertTriangle, CheckCircle2, Lock, Unlock,
+  Handshake, Plus, Trash2, X, Download, Printer, DollarSign, ListPlus, AlertTriangle, CheckCircle2, Lock, Unlock,
 } from 'lucide-react';
 import { InventoryItem, Offer } from '../types';
 import { newId } from '../domain/ids';
@@ -12,12 +12,17 @@ import {
   offerAnnotations, offerCounts, offerItemsIn, offerLineViews, offerProgress, offerTotals,
   patchLine, removeLine, sheetIsStale,
 } from '../domain/offers';
-import { offerSheetCsv, offerSheetFileNameFor, OFFER_SHEET_EXCLUDED_NOTE } from '../domain/offerSheet';
+import {
+  OFFER_SHEET_EXCLUDED_NOTE, offerSheetCsv, offerSheetFileNameFor, offerSheetRows,
+} from '../domain/offerSheet';
+import { printOfferSheet } from '../services/offerPrint';
+import { getStoreProfile } from './SettingsModal';
 import {
   MAX_BATCH_PASTE, batchIds, batchPasteTooLargeMessage, describeBatch, parseIdentifierList, resolveBatch,
 } from '../domain/batchSelection';
 import { MAX_SELL_BATCH, SELL_BLOCK_NOTE, planSellBatch, sellBatchTooLargeMessage } from '../domain/sellBatch';
 import { ResponsiveDialog, EmptyState } from './responsive';
+import { NumberCell } from './NumberCell';
 
 /**
  * WHOLESALE OFFERS — a saved batch you quote a buyer, then sell part of.
@@ -58,6 +63,17 @@ interface Props {
   currentUserId?: string;
   onSave: (offer: Offer) => void;
   onDelete?: (id: string) => void;
+  /**
+   * WRITE ONE FIELD OF AN INVENTORY RECORD. The same handler the Inventory
+   * grid uses (App's `handleUpdateItem`), deliberately — not a second way to
+   * write an item. It carries the permission check, the audit entry and the
+   * below-floor target warning with it, so a target set from here behaves
+   * exactly as one set in the grid.
+   *
+   * Optional, and absent without `inventory.edit`: the Target cell is then
+   * read-only, as it was before.
+   */
+  onUpdateItem?: (id: string, field: keyof InventoryItem, value: unknown) => void | Promise<void>;
   /** Send these devices to Quick Sale. The offer records only that it did. */
   onSellLines: (offerId: string, itemIds: string[]) => void;
 }
@@ -74,7 +90,7 @@ const STATE_STYLE: Record<OfferLineState, string> = {
 };
 
 export const OffersView: React.FC<Props> = ({
-  offers, inventory, canViewCost, currentUserId, onSave, onDelete, onSellLines,
+  offers, inventory, canViewCost, currentUserId, onSave, onDelete, onSellLines, onUpdateItem,
 }) => {
   const [openId, setOpenId] = useState<string | null>(null);
   const [newBuyer, setNewBuyer] = useState('');
@@ -162,6 +178,32 @@ export const OffersView: React.FC<Props> = ({
     a.click();
     // `sentAt` is what makes "the buyer is holding a stale sheet" answerable.
     save({ ...offer, sentAt: Date.now() });
+  };
+
+  /**
+   * PRINT THE SAME THING ON PAPER, with no pricing on it at all.
+   *
+   * Same rows, same annotations, same allow-list — `offerSheetRows` is what
+   * the CSV is built from too, so the two cannot drift. The printer is handed
+   * those STRINGS and no InventoryItem, which is what makes "the printout
+   * cannot reach a cost" a fact about the code rather than a promise: there is
+   * nothing in services/offerPrint.ts to reach one with.
+   *
+   * Printing does NOT stamp `sentAt`. That field answers "is the buyer holding
+   * a stale FILE?" — a CSV they have on their computer and will open again. A
+   * sheet handed across the counter is not something the owner re-sends when a
+   * device is added; they print another one. Conflating the two would put the
+   * stale-sheet banner up after every print.
+   */
+  const printSheet = () => {
+    if (!offer) return;
+    const items = offerItemsIn(offer, inventory, LIVE_STATES);
+    printOfferSheet(offerSheetRows(items, offerAnnotations(offer)), {
+      storeName: getStoreProfile().storeName,
+      buyerName: offer.buyerName,
+      dateLabel: todayISO(),
+      excludedNote: OFFER_SHEET_EXCLUDED_NOTE,
+    });
   };
 
   /* ---------------- Selling part of it ---------------- */
@@ -304,6 +346,12 @@ export const OffersView: React.FC<Props> = ({
             className="flex items-center gap-2 px-3 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-700 dark:text-slate-200 hover:border-indigo-400 disabled:opacity-40">
             <Download className="w-4 h-4" /> Export sheet
           </button>
+          {/* Beside Export sheet: the two ways to send the same content. */}
+          <button onClick={printSheet} disabled={counts.total === 0}
+            title={`Print a sheet to hand the buyer. ${OFFER_SHEET_EXCLUDED_NOTE} No pricing of any kind.`}
+            className="flex items-center gap-2 px-3 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-700 dark:text-slate-200 hover:border-indigo-400 disabled:opacity-40">
+            <Printer className="w-4 h-4" /> Print sheet
+          </button>
           <button onClick={() => save({ ...offer, status: offer.status === 'open' ? 'closed' : 'open', updatedAt: Date.now() })}
             title={offer.status === 'open'
               ? 'Finished with this offer. Its devices stop being counted as out on a quote.'
@@ -437,7 +485,16 @@ export const OffersView: React.FC<Props> = ({
                   <th className="px-2 py-2 w-20">Grade</th>
                   <th className="px-2 py-2">Note to the buyer</th>
                   {canViewCost && <th className="px-2 py-2 text-right">Cost</th>}
-                  {canViewCost && <th className="px-2 py-2 text-right">Target</th>}
+                  {/* TARGET IS NOT COST-GATED, unlike the two beside it.
+                      It is the asking price, not what the shop paid, and the
+                      Inventory grid has never gated its Target column either
+                      — anyone with inventory.edit prices stock there. Gating
+                      it here would make the offer screen stricter than the
+                      grid for the same field, for no reason. Cost and Margin
+                      stay gated, and the below-floor warning stays
+                      owner-facing, so nothing about a cost is recoverable
+                      from this column. */}
+                  <th className="px-2 py-2 text-right">Target</th>
                   {canViewCost && <th className="px-2 py-2 text-right">Margin</th>}
                   <th className="px-2 py-2 w-8" />
                 </tr>
@@ -486,8 +543,25 @@ export const OffersView: React.FC<Props> = ({
                           placeholder="What the buyer should know"
                           className="w-full min-w-[160px] px-1.5 py-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md text-sm" />
                       </td>
+                      {/* COST STAYS READ-ONLY. It is what the shop paid, not a
+                          figure to revise while quoting — if it is wrong it is
+                          wrong on the purchase, and that belongs in Inventory
+                          where the audit trail for it lives. MARGIN is
+                          derived. */}
                       {canViewCost && <td className="px-2 py-1.5 text-right tabular-nums text-slate-600 dark:text-slate-300">{money(cost)}</td>}
-                      {canViewCost && <td className="px-2 py-1.5 text-right tabular-nums text-slate-600 dark:text-slate-300">{target ? money(target) : '—'}</td>}
+                      <td className="px-2 py-1.5 text-right">
+                        {onUpdateItem && v.item
+                          ? (
+                            // Writes the DEVICE's own targetSalePrice — the same
+                            // field Inventory edits, not a per-offer copy that
+                            // would immediately disagree with the grid.
+                            <NumberCell value={target} placeholder="—"
+                              ariaLabel={`Target for ${v.item.sku || v.line.itemId}`}
+                              onCommit={n => { void onUpdateItem(v.item!.id, 'targetSalePrice', n); }}
+                              className="w-20 px-1.5 py-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md text-sm text-right tabular-nums dark:[color-scheme:dark]" />
+                          )
+                          : <span className="tabular-nums text-slate-600 dark:text-slate-300">{target ? money(target) : '—'}</span>}
+                      </td>
                       {canViewCost && <td className="px-2 py-1.5 text-right tabular-nums text-slate-600 dark:text-slate-300">{target ? money(target - cost) : '—'}</td>}
                       <td className="px-2 py-1.5">
                         <button onClick={() => save(removeLine(offer, v.line.itemId, Date.now()))}
