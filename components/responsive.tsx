@@ -70,13 +70,56 @@ export const ResponsiveDialog: React.FC<{
 }> = ({ open, onClose, title, footer, children, maxWidth = 'max-w-md' }) => {
   const ref = useRef<HTMLDivElement>(null);
   useLockBodyScroll(open);
+
+  /**
+   * FOCUS ONCE WHEN IT OPENS — AND THE BUG THAT ATE EVERY KEYSTROKE.
+   *
+   * These two jobs used to live in one effect, with `onClose` in its
+   * dependency array:
+   *
+   *     useEffect(() => {
+   *       …addEventListener('keydown', onKey);
+   *       ref.current?.focus();
+   *     }, [open, onClose]);
+   *
+   * Every call site passes an inline arrow (`onClose={() => setOpen(false)}`),
+   * which is a NEW FUNCTION IDENTITY on every render. So: type a character →
+   * the parent sets state → the parent re-renders → `onClose` is a new
+   * identity → the effect re-runs → `ref.current.focus()` yanks focus out of
+   * the input and onto the dialog container. Every single keystroke. Typing
+   * "32" into the paste box put the caret nowhere after the "3".
+   *
+   * It was never specific to one dialog. EVERY dialog in the app with a text
+   * field had it; it is only noticeable where somebody types more than a word.
+   *
+   * THE FIX IS HERE, NOT AT THE CALL SITES. Wrapping seven inline arrows in
+   * `useCallback` would have worked and left the trap armed for the eighth
+   * dialog anybody adds. A component whose correctness depends on every caller
+   * memoising a prop is the thing that is wrong.
+   *
+   * So the two concerns are separated:
+   *   • this effect focuses, and depends on `open` ALONE, so it runs when the
+   *     dialog opens and at no other time;
+   *   • the Escape listener below owns its own effect and reads the handler
+   *     through a ref, so it is never stale and never re-runs the focus.
+   */
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    document.addEventListener('keydown', onKey);
     ref.current?.focus();
+  }, [open]);
+
+  // The latest onClose, without making it a dependency of anything. Updated on
+  // every render, so the Escape handler below can never call a stale one.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onCloseRef.current(); };
+    document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
+  }, [open]);
+
   if (!open) return null;
 
   return (

@@ -178,10 +178,23 @@ describe('an open shift says where it is being recorded', () => {
 describe('what the owner sees at payroll', () => {
   const owner = me({ id: 'u1', email: 'owner@shop.test', role: 'owner' });
   const HOUR = 3_600_000;
-  // Shifts inside the current period, in both shops.
+  /**
+   * Shifts inside the current period, in both shops.
+   *
+   * ANCHORED TO MIDDAY TODAY, not to `Date.now()` minus six hours. The old
+   * form was inside the current period on most days and outside it on one:
+   * run in the first six hours of the first day of a pay period and
+   * `now - 6h` lands in the PREVIOUS period, the entries drop out of the
+   * summary, and these two assertions fail for a reason that has nothing to
+   * do with what they are testing. That is exactly what happened at 00:45 on
+   * 2026-11-23, the first morning of a new period — found while running the
+   * suite for an unrelated change, and fixed here rather than left to break
+   * again every other Monday.
+   */
+  const midday = (() => { const d = new Date(); d.setHours(12, 0, 0, 0); return d.getTime(); })();
   const shift = (p: Partial<TimeEntry>): TimeEntry => ({
     id: `e${Math.random()}`, userId: 'u1',
-    clockIn: Date.now() - 6 * HOUR, clockOut: Date.now() - 2 * HOUR, breaks: [], ...p,
+    clockIn: midday - 4 * HOUR, clockOut: midday, breaks: [], ...p,
   });
 
   it('FLAGS PUNCHES THE PERSON PICKED THE STORE OF — beside missed clock-outs, not in a tooltip', () => {

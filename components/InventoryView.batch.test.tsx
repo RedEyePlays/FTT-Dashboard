@@ -388,3 +388,27 @@ describe('sending the batch to Quick Sale', () => {
     v.unmount();
   });
 });
+
+/* ======================================================================== *
+ * 6. THE PASTE BOX KEEPS FOCUS WHILE YOU TYPE
+ * ======================================================================== */
+
+describe('typing into the paste dialog', () => {
+  // The reported bug, at the real call site: every keystroke re-rendered
+  // InventoryView, gave ResponsiveDialog's inline `onClose` a new identity,
+  // re-ran its focus effect and pulled the caret out of this textarea. See
+  // components/responsive.focus.test.tsx for the fix.
+  it('keeps the caret in the textarea for a whole multi-line paste', () => {
+    const v = mount(view());
+    click(v.host.querySelector('button[title="Paste a list of SKUs, IMEIs or serials and select all of them"]')!);
+    const box = pasteBox(v);
+    act(() => { box.focus(); });
+    const text = 'FTT-000101\nFTT-000102';
+    for (let k = 1; k <= text.length; k++) {
+      typeInto(box, text.slice(0, k));
+      expect(document.activeElement, `after ${k} chars`).toBe(box);
+    }
+    expect(box.value).toBe(text);
+    v.unmount();
+  });
+});

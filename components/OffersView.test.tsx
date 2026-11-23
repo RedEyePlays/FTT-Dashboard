@@ -706,7 +706,7 @@ describe('printing an offer', () => {
     const restore = stubWindow();
     const { v } = live([QUOTED3]);
     click(v.button('Rashid'));
-    click(v.button('Print sheet'));
+    click(v.button('Buyer sheet'));
     expect(written).toContain('FTT-000101');
     expect(written).toContain('boxed with charger');
     expect(written).toContain('>A<');
@@ -723,7 +723,7 @@ describe('printing an offer', () => {
     click(v.button('Rashid'));
     // The screen itself is showing cost, target and margin right now…
     expect(v.text()).toContain('Our cost');
-    click(v.button('Print sheet'));
+    click(v.button('Buyer sheet'));
     // …and none of it reaches the sheet.
     for (const leak of [...MONEY_LEAKS, '$', 'Cost', 'Target', 'Margin']) {
       expect(written, leak).not.toContain(leak);
@@ -736,7 +736,7 @@ describe('printing an offer', () => {
     const restore = stubWindow();
     const { v } = live([QUOTED3]);
     click(v.button('Rashid'));
-    click(v.button('Print sheet'));
+    click(v.button('Buyer sheet'));
     expect(written).toContain('Rashid');
     expect(written).toContain('1 device');
     restore();
@@ -747,7 +747,7 @@ describe('printing an offer', () => {
     const restore = stubWindow();
     const { v, store } = live([QUOTED3]);
     click(v.button('Rashid'));
-    click(v.button('Print sheet'));
+    click(v.button('Buyer sheet'));
     expect(store.rows[0].sentAt).toBeUndefined();
     expect(v.text()).not.toMatch(/changed since the sheet was sent/);
     restore();
@@ -758,7 +758,114 @@ describe('printing an offer', () => {
     const { v } = live([offer()]);
     click(v.button('Rashid'));
     expect(v.button('Export sheet')).toHaveProperty('disabled', true);
-    expect(v.button('Print sheet')).toHaveProperty('disabled', true);
+    expect(v.button('Buyer sheet')).toHaveProperty('disabled', true);
+    expect(v.button('Owner copy')).toHaveProperty('disabled', true);
+    v.unmount();
+  });
+});
+
+/* ======================================================================== *
+ * 10. THE OWNER'S OWN COPY
+ * ======================================================================== */
+
+describe("the owner's copy of the printout", () => {
+  const QUOTED4 = offer({
+    lines: [
+      { itemId: 'a', outcome: 'pending', grade: 'A', note: 'boxed with charger' },
+      { itemId: 'b', outcome: 'pending', grade: 'B', note: 'light scratch' },
+    ],
+  });
+
+  let written = '';
+  const stubWindow = () => {
+    written = '';
+    const orig = window.open;
+    (window as any).open = () => ({
+      document: { write: (h: string) => { written += h; }, close: () => {} },
+    });
+    return () => { (window as any).open = orig; };
+  };
+
+  it('carries the cost, target, margin, internal notes and the buyer note', () => {
+    const restore = stubWindow();
+    const inv = INV.map(i => i.id === 'a' ? { ...i, notes: 'rear glass replaced in March' } : i);
+    const { v } = live([QUOTED4], { inventory: inv });
+    click(v.button('Rashid'));
+    click(v.button('Owner copy'));
+    expect(written).toContain('$333.16');                      // 311.07 + 22.09
+    expect(written).toContain('$533.41');                      // target
+    expect(written).toContain('$200.25');                      // margin
+    expect(written).toContain('rear glass replaced in March'); // internal
+    expect(written).toContain('boxed with charger');           // to the buyer
+    // The lot totals the screen shows, on the sheet too.
+    expect(written).toContain(LIVE_COST.replace('$', '$'));
+    expect(written).toContain(LIVE_TARGET);
+    expect(written).toContain(LIVE_MARGIN);
+    restore();
+    v.unmount();
+  });
+
+  it('is labelled on the page so nobody picks up the wrong sheet', () => {
+    const restore = stubWindow();
+    const { v } = live([QUOTED4]);
+    click(v.button('Rashid'));
+    click(v.button('Owner copy'));
+    expect(written).toContain('OWNER COPY — NOT FOR THE BUYER');
+    restore();
+    v.unmount();
+  });
+
+  it("and the buyer's sheet, printed from the same screen, still has none of it", () => {
+    const restore = stubWindow();
+    const inv = INV.map(i => i.id === 'a' ? { ...i, notes: 'rear glass replaced in March' } : i);
+    const { v } = live([QUOTED4], { inventory: inv });
+    click(v.button('Rashid'));
+    click(v.button('Buyer sheet'));
+    for (const leak of [...MONEY_LEAKS, '$', 'Cost', 'Target', 'Margin', 'rear glass replaced', 'OWNER COPY']) {
+      expect(written, leak).not.toContain(leak);
+    }
+    restore();
+    v.unmount();
+  });
+
+  it('TWO NAMED ACTIONS, not a remembered checkbox', () => {
+    const { v } = live([QUOTED4]);
+    click(v.button('Rashid'));
+    expect(v.button('Buyer sheet')).toBeTruthy();
+    expect(v.button('Owner copy')).toBeTruthy();
+    // Each says what it contains, every time.
+    expect(v.button('Owner copy')!.getAttribute('title')).toMatch(/cost, target, margin/);
+    expect(v.button('Buyer sheet')!.getAttribute('title')).toMatch(/No pricing of any kind/);
+    // No toggle beside them: the choice is made by which button is pressed,
+    // not by a setting that remembers what it was last left on. (The
+    // checkboxes further down the page are the per-device line selection.)
+    const bar = v.button('Owner copy')!.parentElement!;
+    expect(bar.querySelectorAll('input')).toHaveLength(0);
+    expect(bar.querySelectorAll('select')).toHaveLength(0);
+    v.unmount();
+  });
+
+  it('WITHOUT canViewCost THE OWNER COPY CANNOT BE PRODUCED AT ALL', () => {
+    const { v } = live([QUOTED4], { canViewCost: false });
+    click(v.button('Rashid'));
+    expect(v.button('Owner copy')).toBeUndefined();
+    expect(v.button('Buyer sheet')).toBeTruthy();   // the buyer sheet is still fine
+    v.unmount();
+  });
+
+  it('a device with no target, no internal note and no buyer note prints in both', () => {
+    const restore = stubWindow();
+    const bare = offer({ lines: [{ itemId: 'c', outcome: 'pending' }] });  // target 0, no notes
+    const { v } = live([bare]);
+    click(v.button('Rashid'));
+    click(v.button('Owner copy'));
+    expect(written).toContain('FTT-000103');
+    expect(written).not.toContain('-$');             // no margin of minus its cost
+    written = '';
+    click(v.button('Buyer sheet'));
+    expect(written).toContain('FTT-000103');
+    expect(written).not.toContain('$');
+    restore();
     v.unmount();
   });
 });

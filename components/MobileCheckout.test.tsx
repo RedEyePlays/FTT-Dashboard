@@ -83,3 +83,40 @@ describe('MobileCheckout — "Scan / Add" button', () => {
     unmount();
   });
 });
+
+/**
+ * THE PICKER'S SEARCH BOX LOST FOCUS ON EVERY CHARACTER.
+ *
+ * This dialog is the clearest real instance of the ResponsiveDialog focus bug
+ * (see components/responsive.focus.test.tsx): the field carries `autoFocus`,
+ * so the caret lands in it — and then every keystroke sets `cx.search`,
+ * re-renders this component, gives `onClose` a new identity, re-ran the
+ * dialog's focus effect and pulled the caret onto the dialog card. Searching
+ * the POS picker from a phone was one character at a time.
+ */
+describe('MobileCheckout — typing in the Add device picker', () => {
+  const openPicker = (host: HTMLElement) => {
+    const btn = Array.from(host.querySelectorAll('button')).find(b => b.textContent?.includes('Device'));
+    act(() => { (btn as HTMLButtonElement).click(); });
+  };
+
+  it('keeps focus in the search field the whole way through a word', () => {
+    const { host, unmount } = mount(<MobileCheckout inventory={[]} onComplete={() => {}} />);
+    openPicker(host);
+    const field = Array.from(host.querySelectorAll('input'))
+      .find(i => i.getAttribute('placeholder') === 'Search or scan…') as HTMLInputElement;
+    expect(field).toBeTruthy();
+    act(() => { field.focus(); });
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!;
+    const word = 'iPhone';
+    for (let k = 1; k <= word.length; k++) {
+      act(() => {
+        setter.call(field, word.slice(0, k));
+        field.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      expect(document.activeElement, `after "${word.slice(0, k)}"`).toBe(field);
+    }
+    expect(field.value).toBe(word);
+    unmount();
+  });
+});

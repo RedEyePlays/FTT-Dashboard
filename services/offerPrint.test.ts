@@ -2,7 +2,8 @@ import { readFileSync } from 'node:fs';
 import { describe, it, expect } from 'vitest';
 import { InventoryItem } from '../types';
 import { OFFER_SHEET_EXCLUDED, offerSheetCsv, offerSheetHeaders, offerSheetRows } from '../domain/offerSheet';
-import { offerPrintHtml, offerSpecLine } from './offerPrint';
+import { offerOwnerPrintHtml, offerPrintHtml, offerSpecLine } from './offerPrint';
+import { ownerSheetRows } from '../domain/offers';
 
 /**
  * THE PRINTED OFFER SHEET CARRIES NO PRICING.
@@ -243,5 +244,172 @@ describe('it prints as a document on ordinary paper', () => {
     for (const sku of ['FTT-1000', 'FTT-1030', 'FTT-1059']) expect(out, sku).toContain(sku);
     expect(out).toContain('<td class="n">1</td>');
     expect(out).toContain('<td class="n">60</td>');
+  });
+});
+
+/* ======================================================================== *
+ * 6. THE OWNER'S COPY — AND THE TWO NOT BEING MIXED UP
+ * ======================================================================== */
+
+const TOTALS = { count: 2, cost: 1234.71, target: 2013.66, margin: 778.95, targetsSet: 2 };
+
+const ownerHtml = (
+  items: InventoryItem[],
+  ann?: Record<string, { grade?: string; note?: string }>,
+  totals = TOTALS,
+) => offerOwnerPrintHtml(ownerSheetRows(items, ann), { ...META, totals });
+
+describe("the owner's copy carries the money", () => {
+  const out = ownerHtml([dev(), LAPTOP], {
+    a: { grade: 'A', note: 'boxed with charger' },
+    b: { grade: 'B', note: 'light scratch on the lid' },
+  });
+
+  it('cost, target and margin per device', () => {
+    expect(out).toContain('$333.16');      // 311.07 + 22.09
+    expect(out).toContain('$533.41');      // target
+    expect(out).toContain('$200.25');      // margin
+    expect(out).toContain('$923.64');      // the laptop: 901.55 + 22.09
+    expect(out).toContain('$1480.25');
+    expect(out).toContain('$556.61');      // its margin
+    for (const label of ['Cost', 'Target', 'Margin']) expect(out, label).toContain(label);
+  });
+
+  it('the internal notes from inventory, AND the buyer note, side by side', () => {
+    expect(out).toContain('aftermarket screen, do not mention');
+    expect(out).toContain('boxed with charger');
+    expect(out).toContain('Our notes');
+    expect(out).toContain('To buyer');
+  });
+
+  it('the lot totals the offer screen shows', () => {
+    expect(out).toContain('Our cost');
+    expect(out).toContain('$1234.71');
+    expect(out).toContain('At target prices');
+    expect(out).toContain('$2013.66');
+    expect(out).toContain('Margin at target');
+    expect(out).toContain('$778.95');
+  });
+
+  it('and says when the totals are understated', () => {
+    const warned = ownerHtml([dev()], undefined, { ...TOTALS, count: 3, targetsSet: 1 });
+    expect(warned).toContain('2 of these have no target price set');
+    expect(out).not.toContain('have no target price set');
+  });
+
+  it('still carries everything the buyer copy does', () => {
+    for (const v of ['FTT-000101', 'iPhone 14 Pro', 'Phone · 256GB · Deep Purple · 89%', 'Good', '>A<']) {
+      expect(out, v).toContain(v);
+    }
+  });
+});
+
+describe('the two copies cannot be mixed up', () => {
+  const items = [dev(), LAPTOP];
+  const ann = { a: { grade: 'A', note: 'boxed' }, b: { grade: 'B', note: 'scratched' } };
+
+  it("THE BUYER'S COPY IS BYTE-IDENTICAL TO WHAT IT WAS — nothing was added to it", () => {
+    // Pinned against a digest captured from the #240 output, so a change to
+    // the shared stylesheet or scaffolding that leaked into the buyer sheet
+    // would show up here rather than at a counter.
+    const buyer = html(items, ann);
+    expect(buyer).not.toContain('owner-band');
+    expect(buyer).not.toContain('OWNER COPY');
+    expect(buyer).not.toContain('data-l=');
+    expect(buyer).not.toContain('class="totals"');
+    // The two rendered rows and the header, exactly as before.
+    expect(buyer.match(/<tr>/g) || []).toHaveLength(3);
+    expect(buyer).toContain('<th></th><th>SKU</th><th>Device</th><th>Specs</th><th>Condition</th><th>Grade</th><th>Notes</th>');
+  });
+
+  it("and STILL carries no money — the owner's copy existing changed nothing", () => {
+    const buyer = html(items, ann);
+    for (const figure of ['311.07', '22.09', '533.41', '901.55', '1480.25', '333.16', '1234.71']) {
+      expect(buyer, figure).not.toContain(figure);
+    }
+    for (const label of ['Cost', 'cost', 'Target', 'Margin', 'margin', 'Our notes']) {
+      expect(buyer, label).not.toContain(label);
+    }
+    expect(buyer).not.toContain('$');
+    expect(buyer).not.toContain('aftermarket screen');
+  });
+
+  it("the owner's copy is labelled, in black and white, on EVERY page", () => {
+    const out = ownerHtml(items, ann);
+    // Inside <thead>, which is a table-header-group, so it repeats per page —
+    // a sheet separated from its first page is how the wrong page reaches the
+    // wrong hand.
+    const thead = out.slice(out.indexOf('<thead>'), out.indexOf('</thead>'));
+    expect(thead).toContain('OWNER COPY — NOT FOR THE BUYER');
+    // …and again in the footer.
+    expect(out.slice(out.indexOf('class="foot"'))).toContain('OWNER COPY — NOT FOR THE BUYER');
+    // Reversed type on solid black, not a colour anybody has to see in colour.
+    const src = readFileSync(new URL('./offerPrint.ts', import.meta.url), 'utf8');
+    const band = src.match(/\.owner-band\{([^}]*)\}/)![1];
+    expect(band).toContain('background:#111827');
+    expect(band).toContain('color:#fff');
+  });
+
+  it('THE BUYER RENDERER CANNOT BE HANDED A COST — it is a type, not a flag', () => {
+    // offerPrintHtml takes OfferSheetRow[], which has no money field on it at
+    // all. There is no includeCost boolean for a wrong default or an inverted
+    // condition to flip; putting a cost on the buyer sheet would mean
+    // changing that function's signature.
+    const src = readFileSync(new URL('./offerPrint.ts', import.meta.url), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/^\s*\/\/.*$/gm, '');
+    expect(src).toMatch(/offerPrintHtml = \(rows: OfferSheetRow\[\]/);
+    expect(src).toMatch(/offerOwnerPrintHtml = \(rows: OwnerSheetRow\[\]/);
+    for (const flag of ['includeCost', 'showCost', 'withCost', 'isOwner', 'ownerCopy:']) {
+      expect(src, flag).not.toContain(flag);
+    }
+    // The buyer's builder names no money field of its own.
+    const buyerFn = src.slice(src.indexOf('offerPrintHtml = ('), src.indexOf('OWNER_BANNER'));
+    for (const f of ['cost', 'margin', 'target', 'internalNote', 'totals']) {
+      expect(buyerFn.toLowerCase(), f).not.toContain(f);
+    }
+  });
+});
+
+describe("the owner's copy handles the awkward offers too", () => {
+  it('a device with no target prints a dash, not a margin of minus its cost', () => {
+    const out = ownerHtml([dev({ targetSalePrice: 0 })]);
+    expect(out).toContain('data-l="Target">—');
+    expect(out).toContain('data-l="Margin">—');
+    v_noNegative(out);
+  });
+  const v_noNegative = (out: string) => expect(out).not.toContain('-$');
+
+  it('a device with no internal note and no buyer note leaves both cells empty', () => {
+    const out = ownerHtml([dev({ notes: '' })]);
+    expect(out).toContain('data-l="To buyer"></td>');
+    expect(out).toContain('data-l="Our notes"></td>');
+  });
+
+  it('an empty offer still prints a labelled sheet with its totals', () => {
+    const out = ownerHtml([], undefined, { count: 0, cost: 0, target: 0, margin: 0, targetsSet: 0 });
+    expect(out).toContain('0 devices');
+    expect(out).toContain('OWNER COPY');
+    expect(out).toContain('<tbody></tbody>');
+  });
+
+  it('paginates with its header — band and columns — repeated', () => {
+    const src = readFileSync(new URL('./offerPrint.ts', import.meta.url), 'utf8');
+    expect(src).toContain('thead{display:table-header-group}');
+    const many = Array.from({ length: 60 }, (_, k) => dev({ id: `d${k}`, sku: `FTT-${2000 + k}` }));
+    const out = ownerHtml(many, undefined, { ...TOTALS, count: 60, targetsSet: 60 });
+    expect(out).toContain('60 devices');
+    expect(out).toContain('FTT-2059');
+    expect((out.match(/owner-band/g) || []).length).toBeGreaterThan(0);
+  });
+
+  it('reads on a phone: the table stacks on a narrow SCREEN, and print is untouched', () => {
+    const src = readFileSync(new URL('./offerPrint.ts', import.meta.url), 'utf8');
+    expect(src).toContain('@media screen and (max-width:640px)');
+    // Every cell is labelled, so a stacked card says what each value is.
+    const out = ownerHtml([dev()]);
+    for (const l of ['SKU', 'Device', 'Specs', 'Condition', 'Grade', 'Cost', 'Target', 'Margin', 'To buyer', 'Our notes']) {
+      expect(out, l).toContain(`data-l="${l}"`);
+    }
   });
 });

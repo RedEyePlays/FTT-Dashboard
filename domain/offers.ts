@@ -1,5 +1,6 @@
 import { InventoryItem, Offer, OfferLine } from '../types';
 import { locationOf } from './identifierSearch';
+import { OfferSheetAnnotations, OfferSheetRow, offerSheetRows } from './offerSheet';
 import { targetTotalOf } from './sellBatch';
 
 /**
@@ -335,6 +336,56 @@ export const offerTotals = (items: InventoryItem[]): OfferTotals => {
     margin: money(target - cost),
     targetsSet: items.filter(i => (i.targetSalePrice || 0) > 0).length,
   };
+};
+
+/**
+ * THE OWNER'S COPY OF THE SHEET — a different row type, not a flag.
+ *
+ * The buyer's printout is built from `OfferSheetRow` (domain/offerSheet.ts),
+ * whose cells have been through that module's allow-list and which has no
+ * money field on it at all. The owner's copy needs cost, target, margin and
+ * the internal notes, so it gets its OWN row type, built here.
+ *
+ * WHY A SEPARATE TYPE RATHER THAN AN `includeCost` FLAG. A boolean on one
+ * builder is one wrong default, one inverted condition or one careless
+ * refactor away from printing the shop's cost on the sheet the buyer walks
+ * out with — and the two are generated from the same screen, moments apart,
+ * onto the same printer. With two types, the buyer's renderer takes a
+ * parameter that cannot HOLD a cost: putting one on that sheet would mean
+ * changing its signature, which is not something anybody does by accident.
+ *
+ * It composes the buyer rows rather than rebuilding them, so the device
+ * columns are the same on both sheets and cannot drift.
+ */
+export interface OwnerSheetRow {
+  /** Everything the buyer's copy shows, unchanged. */
+  sheet: OfferSheetRow;
+  /** Purchase + repair, the same sum the offer screen totals. */
+  cost: number;
+  /** 0 when none is set. */
+  target: number;
+  /** target − cost. Only meaningful when a target is set. */
+  margin: number;
+  /** The shop's own `notes` on the item — repair history and anything else. */
+  internalNote: string;
+}
+
+export const ownerSheetRows = (
+  items: InventoryItem[],
+  annotations?: OfferSheetAnnotations,
+): OwnerSheetRow[] => {
+  const sheets = offerSheetRows(items, annotations);
+  return items.map((i, k) => {
+    const cost = money((i.purchaseCost || 0) + (i.repairCost || 0));
+    const target = i.targetSalePrice || 0;
+    return {
+      sheet: sheets[k],
+      cost,
+      target,
+      margin: money(target - cost),
+      internalNote: (i.notes || '').trim(),
+    };
+  });
 };
 
 /** The items behind the lines in the given states — for the totals above. */

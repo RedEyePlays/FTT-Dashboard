@@ -10,12 +10,12 @@ import {
   LIVE_STATES, OFFER_LINE_STATE_LABEL, OFFER_PROGRESS_LABEL, OfferLineState, addLines,
   OFFER_ACCESSORY_NOTE, commitmentExcept, commitmentWarning, committedCounts, newOffer, splitOfferable,
   offerAnnotations, offerCounts, offerItemsIn, offerLineViews, offerProgress, offerTotals,
-  patchLine, removeLine, sheetIsStale,
+  ownerSheetRows, patchLine, removeLine, sheetIsStale,
 } from '../domain/offers';
 import {
   OFFER_SHEET_EXCLUDED_NOTE, offerSheetCsv, offerSheetFileNameFor, offerSheetRows,
 } from '../domain/offerSheet';
-import { printOfferSheet } from '../services/offerPrint';
+import { printOfferOwnerCopy, printOfferSheet } from '../services/offerPrint';
 import { getStoreProfile } from './SettingsModal';
 import {
   MAX_BATCH_PASTE, batchIds, batchPasteTooLargeMessage, describeBatch, parseIdentifierList, resolveBatch,
@@ -195,14 +195,39 @@ export const OffersView: React.FC<Props> = ({
    * device is added; they print another one. Conflating the two would put the
    * stale-sheet banner up after every print.
    */
+  const printMeta = () => ({
+    storeName: getStoreProfile().storeName,
+    buyerName: offer!.buyerName,
+    dateLabel: todayISO(),
+  });
+
   const printSheet = () => {
     if (!offer) return;
     const items = offerItemsIn(offer, inventory, LIVE_STATES);
     printOfferSheet(offerSheetRows(items, offerAnnotations(offer)), {
-      storeName: getStoreProfile().storeName,
-      buyerName: offer.buyerName,
-      dateLabel: todayISO(),
+      ...printMeta(),
       excludedNote: OFFER_SHEET_EXCLUDED_NOTE,
+    });
+  };
+
+  /**
+   * THE OWNER'S OWN COPY — the same lot with the money on it, for reading on
+   * a phone while standing in front of the buyer.
+   *
+   * A DIFFERENT BUILDER, not a flag on the one above: `ownerSheetRows` returns
+   * a row type that carries cost, target, margin and the internal note, and
+   * `offerOwnerPrintHtml` is the only function that accepts it. The buyer's
+   * renderer takes a row type with no money field on it, so there is nothing
+   * to toggle and no default to get wrong.
+   *
+   * Gated on `canViewCost`, like every other cost figure.
+   */
+  const printOwnerCopy = () => {
+    if (!offer || !canViewCost) return;
+    const items = offerItemsIn(offer, inventory, LIVE_STATES);
+    printOfferOwnerCopy(ownerSheetRows(items, offerAnnotations(offer)), {
+      ...printMeta(),
+      totals: offerTotals(items),
     });
   };
 
@@ -346,12 +371,23 @@ export const OffersView: React.FC<Props> = ({
             className="flex items-center gap-2 px-3 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-700 dark:text-slate-200 hover:border-indigo-400 disabled:opacity-40">
             <Download className="w-4 h-4" /> Export sheet
           </button>
-          {/* Beside Export sheet: the two ways to send the same content. */}
+          {/* TWO NAMED ACTIONS, NOT A CHECKBOX. One of these sheets must never
+              reach the buyer, and a remembered toggle is how it eventually
+              does: the owner prints one, prints another an hour later, and the
+              setting is whatever they last left it on. Each button says whose
+              copy it is and what is on it, every time. */}
           <button onClick={printSheet} disabled={counts.total === 0}
-            title={`Print a sheet to hand the buyer. ${OFFER_SHEET_EXCLUDED_NOTE} No pricing of any kind.`}
+            title={`Print the sheet to hand the buyer. ${OFFER_SHEET_EXCLUDED_NOTE} No pricing of any kind.`}
             className="flex items-center gap-2 px-3 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-700 dark:text-slate-200 hover:border-indigo-400 disabled:opacity-40">
-            <Printer className="w-4 h-4" /> Print sheet
+            <Printer className="w-4 h-4" /> Buyer sheet
           </button>
+          {canViewCost && (
+            <button onClick={printOwnerCopy} disabled={counts.total === 0}
+              title="Print YOUR copy — it shows cost, target, margin and your internal notes. Do not hand this one over."
+              className="flex items-center gap-2 px-3 py-2.5 bg-slate-900 dark:bg-slate-700 border border-slate-900 dark:border-slate-600 rounded-lg text-sm text-white hover:bg-slate-800 disabled:opacity-40">
+              <Printer className="w-4 h-4" /> Owner copy
+            </button>
+          )}
           <button onClick={() => save({ ...offer, status: offer.status === 'open' ? 'closed' : 'open', updatedAt: Date.now() })}
             title={offer.status === 'open'
               ? 'Finished with this offer. Its devices stop being counted as out on a quote.'

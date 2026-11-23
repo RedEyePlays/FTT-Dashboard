@@ -40,13 +40,30 @@ export const MobileDrawer: React.FC<Props> = ({
 }) => {
   const panelRef = useRef<HTMLDivElement>(null);
   useLockBodyScroll(open);
+  /**
+   * THE SAME SHAPE AS ResponsiveDialog'S FOCUS BUG, split the same way.
+   *
+   * This one is not visibly broken — the drawer is navigation and holds no
+   * text field, so nothing re-renders it mid-keystroke and nobody saw focus
+   * jump. But it was the identical defect: `[open, onClose]` with a `.focus()`
+   * in the body, and a caller passing an inline arrow, so any future re-render
+   * of App while the drawer is open steals focus back to the panel. Fixed
+   * here rather than left as a working copy of a bug we just removed.
+   */
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    document.addEventListener('keydown', onKey);
     panelRef.current?.focus();
+  }, [open]);
+
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onCloseRef.current(); };
+    document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
+  }, [open]);
 
   const go = (v: ViewState) => { onNavigate(v); onClose(); };
   const act = (fn: () => void) => { fn(); onClose(); };
