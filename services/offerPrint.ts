@@ -1,4 +1,5 @@
 import { OfferSheetRow } from '../domain/offerSheet';
+import { OwnerSheetRow } from '../domain/offers';
 import { PRINT_PREVIEW_BAR_HTML, PRINT_PREVIEW_BAR_STYLE } from './printPreview';
 
 /**
@@ -158,6 +159,149 @@ export const offerPrintHtml = (rows: OfferSheetRow[], meta: OfferPrintMeta): str
       </table>
       <div class="foot">${esc(count)} in this lot · ${esc(meta.storeName)} · ${esc(meta.dateLabel)}</div>
     </div>`;
+};
+
+/* ======================================================================== *
+ * THE OWNER'S COPY
+ * ======================================================================== */
+
+/**
+ * THE SAME LOT, WITH THE MONEY ON IT — for the owner to read on their phone
+ * while they are standing in front of the buyer negotiating.
+ *
+ * A SEPARATE FUNCTION TAKING A SEPARATE ROW TYPE, and that is the whole
+ * safety argument. `offerPrintHtml` above takes `OfferSheetRow[]`, which has
+ * no money field on it at all — so it could not print a cost if somebody
+ * wanted it to, and there is no `includeCost` flag anywhere for a wrong
+ * default or an inverted condition to flip. Putting a cost on the buyer's
+ * sheet would mean changing that function's type signature, which is not
+ * something anybody does by accident. The two sheets share this file's
+ * stylesheet, which carries no data, and nothing else.
+ *
+ * LABELLED SO THE TWO CANNOT BE MIXED UP. They are produced from one screen,
+ * moments apart, onto one printer, and one of them must never reach a buyer:
+ *
+ *   • a black band across the top reading OWNER COPY — NOT FOR THE BUYER.
+ *     Solid black with reversed type, so it survives a black and white print
+ *     and reads from across a counter, where a coloured tint would not;
+ *   • the band is INSIDE `<thead>`, so it repeats on every page — a sheet
+ *     that gets separated from its first page is exactly how the wrong page
+ *     ends up in the wrong hand;
+ *   • the same words again in the footer line.
+ *
+ * READABLE ON A PHONE. This one is as much an on-screen document as a printed
+ * one, so the table collapses to a stacked card per device on a narrow SCREEN
+ * (each cell labelled from its `data-l`), while `@media print` keeps the
+ * table. One document, two presentations — not a second page to keep in sync.
+ */
+const OWNER_BANNER = 'OWNER COPY — NOT FOR THE BUYER';
+
+const OWNER_STYLE = `
+  .owner-band{background:#111827;color:#fff;font-weight:800;letter-spacing:.08em;
+    font-size:11px;text-transform:uppercase;padding:5px 8px;text-align:center;border:none}
+  td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+  th.num{text-align:right}
+  .internal{color:#374151;font-size:10px}
+  .internal b{font-weight:700;color:#111827}
+  .totals{margin-top:14px;border:1.5px solid #111827;border-radius:6px;padding:10px 12px;font-size:12px}
+  .totals .row{display:flex;justify-content:space-between;padding:2px 0}
+  .totals .row.big{font-weight:800;border-top:1px solid #d1d5db;margin-top:4px;padding-top:6px}
+  .totals .warn{margin-top:6px;font-size:10px;color:#92400e}
+  /* LANDSCAPE, overriding the buyer sheet's portrait. Eleven columns —
+     four more than the buyer's seven, and three of them money — do not fit
+     across 7.5in without the notes columns collapsing to one word a line.
+     The buyer's @page rule is untouched; this one comes after it. */
+  @page{size:letter landscape;margin:0.45in}
+  /* PHONE, ON SCREEN ONLY. The printed table is untouched. */
+  @media screen and (max-width:640px){
+    table,thead,tbody,tr,td{display:block;width:100%}
+    thead tr:last-child{display:none}
+    thead tr:first-child th{display:block}
+    tbody tr{border:1px solid #d1d5db;border-radius:8px;padding:8px;margin:0 0 10px}
+    td{border:none;padding:2px 0;display:flex;gap:8px}
+    td.num{justify-content:space-between}
+    td[data-l]::before{content:attr(data-l);flex:0 0 7.5em;color:#6b7280;font-size:10px;
+      text-transform:uppercase;letter-spacing:.04em;padding-top:2px}
+    td:empty{display:none}
+  }
+`;
+
+export interface OwnerPrintMeta extends OfferPrintMeta {
+  /** The lot totals the offer screen already shows. */
+  totals: { count: number; cost: number; target: number; margin: number; targetsSet: number };
+}
+
+const money = (n: number): string => `$${n.toFixed(2)}`;
+
+/**
+ * The owner copy's rendered HTML. Exported so what it carries — and what the
+ * buyer's copy does not — can be asserted against the real output.
+ */
+export const offerOwnerPrintHtml = (rows: OwnerSheetRow[], meta: OwnerPrintMeta): string => {
+  const body = rows.map((r, k) => `
+    <tr>
+      <td class="n" data-l="#">${k + 1}</td>
+      <td class="sku" data-l="SKU">${esc(r.sheet.byHeader['SKU'])}</td>
+      <td data-l="Device">
+        <div class="dev">${esc(r.sheet.byHeader['Item'])}</div>
+        ${(r.sheet.byHeader['IMEI/Serial'] || '').trim() ? `<div class="serial">${esc(r.sheet.byHeader['IMEI/Serial'])}</div>` : ''}
+      </td>
+      <td class="specs" data-l="Specs">${esc(offerSpecLine(r.sheet))}</td>
+      <td data-l="Condition">${esc(r.sheet.byHeader['Condition'])}</td>
+      <td data-l="Grade">${(r.sheet.byHeader['Grade'] || '').trim() ? `<span class="grade">${esc(r.sheet.byHeader['Grade'])}</span>` : ''}</td>
+      <td class="num" data-l="Cost">${esc(money(r.cost))}</td>
+      <td class="num" data-l="Target">${r.target ? esc(money(r.target)) : '—'}</td>
+      <td class="num" data-l="Margin">${r.target ? esc(money(r.margin)) : '—'}</td>
+      <td class="note" data-l="To buyer">${esc(r.sheet.byHeader['Notes'])}</td>
+      <td class="internal" data-l="Our notes">${esc(r.internalNote)}</td>
+    </tr>`).join('');
+
+  const count = `${rows.length} device${rows.length === 1 ? '' : 's'}`;
+  const t = meta.totals;
+
+  return `
+    <div class="sheet">
+      <div class="head">
+        <h1>${esc(meta.storeName)}</h1>
+        <div class="meta">
+          Offer for <b>${esc(meta.buyerName || 'buyer')}</b> · ${esc(meta.dateLabel)} · <b>${esc(count)}</b>
+        </div>
+      </div>
+      <table>
+        <thead>
+          <tr><th class="owner-band" colspan="11">${esc(OWNER_BANNER)}</th></tr>
+          <tr>
+            <th></th><th>SKU</th><th>Device</th><th>Specs</th><th>Condition</th><th>Grade</th>
+            <th class="num">Cost</th><th class="num">Target</th><th class="num">Margin</th>
+            <th>To buyer</th><th>Our notes</th>
+          </tr>
+        </thead>
+        <tbody>${body}</tbody>
+      </table>
+      <div class="totals">
+        <div class="row"><span>Our cost</span><span>${esc(money(t.cost))}</span></div>
+        <div class="row"><span>At target prices</span><span>${esc(money(t.target))}</span></div>
+        <div class="row big"><span>Margin at target</span><span>${esc(money(t.margin))}</span></div>
+        ${t.targetsSet < t.count
+          ? `<div class="warn">${t.count - t.targetsSet} of these have no target price set, so the target and margin are understated.</div>`
+          : ''}
+      </div>
+      <div class="foot">${esc(OWNER_BANNER)} · ${esc(count)} · ${esc(meta.storeName)} · ${esc(meta.dateLabel)}</div>
+    </div>`;
+};
+
+export const printOfferOwnerCopy = (rows: OwnerSheetRow[], meta: OwnerPrintMeta): boolean => {
+  const w = window.open('', '_blank', 'width=1100,height=850');
+  if (!w) return false;
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8">`
+    + `<meta name="viewport" content="width=device-width,initial-scale=1">`
+    + `<title>${esc(`${OWNER_BANNER} — ${meta.buyerName || 'buyer'}`)}</title>`
+    + `<style>${PRINT_PREVIEW_BAR_STYLE}${STYLE}${OWNER_STYLE}</style></head>`
+    + `<body>${PRINT_PREVIEW_BAR_HTML}`
+    + `<div class="ftt-print-why">Your copy — it shows cost, target and margin. Do not hand this one over.</div>`
+    + `${offerOwnerPrintHtml(rows, meta)}</body></html>`);
+  w.document.close();
+  return true;
 };
 
 export const printOfferSheet = (rows: OfferSheetRow[], meta: OfferPrintMeta): boolean => {
